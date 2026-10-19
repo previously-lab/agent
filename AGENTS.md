@@ -43,6 +43,15 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 
 `doc/` is gitignored — it holds local design docs (`doc/design/`, one per milestone) and release notes only.
 
+## Design discipline (mandated by the user, 2026-10-20)
+
+**The discussion is the spec. Nobody — the main agent or any subagent — may change a detail of an agreed design without flagging it first.** The only exceptions are a serious deviation in the agreed result, or an extreme technical cost; even then the deviation must be raised, never absorbed silently.
+
+- An agreed design decision is cited, not re-derived. If a design doc and the user's own words disagree, **the user's words win** and the doc is the thing that is wrong.
+- An open question the user asked is not a decision. Answering it inside an implementation (deleting a unit because "it seemed simpler") is exactly the failure this rule exists to prevent.
+- Where the discussion is silent, write it down as 待裁决 and ask. Do not pick a default; do not present an inference as a decision.
+- Design docs record *decisions with their source* and *open points*, not the author's preferred shape. A doc that reads as settled while it encodes an inference is worse than no doc.
+
 ## Constraints
 
 - Agent tools operate on whitelisted paths only: `memory/`, `tasks/`, `sessions/`
