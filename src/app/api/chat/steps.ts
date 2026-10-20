@@ -1020,7 +1020,9 @@ export async function housekeeping(
       if (last?.role === "user") last.content += marker;
     }
   }
-  await emitPhase(stream, "slice", false, [slice.slice_id]);
+  // v0.42 — the step is a READ: a materialized context shell is not a
+  // record on disk, so it must not display an id as if one existed.
+  await emitPhase(stream, "slice", false, diskSlice ? [slice.slice_id] : undefined);
 
   // ── Phase: context — load the user profile (previously + identity) ───
   await emitPhase(stream, "context", true);

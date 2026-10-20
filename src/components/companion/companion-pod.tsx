@@ -63,7 +63,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
-import { CircleAlert, ChevronRight, RefreshCw, X } from "lucide-react";
+import { CircleAlert, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
@@ -1059,19 +1059,11 @@ export function CompanionPod({
                 </div>
               ) : null}
 
-              {/* Debug instrumentation (dev phase) — folded behind the
-                  work-log disclosure: diagnostic value kept, the debug
-                  console off the panel's default face (v0.29 §4.5). The
-                  data attributes stay — probes read them regardless of
-                  the disclosure's open state. */}
-              <details className="chrome-worklog">
-                <summary>
-                  {t("workLog")}
-                  <ChevronRight
-                    aria-hidden
-                    className="chrome-worklog-caret size-3"
-                  />
-                </summary>
+              {/* v0.42 — the work log IS the panel's face, not a disclosure:
+                  the reflection state, the live runs and the water level are
+                  what the user opened this panel to see. Nothing here folds;
+                  the data attributes stay for the probes. */}
+              <div className="chrome-worklog">
                 <div
                   data-companion-pod-debug
                   className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
@@ -1130,7 +1122,7 @@ export function CompanionPod({
                     />
                   </DebugSection>
                 </div>
-              </details>
+              </div>
             </div>
           </motion.aside>
         )}
