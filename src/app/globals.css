@@ -67,25 +67,28 @@
   --color-card: var(--card);
   --color-paper: var(--paper);
   --color-paper-line: var(--paper-line);
+  /* v0.43 — the workflow panel's sunken card fill (the plate one tone below
+     the sheet); defined in :root below, registered here like paper itself. */
+  --color-paper-plate: var(--paper-plate);
   --color-field: var(--field);
   --background-image-paper-grain: var(--paper-grain-map);
   --background-image-paper-grain-card: var(--paper-grain-map);
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-contact: var(--paper-contact);
   --text-shadow-paper-recess: var(--paper-ink-recess);
-  --radius-sm: var(--radius);
-  --radius-md: var(--radius);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: var(--radius);
-  --radius-2xl: var(--radius);
-  --radius-3xl: var(--radius);
-  --radius-4xl: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
 }
 
 :root {
-  /* THE PRODUCT IS SQUARE (owner rule 2; the chrome's P4 "round belongs to
-     the world"). One dial: every primitive's rounded-sm/md/lg/xl reads this. */
-  --radius: 0;
+  /* v0.43 — user decision: back to shadcn/ui's default rounded look; one
+     dial (--radius) still drives every rounded-sm/md/lg/xl. */
+  --radius: 0.625rem;
   --brand: oklch(0.55 0.25 262);
   --brand-50: oklch(0.97 0.02 262);
   --brand-100: oklch(0.935 0.045 262);
