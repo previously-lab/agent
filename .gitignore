@@ -99,3 +99,6 @@ benchmark-data/
 # ===== The visual lab (a dev-only discussion medium; kept local, never shipped) =====
 src/components/lab/
 src/app/\[locale\]/lab/
+
+# Local workflow runtime store (dev-server runs, hooks, streams) — never code.
+.workflow-data/
