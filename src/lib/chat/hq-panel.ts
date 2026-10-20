@@ -113,11 +113,13 @@ export function burstDisplaySuffix(burst: string): string {
  * answered (including 事实空: the reflection row's "none" is a TRUE verdict
  * — 后台整理没在跑 is real information, not a missing read, so it earns no
  * apology note). The keys returned are i18n keys; the pod renders them under
- * the layer's own degradation line.
+ * the layer's own degradation line. v0.11 streams: `log` is OPTIONAL — the
+ * status and log layers fetch separately, so a missing log here means
+ * "not loaded yet" (no note), not a failed read.
  */
 export function layerDegradationNote(
   layer: "reflection" | "runs" | "log",
-  response: HQStatusResponse | null,
+  response: Pick<HQStatusResponse, "reflection" | "runs" | "log"> | null,
 ): string | null {
   if (!response) return "hqNoteOffline"; // 全灭 — the fetch itself failed
   if (layer === "reflection" && response.reflection.state === "unreachable") {
@@ -126,8 +128,30 @@ export function layerDegradationNote(
   if (layer === "runs" && response.runs.state === "unavailable") {
     return "hqNoteRunsUnavailable";
   }
-  if (layer === "log" && response.log.state === "unavailable") {
-    return "hqNoteLogUnavailable";
+  if (layer === "log" && response.log !== undefined && response.log !== null) {
+    return response.log.state === "unavailable" ? "hqNoteLogUnavailable" : null;
   }
   return null;
+}
+
+// ─── 终结去抖 (v0.11 streams — event-driven log refresh) ───────────────────
+
+/**
+ * Debounce a log refresh across run terminals: several watched runs
+ * finishing within the window (a burst's last turn + its summary land
+ * together) must trigger ONE refresh, not N. Every call inside the window
+ * resets the clock — the newest terminal is the one worth reflecting.
+ */
+export function createTerminalDebounce(
+  trigger: () => void,
+  waitMs: number,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      trigger();
+    }, waitMs);
+  };
 }

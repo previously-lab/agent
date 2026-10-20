@@ -1,10 +1,10 @@
 /**
- * GET /api/evolution/hq-status — the three-layer aggregate (v0.39 §4.1).
- * The workflow public API (getHookByToken/getRun), the runtime interface
- * (getWorld) and the log reader are mocked; the parallel-runs predicate is
- * real. Pins the layer contract: the reflection row answers through the
- * PUBLIC hook channel; the run table degrades LOUDLY (never fabricated);
- * the log layer degrades to an explicit line; 「看不到」never renders as 「没有」.
+ * GET /api/evolution/hq-status — the two-layer aggregate + the opt-in log
+ * layer (v0.11 streams). The workflow public API (getHookByToken/getRun),
+ * the runtime interface (getWorld), the single-scan log bundle and the
+ * slice enumeration are mocked; the parallel-runs predicate is real.
+ * Pins the event-driven contract: the DEFAULT response carries NO log layer
+ * and makes ZERO log-layer calls; ?log=1 re-attaches it for legacy/debug.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -12,9 +12,15 @@ const h = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
   getRun: vi.fn(),
   runsList: vi.fn(),
-  cursor: { sliceId: null as string | null, sha: null as string | null, at: null as string | null, degraded: false },
-  log: { available: true as boolean, reason: undefined as string | undefined, entries: [] as unknown[] },
-  summaries: { available: true as boolean, reason: undefined as string | undefined, entries: [] as unknown[] },
+  bundle: {
+    available: true as boolean,
+    reason: undefined as string | undefined,
+    derivation: {
+      cursor: { sliceId: null as string | null, sha: null as string | null, at: null as string | null },
+      rounds: [] as unknown[],
+      summaries: [] as unknown[],
+    },
+  },
   enumerate: vi.fn(async () => ["2026/10/01/0900", "2026/10/02/1000"]),
 }));
 
@@ -28,9 +34,7 @@ vi.mock("workflow/runtime", () => ({
 }));
 
 vi.mock("@/lib/chat/hq-log", () => ({
-  readReflectionCursor: async () => h.cursor,
-  readReflectionLog: async () => h.log,
-  readRecentSummaries: async () => h.summaries,
+  readHQLogBundle: async () => h.bundle,
 }));
 
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
@@ -40,11 +44,15 @@ vi.mock("@/lib/episodic/timeline/enumerate", () => ({
 import { HookNotFoundError } from "workflow/errors";
 import { GET } from "@/app/api/evolution/hq-status/route";
 
+const STATUS_URL = "http://localhost/api/evolution/hq-status";
+
 beforeEach(() => {
   vi.clearAllMocks();
-  h.cursor = { sliceId: null, sha: null, at: null, degraded: false };
-  h.log = { available: true, reason: undefined, entries: [] };
-  h.summaries = { available: true, reason: undefined, entries: [] };
+  h.bundle = {
+    available: true,
+    reason: undefined,
+    derivation: { cursor: { sliceId: null, sha: null, at: null }, rounds: [], summaries: [] },
+  };
   h.runsList.mockResolvedValue({
     data: [
       {
@@ -63,28 +71,45 @@ beforeEach(() => {
   });
 });
 
-describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () => {
-  it("all layers live: reflection via the hook channel, the run table with attributes, the log cursor + behind count", async () => {
+describe("GET /api/evolution/hq-status — the event-driven split (v0.11 streams)", () => {
+  it("the DEFAULT response carries NO log layer and makes ZERO log-layer calls", async () => {
+    h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
+
+    const res = await GET(new Request(STATUS_URL));
+    const body = await res.json();
+
+    expect(body.log).toBeUndefined();
+    expect(body.reflection).toEqual({ state: "none" });
+    expect(body.runs.state).toBe("live");
+    // The poll that used to burn 21–27 GitHub calls must not touch the log
+    // plane at all — neither the commit scan nor the slice enumeration.
+    expect(h.enumerate).not.toHaveBeenCalled();
+  });
+
+  it("all layers live with ?log=1: reflection via the hook channel, the run table, the log cursor + behind count", async () => {
     h.getHookByToken.mockResolvedValue({ runId: "wrun-hq" });
     h.getRun.mockReturnValue({
       status: Promise.resolve("running"),
       createdAt: Promise.resolve(new Date(Date.now() - 60_000).toISOString()),
     });
-    h.cursor = { sliceId: "2026-10-01-0900", sha: "abc123", at: "2026-10-02T10:00:00.000Z", degraded: false };
-    h.log.entries = [
-      {
-        sha: "abc123",
-        committedAt: "2026-10-02T10:00:00.000Z",
-        parsed: {
-          date: "2026-10-02",
-          note: "处理了周末安排。",
-          trailer: { seen: [{ sliceId: "2026-10-01-0900" }], evolved: { date: "2026-10-02" } },
+    h.bundle.derivation = {
+      cursor: { sliceId: "2026-10-01-0900", sha: "abc123", at: "2026-10-02T10:00:00.000Z" },
+      rounds: [
+        {
+          sha: "abc123",
+          committedAt: "2026-10-02T10:00:00.000Z",
+          parsed: {
+            date: "2026-10-02",
+            note: "处理了周末安排。",
+            trailer: { seen: [{ sliceId: "2026-10-01-0900" }], evolved: { date: "2026-10-02" } },
+          },
+          files: [],
         },
-        files: ["tasks/周末安排/index.md"],
-      },
-    ];
+      ],
+      summaries: [],
+    };
 
-    const res = await GET();
+    const res = await GET(new Request(`${STATUS_URL}?log=1`));
     const body = await res.json();
 
     expect(body.reflection.state).toBe("live");
@@ -112,9 +137,9 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
     expect(typeof body.asOf).toBe("string");
   });
 
-  it("recentSummaries rides the log layer (v0.43 §5) — parsed counts + failed entries, degraded on its own flag", async () => {
+  it("recentSummaries rides the same bundle (v0.43 §5) — parsed counts + failed entries", async () => {
     h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
-    h.summaries.entries = [
+    h.bundle.derivation.summaries = [
       {
         slice: "2026-10-02-1000",
         at: "2026-10-02T10:05:00.000Z",
@@ -125,7 +150,7 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
       },
     ];
 
-    const res = await GET();
+    const res = await GET(new Request(`${STATUS_URL}?log=1`));
     const body = await res.json();
 
     expect(body.log.state).toBe("live");
@@ -140,24 +165,11 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
     });
   });
 
-  it("the summaries read degrades on its OWN flag — the log layer still answers (recentSummaries empty, never fabricated)", async () => {
+  it("no live reflection run → 公开层 says NONE (无人在家 is a verdict) and the log layer still answers with ?log=1", async () => {
     h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
-    h.summaries = { available: false, reason: "summary log read failed: boom", entries: [] };
+    h.bundle.derivation.cursor = { sliceId: "2026-10-01-0900", sha: "s", at: null };
 
-    const res = await GET();
-    const body = await res.json();
-
-    expect(body.log.state).toBe("live");
-    expect(body.log.summariesAvailable).toBe(false);
-    expect(body.log.summariesReason).toContain("boom");
-    expect(body.log.recentSummaries).toEqual([]);
-  });
-
-  it("no live reflection run → 公开层 says NONE (无人在家 is a verdict) and the log layer still answers", async () => {
-    h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
-    h.cursor = { sliceId: "2026-10-01-0900", sha: "s", at: null, degraded: false };
-
-    const res = await GET();
+    const res = await GET(new Request(`${STATUS_URL}?log=1`));
     const body = await res.json();
 
     expect(body.reflection).toEqual({ state: "none" });
@@ -169,19 +181,26 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
     h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
     h.runsList.mockRejectedValue(new Error("runtime interface unavailable"));
 
-    const res = await GET();
+    const res = await GET(new Request(STATUS_URL));
     const body = await res.json();
 
     expect(body.runs.state).toBe("unavailable");
     expect(typeof body.runs.reason).toBe("string");
     expect(body.reflection).toEqual({ state: "none" });
+    // still zero log-layer work on the default face
+    expect(body.log).toBeUndefined();
+    expect(h.enumerate).not.toHaveBeenCalled();
   });
 
   it("the log layer degrades to an explicit line — the run rows stand", async () => {
     h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
-    h.log = { available: false, reason: "the memory root is not a git repository …", entries: [] };
+    h.bundle = {
+      available: false,
+      reason: "the memory root is not a git repository …",
+      derivation: { cursor: { sliceId: null, sha: null, at: null }, rounds: [], summaries: [] },
+    };
 
-    const res = await GET();
+    const res = await GET(new Request(`${STATUS_URL}?log=1`));
     const body = await res.json();
 
     expect(body.log.state).toBe("unavailable");

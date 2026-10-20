@@ -4,9 +4,10 @@
  * offers, what each tier cancels, which tier confirms, and which note a
  * degraded layer earns.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   burstDisplaySuffix,
+  createTerminalDebounce,
   layerDegradationNote,
   reflectionStopTier,
   resolveStopTargets,
@@ -144,5 +145,51 @@ describe("layerDegradationNote — 看不到 ≠ 没有 (v0.40 §6)", () => {
   it("全灭 (the fetch itself failed) → the overall offline note", () => {
     expect(layerDegradationNote("runs", null)).toBe("hqNoteOffline");
     expect(layerDegradationNote("log", null)).toBe("hqNoteOffline");
+  });
+});
+
+describe("createTerminalDebounce — run terminals collapse into ONE log refresh (v0.11 streams)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("several terminals inside the window trigger the refresh exactly ONCE", () => {
+    const trigger = vi.fn();
+    const debounced = createTerminalDebounce(trigger, 1_000);
+    // a burst's last turn + its summary land together — three terminals…
+    debounced();
+    vi.advanceTimersByTime(300);
+    debounced();
+    vi.advanceTimersByTime(300);
+    debounced();
+    expect(trigger).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it("the window resets on every terminal — the newest one is the one worth reflecting", () => {
+    const trigger = vi.fn();
+    const debounced = createTerminalDebounce(trigger, 1_000);
+    debounced();
+    vi.advanceTimersByTime(900);
+    debounced(); // resets the clock
+    vi.advanceTimersByTime(900);
+    expect(trigger).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    expect(trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminals further apart than the window each fire their own refresh", () => {
+    const trigger = vi.fn();
+    const debounced = createTerminalDebounce(trigger, 1_000);
+    debounced();
+    vi.advanceTimersByTime(1_000);
+    expect(trigger).toHaveBeenCalledTimes(1);
+    debounced();
+    vi.advanceTimersByTime(1_000);
+    expect(trigger).toHaveBeenCalledTimes(2);
   });
 });

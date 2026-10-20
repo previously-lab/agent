@@ -9,14 +9,25 @@
  * Pure — no fs, no next; the pod imports it client-side.
  */
 import type {
+  HQLogLayer,
   HQStatusResponse,
   PanelRunRow,
 } from "@/app/api/evolution/hq-status/route";
 
-export type { HQStatusResponse, PanelRunRow };
+export type { HQLogLayer, HQStatusResponse, PanelRunRow };
 
-/** The panel's read. Throws on a non-2xx — a failure is the server's, and
- *  the pod renders its offline state instead of fabricating "no data". */
+/** The log layer's own response (v0.11 streams) — GET /api/evolution/hq-log. */
+export interface HQLogResponse {
+  asOf: string;
+  log: HQLogLayer;
+}
+
+/**
+ * The status poll's read — REFLECTION + RUNS ONLY, zero GitHub calls (the
+ * log layer lives behind /api/evolution/hq-log and is fetched on panel open
+ * / a run's stream terminal / manual refresh). Throws on a non-2xx — the
+ * pod renders its offline state instead of fabricating "no data".
+ */
 export async function fetchHQStatus(signal?: AbortSignal): Promise<HQStatusResponse> {
   const res = await fetch("/api/evolution/hq-status", {
     cache: "no-store",
@@ -24,6 +35,20 @@ export async function fetchHQStatus(signal?: AbortSignal): Promise<HQStatusRespo
   });
   if (!res.ok) throw new Error(`hq-status answered ${res.status}`);
   return (await res.json()) as HQStatusResponse;
+}
+
+/**
+ * The event-driven log read — the water level / recent rounds / recent
+ * archives, ONE bounded commit-log scan per call. Same throw discipline as
+ * fetchHQStatus.
+ */
+export async function fetchHQLog(signal?: AbortSignal): Promise<HQLogResponse> {
+  const res = await fetch("/api/evolution/hq-log", {
+    cache: "no-store",
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) throw new Error(`hq-log answered ${res.status}`);
+  return (await res.json()) as HQLogResponse;
 }
 
 /**

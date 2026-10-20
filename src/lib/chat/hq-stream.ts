@@ -264,6 +264,71 @@ export async function streamHQActivity(
   }
 }
 
+// ─── The turn/summary run's terminal watcher (v0.11 streams) ────────────────
+
+/**
+ * Attach to a turn/summary run's durable stream (`/api/chat/[runId]/stream`)
+ * and RESOLVE when the run reaches its terminal: a `finish` UIMessageChunk,
+ * an `error` chunk, or the stream closing (replays of finished runs drain
+ * straight to close). The chunks themselves are consumed, not interpreted —
+ * the panel only needs the MOMENT, then it refreshes the log layer once.
+ * Never rejects on transport failure: a dead run is still a terminal (the
+ * caller refreshes and moves on); only an external abort stays silent.
+ */
+export async function watchChatRunEnd(opts: {
+  runId: string;
+  signal?: AbortSignal;
+  fetchImpl?: HQStreamFetch;
+}): Promise<void> {
+  const fetchFn = opts.fetchImpl ?? fetch;
+  let res: Response;
+  try {
+    res = await fetchFn(`/api/chat/${encodeURIComponent(opts.runId)}/stream`, {
+      cache: "no-store",
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+  } catch {
+    return; // aborted or transport dead — either way, nothing more to watch
+  }
+  if (!res.ok || !res.body) return; // gone run — terminal by definition
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of rawEvent.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (!payload || payload === "[DONE]") continue;
+          let chunk: unknown;
+          try {
+            chunk = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          const type = (chunk as Record<string, unknown> | null)?.type;
+          if (type === "finish" || type === "error") return; // terminal frame
+        }
+      }
+    }
+  } catch {
+    // aborted mid-read — the caller is tearing down; stay silent
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
+  }
+}
+
 // ─── Reconnect persistence (localStorage) ─────────────────────────────────
 
 /**

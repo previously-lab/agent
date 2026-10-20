@@ -33,6 +33,7 @@ import {
   readReflectionCoverage,
   readReflectionLog,
   readRecentSummaries,
+  readHQLogBundle,
 } from "@/lib/chat/hq-log";
 
 const ROUND = (over: { message?: string; oid?: string; ts?: number }) => ({
@@ -373,5 +374,56 @@ describe("readRecentSummaries — the panel's summary read face (v0.43 §5)", ()
     );
     const read = await readRecentSummaries();
     expect(read.entries).toHaveLength(5);
+  });
+});
+
+describe("readHQLogBundle — ONE scan, three derivations (v0.11 streams)", () => {
+  it("scans the log ONCE and derives cursor + rounds + summaries from it (no per-round getCommit)", async () => {
+    h.logCommits.mockResolvedValue([
+      // newest: a summary commit
+      ROUND({
+        message: "Summary — 2026-10-19-1751\n\n- user turn a1\n- reply b1\n- merge c1",
+        oid: "sha-sum",
+      }),
+      // then a clean round with the level
+      ROUND({
+        message:
+          "Reflection round — 2026-10-19\n\n处理了周末。\n\n—\nseen: 2026-10-19-1721",
+        oid: "sha-clean",
+      }),
+      // oldest: a failed round (no trailer)
+      ROUND({ message: "Reflection round — 2026-10-19", oid: "sha-fail" }),
+    ]);
+
+    const bundle = await readHQLogBundle();
+
+    expect(bundle.available).toBe(true);
+    // THE read-amplification pin: one scan feeds every derivation.
+    expect(h.logCommits).toHaveBeenCalledTimes(1);
+    expect(bundle.derivation.cursor).toEqual({
+      sliceId: "2026-10-19-1721",
+      sha: "sha-clean",
+      at: new Date(Date.parse("2026-10-19T17:00:00.000Z")).toISOString(),
+    });
+    expect(bundle.derivation.rounds.map((r) => r.sha)).toEqual(["sha-clean", "sha-fail"]);
+    expect(bundle.derivation.rounds.every((r) => r.files.length === 0)).toBe(true);
+    expect(bundle.derivation.summaries).toEqual([
+      {
+        slice: "2026-10-19-1751",
+        at: new Date(Date.parse("2026-10-19T17:00:00.000Z")).toISOString(),
+        userTurns: 1,
+        replies: 1,
+        merges: 1,
+        failed: [],
+      },
+    ]);
+  });
+
+  it("degrades exactly like the sibling readers (non-git root → available false + advice)", async () => {
+    h.isGitRepo.mockReturnValue(false);
+    const bundle = await readHQLogBundle();
+    expect(bundle.available).toBe(false);
+    expect(bundle.reason).toContain("git init");
+    expect(h.logCommits).not.toHaveBeenCalled();
   });
 });

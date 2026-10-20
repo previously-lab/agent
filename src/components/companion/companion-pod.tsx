@@ -41,17 +41,19 @@
  *
  * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
  * read-only instrumentation sections — the HQ activity face (the field↔HQ
- * channel made visible: last dispatch, run status, recent writes, read from
- * the memory/config/hq.json pointer via GET /api/evolution/hq-status and
- * POLLED ~3s while the panel is open — plus the LIVE beat log: the running
- * run's `data-hq-activity` frames, attached from the pointer's runId through
- * GET /api/evolution/hq/[runId]/stream. The stream replays, so a reload
- * simply re-attaches; while HQ works the tab works, discovered by a slow
- * closed-panel poll) and a memory-map summary (slice/
- * active-slice overview fetched ONCE per panel open from the existing
- * episodic server actions, never polled, with a manual refresh). Since
- * v0.29 they ride behind a collapsed 「工作日志」 disclosure at the panel's
- * foot — diagnostic value kept, debug noise off the default face.
+ * channel made visible: last dispatch, run status, recent writes. v0.11
+ * streams made it EVENT-DRIVEN: the status face (reflection + runs, zero
+ * GitHub calls) polls ~3s while the panel is open; the log face (水位 /
+ * recent archives) reads GET /api/evolution/hq-log ONLY on panel open, a
+ * watched run's stream terminal (debounced 1s), or the manual refresh — the
+ * live beats still ride the running run's `data-hq-activity` frames,
+ * attached from the pointer's runId through
+ * GET /api/evolution/hq/[runId]/stream; turn/summary runs get their own
+ * terminal watchers on /api/chat/[runId]/stream) and a memory-map summary
+ * (slice/ active-slice overview fetched ONCE per panel open from the
+ * existing episodic server actions, never polled, with a manual refresh).
+ * Since v0.29 they ride behind a collapsed 「工作日志」 disclosure at the
+ * panel's foot — diagnostic value kept, debug noise off the default face.
  *
  * TWO ENTRIES, ONE PANEL: the composer's evolution-stream button asks this
  * pod to open via the companion-panel request bus
@@ -60,7 +62,7 @@
  * The pod renders in the SHELL (not the card field) so a narration survives
  * rung switches and view changes — the same ownership rule the dock had.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
@@ -70,12 +72,15 @@ import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
 import {
   cancelPanelRun,
+  fetchHQLog,
   fetchHQStatus,
+  type HQLogLayer,
   type HQStatusResponse,
   type PanelRunRow,
 } from "@/lib/chat/hq-status";
 import {
   burstDisplaySuffix,
+  createTerminalDebounce,
   layerDegradationNote,
   reflectionStopTier,
   resolveStopTargets,
@@ -86,6 +91,7 @@ import {
   clearStoredHQRunId,
   HQStreamError,
   streamHQActivity,
+  watchChatRunEnd,
   writeStoredHQRunId,
   type HQActivityFrame,
 } from "@/lib/chat/hq-stream";
@@ -451,6 +457,8 @@ function DegradedLine({ text, noteKey, detail, t }: { text: string; noteKey: str
 function WorklogTabs({
   data,
   failed,
+  log,
+  logFailed,
   t,
   locale,
   activity,
@@ -458,9 +466,12 @@ function WorklogTabs({
   open,
   requestCancel,
 }: {
-  /** The three-layer aggregate (v0.39 §4.1) — null while loading. */
+  /** The two-layer status (v0.11 streams: reflection + runs) — null while loading. */
   data: HQStatusResponse | null;
   failed: boolean;
+  /** The log layer, fetched separately (open / run-terminal / manual). */
+  log: HQLogLayer | null;
+  logFailed: boolean;
   t: CompanionT;
   locale: string;
   activity: HQActivityFrame[];
@@ -501,11 +512,15 @@ function WorklogTabs({
 
   const asOfMs = Date.parse(data.asOf);
   const tickMs = Number.isNaN(asOfMs) ? 0 : Math.max(0, nowMs - asOfMs);
-  const { reflection, runs, log } = data;
+  const { reflection, runs } = data;
   // §6 旁注: one 人话 line per layer whose READ failed — 事实空 earns none.
+  // v0.11 streams: the log layer arrives separately — a null log is "not
+  // loaded yet" (no note), logFailed is its offline read.
   const reflectionNoteKey = layerDegradationNote("reflection", data);
   const runsNoteKey = layerDegradationNote("runs", data);
-  const logNoteKey = layerDegradationNote("log", data);
+  const logNoteKey = logFailed
+    ? "hqNoteOffline"
+    : layerDegradationNote("log", { ...data, log: log ?? undefined });
 
   const allRows = runs.state === "live" ? runs.live : [];
   const reflectionRunId = reflection.state === "live" ? reflection.runId : null;
@@ -534,7 +549,7 @@ function WorklogTabs({
   const summaryRows = allRows.filter((r) => r.role === "summary");
   const latestBeat = activity.at(-1) ?? null;
   const recentBeats = activity.slice(-4).reverse();
-  const newestRound = log.state === "live" ? log.recentRounds[0] : undefined;
+  const newestRound = log?.state === "live" ? log.recentRounds[0] : undefined;
 
   return (
     <div className="space-y-3">
@@ -591,7 +606,7 @@ function WorklogTabs({
               ) : (
                 <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
               )}
-              {log.state === "live" && log.recentSummaries[0] && (
+              {log?.state === "live" && log.recentSummaries[0] && (
                 <p className="font-mono text-[10px] text-muted-foreground/70">
                   {t("wfLastArchive", {
                     page: log.recentSummaries[0].slice,
@@ -663,7 +678,9 @@ function WorklogTabs({
 
             {/* ── 历史与水位: the water level + recent archives ── */}
             <DebugSection id="history" title={t("wfHistory")}>
-              {log.state === "live" ? (
+              {log === null && !logFailed ? (
+                <p className="text-muted-foreground/80">{t("hqLoading")}</p>
+              ) : log?.state === "live" ? (
                 <div className="space-y-1.5">
                   <DebugRow
                     label={t("hqCursor")}
@@ -724,7 +741,7 @@ function WorklogTabs({
                 <DegradedLine
                   text={t("hqLogUnavailable")}
                   noteKey={logNoteKey}
-                  detail={log.reason}
+                  detail={log?.reason}
                   t={t}
                 />
               )}
@@ -890,15 +907,17 @@ function CompanionPodBody({
   }, [target, status, text]);
 
   // ── Debug: the HQ activity face ───────────────────────────────────────────
-  // HQ works in its own durable run, so the only honest read on it is the
-  // hq.json pointer behind GET /api/evolution/hq-status. Fetched on open and
-  // POLLED every 3s while the panel is open (a debug surface gets a poll, not
-  // an SSE channel); closing the panel stops the clock. The seq guard drops
-  // responses that land after a newer fetch started.
+  // v0.11 streams — EVENT-DRIVEN, no GitHub polling:
+  //   status (reflection + runs, ZERO GitHub calls): first open + every 3s —
+  //     the breathing point's clock; also what closed-panel discovery reads.
+  //   log (水位 / rounds / archives, the GitHub read): first open + a watched
+  //     run's stream terminal (debounced 1s across simultaneous finishes) +
+  //     the manual refresh — never on the 3s clock.
+  // The seq guards drop responses that land after a newer fetch started.
   const [hq, setHq] = useState<HQStatusResponse | null>(null);
   const [hqFailed, setHqFailed] = useState(false);
   const hqSeqRef = useRef(0);
-  const loadHQ = useCallback(async (): Promise<HQStatusResponse | null> => {
+  const loadStatus = useCallback(async (): Promise<HQStatusResponse | null> => {
     const seq = ++hqSeqRef.current;
     try {
       const res = await fetchHQStatus();
@@ -911,12 +930,34 @@ function CompanionPodBody({
       return null;
     }
   }, []);
+  const [hqLog, setHqLog] = useState<HQLogLayer | null>(null);
+  const [hqLogFailed, setHqLogFailed] = useState(false);
+  const hqLogSeqRef = useRef(0);
+  const loadLog = useCallback(async (): Promise<HQLogLayer | null> => {
+    const seq = ++hqLogSeqRef.current;
+    try {
+      const res = await fetchHQLog();
+      if (seq !== hqLogSeqRef.current) return null;
+      setHqLog(res.log);
+      setHqLogFailed(false);
+      return res.log;
+    } catch {
+      if (seq === hqLogSeqRef.current) setHqLogFailed(true);
+      return null;
+    }
+  }, []);
+  /** Run terminals within 1s of each other collapse into ONE log refresh. */
+  const scheduleLogRefresh = useMemo(
+    () => createTerminalDebounce(() => void loadLog(), 1_000),
+    [loadLog],
+  );
   useEffect(() => {
     if (!open) return;
-    void loadHQ();
-    const id = setInterval(() => void loadHQ(), 3000);
+    void loadStatus();
+    void loadLog();
+    const id = setInterval(() => void loadStatus(), 3000);
     return () => clearInterval(id);
-  }, [open, loadHQ]);
+  }, [open, loadStatus, loadLog]);
 
   // ── HQ live: attach to the run's activity stream ──────────────────────────
   // The pointer names the running run (runId, written by the claiming run
@@ -955,7 +996,8 @@ function CompanionPodBody({
           hqAttachRef.current = null;
           setHqLive(false);
           clearStoredHQRunId();
-          void loadHQ(); // settle the pointer face (runStatus just flipped)
+          void loadStatus(); // settle the run table (runStatus just flipped)
+          scheduleLogRefresh(); // the run wrote its files — ONE log refresh
         })
         .catch((e: unknown) => {
           if (hqAttachRef.current?.runId !== runId) return;
@@ -968,19 +1010,50 @@ function CompanionPodBody({
           }
         });
     },
-    [detachHQ, loadHQ],
+    [detachHQ, loadStatus, scheduleLogRefresh],
   );
+
+  // ── Turn/summary run watchers (v0.11 streams) ─────────────────────────────
+  // Every live run the status table names gets its OWN SSE attachment; the
+  // moment the run's durable stream reaches a terminal frame (or closes) the
+  // watcher schedules ONE debounced log refresh — that is the whole GitHub
+  // read rhythm: open / terminal / manual, never the clock.
+  const runWatchRef = useRef(new Map<string, AbortController>());
+  const attachRunWatch = useCallback(
+    (runId: string) => {
+      if (runWatchRef.current.has(runId)) return; // already watching
+      const controller = new AbortController();
+      runWatchRef.current.set(runId, controller);
+      void watchChatRunEnd({ runId, signal: controller.signal }).finally(() => {
+        runWatchRef.current.delete(runId);
+        void loadStatus();
+        scheduleLogRefresh();
+      });
+    },
+    [loadStatus, scheduleLogRefresh],
+  );
+  useEffect(() => {
+    if (!open || !hq || hq.runs.state !== "live") return;
+    const reflectionRunId =
+      hq.reflection.state === "live" ? hq.reflection.runId : null;
+    for (const row of hq.runs.live) {
+      if (row.runId === reflectionRunId) continue; // the HQ attach owns it
+      attachRunWatch(row.runId);
+    }
+  }, [open, hq, attachRunWatch]);
 
   // Discovery: the mount-time check IS the local reconnect (the stash only
   // hints; the pointer's runStatus + runId is the verdict — a stashed id the
   // pointer no longer names as running is simply not attached). Afterwards a
   // slow clock watches for NEW runs while the panel is closed — the pod
-  // breathes for HQ even when nobody is looking at the internals.
+  // breathes for HQ even when nobody is looking at the internals. v0.11
+  // streams: the read is the REGISTRY-ONLY status (zero GitHub calls), and
+  // only the REFLECTION run gets an attachment while closed.
   useEffect(() => {
     let stopped = false;
     const discover = async () => {
       if (stopped || hqAttachRef.current) return; // attached — frames drive
-      const status = await loadHQ();
+      const status = await loadStatus();
       if (stopped || !status) return;
       // v0.39 §4.1 — the PUBLIC layer (hook channel) is the verdict: a live
       // reflection run's id attaches; "none" is 无人在家, not an error.
@@ -997,10 +1070,17 @@ function CompanionPodBody({
       stopped = true;
       clearInterval(id);
     };
-  }, [loadHQ, attachHQ]);
+  }, [loadStatus, attachHQ]);
 
-  // Unmount: cut the attachment so a navigated-away pod leaves no reader.
-  useEffect(() => detachHQ, [detachHQ]);
+  // Unmount: cut every attachment so a navigated-away pod leaves no reader.
+  useEffect(() => {
+    const watches = runWatchRef.current;
+    return () => {
+      detachHQ();
+      for (const controller of watches.values()) controller.abort();
+      watches.clear();
+    };
+  }, [detachHQ]);
 
   // The composer's evolution-stream button is this panel's SECOND entry —
   // a request only ever opens; closing stays the panel's own gesture.
@@ -1282,7 +1362,12 @@ function CompanionPodBody({
                   <div className="flex items-center justify-end">
                     <button
                       type="button"
-                      onClick={() => void loadHQ()}
+                      onClick={() => {
+                        // v0.11 streams — the manual refresh: status AND log
+                        // (the log read is event-triggered otherwise).
+                        void loadStatus();
+                        void loadLog();
+                      }}
                       aria-label={t("debugRefresh")}
                       title={t("debugRefresh")}
                       className={`${ISLAND_CONTROL} size-5`}
@@ -1293,6 +1378,8 @@ function CompanionPodBody({
                   <WorklogTabs
                     data={hq}
                     failed={hqFailed}
+                    log={hqLog}
+                    logFailed={hqLogFailed}
                     t={t}
                     locale={locale}
                     activity={hqActivity}
@@ -1300,11 +1387,14 @@ function CompanionPodBody({
                     open={open}
                     requestCancel={(targets) => {
                       // §4.3/§2.3 — the panel's ONLY write, through the
-                      // existing cancel endpoint; then re-read.
+                      // existing cancel endpoint; then re-read. A cancel ends
+                      // the runs — the watchers' terminals ALSO schedule a
+                      // log refresh (the debounce collapses the pair).
                       for (const runId of targets) {
                         void cancelPanelRun(runId);
                       }
-                      void loadHQ();
+                      void loadStatus();
+                      scheduleLogRefresh();
                     }}
                   />
                 </div>

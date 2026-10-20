@@ -502,6 +502,156 @@ export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
   return { covered, wholeUpTo, sha, at, degraded: false };
 }
 
+// ─── The event-driven bundle (v0.11 streams — one scan, three derivations) ──
+
+/**
+ * The panel's log layer was the GitHub-quota fire: every hq-status poll ran
+ * THREE sibling scans of the same commit history (readReflectionCursor →
+ * readReflectionLog, readReflectionLog again for the rounds, readRecent
+ * Summaries → readSummaryLog) plus a getCommit per round for file lists the
+ * panel never renders. The bundle below is the single-scan replacement the
+ * event-driven endpoints use: ONE bounded scan, cursor/rounds/summaries all
+ * derived from it, NO getCommit (the recent-writes glance degrades to []).
+ */
+
+/** One commit from the single bounded scan — identity + message + time. */
+export interface HQLogScanCommit {
+  sha: string;
+  message: string;
+  committedAt: string | null;
+}
+
+export interface HQLogScan {
+  /** Newest-first commits inside the bounded scan. */
+  commits: HQLogScanCommit[];
+  /** False when the log plane is unavailable (non-git local root, API down). */
+  available: boolean;
+  /** The degradation reason (the `git init` advice rides here). */
+  reason?: string;
+}
+
+/** ONE bounded scan of the memory commit history on the active backend. */
+export async function readHQLogScan(): Promise<HQLogScan> {
+  const source = resolveDataSource();
+  try {
+    if (source === "github") {
+      const { owner, repo } = getRepoConfig();
+      const octokit = getOctokit();
+      const commits: HQLogScanCommit[] = [];
+      for (let page = 1; page <= MAX_PAGES; page += 1) {
+        const { data } = await octokit.rest.repos.listCommits({
+          owner,
+          repo,
+          path: "memory",
+          per_page: GITHUB_PAGE,
+          page,
+        });
+        commits.push(
+          ...data.map((c) => ({
+            sha: c.sha,
+            message: c.commit?.message ?? "",
+            committedAt: c.commit?.committer?.date ?? null,
+          })),
+        );
+        if (data.length < GITHUB_PAGE) break; // history exhausted
+      }
+      return { commits, available: true };
+    }
+    if (source === "local") {
+      const root = getMemoryRoot();
+      if (!isGitRepo(root)) {
+        return {
+          commits: [],
+          available: false,
+          reason:
+            "the memory root is not a git repository — there is no commit history to read; run `git init` in the memory root to enable it",
+        };
+      }
+      const commits = await logCommits(root, LOCAL_SCAN_CAP);
+      return {
+        commits: commits.map((c) => ({
+          sha: c.oid,
+          message: c.message,
+          committedAt:
+            c.committedAtMs !== null ? new Date(c.committedAtMs).toISOString() : null,
+        })),
+        available: true,
+      };
+    }
+    return { commits: [], available: false, reason: "demo mode has no commit log" };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/Could not find refs\/heads|Could not find HEAD/i.test(message)) {
+      return {
+        commits: [],
+        available: false,
+        reason:
+          "the memory repository has no commits yet (unborn branch) — there is no cursor to read; the reflection range starts from the beginning (fresh-deployment semantics, nothing skipped)",
+      };
+    }
+    return { commits: [], available: false, reason: `log read failed: ${message}` };
+  }
+}
+
+/** Everything the panel's log layer renders, derived from ONE scan. */
+export interface HQLogDerivation {
+  /** The slice-level water level (newest clean round's furthest seen mark). */
+  cursor: { sliceId: string | null; sha: string | null; at: string | null };
+  /** Newest-first reflection rounds (a glance, capped) — files: [] (omitted). */
+  rounds: ReflectionRoundLogEntry[];
+  /** Newest-first parsed summary bodies (a glance, capped). */
+  summaries: RecentSummaryEntry[];
+}
+
+/** Pure: shape ONE scan into cursor + rounds + summaries (no I/O at all). */
+export function deriveHQLog(scan: HQLogScan): HQLogDerivation {
+  const rounds: ReflectionRoundLogEntry[] = [];
+  const summaries: RecentSummaryEntry[] = [];
+  const cursor: HQLogDerivation["cursor"] = {
+    sliceId: null,
+    sha: null,
+    at: null,
+  };
+  for (const c of scan.commits) {
+    if (summaries.length < MAX_RECENT_SUMMARIES && c.message.startsWith(SUMMARY_COMMIT_PREFIX)) {
+      summaries.push({
+        slice:
+          c.message.slice(SUMMARY_COMMIT_PREFIX.length).split("\n", 1)[0]?.trim() ?? "",
+        at: c.committedAt,
+        ...parseSummaryBody(c.message),
+      });
+    }
+    const parsed = parseReflectionRoundMessage(c.message);
+    if (parsed && rounds.length < MAX_ROUNDS) {
+      rounds.push({ sha: c.sha, committedAt: c.committedAt, parsed, files: [] });
+    }
+    // The cursor is the FIRST (newest) clean round's furthest seen mark —
+    // same semantics as readReflectionCursor, read off the same scan.
+    if (cursor.sliceId === null && parsed) {
+      const furthest = parsed.trailer?.seen?.at(-1)?.sliceId;
+      if (furthest) {
+        cursor.sliceId = furthest;
+        cursor.sha = c.sha;
+        cursor.at = c.committedAt;
+      }
+    }
+  }
+  return { cursor, rounds, summaries };
+}
+
+/** The one-call log read for the event-driven endpoints: scan once, derive. */
+export async function readHQLogBundle(): Promise<{
+  derivation: HQLogDerivation;
+  available: boolean;
+  reason?: string;
+}> {
+  const scan = await readHQLogScan();
+  if (!scan.available) {
+    return { derivation: deriveHQLog(scan), available: false, reason: scan.reason };
+  }
+  return { derivation: deriveHQLog(scan), available: true };
+}
+
 /**
  * The 暂存 (§1 lastNote 的去向): the newest reflection round commit that
  * carries a note — {note, at: commit time}. The turn pipeline's exactly-once

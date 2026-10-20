@@ -1,6 +1,7 @@
 /**
  * GET /api/evolution/hq-status — the companion pod's aggregate read
- * (v0.39 §4.1), three layers assembled in one answer:
+ * (v0.39 §4.1), two layers assembled in one answer (v0.11 streams: the log
+ * layer moved to GET /api/evolution/hq-log and only rides here with ?log=1):
  *
  *   公开层  reflection — the hook channel: getHookByToken(REFLECTION_TOKEN)
  *           → runId → getRun: status/createdAt + the run's own attributes
@@ -11,22 +12,19 @@
  *           runtime interface is unavailable the layer degrades to an
  *           explicit "运行表不可用" row, never to fabricated rows or a
  *           silent blank (§4.1 降级矩阵).
- *   日志层  log — the commit-log read: the water level (newest clean round's
- *           `seen:` trailer + its sha/time), the newest rounds' notes, and
- *           the behind count (slice ids past the level — a glance, ±1).
- *           Unavailable → an explicit line, the run rows stand.
  *
- * The route is STATELESS ASSEMBLY (read three layers → merge → answer) and
- * writes NOTHING. 面板无正确性依赖 (§6): this route 500-ing changes nothing
- * about turns, writers, or reflection.
+ * The route is STATELESS ASSEMBLY and writes NOTHING. 面板无正确性依赖
+ * (§6): this route 500-ing changes nothing about turns, writers, or
+ * reflection. The heavy GitHub reads live behind /api/evolution/hq-log,
+ * fetched on panel open / a run's stream terminal / manual refresh only —
+ * polling THIS route costs zero GitHub calls (v0.11 streams).
  */
 import { getHookByToken, getRun } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 import { getWorld } from "workflow/runtime";
 import { REFLECTION_TOKEN } from "@/app/api/evolution/reflection-run";
 import { isLiveRunStatus, type ParallelRunEntry } from "@/lib/chat/parallel-runs";
-import { readReflectionCursor, readReflectionLog, readRecentSummaries } from "@/lib/chat/hq-log";
-import type { RecentSummaryEntry } from "@/lib/chat/hq-log";
+import { readHQLogBundle, type RecentSummaryEntry } from "@/lib/chat/hq-log";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +40,28 @@ export interface PanelRunRow {
   burst: string | null;
   ageMs: number | null;
 }
+
+/** 日志层 — the cursor/water level + recent rounds (降级显式). */
+export type HQLogLayer =
+  | {
+      state: "live";
+      cursor: { sliceId: string; sha: string | null; at: string | null } | null;
+      behind: number | null;
+      recentRounds: Array<{
+        date: string;
+        note: string | null;
+        at: string | null;
+        seen: string | null;
+        evolved: string | null;
+        superseded: boolean;
+      }>;
+      /** v0.43 §5 — the newest few `Summary —` bodies, parsed for the panel. */
+      recentSummaries: RecentSummaryEntry[];
+      /** False when the summary log's own read degraded (panel shows a note). */
+      summariesAvailable: boolean;
+      summariesReason?: string;
+    }
+  | { state: "unavailable"; reason: string };
 
 export interface HQStatusResponse {
   asOf: string;
@@ -61,27 +81,12 @@ export interface HQStatusResponse {
   runs:
     | { state: "live"; live: PanelRunRow[] }
     | { state: "unavailable"; reason: string };
-  /** 日志层 — the cursor/water level + recent rounds (降级显式). */
-  log:
-    | {
-        state: "live";
-        cursor: { sliceId: string; sha: string | null; at: string | null } | null;
-        behind: number | null;
-        recentRounds: Array<{
-          date: string;
-          note: string | null;
-          at: string | null;
-          seen: string | null;
-          evolved: string | null;
-          superseded: boolean;
-        }>;
-        /** v0.43 §5 — the newest few `Summary —` bodies, parsed for the panel. */
-        recentSummaries: RecentSummaryEntry[];
-        /** False when the summary log's own read degraded (panel shows a note). */
-        summariesAvailable: boolean;
-        summariesReason?: string;
-      }
-    | { state: "unavailable"; reason: string };
+  /**
+   * 日志层 — OPTIONAL (v0.11 streams): absent by default, present only with
+   * ?log=1 (legacy/debug). The panel reads it from /api/evolution/hq-log on
+   * open / run-terminal / manual refresh — never on the 3s status poll.
+   */
+  log?: HQLogLayer;
 }
 
 function toEpochMs(v: Date | string | null | undefined): number | null {
@@ -90,7 +95,51 @@ function toEpochMs(v: Date | string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-export async function GET(): Promise<Response> {
+/**
+ * 日志层 assembly (v0.11 streams): ONE bounded commit-log scan feeds the
+ * cursor, the recent rounds AND the recent summaries; the behind count adds
+ * one slice enumeration. Shared by /api/evolution/hq-log (the panel's
+ * event-driven read) and hq-status's ?log=1 legacy face.
+ */
+export async function readLogLayer(): Promise<HQLogLayer> {
+  const bundle = await readHQLogBundle();
+  if (!bundle.available) {
+    return { state: "unavailable", reason: bundle.reason ?? "log unavailable" };
+  }
+  const d = bundle.derivation;
+  let behind: number | null = null;
+  try {
+    const rels = await enumerateSliceIds();
+    const ids = rels.map((rel) => rel.replaceAll("/", "-")).sort();
+    behind = d.cursor.sliceId
+      ? ids.filter((id) => id > d.cursor.sliceId!).length
+      : ids.length;
+  } catch {
+    behind = null; // the count is a glance — an enumeration hiccup degrades it
+  }
+  return {
+    state: "live",
+    cursor: d.cursor.sliceId
+      ? { sliceId: d.cursor.sliceId, sha: d.cursor.sha, at: d.cursor.at }
+      : null,
+    behind,
+    recentRounds: d.rounds.slice(0, 5).map((e) => ({
+      date: e.parsed.date,
+      note: e.parsed.note,
+      at: e.committedAt,
+      // v0.42 — turn-level marks (scope order): the furthest slice id is
+      // the slice-level display water level.
+      seen: e.parsed.trailer?.seen?.at(-1)?.sliceId ?? null,
+      evolved: e.parsed.trailer?.evolved?.date ?? null,
+      superseded: e.parsed.trailer?.superseded === true,
+    })),
+    // Summaries derive from the SAME scan — when the scan answered, they did.
+    recentSummaries: d.summaries,
+    summariesAvailable: true,
+  };
+}
+
+export async function GET(request: Request): Promise<Response> {
   const asOf = new Date().toISOString();
   const nowMs = Date.now();
 
@@ -174,50 +223,11 @@ export async function GET(): Promise<Response> {
     };
   }
 
-  // ── 日志层: the water level + recent rounds (降级显式, never "没有") ──
-  let log: HQStatusResponse["log"];
-  const [cursorRead, logRead, summariesRead] = await Promise.all([
-    readReflectionCursor(),
-    readReflectionLog(),
-    // v0.43 §5 — the summary stream's own read face; degrades on its own
-    // flag so a summary-scan hiccup never sinks the reflection planes.
-    readRecentSummaries(),
-  ]);
-  if (!logRead.available) {
-    log = { state: "unavailable", reason: logRead.reason ?? "log unavailable" };
-  } else {
-    let behind: number | null = null;
-    try {
-      const rels = await enumerateSliceIds();
-      const ids = rels.map((rel) => rel.replaceAll("/", "-")).sort();
-      behind = cursorRead.sliceId
-        ? ids.filter((id) => id > cursorRead.sliceId!).length
-        : ids.length;
-    } catch {
-      behind = null; // the count is a glance — an enumeration hiccup degrades it
-    }
-    log = {
-      state: "live",
-      cursor: cursorRead.sliceId
-        ? { sliceId: cursorRead.sliceId, sha: cursorRead.sha, at: cursorRead.at }
-        : null,
-      behind,
-      recentRounds: logRead.entries.slice(0, 5).map((e) => ({
-        date: e.parsed.date,
-        note: e.parsed.note,
-        at: e.committedAt,
-        // v0.42 — turn-level marks (scope order): the furthest slice id is
-        // the slice-level display water level.
-        seen: e.parsed.trailer?.seen?.at(-1)?.sliceId ?? null,
-        evolved: e.parsed.trailer?.evolved?.date ?? null,
-        superseded: e.parsed.trailer?.superseded === true,
-      })),
-      recentSummaries: summariesRead.entries,
-      summariesAvailable: summariesRead.available,
-      ...(summariesRead.reason ? { summariesReason: summariesRead.reason } : {}),
-    };
-  }
+  // ── 日志层: OPTIONAL — only with ?log=1 (the panel reads /api/evolution/hq-log
+  // on open / run-terminal / manual refresh — never on the 3s status poll) ──
+  const includeLog = new URL(request.url).searchParams.get("log") === "1";
+  const log = includeLog ? await readLogLayer() : undefined;
 
-  const body: HQStatusResponse = { asOf, reflection, runs, log };
+  const body: HQStatusResponse = { asOf, reflection, runs, ...(log ? { log } : {}) };
   return Response.json(body);
 }
