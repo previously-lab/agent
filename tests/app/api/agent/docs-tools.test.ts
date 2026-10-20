@@ -9,7 +9,7 @@
  * is exercised for real. No memory/ directory is touched — all paths are
  * map keys.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const io = vi.hoisted(() => {
   const files = new Map<string, string>();
@@ -41,6 +41,12 @@ vi.mock("@/lib/tools/readFile", () => ({
   readFileFresh: vi.fn(async () => {
     throw new Error("github read should not be called in local mode");
   }),
+  readFileViaTree: vi.fn(async () => {
+    throw new Error("github tree read should not be called in local mode");
+  }),
+  getRepoTree: vi.fn(async () => {
+    throw new Error("github tree read should not be called in local mode");
+  }),
   invalidateReadCache: vi.fn(),
 }));
 vi.mock("@/lib/demo/demo-fs", () => ({
@@ -71,8 +77,14 @@ import {
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
+  readRawBackend,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
+import {
+  readFile as githubReadFile,
+  readFileViaTree as githubReadFileViaTree,
+  getRepoTree as githubGetRepoTree,
+} from "@/lib/tools/readFile";
 
 function makeCtx(sliceId: string): ToolContext {
   return {
@@ -305,5 +317,104 @@ describe("doc_rework probe (§4.4)", () => {
     const ctx = makeCtx("2026-09-10-1002");
     await recallReadExecute({ ref: "records/2026-09-04-2130" }, opts(ctx));
     expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+  });
+});
+
+// ─── GitHub backend: recall reads route through the cached tree layer ─────
+//
+// The production incident this guards (recallSearchExecute at 1m6s, hourly
+// quota exhausted): the GitHub branch of the read dispatch used to call the
+// direct per-file `readFile` — one uncached GitHub API call per scanned
+// file. Historical recall reads are display reads: they must resolve through
+// `readFileViaTree` (cached tree + content-addressed blob layer), where a
+// warm instance pays zero per-file API calls (the zero-underlying-calls
+// property itself is covered by tests/lib/tools/readFile-tree.test.ts).
+// `opts.fresh` keeps the direct read for write-feeding callers.
+
+describe("GitHub backend routing (cached reads)", () => {
+  const githubThrow = async () => {
+    throw new Error("github tree read should not be called in local mode");
+  };
+
+  beforeEach(() => {
+    vi.mocked(githubGetRepoTree).mockClear();
+    vi.mocked(githubReadFileViaTree).mockClear();
+    vi.mocked(githubReadFile).mockClear();
+    // Warm tree: every seeded file is a blob entry, non-truncated — the
+    // listing walk in createRecallBackend takes the cached-tree branch.
+    vi.mocked(githubGetRepoTree).mockImplementation(async () => ({
+      treeSha: "memsha",
+      truncated: false,
+      entries: [...io.files.keys()].map((p) => ({
+        path: p,
+        type: "blob" as const,
+        sha: `sha-${p}`,
+        size: io.files.get(p)!.length,
+      })),
+    }));
+    vi.mocked(githubReadFileViaTree).mockImplementation(async (p: string) => {
+      if (!io.files.has(p)) throw new Error(`File not found: "${p}"`);
+      return io.files.get(p)!;
+    });
+    vi.mocked(githubReadFile).mockImplementation(async (p: string) => {
+      if (!io.files.has(p)) throw new Error(`File not found: "${p}"`);
+      return io.files.get(p)!;
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(githubGetRepoTree).mockImplementation(githubThrow);
+    vi.mocked(githubReadFileViaTree).mockImplementation(githubThrow);
+    vi.mocked(githubReadFile).mockImplementation(async () => {
+      throw new Error("github read should not be called in local mode");
+    });
+  });
+
+  function makeGithubCtx(sliceId: string): ToolContext {
+    return {
+      repo: "mem",
+      owner: "me",
+      useGithub: true,
+      useDemo: false,
+      sliceId,
+      recentTurns: [],
+    };
+  }
+
+  it("recallRecent reads slice files via readFileViaTree, never the direct read", async () => {
+    const out = await recallRecentExecute({}, opts(makeGithubCtx("2026-09-10-1000")));
+    expect(out).toContain("records/2026-09-04-2130");
+    expect(githubReadFileViaTree).toHaveBeenCalled();
+    expect(
+      vi.mocked(githubReadFileViaTree).mock.calls.every(([p]) =>
+        p.startsWith("memory/"),
+      ),
+    ).toBe(true);
+    expect(githubReadFile).not.toHaveBeenCalled();
+  });
+
+  it("recallSearch scans records bodies via readFileViaTree, never the direct read", async () => {
+    const out = await recallSearchExecute(
+      { query: "深埋关键词", includeRecords: true },
+      opts(makeGithubCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(/^1 match\(es\) for "深埋关键词":/);
+    expect(githubReadFileViaTree).toHaveBeenCalled();
+    expect(githubReadFile).not.toHaveBeenCalled();
+  });
+
+  it("readRawBackend defaults to the cached layer; opts.fresh stays direct", async () => {
+    const ctx = makeGithubCtx("2026-09-10-1000");
+
+    const cached = await readRawBackend(ctx, CORE_PATH);
+    expect(cached).toBe(CORE_RAW);
+    expect(githubReadFileViaTree).toHaveBeenCalledWith(CORE_PATH, "mem", "me", undefined);
+    expect(githubReadFile).not.toHaveBeenCalled();
+
+    const fresh = await readRawBackend(ctx, CORE_PATH, { fresh: true });
+    expect(fresh).toBe(CORE_RAW);
+    expect(githubReadFile).toHaveBeenCalledTimes(1);
+    // The fresh read does NOT add another cached-layer call.
+    expect(githubReadFileViaTree).toHaveBeenCalledTimes(1);
   });
 });

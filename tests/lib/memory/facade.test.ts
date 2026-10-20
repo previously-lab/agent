@@ -28,6 +28,8 @@ import {
   buildTreeIndex,
   sliceHeadText,
   firstProseLine,
+  mapWithConcurrency,
+  createReadCache,
   type RecallBackend,
   type RecallChangesRead,
   type RecallResult,
@@ -1200,5 +1202,158 @@ describe("recallSince — pure shaping over a synthetic read", () => {
     const timeline = recallSince(read, { category: "timeline" });
     if (timeline.kind !== "changes") throw new Error(`expected changes, got ${timeline.kind}`);
     expect(timeline.entries.map((e) => e.ref)).toEqual(["records/2026-10-15-0831"]);
+  });
+});
+
+
+// ─── Bounded concurrency + read cache (recall latency fix) ─────────────────
+
+describe("mapWithConcurrency", () => {
+  const delayed =
+    (ms: number) =>
+    async <T>(v: T): Promise<T> => {
+      await new Promise((r) => setTimeout(r, ms));
+      return v;
+    };
+
+  it("keeps input order regardless of completion order", async () => {
+    // Later items finish FIRST (0 ms) while early items lag — output must
+    // still match input order.
+    const out = await mapWithConcurrency([50, 10, 30], 3, async (n) => {
+      await new Promise((r) => setTimeout(r, 60 - n));
+      return n * 2;
+    });
+    expect(out).toEqual([100, 20, 60]);
+  });
+
+  it("never exceeds the concurrency limit", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const out = await mapWithConcurrency(Array.from({ length: 25 }, (_, i) => i), 3, async (n) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await delayed(5)(null);
+      inFlight -= 1;
+      return n;
+    });
+    expect(maxInFlight).toBeLessThanOrEqual(3);
+    expect(out).toEqual(Array.from({ length: 25 }, (_, i) => i));
+  });
+
+  it("caps lanes at the item count and handles empty input", async () => {
+    const seen: number[] = [];
+    await mapWithConcurrency([1], 8, async (n) => {
+      seen.push(n);
+    });
+    expect(seen).toEqual([1]);
+    expect(await mapWithConcurrency([], 8, delayed(0))).toEqual([]);
+  });
+});
+
+describe("createReadCache", () => {
+  function countingBackend(files: Record<string, string>): {
+    backend: RecallBackend;
+    calls: Map<string, number>;
+  } {
+    const calls = new Map<string, number>();
+    const backend: RecallBackend = {
+      listMemoryFiles: async () => Object.keys(files).sort(),
+      readFile: async (path: string) => {
+        calls.set(path, (calls.get(path) ?? 0) + 1);
+        const v = files[path];
+        if (v === undefined) throw new Error(`File not found: "${path}"`);
+        return v;
+      },
+    };
+    return { backend, calls };
+  }
+
+  it("serves repeat reads inside the TTL with zero underlying calls", async () => {
+    const { backend, calls } = countingBackend({ "memory/self/agenda.md": "# agenda" });
+    const cached = createReadCache(backend);
+    const a = await cached.readFile("memory/self/agenda.md");
+    const b = await cached.readFile("memory/self/agenda.md");
+    expect(a).toBe(b);
+    expect(calls.get("memory/self/agenda.md")).toBe(1);
+    // passthrough for the other primitive
+    expect(await cached.listMemoryFiles()).toEqual(["memory/self/agenda.md"]);
+  });
+
+  it("re-reads after the TTL window", async () => {
+    vi.useFakeTimers();
+    try {
+      const { backend, calls } = countingBackend({ "memory/self/agenda.md": "# agenda" });
+      const cached = createReadCache(backend);
+      await cached.readFile("memory/self/agenda.md");
+      vi.setSystemTime(Date.now() + 29_000);
+      await cached.readFile("memory/self/agenda.md");
+      expect(calls.get("memory/self/agenda.md")).toBe(1);
+      vi.setSystemTime(Date.now() + 31_000);
+      await cached.readFile("memory/self/agenda.md");
+      expect(calls.get("memory/self/agenda.md")).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts the oldest entry past the capacity cap", async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 202; i += 1) files[`memory/self/f${i}.md`] = `body ${i}`;
+    const { backend, calls } = countingBackend(files);
+    const cached = createReadCache(backend);
+    for (let i = 0; i < 200; i += 1) await cached.readFile(`memory/self/f${i}.md`);
+    // Two more inserts push f0 and f1 out (cap 200, insertion-order eviction).
+    await cached.readFile("memory/self/f200.md");
+    await cached.readFile("memory/self/f201.md");
+    expect(calls.get("memory/self/f0.md")).toBe(1);
+    await cached.readFile("memory/self/f0.md"); // evicted → backend again
+    expect(calls.get("memory/self/f0.md")).toBe(2);
+    // f199 is still inside → no extra call.
+    await cached.readFile("memory/self/f199.md");
+    expect(calls.get("memory/self/f199.md")).toBe(1);
+  });
+
+  it("does not cache failures", async () => {
+    const { backend, calls } = countingBackend({});
+    const cached = createReadCache(backend);
+    await expect(cached.readFile("memory/self/nope.md")).rejects.toThrow("File not found");
+    await expect(cached.readFile("memory/self/nope.md")).rejects.toThrow("File not found");
+    expect(calls.get("memory/self/nope.md")).toBe(2);
+  });
+});
+
+describe("recall verbs read with bounded concurrency", () => {
+  it("recallSearch caps in-flight reads and preserves hit order", async () => {
+    // 12 case index files, all containing the keyword; the scan must fan out
+    // no wider than the concurrency ceiling and return hits newest-first.
+    const files: Record<string, string> = {};
+    for (let i = 1; i <= 12; i += 1) {
+      const day = String(i).padStart(2, "0");
+      files[`memory/people/case-${day}/index.md`] =
+        `---\nopened: 2026-09-${day}\nupdated: 2026-09-${day}T10:00:00.000Z\n---\n\n关键词 body ${i}`;
+    }
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const backend: RecallBackend = {
+      listMemoryFiles: async () => Object.keys(files).sort(),
+      readFile: async (path: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 2));
+        inFlight -= 1;
+        const v = files[path];
+        if (v === undefined) throw new Error(`File not found: "${path}"`);
+        return v;
+      },
+    };
+    const r = await recallSearch(backend, { query: "关键词" });
+    expect(r.kind).toBe("entries");
+    if (r.kind !== "entries") return;
+    expect(r.entries).toHaveLength(12);
+    // Newest-first by activity date (case-12 = 2026-09-12 first).
+    expect(r.entries[0]!.ref).toBe("people/case-12");
+    expect(r.entries[11]!.ref).toBe("people/case-01");
+    expect(maxInFlight).toBeLessThanOrEqual(8);
+    expect(maxInFlight).toBeGreaterThan(1); // actually concurrent, not serial
   });
 });

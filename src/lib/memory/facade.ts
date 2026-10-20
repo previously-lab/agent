@@ -192,6 +192,84 @@ function isAbsentError(e: unknown): boolean {
   );
 }
 
+// ─── Bounded concurrency + short-TTL read cache (recall latency) ──────────
+//
+// Production traces showed recallSearch at ~66 s: the scan reads up to
+// SEARCH_SCAN_CAP files one at a time, each a separate GitHub call, and
+// recallRecent fans the same serial pattern across cases/pieces/slices.
+// Fix: bound the fan-out (GitHub's secondary rate limiting punishes burst
+// concurrency, so the ceiling stays modest) and cache file contents for a
+// short window so one turn's recallRecent → recallSearch → recallRead chain
+// hits memory instead of GitHub on repeat paths.
+
+/**
+ * Hard ceiling on parallel file reads. 8 in flight cuts a 50-file serial
+ * scan to ~7 waves; higher fan-out starts tripping GitHub's secondary
+ * rate limits, which cost far more than the waves save.
+ */
+const RECALL_READ_CONCURRENCY = 8;
+
+/** Cache entry lifetime: one turn's recall chain completes well inside it. */
+const READ_CACHE_TTL_MS = 30_000;
+/** Beyond this many cached paths the oldest INSERTED entry is evicted. */
+const READ_CACHE_MAX_ENTRIES = 200;
+
+/**
+ * Run `fn` over `items` with at most `limit` calls in flight. Results come
+ * back in INPUT order regardless of completion order; the first rejection
+ * propagates after the in-flight calls settle.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next;
+      next += 1;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!, i);
+    }
+  };
+  const lanes = Math.min(Math.max(1, limit), Math.max(1, items.length));
+  await Promise.all(Array.from({ length: lanes }, worker));
+  return results;
+}
+
+interface ReadCacheEntry {
+  content: string;
+  at: number;
+}
+
+/**
+ * Short-TTL wrapper around `backend.readFile`: keyed by repo-relative path,
+ * entries expire after READ_CACHE_TTL_MS and the oldest inserted entry is
+ * evicted past READ_CACHE_MAX_ENTRIES. Read path only — the write paths
+ * (batch / episodic flush) never route through it, and nothing invalidates
+ * it: within one turn the same file is read by recallRecent → recallSearch
+ * → recallRead, and a ≤30 s stale window is the accepted trade for zero
+ * repeat GitHub calls.
+ */
+export function createReadCache(backend: RecallBackend): RecallBackend {
+  const cache = new Map<string, ReadCacheEntry>();
+  const readFile = async (path: string): Promise<string> => {
+    const hit = cache.get(path);
+    const now = Date.now();
+    if (hit && now - hit.at < READ_CACHE_TTL_MS) return hit.content;
+    if (hit) cache.delete(path);
+    const content = await backend.readFile(path);
+    cache.set(path, { content, at: now });
+    if (cache.size > READ_CACHE_MAX_ENTRIES) {
+      cache.delete(cache.keys().next().value as string);
+    }
+    return content;
+  };
+  return { listMemoryFiles: () => backend.listMemoryFiles(), readFile };
+}
+
 // ─── Tree index (paths only — zero content reads) ─────────────────────────
 
 interface CaseNode {
@@ -566,10 +644,12 @@ async function gatherScopeEntries(
     return isCaseCategory(category) && nodeCategory(node) === category;
   };
 
-  for (const node of index.cases) {
-    if (!wantNode(node) || !node.indexPath) continue;
-    const built = await buildCaseEntry(backend, node);
-    if (built) out.push({ built, sourcePath: node.indexPath });
+  const nodes = index.cases.filter((node) => wantNode(node) && node.indexPath);
+  const builtCases = await mapWithConcurrency(nodes, RECALL_READ_CONCURRENCY, (node) =>
+    buildCaseEntry(backend, node),
+  );
+  for (const [i, built] of builtCases.entries()) {
+    if (built) out.push({ built, sourcePath: nodes[i]!.indexPath! });
   }
   if (category === undefined || category === "self") {
     if (index.agendaPath) {
@@ -585,9 +665,13 @@ async function gatherScopeEntries(
   }
   if (category === undefined || category === "records" || category === "timeline") {
     const sliceCategory = category === "timeline" ? "timeline" : "records";
-    for (const sliceId of index.slices) {
-      const built = await buildSliceEntry(backend, sliceId, sliceCategory);
-      if (built) out.push({ built, sourcePath: `records/${sliceId}` });
+    const builtSlices = await mapWithConcurrency(
+      index.slices,
+      RECALL_READ_CONCURRENCY,
+      (sliceId) => buildSliceEntry(backend, sliceId, sliceCategory),
+    );
+    for (const [i, built] of builtSlices.entries()) {
+      if (built) out.push({ built, sourcePath: `records/${index.slices[i]!}` });
     }
   }
   return out;
@@ -616,6 +700,7 @@ export async function recallRecent(
   backend: RecallBackend,
   input: RecallRecentInput,
 ): Promise<RecallResult> {
+  backend = createReadCache(backend);
   const n = Math.min(Math.max(1, Math.floor(input.n ?? RECENT_DEFAULT_N)), RECENT_MAX_N);
   const offset = Math.max(0, Math.floor(input.offset ?? 0));
   let index: MemoryTreeIndex;
@@ -810,6 +895,7 @@ export async function recallFind(
   backend: RecallBackend,
   input: RecallFindInput,
 ): Promise<RecallResult> {
+  backend = createReadCache(backend);
   const index = buildTreeIndex(await backend.listMemoryFiles());
   const name = normalizeCaseRefText(input.name);
   const { category } = input;
@@ -831,15 +917,19 @@ export async function recallFind(
         .slice(-5)
         .reverse();
       const nearMisses: MemoryEntry[] = [];
-      for (const id of nearIds) {
-        const built = await buildSliceEntry(backend, id, sliceCategory);
+      const builtNear = await mapWithConcurrency(nearIds, RECALL_READ_CONCURRENCY, (id) =>
+        buildSliceEntry(backend, id, sliceCategory),
+      );
+      for (const built of builtNear) {
         if (built) nearMisses.push(built.entry);
       }
       return { kind: "not_found", nearMisses };
     }
     const entries: MemoryEntry[] = [];
-    for (const id of hits) {
-      const built = await buildSliceEntry(backend, id, sliceCategory);
+    const builtHits = await mapWithConcurrency(hits, RECALL_READ_CONCURRENCY, (id) =>
+      buildSliceEntry(backend, id, sliceCategory),
+    );
+    for (const built of builtHits) {
       if (built) entries.push(built.entry);
     }
     if (entries.length === 0) {
@@ -903,9 +993,11 @@ export async function recallFind(
     .filter((s) => s.score >= NEAR_MISS_MIN_SCORE)
     .slice(0, NEAR_MISS_MAX);
   const nearMisses: MemoryEntry[] = [];
+  const builtNear = await mapWithConcurrency(nearNodes, RECALL_READ_CONCURRENCY, ({ node }) =>
+    buildCaseEntry(backend, node),
+  );
   let nearFailures = 0;
-  for (const { node } of nearNodes) {
-    const built = await buildCaseEntry(backend, node);
+  for (const built of builtNear) {
     if (built) nearMisses.push(built.entry);
     else nearFailures += 1;
   }
@@ -960,78 +1052,84 @@ async function gatherSearchUnits(
     return (CASE_TREE_DIRS[input.category] ?? []).includes(treeDir);
   };
 
-  for (const node of index.cases) {
-    if (!wantDir(node.treeDir)) continue;
-    // Sort key needs the header — one cached read per case in scope.
-    let caseActivity = latestPieceDate(node);
-    if (node.indexPath) {
-      try {
-        const raw = await backend.readFile(node.indexPath);
-        const doc = parseCaseDoc(raw, {
-          category: node.treeDir as CaseCategory,
-          caseName: node.caseName,
-          fileName: "index.md",
-        });
-        caseActivity = maxDate(doc.updated.slice(0, 10), caseActivity);
-      } catch {
-        // header unreadable — fall back to the piece-date sort key
-      }
-      units.push({
-        docPath: node.indexPath,
-        activity: caseActivity,
-        sliceHeadOnly: false,
-        build: async (raw) => {
+  const caseUnits = await mapWithConcurrency(
+    index.cases.filter((node) => wantDir(node.treeDir)),
+    RECALL_READ_CONCURRENCY,
+    async (node): Promise<SearchUnit[]> => {
+      const out: SearchUnit[] = [];
+      // Sort key needs the header — one cached read per case in scope.
+      let caseActivity = latestPieceDate(node);
+      if (node.indexPath) {
+        try {
+          const raw = await backend.readFile(node.indexPath);
           const doc = parseCaseDoc(raw, {
             category: node.treeDir as CaseCategory,
             caseName: node.caseName,
             fileName: "index.md",
           });
-          const category = nodeCategory(node);
-          return {
-            entry: {
-              ref: `${category}/${node.caseName}`,
-              category,
-              kind: nodeKind(node),
-              title: node.caseName,
-              date: doc.opened || caseActivity,
-              excerpt: "",
-              updated: doc.updated,
-            },
-            activity: caseActivity,
-          };
-        },
-      });
-    }
-    for (const piecePath of node.pieces) {
-      const date = pieceDate(piecePath);
-      units.push({
-        docPath: piecePath,
-        activity: date,
-        sliceHeadOnly: false,
-        build: (raw) => {
-          const fileName = piecePath.slice(piecePath.lastIndexOf("/") + 1);
-          const doc = parseCaseDoc(raw, {
-            category: node.treeDir as CaseCategory,
-            caseName: node.caseName,
-            fileName,
-          });
-          const category = nodeCategory(node);
-          return Promise.resolve({
-            entry: {
-              ref: `${category}/${node.caseName}/${fileName.replace(/\.md$/, "")}`,
-              category,
-              kind: node.treeDir === "hypotheses" ? "hypothesis" : "piece",
-              title: pieceTitle(piecePath),
-              date,
-              excerpt: "",
-              updated: doc.updated,
-            },
-            activity: date,
-          });
-        },
-      });
-    }
-  }
+          caseActivity = maxDate(doc.updated.slice(0, 10), caseActivity);
+        } catch {
+          // header unreadable — fall back to the piece-date sort key
+        }
+        out.push({
+          docPath: node.indexPath,
+          activity: caseActivity,
+          sliceHeadOnly: false,
+          build: async (raw) => {
+            const doc = parseCaseDoc(raw, {
+              category: node.treeDir as CaseCategory,
+              caseName: node.caseName,
+              fileName: "index.md",
+            });
+            const category = nodeCategory(node);
+            return {
+              entry: {
+                ref: `${category}/${node.caseName}`,
+                category,
+                kind: nodeKind(node),
+                title: node.caseName,
+                date: doc.opened || caseActivity,
+                excerpt: "",
+                updated: doc.updated,
+              },
+              activity: caseActivity,
+            };
+          },
+        });
+      }
+      for (const piecePath of node.pieces) {
+        const date = pieceDate(piecePath);
+        out.push({
+          docPath: piecePath,
+          activity: date,
+          sliceHeadOnly: false,
+          build: (raw) => {
+            const fileName = piecePath.slice(piecePath.lastIndexOf("/") + 1);
+            const doc = parseCaseDoc(raw, {
+              category: node.treeDir as CaseCategory,
+              caseName: node.caseName,
+              fileName,
+            });
+            const category = nodeCategory(node);
+            return Promise.resolve({
+              entry: {
+                ref: `${category}/${node.caseName}/${fileName.replace(/\.md$/, "")}`,
+                category,
+                kind: node.treeDir === "hypotheses" ? "hypothesis" : "piece",
+                title: pieceTitle(piecePath),
+                date,
+                excerpt: "",
+                updated: doc.updated,
+              },
+              activity: date,
+            });
+          },
+        });
+      }
+      return out;
+    },
+  );
+  for (const unitsOfCase of caseUnits) units.push(...unitsOfCase);
 
   if (input.category === undefined || input.category === "self") {
     if (index.agendaPath) {
@@ -1100,6 +1198,7 @@ export async function recallSearch(
   backend: RecallBackend,
   input: RecallSearchInput,
 ): Promise<RecallResult> {
+  backend = createReadCache(backend);
   const keywords = (Array.isArray(input.query) ? input.query : [input.query])
     .map((q) => q.trim())
     .filter((q) => q.length > 0);
@@ -1125,25 +1224,32 @@ export async function recallSearch(
   const scanUnits = units.slice(0, SEARCH_SCAN_CAP);
 
   const hits: MemoryEntry[] = [];
+  const scannedUnits = await mapWithConcurrency(
+    scanUnits,
+    RECALL_READ_CONCURRENCY,
+    async (unit): Promise<{ failed: boolean; entry: MemoryEntry | null }> => {
+      let raw: string;
+      try {
+        raw = unit.sliceId
+          ? await readSliceRaw(backend, unit.sliceId, "core")
+          : await backend.readFile(unit.docPath);
+      } catch {
+        return { failed: true, entry: null };
+      }
+      if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
+      const segments = splitParagraphs(raw);
+      const found = segmentSearch(segments, keywords, 1, 1);
+      if (found.length === 0) return { failed: false, entry: null };
+      const built = await unit.build(raw);
+      if (!built) return { failed: false, entry: null };
+      built.entry.excerpt = truncateExcerpt(found[0]!.content);
+      return { failed: false, entry: built.entry };
+    },
+  );
   let readFailures = 0;
-  for (const unit of scanUnits) {
-    let raw: string;
-    try {
-      raw = unit.sliceId
-        ? await readSliceRaw(backend, unit.sliceId, "core")
-        : await backend.readFile(unit.docPath);
-    } catch {
-      readFailures += 1;
-      continue;
-    }
-    if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
-    const segments = splitParagraphs(raw);
-    const found = segmentSearch(segments, keywords, 1, 1);
-    if (found.length === 0) continue;
-    const built = await unit.build(raw);
-    if (!built) continue;
-    built.entry.excerpt = truncateExcerpt(found[0]!.content);
-    hits.push(built.entry);
+  for (const r of scannedUnits) {
+    if (r.failed) readFailures += 1;
+    else if (r.entry) hits.push(r.entry);
   }
 
   if (hits.length === 0) {
@@ -1281,15 +1387,22 @@ async function readFirstCandidate(
   | { kind: "allAbsent" }
   | { kind: "unavailable"; note: string }
 > {
-  for (const path of candidates) {
+  // Probes run in parallel (cached, so an extra probe is cheap); the verdict
+  // still follows candidate order: first hit wins, else the first genuine
+  // (non-absent) error in order, else total absence.
+  const probed = await mapWithConcurrency(candidates, RECALL_READ_CONCURRENCY, async (path) => {
     try {
       const content = await backend.readFile(path);
-      return { kind: "content", content, path };
+      return { kind: "content" as const, content, path };
     } catch (e) {
-      if (!isAbsentError(e)) {
-        return { kind: "unavailable", note: e instanceof Error ? e.message : String(e) };
-      }
+      return isAbsentError(e)
+        ? { kind: "absent" as const }
+        : { kind: "error" as const, note: e instanceof Error ? e.message : String(e) };
     }
+  });
+  for (const r of probed) {
+    if (r.kind === "content") return r;
+    if (r.kind === "error") return { kind: "unavailable", note: r.note };
   }
   return { kind: "allAbsent" };
 }
@@ -1336,10 +1449,12 @@ async function fuzzyResolveCaseRef(
     matched = candidates ? { ref: rebuilt, candidates } : null;
   }
   const nearMisses: MemoryEntry[] = [];
-  for (const { node } of scored
-    .filter((s) => s.score >= NEAR_MISS_MIN_SCORE)
-    .slice(0, NEAR_MISS_MAX)) {
-    const built = await buildCaseEntry(backend, node);
+  const builtNear = await mapWithConcurrency(
+    scored.filter((s) => s.score >= NEAR_MISS_MIN_SCORE).slice(0, NEAR_MISS_MAX),
+    RECALL_READ_CONCURRENCY,
+    ({ node }) => buildCaseEntry(backend, node),
+  );
+  for (const built of builtNear) {
     if (built) nearMisses.push(built.entry);
   }
   return { matched, nearMisses };
@@ -1378,7 +1493,7 @@ export async function recallRead(
   backend: RecallBackend,
   input: RecallReadInput,
 ): Promise<RecallReadResult> {
-  const result = await recallReadBody(backend, input);
+  const result = await recallReadBody(createReadCache(backend), input);
   if (input.outline && result.kind === "content") {
     const { totalLines, headings } = parseDocumentOutline(result.content);
     return { kind: "outline", ref: input.ref, totalLines, headings };

@@ -19,7 +19,7 @@ import { start } from "workflow/api";
 // serialization-class registration for it runs before any doStreamStep
 // message is handled (see src/lib/models/step-boundary-model.ts).
 import "@/lib/models/step-boundary-model";
-import { readFile, getRepoTree } from "@/lib/tools/readFile";
+import { readFile, readFileViaTree, getRepoTree } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {
   readFileLocal,
@@ -215,10 +215,27 @@ function emitToolProgress(
 /**
  * Backend-dispatched raw read (demo / GitHub / local) — the dispatch the
  * facade backend below shares.
+ *
+ * GitHub historical reads go through the content-addressed tree + blob layer
+ * (`readFileViaTree`): the path's sha comes from the cached tree, the bytes
+ * from the permanent blob cache, so a recall scan over N slice files costs
+ * zero per-file API calls on a warm instance instead of N direct reads. The
+ * recall surface only ever reads history (committed slices), so staleness is
+ * bounded by the tree TTL; `opts.fresh` keeps the direct per-file read for a
+ * caller that must see the bytes on the other side NOW (same contract as
+ * io-helpers' `fsReadFile`).
  */
-async function readRawBackend(ctx: ToolContext, path: string): Promise<string> {
+export async function readRawBackend(
+  ctx: ToolContext,
+  path: string,
+  opts?: { fresh?: boolean },
+): Promise<string> {
   if (ctx.useDemo) return readFileDemo(path);
-  if (ctx.useGithub) return readFile(path, ctx.repo, ctx.owner);
+  if (ctx.useGithub) {
+    return opts?.fresh
+      ? readFile(path, ctx.repo, ctx.owner, opts)
+      : readFileViaTree(path, ctx.repo, ctx.owner, opts);
+  }
   return readFileLocal(path);
 }
 

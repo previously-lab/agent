@@ -31,12 +31,12 @@ const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
 //      path's identity with the TTL class `ttlForPath` assigns and the tag
 //      writers revalidate. Unchanged contract.
 //   2. The content-addressed layer at the bottom of the file: ONE cached
-//      `memory/` subtree listing (`getRepoTree`, 60s, `tree:` tag) plus blob
+//      `memory/` subtree listing (`getRepoTree`, 300s, `tree:` tag) plus blob
 //      bodies fetched BY SHA (`readBlobBase64`, effectively permanent — the
 //      sha is the content hash). `readFileViaTree` / `listRepoChildren` /
 //      `readBinaryFileViaTree` derive path answers from the two, so a warm
 //      instance answers every display read with at most one small tree
-//      revalidation per minute instead of one API call per file per TTL
+//      revalidation per 5 minutes instead of one API call per file per TTL
 //      window.
 //
 // A single chat turn reads several files repeatedly (strands.json 4-7x,

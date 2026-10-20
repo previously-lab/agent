@@ -70,11 +70,14 @@ export const CACHE_TTLS = {
    * GitHub: the cached `memory/` subtree listing (`getRepoTree` in
    * readFile.ts) — the metadata spine every enumeration, directory listing
    * and sha-resolved read is derived from. Writers revalidate the `tree:`
-   * tag on every commit, so in-app changes are exact; 60s is only the bound
-   * for changes that bypass our write path (a direct push). Same staleness
-   * class as TIMELINE_INDEX_SECONDS, a different kind of payload.
+   * tag on every commit, so in-app changes are exact; 300s is only the bound
+   * for changes that bypass our write path (a direct push) — worst case a
+   * file created or edited out-of-band stays invisible to reads for 5
+   * minutes. Blob bodies are content-addressed by sha, so a stale tree entry
+   * can only ever point a path at the wrong (older) revision, never at
+   * corrupt bytes, and the next revalidation self-heals.
    */
-  TREE_SECONDS: 60,
+  TREE_SECONDS: 300,
   /**
    * GitHub: a blob read by its content sha (`readBlobBase64` in readFile.ts).
    * The sha IS the content hash — an entry can only ever hold the one true

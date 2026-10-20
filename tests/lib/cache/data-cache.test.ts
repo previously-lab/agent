@@ -219,9 +219,11 @@ describe("ttlForPath — local", () => {
 describe("the tree/blob TTLs (Wave A)", () => {
   it("pins the tree at the mutable-metadata bound, blobs at a week", () => {
     // Tree: writers revalidate the `tree:` tag on every commit, so the TTL
-    // only bounds pushes that bypass our write path — same class as the
-    // timeline index.
-    expect(CACHE_TTLS.TREE_SECONDS).toBe(60);
+    // only bounds pushes that bypass our write path — worst case a directly
+    // pushed change stays invisible for 5 minutes (raised from 60s: recall
+    // scans derive every path read from this listing, so its revalidation
+    // rate dominated the GitHub quota).
+    expect(CACHE_TTLS.TREE_SECONDS).toBe(300);
     // Blob: the sha IS the content hash, so the entry can never be stale —
     // a week is an eviction horizon, not a staleness bound.
     expect(CACHE_TTLS.BLOB_SECONDS).toBe(604_800);
