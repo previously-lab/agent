@@ -9,6 +9,7 @@
  * machine happens to export.
  */
 import { rm, mkdir, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const home = process.env.PREVIOUSLY_HOME;
@@ -34,3 +35,20 @@ await writeFile(
   path.join(memoryRoot, "config", "settings.json"),
   JSON.stringify({ model: { provider: "bridge/claude" } }, null, 2) + "\n",
 );
+
+// A git root, so the agent-flow spec can assert on the commit log the same way
+// production does (Summary / Reflection round prefixes, the `seen:` trailer).
+// Best-effort: a host without git keeps the filesystem-only assertions.
+try {
+  execFileSync("git", ["init", "-q"], { cwd: memoryRoot, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "e2e@previously.local"], {
+    cwd: memoryRoot,
+    stdio: "ignore",
+  });
+  execFileSync("git", ["config", "user.name", "previously e2e"], {
+    cwd: memoryRoot,
+    stdio: "ignore",
+  });
+} catch {
+  /* no git on this host — the spec degrades to filesystem assertions */
+}
