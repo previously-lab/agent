@@ -274,7 +274,7 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
 }
 
 export async function recallRecentExecute(
-  input: { category?: string; n?: number; before?: string; after?: string },
+  input: { category?: string; n?: number; offset?: number; before?: string; after?: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
@@ -291,6 +291,7 @@ export async function recallRecentExecute(
   const result = await recallRecent(createRecallBackend(ctx), {
     ...(category ? { category } : {}),
     ...(input.n !== undefined ? { n: input.n } : {}),
+    ...(input.offset !== undefined ? { offset: input.offset } : {}),
     ...(input.before ? { before: input.before } : {}),
     ...(input.after ? { after: input.after } : {}),
   });
@@ -329,6 +330,7 @@ export async function recallSearchExecute(
     since?: string;
     until?: string;
     limit?: number;
+    offset?: number;
   },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
@@ -356,6 +358,7 @@ export async function recallSearchExecute(
     ...(input.since ? { since: input.since } : {}),
     ...(input.until ? { until: input.until } : {}),
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
+    ...(input.offset !== undefined ? { offset: input.offset } : {}),
   });
   return renderRecallResult(result, {
     query: keywords.join(" "),
@@ -893,8 +896,8 @@ const WEB_FETCH_MAX_CHARS = 15_000;
 /**
  * webFetch — read a specific URL's page text, server-side.
  *
- * The web complement of readSlice: the main agent points at one item (a URL
- * instead of a slice id) and gets its raw content back for the model to
+ * The web complement of recallRead: the main agent points at one item (a URL
+ * instead of a memory ref) and gets its raw content back for the model to
  * digest. Used when the user pastes a link, or when a webSearch recommendation
  * suggests a page is worth reading. Returns the extracted prose (scripts and
  * styles stripped), truncated to keep context bounded.
@@ -1303,7 +1306,7 @@ const SUB_AGENT_TIMEOUT_NOTE =
   "The reasoning fragment was interrupted before finishing. The `answer` holds " +
   "the partial conclusion and `reasoning` the thinking trail it already produced " +
   "— work with them (noting the uncertainty). If you need more, gather the " +
-  "missing information yourself (webSearch/readDoc/readSlice), embed it, and dispatch a " +
+  "missing information yourself (webSearch / recallSearch / recallRead), embed it, and dispatch a " +
   "finer fragment. Do not re-dispatch the same question unchanged — a fragment " +
   "that timed out will likely time out again.";
 

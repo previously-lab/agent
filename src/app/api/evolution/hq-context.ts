@@ -1,6 +1,6 @@
 /**
  * Run-shared helpers for the background side (v0.21 §5) — the model, the
- * listTree manifest and the card-evolution readers a background run needs
+ * survey manifest and the card-evolution readers a background run needs
  * because it carries neither a ToolContext nor a TurnInput.
  *
  * WHY THIS MODULE EXISTS: the Workflow plugin bundles a workflow file's
@@ -31,8 +31,8 @@ export function backgroundModel() {
 }
 
 /**
- * The listTree manifest for a writer pass — the same mechanical walk the
- * reply segment's listTree tool does (memory/, config/ filtered out,
+ * The survey manifest for a writer pass — the same mechanical walk the HQ
+ * agent's survey tool does (memory/, config/ filtered out,
  * records/ collapsed to slice dirs), rebuilt here on the env-driven io layer
  * so a background run needs no ToolContext.
  */
@@ -75,7 +75,7 @@ export async function buildRunManifest(): Promise<CaseWriterManifest> {
  * (a background run carries no TurnInput backend flags).
  *
  * The round's batch rides every read (v0.37 §5 — read-your-writes): a slice
- * sealed earlier in the same round (markSlice) reads back as sealed here,
+ * sealed earlier in the same round (markOrphan) reads back as sealed here,
  * and any queued write is visible to the card agent.
  */
 export function buildRunCardReaders(batch?: WriteBatch): CardEvolutionReaders {

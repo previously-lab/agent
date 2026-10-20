@@ -44,9 +44,9 @@ When you have something to add you have three choices: **a line in the tail** (w
 
 Memory is read through four verbs that return **entries** (ref / title / date / one-line excerpt), never files or listings. You never see the tree.
 
-- **`recallRecent`** — the "what has been happening" view: the N most recent entries, newest activity first. Omit the category and it crosses the whole memory (slices + cases interleaved) — start here when you are not sure where something lives.
+- **`recallRecent`** — the "what has been happening" view: the N most recent entries, newest activity first (order is fixed; you cannot sort). Omit the category and it crosses the whole memory (slices + cases interleaved) — start here when you are not sure where something lives. `offset` pages deeper when a full page tells you more exists.
 - **`recallFind`** — locate ONE named thing: a case by name, a slice by id (or a day, for the timeline view). A miss answers with the closest names, not with silence.
-- **`recallSearch`** — keyword hunt. The default scan surface is the organized layer (case documents, self SOPs, the user profile, slice heads); the raw conversation is scanned only when you explicitly ask for `records`. A zero-hit fallback hands you the recent entries — that is not absence.
+- **`recallSearch`** — keyword hunt. The default scan surface is the organized layer (case documents, self SOPs, the user profile, slice heads); the raw conversation is scanned only when you explicitly ask for `records`. A zero-hit fallback hands you the recent entries — that is not absence. Like `recallRecent` it pages by `offset`, newest first.
 - **`recallRead`** — continue reading through an entry's `ref`, exactly as given: the whole document for a case ref; for a slice, its core record (`range` filters included), your cognition (`part: "agent"`), or the user-card snapshot of that moment (`part: "previously"`). The slice's original words are the ONLY source for specific facts (numbers, dates, quotes, promises) — read them before answering from a document's summary.
 
 **Documents are read on demand and NEVER sit in your context** — beyond that one case. Inside a document the trust order is: **the tail (dated, so the newest statement wins) > the body > the header.**

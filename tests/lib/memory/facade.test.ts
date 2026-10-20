@@ -239,6 +239,57 @@ describe("recallRecent", () => {
     expect(r.entries).toHaveLength(1);
     expect(r.truncated).toBe(true);
   });
+
+  it("offset pages deeper — no overlap, no skips, fixed page wording", async () => {
+    // 3 slices in records, newest first: 10-14, 10-09, 10-08.
+    const p1 = await recallRecent(backend, { category: "records", n: 1, offset: 0 });
+    const p2 = await recallRecent(backend, { category: "records", n: 1, offset: 1 });
+    const p3 = await recallRecent(backend, { category: "records", n: 1, offset: 2 });
+    const refs = (r: RecallResult) =>
+      r.kind === "entries" ? r.entries.map((e) => e.ref) : [];
+    const r1 = refs(p1);
+    const r2 = refs(p2);
+    const r3 = refs(p3);
+    expect(r1).toEqual(["records/2026-10-14-1836"]);
+    expect(r2).toEqual(["records/2026-10-09-2143"]);
+    expect(r3).toEqual(["records/2026-10-08-1000"]);
+    // no overlap, no skips
+    expect(new Set([...r1, ...r2, ...r3]).size).toBe(3);
+    if (p1.kind !== "entries" || p3.kind !== "entries") {
+      throw new Error("expected entries");
+    }
+    // a full page with older entries behind it carries the FIXED wording
+    expect(p1.truncated).toBe(true);
+    const text = renderRecallResult(p1, { category: "records" });
+    expect(text).toContain(
+      "Showing 1 from offset 0 — pass offset=1 for older ones.",
+    );
+    // the last page is complete: no continuation note
+    expect(p3.truncated).toBe(false);
+    expect(renderRecallResult(p3, { category: "records" })).not.toContain(
+      "for older ones.",
+    );
+  });
+
+  it("an offset past the end returns an empty page with the FIXED wording — not absence", async () => {
+    const r = await recallRecent(backend, { category: "records", n: 1, offset: 3 });
+    if (r.kind !== "entries") throw new Error("expected entries");
+    expect(r.entries).toHaveLength(0);
+    expect(r.pastEnd).toBe(true);
+    expect(renderRecallResult(r, { category: "records" })).toBe(
+      "No more entries — offset 3 is past the end; only 3 exist in this scope, newest first.",
+    );
+  });
+
+  it("a negative / fractional offset floors to 0 — the first page", async () => {
+    const r = await recallRecent(backend, { category: "records", n: 1, offset: -5 });
+    const r2 = await recallRecent(backend, { category: "records", n: 1, offset: 0.9 });
+    if (r.kind !== "entries" || r2.kind !== "entries") throw new Error("expected entries");
+    expect(r.entries.map((e) => e.ref)).toEqual(["records/2026-10-14-1836"]);
+    expect(r2.entries.map((e) => e.ref)).toEqual(["records/2026-10-14-1836"]);
+    expect(r.offset).toBe(0); // clamped, and marked so the model learns to page
+    expect(r2.offset).toBe(0);
+  });
 });
 
 // ─── Verb ② recallFind ────────────────────────────────────────────────────
@@ -343,6 +394,37 @@ describe("recallSearch", () => {
     // heads match instead.
     expect(entries.every((e) => e.date >= "2026-10-01")).toBe(true);
     expect(entries.some((e) => e.kind === "slice")).toBe(true);
+  });
+
+  it("offset pages the hits — no overlap, no skips, fixed page wording", async () => {
+    // "想换 iPhone Air" hits two slice heads (10-14 and 10-09), newest first.
+    const p1 = await recallSearch(backend, { query: "iPhone", limit: 1, offset: 0 });
+    const p2 = await recallSearch(backend, { query: "iPhone", limit: 1, offset: 1 });
+    if (p1.kind !== "entries" || p2.kind !== "entries") {
+      throw new Error("expected entries");
+    }
+    expect(p1.entries.map((e) => e.ref)).toEqual(["records/2026-10-14-1836"]);
+    expect(p2.entries.map((e) => e.ref)).toEqual(["records/2026-10-09-2143"]);
+    expect(p2.offset).toBe(1);
+    expect(p1.total).toBe(2);
+    const text = renderRecallResult(p1, { query: "iPhone" });
+    expect(text).toContain("Showing 1 from offset 0 — pass offset=1 for older ones.");
+    // the second page is complete — no continuation note
+    expect(p2.truncated).toBe(false);
+    expect(renderRecallResult(p2, { query: "iPhone" })).not.toContain(
+      "for older ones.",
+    );
+  });
+
+  it("an offset past the hits returns an empty page with the FIXED wording", async () => {
+    const r = await recallSearch(backend, { query: "iPhone", limit: 1, offset: 2 });
+    if (r.kind !== "entries") throw new Error("expected entries");
+    expect(r.entries).toHaveLength(0);
+    expect(r.pastEnd).toBe(true);
+    expect(r.total).toBe(2);
+    expect(renderRecallResult(r, { query: "iPhone" })).toBe(
+      "No more entries — offset 2 is past the end; only 2 exist in this scope, newest first.",
+    );
   });
 });
 

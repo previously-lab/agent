@@ -113,7 +113,7 @@ export interface DocResearchPassInput {
   /** The slice whose agent.md carries the question markers. */
   sliceId: string;
   excerpt: SliceExcerpt;
-  /** The listTree manifest — what cases exist before the pass starts.
+  /** The survey manifest — what cases exist before the pass starts.
    *  Optional at the seam: absent → empty tree (readCase becomes the only
    *  discovery surface — degraded but functional). */
   manifest?: CaseWriterManifest;
@@ -176,7 +176,7 @@ ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
 ${questionBlocks}
 
-## Case manifest (the full listTree — the catalog of what exists)
+## Case manifest (the full survey — the catalog of what exists)
 
 ${renderManifest(manifest.tree)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}

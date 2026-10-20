@@ -117,7 +117,7 @@ const episodic = vi.hoisted(() => ({
     ) => {
       // the real closeSlice (manager.ts): status + closed_by + end = last
       // turn's timestamp, then persist. The mock mutates in place — the
-      // tests' loadSlice hands out the SAME object, so a second markSlice
+      // tests' loadSlice hands out the SAME object, so a second markOrphan
       // call observes the close.
       slice.status = "closed";
       slice.closedBy = signal;
@@ -692,7 +692,7 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(scribeInput.date).toBe(DATE);
   });
 
-  it("markSlice seals an orphaned ACTIVE slice (closed_by: context_lost), idempotently", async () => {
+  it("markOrphan seals an orphaned ACTIVE slice (closed_by: context_lost), idempotently", async () => {
     // An active slice past the date window: the conversation long ended, the
     // close never fired, and findStaleActiveSlice only scans the last two
     // days — HQ is its only closer (T-08).
@@ -706,12 +706,12 @@ describe("handleBrief (v0.21 §5)", () => {
     };
     episodic.loadSlice.mockResolvedValue(orphan);
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r1 = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      const r1 = await callTool(opts, "markOrphan", { sliceId: SLICE_ID });
       expect(r1).toContain(`closed: ${SLICE_ID}`);
       expect(r1).toContain("context_lost");
       expect(r1).toContain("2026-08-09T13:20:00.000Z"); // end = last turn's stamp
       // Second call: the same object now reads closed → no-op, NO rewrite.
-      const r2 = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      const r2 = await callTool(opts, "markOrphan", { sliceId: SLICE_ID });
       expect(r2).toContain("no-op");
       expect(r2).toContain("context_lost");
       expect(episodic.closeSlice).toHaveBeenCalledTimes(1);
@@ -733,12 +733,12 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(outcome.error).toBeUndefined();
     // the capability is announced on the tool surface and in the role prompt
     const opts = runSubAgentMock.mock.calls[0][0];
-    const markSliceTool = opts.tools.markSlice as unknown as { description: string };
-    expect(markSliceTool.description).toContain("context_lost");
+    const markOrphanTool = opts.tools.markOrphan as unknown as { description: string };
+    expect(markOrphanTool.description).toContain("context_lost");
     expect(opts.system).toContain("orphan");
   });
 
-  it("markSlice on an already-closed slice is a no-op — closed_by named, never rewritten", async () => {
+  it("markOrphan on an already-closed slice is a no-op — closed_by named, never rewritten", async () => {
     episodic.loadSlice.mockResolvedValue({
       slice_id: SLICE_ID,
       focus: "",
@@ -749,7 +749,7 @@ describe("handleBrief (v0.21 §5)", () => {
       turns: [{ timestamp: "t0", role: "user", content: "x" }],
     });
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      const r = await callTool(opts, "markOrphan", { sliceId: SLICE_ID });
       expect(r).toContain("no-op");
       expect(r).toContain("idle_gap");
       return { ok: true, report: { actions: [], note: "already closed" }, text: "" };
@@ -761,10 +761,10 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(episodic.closeSlice).not.toHaveBeenCalled();
   });
 
-  it("markSlice on an unreadable slice reports and writes nothing", async () => {
+  it("markOrphan on an unreadable slice reports and writes nothing", async () => {
     episodic.loadSlice.mockRejectedValue(new Error("missing"));
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      const r = await callTool(opts, "markOrphan", { sliceId: SLICE_ID });
       expect(r).toContain("unreadable");
       return { ok: true, report: { actions: [], note: "nothing marked" }, text: "" };
     });
@@ -790,15 +790,15 @@ describe("handleBrief (v0.21 §5)", () => {
     "",
   ];
 
-  it("markSlice / readSlice refuse a malformed slice id at the gate — no throw, no read, no queued write", async () => {
+  it("markOrphan / readRound refuse a malformed slice id at the gate — no throw, no read, no queued write", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
       for (const id of MALFORMED_IDS) {
-        const m = await callTool(opts, "markSlice", { sliceId: id });
+        const m = await callTool(opts, "markOrphan", { sliceId: id });
         expect(m).toContain("rejected");
         expect(m).toContain("YYYY-MM-DD-HHMM");
-        expect(m).toContain("listTree");
+        expect(m).toContain("survey");
         if (id) expect(m).toContain(id); // the refusal echoes what was passed
-        const r = await callTool(opts, "readSlice", { sliceId: id });
+        const r = await callTool(opts, "readRound", { sliceId: id });
         expect(r).toContain("rejected");
         expect(r).not.toContain("cannot read");
       }
@@ -820,9 +820,9 @@ describe("handleBrief (v0.21 §5)", () => {
   it("a shape-valid but nonexistent id (2026-13-99-9999) degrades unreadable — the pre-gate load judgment, never a throw or a write", async () => {
     episodic.loadSlice.mockResolvedValue(null);
     runSubAgentMock.mockImplementation(async (opts) => {
-      const m = await callTool(opts, "markSlice", { sliceId: "2026-13-99-9999" });
+      const m = await callTool(opts, "markOrphan", { sliceId: "2026-13-99-9999" });
       expect(m).toContain("unreadable");
-      const r = await callTool(opts, "readSlice", { sliceId: "2026-13-99-9999" });
+      const r = await callTool(opts, "readRound", { sliceId: "2026-13-99-9999" });
       expect(r).toContain("cannot read");
       expect(io.batchRef.current!.entries.size).toBe(0);
       return { ok: true, report: { actions: [], note: "degraded" }, text: "" };
@@ -1032,16 +1032,68 @@ describe("read-your-writes — the round's batch rides every read (v0.37 §5)", 
     expect(io.files.has("memory/research/手机调研/index.md")).toBe(false);
   });
 
-  it("readSlice reads this round's QUEUED slice bytes before the disk", async () => {
+  it("readRound reads this round's QUEUED slice bytes before the disk", async () => {
     io.files.set(`${SLICE_ID}:core`, "盘上旧文。");
     runSubAgentMock.mockImplementation(async (opts) => {
       io.batchRef.current!.entries.set(
         `memory/records/${SLICE_ID}/core.md`,
         "本轮队列里的新文。",
       );
-      const r = await callTool(opts, "readSlice", { sliceId: SLICE_ID, part: "core" });
-      expect(r).toBe("本轮队列里的新文。");
+      const r = await callTool(opts, "readRound", { sliceId: SLICE_ID });
+      // The complete round comes back in one call: the queued core text under
+      // its labeled section, and the missing side-parts degraded to notes.
+      expect(r).toContain("## core — the conversation");
+      expect(r).toContain("本轮队列里的新文。");
+      expect(r).not.toContain("盘上旧文。");
+      expect(r).toContain("agent not found");
       return { ok: true, report: { actions: [], note: "ryw" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+  });
+
+  it("readRound returns the complete round — core + agent + previously in one call", async () => {
+    io.files.set(`${SLICE_ID}:core`, "用户的话。\n");
+    io.files.set(`${SLICE_ID}:agent`, "agent 的思考。\n");
+    io.files.set(`${SLICE_ID}:previously`, "当时的卡片。\n");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "readRound", { sliceId: SLICE_ID });
+      expect(r).toContain("## core — the conversation");
+      expect(r).toContain("用户的话。");
+      expect(r).toContain("## agent — the field's thinking and work");
+      expect(r).toContain("agent 的思考。");
+      expect(r).toContain("## previously — the user-card snapshot of that moment");
+      expect(r).toContain("当时的卡片。");
+      return { ok: true, report: { actions: [], note: "full round" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+  });
+
+  it("survey returns a compact semantic index — never a raw file tree, config/ never exposed", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n正文。\n",
+    );
+    io.files.set("memory/research/手机调研/2026-08-09-报价篇.md", "篇正文。\n");
+    io.files.set("memory/records/2026/08/09/1300/core.md", "记录。\n");
+    io.files.set("memory/config/settings.json", "{}");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "survey", {});
+      // cases fold to one line with piece counts + dates…
+      expect(r).toContain("research/ — 1 case");
+      expect(r).toContain("手机调研 — 1 piece, latest 2026-08-09");
+      // …records collapse to round ids with newest first…
+      expect(r).toContain("records/ — 1 round (2026-08-09-1300");
+      expect(r).toContain("- 2026-08-09-1300");
+      // …and the system config file never surfaces.
+      expect(r).not.toContain("settings.json");
+      expect(r).not.toContain("config/");
+      return { ok: true, report: { actions: [], note: "surveyed" }, text: "" };
     });
 
     const outcome = await handleBrief(DOCKET);
@@ -1057,8 +1109,8 @@ describe("the batch-threading mechanical audit (v0.37 §5 — 漏接即红)", ()
   const ctxSrc = readSrc("../../../../src/app/api/evolution/hq-context.ts");
 
   it("every HQ read assembly point threads the round's batch", () => {
-    // readSlice → readSlicePart; readCase → makeCaseReadTool; the four
-    // loadSlice pre-reads (markSlice / archiveSliceCases / evolveUserModel /
+    // readRound → readSlicePart; readCase → makeCaseReadTool; the four
+    // loadSlice pre-reads (markOrphan / archiveSliceCases / evolveUserModel /
     // researchSliceQuestions); the user-model read; the card readers.
     expect(hqSrc).toContain("readSlicePart(sliceId, part, batch)");
     expect(hqSrc).toContain("makeCaseReadTool(batch)");

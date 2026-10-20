@@ -100,7 +100,18 @@ export interface MemoryEntry {
  * TYPES, and "cannot read" (unavailable) is strictly separate from "absent".
  */
 export type RecallResult =
-  | { kind: "entries"; entries: MemoryEntry[]; scanned: number; truncated: boolean }
+  | {
+      kind: "entries";
+      entries: MemoryEntry[];
+      scanned: number;
+      truncated: boolean;
+      /** Page start (default 0) — present only when an offset was requested. */
+      offset?: number;
+      /** True when offset landed past the end — an empty page, not absence. */
+      pastEnd?: boolean;
+      /** Total matching entries in scope (search only: scanned ≠ total). */
+      total?: number;
+    }
   | { kind: "fallback"; reason: "no_match"; entries: MemoryEntry[] }
   | { kind: "empty" }
   | { kind: "not_found"; nearMisses: MemoryEntry[] }
@@ -559,6 +570,8 @@ export interface RecallRecentInput {
   category?: RecallCategory;
   /** Default 10, hard cap 30. */
   n?: number;
+  /** Page start, default 0 — entries before it are skipped (newest-first paging). */
+  offset?: number;
   /** Inclusive day bounds (user calendar, string day comparison). */
   before?: string;
   after?: string;
@@ -569,6 +582,7 @@ export async function recallRecent(
   input: RecallRecentInput,
 ): Promise<RecallResult> {
   const n = Math.min(Math.max(1, Math.floor(input.n ?? RECENT_DEFAULT_N)), RECENT_MAX_N);
+  const offset = Math.max(0, Math.floor(input.offset ?? 0));
   let index: MemoryTreeIndex;
   try {
     index = buildTreeIndex(await backend.listMemoryFiles());
@@ -584,11 +598,25 @@ export async function recallRecent(
     return { kind: "empty" };
   }
   filtered.sort((a, b) => (a.built.activity >= b.built.activity ? -1 : 1));
+  if (offset >= filtered.length) {
+    return {
+      kind: "entries",
+      entries: [],
+      scanned: filtered.length,
+      truncated: false,
+      offset,
+      pastEnd: true,
+    };
+  }
+  const page = filtered.slice(offset, offset + n);
   return {
     kind: "entries",
-    entries: filtered.slice(0, n).map((s) => s.built.entry),
+    entries: page.map((s) => s.built.entry),
     scanned: filtered.length,
-    truncated: filtered.length > n,
+    truncated: filtered.length > offset + page.length,
+    // Offset rides the result only when the caller actually paged — a full
+    // page then teaches the model how to continue.
+    ...(input.offset !== undefined ? { offset } : {}),
   };
 }
 
@@ -713,6 +741,8 @@ export interface RecallSearchInput {
   until?: string;
   /** Default 20, hard cap 30. */
   limit?: number;
+  /** Page start, default 0 — hits before it are skipped (newest-first paging). */
+  offset?: number;
 }
 
 /** One searchable document: where it lives, how to build its entry, its sort date. */
@@ -888,6 +918,7 @@ export async function recallSearch(
     Math.max(1, Math.floor(input.limit ?? SEARCH_DEFAULT_LIMIT)),
     SEARCH_MAX_LIMIT,
   );
+  const offset = Math.max(0, Math.floor(input.offset ?? 0));
   if (keywords.length === 0) {
     return { kind: "unavailable", note: "empty query" };
   }
@@ -936,12 +967,27 @@ export async function recallSearch(
     return { kind: "fallback", reason: "no_match", entries };
   }
 
-  const truncatedByLimit = hits.length > limit;
+  if (offset >= hits.length) {
+    return {
+      kind: "entries",
+      entries: [],
+      scanned,
+      truncated: truncatedByScan,
+      offset,
+      pastEnd: true,
+      total: hits.length,
+    };
+  }
+  const page = hits.slice(offset, offset + limit);
+  const truncatedByLimit = hits.length > offset + page.length;
   return {
     kind: "entries",
-    entries: hits.slice(0, limit),
+    entries: page,
     scanned,
     truncated: truncatedByScan || truncatedByLimit,
+    // Offset rides the result only when the caller actually paged.
+    ...(input.offset !== undefined ? { offset } : {}),
+    total: hits.length,
   };
 }
 
@@ -1129,15 +1175,27 @@ function renderEntryLines(entries: MemoryEntry[]): string {
 export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}): string {
   switch (result.kind) {
     case "entries": {
+      if (result.pastEnd) {
+        return (
+          `No more entries — offset ${result.offset ?? 0} is past the end; ` +
+          `only ${result.total ?? result.scanned} exist in this scope, newest first.`
+        );
+      }
       const head =
         meta.query !== undefined
           ? `${result.entries.length} match(es) for "${meta.query}":`
           : `The ${result.entries.length} most recent ${meta.category ?? "memory"} entries:`;
       const lines = renderEntryLines(result.entries);
-      const truncatedNote = result.truncated
-        ? `\nShowing the newest ${meta.limit ?? result.entries.length} of ${result.scanned} scanned — narrow by date or add keywords for the older ones.`
-        : "";
-      return lines ? `${head}\n${lines}${truncatedNote}` : `${head}${truncatedNote}`;
+      // Paging notes (fixed wording): an offset page with more entries behind
+      // it tells the model exactly how to continue; otherwise the legacy
+      // truncation note applies (both verbs, offset 0).
+      const note = !result.truncated
+        ? ""
+        : result.offset !== undefined
+          ? `\nShowing ${result.entries.length} from offset ${result.offset} — ` +
+            `pass offset=${result.offset + result.entries.length} for older ones.`
+          : `\nShowing the newest ${meta.limit ?? result.entries.length} of ${result.scanned} scanned — narrow by date or add keywords for the older ones.`;
+      return lines ? `${head}\n${lines}${note}` : `${head}${note}`;
     }
     case "fallback": {
       const head = `Nothing matches "${meta.query ?? ""}". Here are the ${result.entries.length} most recent entries instead:`;

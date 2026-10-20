@@ -45,7 +45,6 @@ import {
   applyCaseWriteIntent,
   buildSliceExcerpt,
   makeCaseReadTool,
-  renderManifest,
   runLibrarianPass,
   runScribePass,
   type CaseWriteIntent,
@@ -152,7 +151,7 @@ const HQ_ROLE = `You are the reflection unit — the archival and evolution unit
 
 The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the turn(s) named as this round's material (their slice may still be open), what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
 - A docket is a plan, not a fact. It names slices and beats; it does not carry their content.
-- BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the docket alone.
+- BEFORE writing anything, verify against the raw records: readRound / readCase / survey. Never write from the docket alone.
 - This round's material is the turn(s) named below — a slice may still be open; you owe the TURNS, not a seal. The cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
 
 Store RESULTS ONLY:
@@ -167,7 +166,7 @@ You decide what to do and in what order. The natural order, when several things 
 
 A round can end SUPERSEDED — rarely. You read the world fresh as you work; when a read shows the world moved so this round's plan is void (another slice sealed, your agenda changed under you, the slice you were checking is no longer the latest edge), close out early: report disposition "superseded" and let the next round re-plan from the same edge. The note then says why you abandoned and what you had already landed. This is a premise overturned, never "tired, start over" — when in doubt, finish the round.
 
-Housekeeping you own: an ACTIVE slice past the date window is an orphan — the conversation long ended but the close never fired, and the field's stale-scan only looks back two days. When a read shows you one, seal it with markSlice (closed_by: context_lost); a capability, not a per-round obligation.
+Housekeeping you own: an ACTIVE slice past the date window is an orphan — the conversation long ended but the close never fired, and the field's stale-scan only looks back two days. When a read shows you one, seal it with markOrphan (closed_by: context_lost); a capability, not a per-round obligation.
 
 Craft notes:
 - ${MEMORY_IS_GIT_RULE}
@@ -195,7 +194,7 @@ ${DOC_HOUSE_STYLE}`;
  * malformed id used to survive all the way to the round-end flush: loadSlice
  * degrades to null for ids that resolve to nothing (harmless string), but an
  * id that happens to READ (e.g. a legacy dir whose name carries a space or a
- * colon) lets markSlice queue a closeSlice write whose path is derived from
+ * colon) lets markOrphan queue a closeSlice write whose path is derived from
  * the id unchecked — and fsWriteFile validates NOTHING at queue time. The
  * whitelist / portable-name refusal then fires inside commitReflectionRound
  * and fails the WHOLE round's commit: the trailer never lands, the cursor
@@ -207,8 +206,107 @@ function refuseMalformedSliceId(sliceId: string): string | null {
   if (parseSliceId(sliceId) !== null) return null;
   return (
     `(rejected: "${sliceId}" is not a slice id — ids look like 2026-10-04-0131 ` +
-    `(YYYY-MM-DD-HHMM). Copy the FULL id from listTree or this round's docket; ` +
+    `(YYYY-MM-DD-HHMM). Copy the FULL id from survey or this round's docket; ` +
     `nothing was read, written, or closed.)`
+  );
+}
+
+/**
+ * Render the survey — a compact semantic index over the round's manifest:
+ * per world (category), how many entries, the newest few with their dates,
+ * the latest activity. NEVER a raw file/directory listing: piece files fold
+ * into their case, records collapse to round ids, and config/ + system files
+ * never appear (the walk already filters them out).
+ */
+function renderSurvey(tree: Record<string, string[]>): string {
+  const PIECE_DATE_RE = /(\d{4}-\d{2}-\d{2})-[^/]+\.md$/;
+  const pieceDate = (p: string) => PIECE_DATE_RE.exec(p)?.[1] ?? "";
+  const sliceIdOf = (dirPath: string) => {
+    const m = /(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})$/.exec(dirPath);
+    return m ? `${m[1]}-${m[2]}-${m[3]}-${m[4]}` : dirPath;
+  };
+
+  const blocks: string[] = [];
+  const push = (title: string, body: string[]) => {
+    if (body.length > 0) blocks.push(`### ${title}\n${body.join("\n")}`);
+  };
+
+  // records — collapse to round ids, newest first.
+  const sliceIds = (tree["records"] ?? []).map(sliceIdOf).sort().reverse();
+  if (sliceIds.length > 0) {
+    const newest = sliceIds[0]!;
+    const oldest = sliceIds[sliceIds.length - 1]!;
+    const shown = sliceIds
+      .slice(0, 5)
+      .map((id) => `- ${id}`)
+      .join("\n");
+    const more =
+      sliceIds.length > 5 ? `\n- … and ${sliceIds.length - 5} older (newest first)` : "";
+    push(
+      `records/ — ${sliceIds.length} round${sliceIds.length > 1 ? "s" : ""} (${newest} … ${oldest})`,
+      [shown + more],
+    );
+  }
+
+  // case-shaped worlds — one line per case: piece count + latest piece date.
+  const CASE_WORLDS = [
+    "people", "events", "things", "places", "orgs",
+    "research", "hypotheses", "tasks", "self",
+  ] as const;
+  for (const top of CASE_WORLDS) {
+    const paths = tree[top];
+    if (!paths || paths.length === 0) continue;
+    const cases = new Map<string, { pieces: string[]; hasIndex: boolean }>();
+    const bare: string[] = [];
+    for (const p of paths) {
+      const segs = p.split("/");
+      if (segs[segs.length - 1] === "index.md" && segs.length >= 3) {
+        const name = segs.slice(1, -1).join("/");
+        const c = cases.get(name) ?? { pieces: [], hasIndex: false };
+        c.hasIndex = true;
+        cases.set(name, c);
+      } else if (PIECE_DATE_RE.test(segs[segs.length - 1] ?? "") && segs.length >= 3) {
+        const name = segs.slice(1, -1).join("/");
+        const c = cases.get(name) ?? { pieces: [], hasIndex: false };
+        c.pieces.push(p);
+        cases.set(name, c);
+      } else {
+        bare.push(p);
+      }
+    }
+    const rows = [...cases.entries()]
+      .map(([name, c]) => {
+        const dates = c.pieces.map(pieceDate).sort();
+        const latest = dates[dates.length - 1];
+        const pieceBit =
+          c.pieces.length > 0
+            ? `${c.pieces.length} piece${c.pieces.length > 1 ? "s" : ""}` +
+              (latest ? `, latest ${latest}` : "")
+            : "no dated pieces";
+        return { name, latest: latest ?? "", line: `- ${name} — ${pieceBit}` };
+      })
+      .sort((a, b) => (a.latest >= b.latest ? -1 : 1) || (a.name >= b.name ? 1 : -1));
+    const SHOWN = 8;
+    const shownRows = rows.slice(0, SHOWN).map((r) => r.line);
+    if (rows.length > SHOWN) {
+      shownRows.push(`- … and ${rows.length - SHOWN} more`);
+    }
+    const worldLatest = rows[0]?.latest;
+    const countBit = `${rows.length} case${rows.length > 1 ? "s" : ""}` +
+      (bare.length > 0 ? ` + ${bare.length} document${bare.length > 1 ? "s" : ""}` : "") +
+      (worldLatest ? `, latest activity ${worldLatest}` : "");
+    if (bare.length > 0) {
+      shownRows.push(`- (bare files) ${bare.join(", ")}`);
+    }
+    push(`${top}/ — ${countBit}`, shownRows);
+  }
+
+  const body =
+    blocks.join("\n\n") ||
+    "(empty survey — no cases, documents, or rounds in memory yet)";
+  return (
+    `${body}\n\n— snapshot of the round's START; this round's queued writes ` +
+    `do not appear here. For content: readCase (cases), readRound (rounds).`
   );
 }
 
@@ -219,46 +317,73 @@ function buildHqTools(
   flags: { evolutionRan: boolean },
 ) {
   return {
-    listTree: tool({
+    survey: tool({
       description:
-        "The whole memory tree as a manifest (memory/ minus config/, records/ collapsed to slice dirs). " +
-        "Your discovery surface — call it first when the brief does not name exact cases. " +
-        "The manifest is a snapshot of the round's START: cases queued (written or deleted) this " +
-        "round may not appear in it — readCase sees the queue, the manifest does not.",
+        "Survey what lives in memory — a compact index by world (category): how many " +
+        "cases / documents / rounds, the newest few with their dates, the latest activity. " +
+        "NEVER a raw file or directory tree, and system files (config/, attachment bytes) " +
+        "are never exposed. Your discovery surface — call it FIRST when the brief does not " +
+        "name exact cases. The survey is a snapshot of the round's START: cases queued " +
+        "(written or deleted) this round may not appear in it — readCase sees the queue, " +
+        "the survey does not.",
       inputSchema: z.object({}),
-      execute: async () => renderManifest((await buildRunManifest()).tree),
+      execute: async () => renderSurvey((await buildRunManifest()).tree),
     }),
 
-    readSlice: tool({
+    readRound: tool({
       description:
-        "Read one slice's raw record: part 'core' (the conversation, default), 'agent' (the mailbox / agent timeline), " +
-        "or 'previously' (the card snapshot at that slice). Dual-root — older slices are found under the legacy root. " +
-        "Sees this round's queued writes (read-your-writes): a slice you sealed earlier this round reads back sealed.",
+        "Read one round's COMPLETE record in one call — the conversation (core), the field " +
+        "agent's thinking and work for that round (agent), and the user-card snapshot of " +
+        "that moment (previously), returned together under labeled sections. Dual-root — " +
+        "older rounds are found under the legacy root. Sees this round's queued writes " +
+        "(read-your-writes): a round you sealed earlier this round reads back sealed. A " +
+        "missing side-part (agent / previously) reads as a note inside the result, not a " +
+        "failure — only a missing conversation fails the read.",
       inputSchema: z.object({
-        sliceId: z.string().describe("e.g. 2026-10-04-0131"),
-        part: z.enum(["core", "agent", "previously"]).default("core"),
+        sliceId: z.string().describe("The round's id, e.g. 2026-10-04-0131"),
       }),
-      execute: async ({ sliceId, part }) => {
+      execute: async ({ sliceId }) => {
         const refusal = refuseMalformedSliceId(sliceId);
         if (refusal) return refusal;
-        try {
-          return await readSlicePart(sliceId, part, batch);
-        } catch {
-          return `(cannot read ${sliceId} part ${part} — the slice or the part is missing; check listTree first.)`;
+        const parts: Array<{
+          part: "core" | "agent" | "previously";
+          label: string;
+        }> = [
+          { part: "core", label: "the conversation" },
+          { part: "agent", label: "the field's thinking and work" },
+          { part: "previously", label: "the user-card snapshot of that moment" },
+        ];
+        const sections: string[] = [];
+        for (const { part, label } of parts) {
+          try {
+            const raw = await readSlicePart(sliceId, part, batch);
+            sections.push(`## ${part} — ${label}\n\n${raw}`);
+          } catch {
+            if (part === "core") {
+              return (
+                `(cannot read ${sliceId} — the round's record is missing; ` +
+                `check survey first.)`
+              );
+            }
+            sections.push(`## ${part} — ${label}\n\n(${part} not found for ${sliceId}.)`);
+          }
         }
+        return sections.join("\n\n");
       },
     }),
 
     readCase: makeCaseReadTool(batch),
 
-    markSlice: tool({
+    markOrphan: tool({
       description:
-        "Seal one slice that is still ACTIVE past the date window — an orphan: the conversation long ended " +
-        "but the close never fired (the field's stale-scan only looks back two days, so older orphans have no " +
-        "other closer). Verify with readSlice first that it is genuinely orphaned. The close stamps " +
-        "closed_by: context_lost — the scene was lost, not checkpointed. An already-closed slice is a no-op.",
+        "Seal one round that is still ACTIVE past the date window — an orphan: the " +
+        "conversation long ended but the close never fired (the field's stale-scan only " +
+        "looks back two days, so older orphans have no other closer). Verify with " +
+        "readRound first that it is genuinely orphaned. The close stamps " +
+        "closed_by: context_lost — the scene was lost, not checkpointed. " +
+        "An already-closed round is a no-op.",
       inputSchema: z.object({
-        sliceId: z.string().describe("e.g. 2026-10-04-0131"),
+        sliceId: z.string().describe("The round's id, e.g. 2026-10-04-0131"),
       }),
       execute: async ({ sliceId }) => {
         const refusal = refuseMalformedSliceId(sliceId);
@@ -290,14 +415,31 @@ function buildHqTools(
         "pass expectedUpdated = the updated stamp you read from the case header — the rewrite is refused when the case moved since your read). " +
         "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
         "addPiece: a dated piece (title + body, always allowed). " +
-        "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. " +
+        "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveUserModel; writes there are rejected. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
         DOC_WRITE_WINDOW_RULE +
         `\n\n${MEMORY_IS_GIT_RULE}`,
       inputSchema: z.object({
         action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece"]),
-        category: z.string(),
+        category: z
+          .enum([
+            "people",
+            "events",
+            "things",
+            "places",
+            "orgs",
+            "research",
+            "hypotheses",
+            "tasks",
+            "self",
+          ])
+          .optional()
+          .describe(
+            "What the case IS decides the category (see the tool description). " +
+            "Defaults to research — same schema as the field side's writeCase. " +
+            "self/ is the reflection unit's own and is refused to the field agent.",
+          ),
         caseName: z.string(),
         body: z.string().optional(),
         line: z.string().optional(),
@@ -322,7 +464,10 @@ function buildHqTools(
         // (isCaseCategory throws on an unknown category) — one enforcement point.
         // Names come from the model — normalize before anything else touches
         // them (2026-10-12 discipline; see sanitizeCaseSegment).
-        const base = { category: args.category as CaseCategory, caseName: sanitizeCaseSegment(args.caseName) };
+        // Category defaults to research — the same default as the field side's
+        // writeCase (one schema, two posts).
+        const category = (args.category ?? "research") as CaseCategory;
+        const base = { category, caseName: sanitizeCaseSegment(args.caseName) };
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "open":

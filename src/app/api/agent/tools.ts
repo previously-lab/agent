@@ -126,12 +126,20 @@ export const chatTools = {
       "activity date). Pass a category to look inside one world — events / " +
       "people / things / tasks / research / places / orgs / self / timeline " +
       "(slice heads) / records (slices). `n` defaults to 10 (hard cap 30); " +
-      "`after` / `before` (YYYY-MM-DD, inclusive) bound the window. Use " +
-      "recallFind when the thing is NAMED, recallSearch for a keyword hunt. " +
+      "`after` / `before` (YYYY-MM-DD, inclusive) bound the window. Order is " +
+      "always newest activity first — you cannot sort. `offset` (default 0) " +
+      "pages deeper: pass the offset the result tells you to continue past " +
+      "the first page. Use recallFind when the thing is NAMED, recallSearch " +
+      "for a keyword hunt. " +
       "FIXED result wording (recognize it, do not paraphrase): entries open " +
       "with `The {n} most recent {category} entries:`; an empty scope opens " +
       "with `There is nothing here yet — no {category} entries exist in this " +
-      "scope.` — report THAT, not your own guess about what the user remembers.",
+      "scope.` — report THAT, not your own guess about what the user " +
+      "remembers; a page with older entries behind it appends `Showing {n} " +
+      "from offset {offset} — pass offset={offset+n} for older ones.`; an " +
+      "offset past the end returns `No more entries — offset {offset} is " +
+      "past the end; only {total} exist in this scope, newest first.` — an " +
+      "empty page is NOT absence.",
     inputSchema: z.object({
       category: z
         .enum(RECALL_CATEGORIES)
@@ -146,6 +154,15 @@ export const chatTools = {
         .min(1)
         .optional()
         .describe("How many entries (default 10, hard cap 30)."),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Skip the newest `offset` entries and return the next page " +
+          "(default 0). Continue with the offset the full-page note gives you.",
+        ),
       after: z
         .string()
         .optional()
@@ -199,8 +216,11 @@ export const chatTools = {
       "first; go to the raw record as the second layer, when the answer is " +
       "not in any document. Keywords AND within a segment (pass synonyms as " +
       "separate calls). Hits return entries whose excerpt is the matching " +
-      "snippet, newest activity first, up to `limit` (default 20), scanning " +
-      "at most 50 files per call; `since` / `until` (YYYY-MM-DD) bound by " +
+      "snippet, newest activity first, up to `limit` (default 20, hard cap 30) " +
+      "per page; `offset` (default 0) pages deeper — pass the offset the " +
+      "full-page note gives you; order is always newest first — you cannot " +
+      "sort. Scanning touches at most 50 files per call; `since` / `until` " +
+      "(YYYY-MM-DD) bound by " +
       "activity date. FIXED result wording: hits open `{n} match(es) for " +
       "\"{query}\":`; ZERO hits on a non-empty scope open `Nothing matches " +
       "\"{query}\". Here are the {n} most recent entries instead:` — that is " +
@@ -208,8 +228,12 @@ export const chatTools = {
       "recorded this'; an empty scope opens `There is nothing here yet — no " +
       "{category} entries exist in this scope.`; a capped scan appends " +
       "`Showing the newest {limit} of {scanned} scanned — narrow by date or " +
-      "add keywords for the older ones.` Continue with recallRead(ref) on " +
-      "anything promising.",
+      "add keywords for the older ones.`; a page with older hits behind it " +
+      "appends `Showing {n} from offset {offset} — pass offset={offset+n} for " +
+      "older ones.`; an offset past the end returns `No more entries — offset " +
+      "{offset} is past the end; only {total} exist in this scope, newest " +
+      "first.` — an empty page is NOT absence. Continue with recallRead(ref) " +
+      "on anything promising.",
     inputSchema: z.object({
       query: z
         .union([z.string(), z.array(z.string())])
@@ -244,7 +268,16 @@ export const chatTools = {
         .int()
         .min(1)
         .optional()
-        .describe("Max hits returned (default 20, hard cap 30)."),
+        .describe("Max hits per page (default 20, hard cap 30)."),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "Skip the newest `offset` hits and return the next page " +
+          "(default 0). Continue with the offset the full-page note gives you.",
+        ),
     }),
     contextSchema: toolContextSchema,
     execute: recallSearchExecute,
@@ -513,7 +546,7 @@ export const chatTools = {
         .string()
         .optional()
         .describe(
-          "sediment only: an EXISTING case reference to update (<category>/<case>, from listTree/readDoc), when this updates one rather than opening one.",
+          "sediment only: an EXISTING case reference to update (<category>/<case>, as cited by a recall result's ref), when this updates one rather than opening one.",
         ),
       dateAnchor: z
         .string()

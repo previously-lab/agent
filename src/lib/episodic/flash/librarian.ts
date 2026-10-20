@@ -7,7 +7,7 @@
  * empty run is a legal outcome (强制触发 ≠ 强制变异; axiom D: no semantic
  * gates). Tags are dead (R2): "which cases did this slice touch" is the
  * WRITER'S OWN judgment over the case manifest — writer-is-reader is
- * structural (§A.2.3): engineering assembles the listTree manifest into the
+ * structural (§A.2.3): engineering assembles the survey manifest into the
  * prompt, the writer reads the current text of the cases it judges relevant
  * via the readCase tool, then returns write-intents that engineering applies
  * through the case write ops (§B.3 — open / rewriteIndex / appendTail /
@@ -430,12 +430,12 @@ export function makeCaseReadTool(batch?: WriteBatch) {
           continue;
         }
       }
-      return `(dead link: ${ref} — found under neither the new nor the legacy root; run listTree for the current manifest.)`;
+      return `(dead link: ${ref} — found under neither the new nor the legacy root; it is not in the current manifest.)`;
     },
   });
 }
 
-/** The set of existing case identities (`分类/case名`) in a listTree manifest. */
+/** The set of existing case identities (`分类/case名`) in a survey manifest. */
 export function caseIdentsOfManifest(tree: Record<string, string[]>): Set<string> {
   const idents = new Set<string>();
   for (const [top, paths] of Object.entries(tree)) {
@@ -549,7 +549,7 @@ export interface LibrarianPassInput {
   closedSliceId: string;
   excerpt: SliceExcerpt;
   /**
-   * The listTree manifest — the writer reads it to judge what this slice
+   * The survey manifest — the writer reads it to judge what this slice
    * touched. Optional at the seam: a caller that has not wired the manifest
    * yet gets an empty tree (the writer then knows only what readCase tells
    * it — degraded but functional).
@@ -600,7 +600,7 @@ summary: ${excerpt.summary || "(none)"}
 
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
-## Case manifest (the full listTree — judging which cases this slice touched is your job; readCase the ones you may write)
+## Case manifest (the full survey — judging which cases this slice touched is your job; readCase the ones you may write)
 
 ${renderManifest(manifest.tree)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}

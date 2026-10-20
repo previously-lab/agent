@@ -125,7 +125,7 @@ export function createChatAgent(opts: {
 
   // The bridge main model (client mode, PREVIOUSLY_BRAIN=bridge) shells out
   // to a subscription CLI that returns plain text — it CANNOT emit structured
-  // tool calls, so the kernel tools (recall/readSlice/delegateTask/…) are not
+  // tool calls, so the kernel tools (recall*/writeCase/delegateTask/…) are not
   // mounted for it. The system prompt says this explicitly (see the bridge
   // notice in turn-workflow.ts). Memory reads still work on the bridge side:
   // the client spawns the CLI in a per-call skills workspace whose instruction
