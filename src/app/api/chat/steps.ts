@@ -2460,10 +2460,6 @@ async function persistTurnSummaryAttempt(
   try {
     const ownId = getWorkflowMetadata().workflowRunId;
     const runs = await listRegistryRuns();
-    if (runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))) {
-      console.log(`[Summary] ${payload.sliceId} deduped — a live summary owns it`);
-      return { kind: "deduped" };
-    }
     const batch = createBatch();
 
     // ── The slice: fresh from disk, or materialized from a member's birth
@@ -2508,15 +2504,33 @@ async function persistTurnSummaryAttempt(
     const turnOnDisk = (turnId: string): boolean =>
       slice.turns.some((t) => t.turnId === turnId);
 
+    // v0.42 §5 (observed 2026-10-21) — dedupe ONLY stands when MY turn
+    // already landed: a live summary may have snapshotted its members while
+    // THIS turn was still running and will never collect it (the real-
+    // machine shape: A's summary deduped B's, and B's answer was lost
+    // forever). When my reply is not on disk yet, DO MY OWN JOB — two live
+    // summaries write DIFFERENT turns and the flush's key-controlled merge
+    // absorbs the overlap (按 git 理解、冲突自愈 [10631]; every write is
+    // turnId-idempotent).
+    const ownReplyOnDisk = slice.turns.some(
+      (t) => t.role === "agent" && t.turnId === payload.own.turnId,
+    );
+    if (
+      ownReplyOnDisk &&
+      runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))
+    ) {
+      console.log(
+        `[Summary] ${payload.sliceId} deduped — my turn already landed, a live summary owns the rest`,
+      );
+      return { kind: "deduped" };
+    }
+
     // ── Members: own record + the same-slice turn runs whose turn is not
     //    yet persisted; failed/cancelled ones recorded honestly (v0.42 §5).
     //    Own's test is the REPLY's presence, not the user turn's — a slice
     //    just materialized from a birth record already carries turn 0 (the
     //    birth user turn IS own's user message).
     const members: TurnRunResult[] = [];
-    const ownReplyOnDisk = slice.turns.some(
-      (t) => t.role === "agent" && t.turnId === payload.own.turnId,
-    );
     if (!ownReplyOnDisk) members.push(payload.own);
     const failedTurns: Array<{ turn: string; note: string }> = [];
     const noAnswerNote = (turn: string, status: string): string =>
@@ -2530,6 +2544,13 @@ async function persistTurnSummaryAttempt(
       const turn = r.attributes?.turn ?? r.runId;
       if (turnOnDisk(turn)) continue; // already persisted — nobody's member
       if (r.status !== "completed") {
+        // §3/§5 [7189] — a still-RUNNING sibling is not a failure and not
+        // material: the summary 只对已完成的内容总结, and the running
+        // turn's own last-one check wakes its own summary when it answers.
+        // Only a TERMINAL non-completed run is an honest 没答成. (Observed
+        // 2026-10-21: a running sibling was recorded as a failure and its
+        // answer was never collected.)
+        if (isLiveRunStatus(r.status)) continue;
         failedTurns.push({ turn, note: noAnswerNote(turn, r.status) });
         continue;
       }
