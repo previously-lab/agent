@@ -24,10 +24,12 @@
  *          → settleReflectionRound(round, docket)          // 失败轮游标不动
  *          → 立即再 loop（积压由循环本身消化 — 工作驱动, not a timer）
  *
- * 活性由事件链供给（消息 → turn → writer → 铃), the agenda degrades to
+ * 活性由事件链供给（消息 → turn → 总结流 → 铃), the agenda degrades to
  * 机会式补查 (each lap's docket carries due items), and a lost bell is made
- * up by the next writer's bell — the work sits on disk past the on-disk
- * cursor (hq.json lastSeen), which is the only continuity a generation needs.
+ * up by the next turn's bell — the work sits on disk past the water level
+ * (the newest clean round's `seen:` trailer), which is the only continuity
+ * a generation needs; a bell carrying the summary stream's range (v0.42 §4)
+ * scopes the first lap directly.
  *
  * This is a WORKFLOW file: its static import graph is bundled into the
  * workflow sandbox, which has no Node modules (docs/errors/
@@ -44,6 +46,7 @@ import {
   REFLECTION_TAKEOVER_MAX_ATTEMPTS,
   REFLECTION_TAKEOVER_MS,
   type ReflectionRunOutcome,
+  type ReflectionWakeRange,
 } from "./reflection-contract";
 import { lapHasWork } from "./reflection-plan";
 import {
@@ -67,7 +70,9 @@ export type {
   ReflectionWakePayload,
 } from "./reflection-contract";
 
-export async function reflectionRun(): Promise<ReflectionRunOutcome> {
+export async function reflectionRun(
+  range?: ReflectionWakeRange | null,
+): Promise<ReflectionRunOutcome> {
   "use workflow";
   // The hook is now ONLY a mutex + liveness marker (§5): the run never
   // iterates it — no mailbox, no drain. dispose() is idempotent-guarded and
@@ -133,10 +138,14 @@ export async function reflectionRun(): Promise<ReflectionRunOutcome> {
     // ── The work loop (§5): no clocks — the loop IS the event chain. Each
     //    lap re-reads the world; a lap with work runs ONE round and settles
     //    it immediately (失败轮不推游标 — §4.2); an empty docket retires the
-    //    unit on the spot.
+    //    unit on the spot. The bell's range opens the FIRST lap only (a
+    //    hint, consumed on read — v0.42 §4/§3.5); every later lap reads the
+    //    commit log, which the settle's trailer has advanced past the hint.
     let rounds = 0;
+    let openingRange = range ?? undefined;
     for (;;) {
-      const docket = await loadReflectionWorld();
+      const docket = await loadReflectionWorld(undefined, openingRange);
+      openingRange = undefined;
       if (!lapHasWork(docket)) {
         await markReflectionRunIdleExit({ rounds });
         dispose();

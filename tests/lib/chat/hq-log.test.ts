@@ -30,6 +30,7 @@ vi.mock("@/lib/whitelist", () => ({
 import {
   readReflectionCursor,
   readLatestReflectionNote,
+  readReflectionCoverage,
   readReflectionLog,
 } from "@/lib/chat/hq-log";
 
@@ -101,6 +102,88 @@ describe("readReflectionCursor — the water level (v0.39 §2.4)", () => {
     const cursor = await readReflectionCursor();
     expect(cursor.sliceId).toBeNull();
     expect(cursor.degraded).toBe(true);
+  });
+});
+
+describe("readReflectionCoverage — the TURN-level water level (v0.42 §4)", () => {
+  it("turn-level marks merge newest-first, first-wins per slice; sha/at ride the NEWEST marked round", async () => {
+    h.logCommits.mockResolvedValue([
+      // newest: a round that marked two slices
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t3\nseen: 2026-10-19-1800#t2", oid: "new" }),
+      // older: t1 of the 19th slice — SUBSUMED by the newer round's t2 mark? NO:
+      // first-wins per slice means the NEWER mark stands; t1's round is older.
+      ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1800#t1", oid: "old" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.degraded).toBe(false);
+    expect(coverage.sha).toBe("new");
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-20-0900", turnIds: ["t3"] },
+      { sliceId: "2026-10-19-1800", turnIds: ["t2"] }, // newest wins for this slice
+    ]);
+  });
+
+  it("an OLD-format bare `seen: <sliceId>` covers the WHOLE slice and lifts wholeUpTo", async () => {
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721", oid: "s1" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-19-1721", turnIds: null },
+    ]);
+    expect(coverage.wholeUpTo).toBe("2026-10-19-1721");
+  });
+
+  it("mixed history: an old whole-slice level BELOW a newer explicit mark — the explicit mark wins for its slice, wholeUpTo fills the rest", async () => {
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t3", oid: "n" }),
+      ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721", oid: "o" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-20-0900", turnIds: ["t3"] },
+      { sliceId: "2026-10-19-1721", turnIds: null },
+    ]);
+    expect(coverage.wholeUpTo).toBe("2026-10-19-1721");
+  });
+
+  it("failed (trailer-less) and superseded rounds contribute NOTHING; the newest CLEAN marks define the level", async () => {
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-20", oid: "failed" }), // no trailer
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nsuperseded: true", oid: "ss" }),
+      ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1800#t1", oid: "clean" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.degraded).toBe(false);
+    expect(coverage.sha).toBe("clean");
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-19-1800", turnIds: ["t1"] },
+    ]);
+  });
+
+  it("no reflection rounds in the scan → degraded (UNKNOWN — never 'all done')", async () => {
+    h.logCommits.mockResolvedValue([
+      { oid: "t1", message: "Turn a1b2c3 — finalize", committedAtMs: 1 },
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.degraded).toBe(true);
+    expect(coverage.covered).toEqual([]);
+  });
+
+  it("the log plane down → degraded", async () => {
+    h.isGitRepo.mockReturnValue(false);
+    const coverage = await readReflectionCoverage();
+    expect(coverage.degraded).toBe(true);
   });
 
   it("空仓库 (unborn branch): a ref-resolution log error reads as 'no commits yet', NOT a generic log read failure", async () => {

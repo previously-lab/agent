@@ -32,11 +32,13 @@ import { getWorld } from "workflow/runtime";
 import type { UIMessageChunk } from "ai";
 import {
   assembleLapPlan,
-  REFLECTION_SCOPE_MAX,
+  scopeFromSummaries,
   type LapPlan,
-  type SliceHead,
+  type ScopeCoverage,
+  type ScopedSlice,
+  type SummaryHead,
 } from "./reflection-plan";
-import type { SlicingSignal } from "@/lib/episodic/types";
+import type { ReflectionWakeRange } from "./reflection-contract";
 import {
   HQ_ACTIVITY_CHUNK,
   type HQActivityFrame,
@@ -105,6 +107,13 @@ export interface ReflectionRound {
 export interface ReflectionDocket extends LapPlan {
   /** The blocking race's agenda arm; null arms nothing. */
   agendaWakeMs: number | null;
+  /**
+   * §3.5-2 — "前面没有任何提交记录" IS a state: the commit log was unreadable
+   * (or the summary log was, for a rangeless unit). The docket says so
+   * instead of pretending "no work"; the lap still retires (there is
+   * nothing readable to do), and the step logs the state loudly.
+   */
+  logDegraded?: boolean;
 }
 
 /**
@@ -197,30 +206,38 @@ export async function stampReflectionTakeover(holderRunId: string): Promise<void
 }
 
 /**
- * Read the world for ONE lap ("use step", §3.3) — every read, no writes —
- * and return the lap's docket. The reads:
+ * Read the world for ONE lap ("use step", §3.3; v0.42 §4 — the scope is
+ * TURNS) — every read, no writes — and return the lap's docket. The reads:
  *
- *   - the pointer (hq.json, fresh): `lastSeen.sliceId` is the cursor, the
- *     scope's exclusive lower bound; `lastEvolution.date` feeds the daily
- *     beat (§3.4-2);
- *   - the slice enumeration (`enumerateSliceIds` — the server-side live
- *     enumeration the timeline readers already use): slices with
- *     `id > cursor`, ascending, of which at most REFLECTION_SCOPE_MAX heads
- *     are point-read for `closed_by` (门上界 ≤5, bounded) — a sealed slice
- *     (`closed_by` present) makes the scope, an active one does not;
+ *   - the commit log (v0.39 §2.4 + v0.42 C2): the rounds' `seen:` trailers
+ *     are the TURN-level water level (readReflectionCoverage — a bare
+ *     `seen: <sliceId>` still means the whole slice, old-format backward
+ *     compatibility); the newest round's `evolved:` trailer feeds the daily
+ *     beat (§3.4-2). The SAME bounded scan yields the summary log —
+ *     `Summary — {sliceId}` commits, each parsed to its member turn ids;
+ *   - the SCOPE (v0.42 §4): the bell's range UNION the summary log's turns
+ *     [11443 — the range is a hint, not the only truth], every candidate
+ *     filtered through the water level so already-processed turns drop out
+ *     (scopeFromSummaries). An unreadable log is a STATE, not "no work": the
+ *     range still stands, the docket carries `logDegraded`, and the step
+ *     warns (§3.5-2);
+ *   - the scoped slices' heads (≤ REFLECTION_SCOPE_MAX point reads): the
+ *     on-disk `closed_by` attaches to each scope entry — the boundary
+ *     evolution beat's input; the criterion itself is untouched;
  *   - the agenda (`memory/self/agenda.md`): parsed and due-judged by the
  *     pure module.
  *
- * All judgment is `assembleLapPlan`'s (谓词纯、step 薄). The lap's
- * user-clock `date` rides the caller (the drained mailbox's furthest dated
- * wake, §3.3); absent (a clock lap) the UTC date is the fallback — the
- * agenda is day-granular and a day of drift is the design's own tolerance
- * (§6.2). Everything is BEST-EFFORT: each read leg degrades independently,
- * and any failure bottoms out as an EMPTY docket — a lap with no work that
- * blocks without touching the model, the pointer, or the stream (§3.1).
- * This step NEVER throws.
+ * All judgment is `assembleLapPlan`'s (谓词纯、step 薄). The lap's user-clock
+ * `date` rides the caller; absent (a clock lap) the UTC date is the fallback.
+ * Everything is BEST-EFFORT: each read leg degrades independently, and any
+ * failure bottoms out as an EMPTY docket — a lap with no work that blocks
+ * without touching the model, the pointer, or the stream (§3.1). This step
+ * NEVER throws.
  */
-export async function loadReflectionWorld(date?: string): Promise<ReflectionDocket> {
+export async function loadReflectionWorld(
+  date?: string,
+  range?: ReflectionWakeRange,
+): Promise<ReflectionDocket> {
   "use step";
   const now = new Date();
   const nowIso = now.toISOString();
@@ -234,31 +251,35 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
     evolutionReasons: [],
     agendaDue: [],
     agendaWakeMs: null,
+    logDegraded: true,
   });
   try {
-    const [{ enumerateSliceIds }, { sliceEntryFromDisk }, { fsReadFile }, { AGENDA_PATH, parseAgenda }] =
-      await Promise.all([
-        import("@/lib/episodic/timeline/enumerate"),
-        import("@/lib/episodic/timeline/store"),
-        import("@/lib/episodic/io-helpers"),
-        import("@/lib/evolution/agenda"),
-      ]);
+    const [{ fsReadFile }, { AGENDA_PATH, parseAgenda }] = await Promise.all([
+      import("@/lib/episodic/io-helpers"),
+      import("@/lib/evolution/agenda"),
+    ]);
 
-    // The water level + the evolution beat — read from the COMMIT LOG
-    // (v0.39 §2.4): the newest clean round's `seen:` trailer is the cursor;
-    // the newest round's `evolved:` trailer is the beat. A missing/unreadable
-    // log degrades to cursor null (fresh-deployment semantics — 全量重读,
-    // never a silent skip) and is already warned inside the reader.
+    // The water level (TURN-level, v0.42 §4) + the evolution beat + the
+    // summary log — all from the COMMIT LOG. A missing/unreadable leg
+    // degrades loudly (§3.5-2), never silently: the docket carries
+    // `logDegraded`.
     let cursor: string | null = null;
     let lastEvolutionDate: string | null = null;
+    let scope: LapPlan["scope"] = [];
+    let logDegraded = false;
     try {
-      const [{ readReflectionCursor, readReflectionLog }] = await Promise.all([
-        import("@/lib/chat/hq-log"),
-      ]);
+      const {
+        readReflectionCursor,
+        readReflectionLog,
+        readSummaryLog,
+        readReflectionCoverage,
+      } = await import("@/lib/chat/hq-log");
       const level = await readReflectionCursor();
       cursor = level.sliceId;
       const log = await readReflectionLog();
-      if (log.available) {
+      if (!log.available) {
+        logDegraded = true;
+      } else {
         for (const entry of log.entries) {
           const evolved = entry.parsed.trailer?.evolved;
           if (evolved?.date) {
@@ -267,31 +288,66 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
           }
         }
       }
+      const coverageRead = await readReflectionCoverage();
+      if (coverageRead.degraded) logDegraded = true;
+      // null coverage = the water level is UNKNOWN: nothing counts as
+      // covered (never "all done") — the range then stands alone.
+      const coverage: ScopeCoverage | null = coverageRead.degraded
+        ? null
+        : {
+            covered: new Map(
+              coverageRead.covered.map((m) => [
+                m.sliceId,
+                m.turnIds === null ? ("all" as const) : m.turnIds,
+              ]),
+            ),
+            wholeUpTo: coverageRead.wholeUpTo,
+          };
+      // §4's UNION — the range is a HINT, not the only truth [11443]: the
+      // bell's turns ∪ the summary log's turns, EVERY candidate filtered
+      // through the water level (already-processed turns drop out of both
+      // legs, so a repeated bell eats nothing twice and a lost bell's turns
+      // ride the union in). Summary log unreadable → the range still stands,
+      // and the docket says the log degraded.
+      const candidates: SummaryHead[] = [];
+      if (range && range.turnIds.length > 0) {
+        candidates.push({ sliceId: range.sliceId, turnIds: range.turnIds });
+      }
+      const summaries = await readSummaryLog();
+      if (summaries.available) {
+        candidates.push(...summaries.entries);
+      } else {
+        logDegraded = true;
+      }
+      scope = scopeFromSummaries(coverage, candidates);
     } catch {
-      /* log unreadable — fresh-deployment semantics, never a throw */
+      /* log unreadable — degraded semantics, never a throw */
+      logDegraded = true;
+    }
+    if (logDegraded) {
+      // §3.5-2 — "前面没有任何提交记录"本身是一种状态: say so, don't skip.
+      console.warn(
+        "[reflection] the commit log is unreadable or empty — this lap's scope is a hint at best; the state is carried on the docket (logDegraded), not treated as 'no work'",
+      );
     }
 
-    // Scope: the first REFLECTION_SCOPE_MAX slice ids past the cursor, each
-    // head point-read once for closed_by (the door cap, §3.3).
-    let heads: SliceHead[] = [];
+    // The boundary beat's DATA (v0.42 — the criterion is untouched; only its
+    // input is supplied): point-read each scoped slice's head (at most
+    // REFLECTION_SCOPE_MAX reads) and attach the on-disk closed_by. A slice
+    // that is still open simply stays without one — the boundary reason then
+    // stays silent, exactly as the criterion intends.
     try {
-      const rels = (await enumerateSliceIds()).sort();
-      const candidates = rels
-        .map((rel) => ({ rel, id: rel.replaceAll("/", "-") }))
-        .filter((c) => cursor === null || c.id > cursor)
-        .slice(0, REFLECTION_SCOPE_MAX);
-      for (const c of candidates) {
-        const entry = await sliceEntryFromDisk(c.rel).catch(() => null);
-        if (!entry) continue;
-        heads.push({
-          sliceId: c.id,
-          ...(entry.closed_by
-            ? { closedBy: entry.closed_by as SlicingSignal }
-            : {}),
-        });
+      const { sliceEntryFromDisk } = await import("@/lib/episodic/timeline/store");
+      for (const s of scope) {
+        const entry = await sliceEntryFromDisk(s.sliceId.replaceAll("-", "/")).catch(
+          () => null,
+        );
+        if (entry?.closed_by) {
+          s.closedBy = entry.closed_by as ScopedSlice["closedBy"];
+        }
       }
     } catch {
-      heads = [];
+      /* heads are enhancers — the beat degrades, the lap does not */
     }
 
     // The agenda — absent file is the empty pad, not an error.
@@ -306,7 +362,7 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
       nowIso,
       date: lapDate,
       cursor,
-      slices: heads,
+      scope,
       lastEvolutionDate,
       agendaContent,
     });
@@ -329,7 +385,7 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
       agendaWakeMs = null;
     }
 
-    return { ...plan, agendaWakeMs };
+    return { ...plan, agendaWakeMs, logDegraded };
   } catch (e) {
     // A world-read failure is an empty-docket lap (空转), never a dead run.
     console.warn(

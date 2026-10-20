@@ -50,7 +50,11 @@ const h = vi.hoisted(() => ({
   world: {
     cursor: null as string | null,
     lastEvolution: null as string | null,
-    slices: [] as Array<{ rel: string; closedBy?: string }>,
+    /** the summary log's entries (v0.42 §3.5 — the rangeless scope source) */
+    summaries: [] as Array<{ sliceId: string; turnIds: string[] }>,
+    summariesAvailable: true,
+    /** the turn-level water level the rounds' seen marks build up */
+    marks: [] as Array<{ sliceId: string; turnIds: string[] | null }>,
     agenda: "",
   },
 }));
@@ -113,7 +117,8 @@ vi.mock("@/app/api/evolution/hq-agent", () => ({
 
 // v0.39 — the cursor/note moved to the COMMIT LOG; the store is gone. The
 // mock simulates the water level: a clean round advances it to the scope's
-// furthest slice (the trailer rule, §2.3), a failed round holds it.
+// furthest slice (the trailer rule, §2.3), a failed round holds it. v0.42 §4
+// — the scope is TURNS: the summary log supplies it (a rangeless run).
 vi.mock("@/lib/chat/hq-log", () => ({
   readReflectionCursor: async () => ({
     sliceId: h.world.cursor,
@@ -122,18 +127,19 @@ vi.mock("@/lib/chat/hq-log", () => ({
     degraded: h.world.cursor === null,
   }),
   readReflectionLog: async () => ({ entries: [], available: true }),
-}));
-
-vi.mock("@/lib/episodic/timeline/enumerate", () => ({
-  enumerateSliceIds: vi.fn(async () => h.world.slices.map((s) => s.rel)),
-}));
-vi.mock("@/lib/episodic/timeline/store", () => ({
-  sliceEntryFromDisk: vi.fn(async (rel: string) => {
-    const s = h.world.slices.find((x) => x.rel === rel);
-    if (!s) return null;
-    return s.closedBy ? { closed_by: s.closedBy } : {};
+  readSummaryLog: async () => ({
+    entries: h.world.summaries,
+    available: h.world.summariesAvailable,
+  }),
+  readReflectionCoverage: async () => ({
+    covered: h.world.marks,
+    wholeUpTo: null,
+    sha: null,
+    at: null,
+    degraded: false,
   }),
 }));
+
 vi.mock("@/lib/episodic/io-helpers", () => ({
   fsReadFile: vi.fn(async (path: string) => {
     if (path === "memory/self/agenda.md") return h.world.agenda;
@@ -153,14 +159,20 @@ beforeEach(() => {
   h.attributes = {};
   h.world.cursor = null;
   h.world.lastEvolution = null;
-  h.world.slices = [];
+  h.world.summaries = [];
+  h.world.summariesAvailable = true;
+  h.world.marks = [];
   h.world.agenda = "";
   h.handleBrief.mockImplementation(async (_docket: unknown) => {
-    const docket = _docket as { scope?: Array<{ sliceId: string }> };
+    const docket = _docket as { scope?: Array<{ sliceId: string; turnIds: string[] }> };
     h.order.push("handleBrief");
-    // simulate the trailer: a clean round advances the water level (§2.3)
-    const furthest = docket.scope?.at(-1)?.sliceId;
-    if (furthest) h.world.cursor = furthest;
+    // simulate the trailer: a clean round's seen marks cover the scope's
+    // turns (v0.42 — turn-level water level) and advance the display cursor
+    const scope = docket.scope ?? [];
+    if (scope.length > 0) {
+      h.world.marks = scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }));
+      h.world.cursor = scope[scope.length - 1]?.sliceId ?? null;
+    }
     return { actions: [], note: "idle — nothing substantive" };
   });
 });
@@ -176,8 +188,8 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
     // NO clock, NO mailbox wait — the run exited off the world read alone.
   });
 
-  it("free token + sealed slice → ONE round, cursor advances, immediate re-loop, then retire", async () => {
-    h.world.slices = [{ rel: "2026/10/04/0131", closedBy: "idle_gap" }];
+  it("free token + an owed turn → ONE round, cursor advances, immediate re-loop, then retire", async () => {
+    h.world.summaries = [{ sliceId: "2026-10-04-0131", turnIds: ["t1"] }];
 
     const outcome = await reflectionRun();
 
@@ -194,14 +206,39 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
     expect(h.world.cursor).toBe("2026-10-04-0131");
   });
 
+  it("a run started WITH the bell's range (v0.42 §4) scopes the lap by it — even with an EMPTY summary log and an unsealed slice", async () => {
+    const seen: Array<unknown> = [];
+    h.handleBrief.mockImplementation(async (docket: unknown) => {
+      seen.push(docket);
+      h.order.push("handleBrief");
+      const scope = (docket as { scope?: Array<{ sliceId: string; turnIds: string[] }> }).scope ?? [];
+      if (scope.length > 0) {
+        h.world.marks = scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }));
+        h.world.cursor = scope[scope.length - 1]?.sliceId ?? null;
+      }
+      return { actions: [], note: "ranged" };
+    });
+
+    const outcome = await reflectionRun({ sliceId: "2026-10-05-0900", turnIds: ["x1", "x2"] });
+
+    expect(outcome).toEqual({ kind: "retired", rounds: 1 });
+    // the first lap's scope IS the range, taken as given…
+    expect((seen[0] as { scope: unknown }).scope).toEqual([
+      { sliceId: "2026-10-05-0900", turnIds: ["x1", "x2"] },
+    ]);
+    // …the round settles the water level to the ranged slice; the immediate
+    // re-loop finds the (empty) summary log fully covered and retires.
+    expect(h.world.cursor).toBe("2026-10-05-0900");
+  });
+
   it("a failed round holds the cursor (§4.2) and the loop continues — then retires", async () => {
-    h.world.slices = [
-      { rel: "2026/10/04/0131", closedBy: "idle_gap" },
-      { rel: "2026/10/04/0200", closedBy: "idle_gap" },
+    h.world.summaries = [
+      { sliceId: "2026-10-04-0131", turnIds: ["t1"] },
+      { sliceId: "2026-10-04-0200", turnIds: ["t2"] },
     ];
     let calls = 0;
     h.handleBrief.mockImplementation(async (_docket: unknown) => {
-    const docket = _docket as { scope?: Array<{ sliceId: string }> };
+    const docket = _docket as { scope?: Array<{ sliceId: string; turnIds: string[] }> };
       h.order.push("handleBrief");
       calls += 1;
       // first round fails (the level HOLDS — its commit carries no trailer);
@@ -209,8 +246,11 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
       if (calls === 1) {
         return { actions: [], note: "", error: "model exploded" };
       }
-      const furthest = docket.scope?.at(-1)?.sliceId;
-      if (furthest) h.world.cursor = furthest;
+      const scope = docket.scope ?? [];
+      if (scope.length > 0) {
+        h.world.marks = scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }));
+        h.world.cursor = scope[scope.length - 1]?.sliceId ?? null;
+      }
       return { actions: ["research/x/index.md"], note: "recovered" };
     });
 

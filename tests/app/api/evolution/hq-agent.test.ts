@@ -220,7 +220,7 @@ const SLICE_ID = "2026-08-09-1300";
 const DOCKET = {
   date: DATE,
   cursor: null,
-  scope: [{ sliceId: SLICE_ID, closedBy: "idle_gap" as const }],
+  scope: [{ sliceId: SLICE_ID, turnIds: ["a1b2c3"], closedBy: "idle_gap" as const }],
   evolutionDue: false,
   evolutionReasons: [],
   agendaDue: [],
@@ -272,7 +272,7 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(vi.mocked(commitReflectionRound)).toHaveBeenCalledTimes(1);
     const message = vi.mocked(commitReflectionRound).mock.calls[0][1];
     expect(message).toContain("Reflection round — 2026-08-09");
-    expect(message).toContain("seen: 2026-08-09-1300");
+    expect(message).toContain("seen: 2026-08-09-1300#a1b2c3"); // turn-level water level (v0.42)
     // Runner wiring: forced report through hqReport; NO wall-clock budget
     // (v0.34 修订 A — execution budgets are deleted repo-wide; the round's
     // bounds are the step cap and the platform wall).
@@ -606,8 +606,8 @@ describe("handleBrief (v0.21 §5)", () => {
       date: DATE,
       cursor: "2026-08-09-1200",
       scope: [
-        { sliceId: SLICE_ID, closedBy: "idle_gap" },
-        { sliceId: "2026-08-09-1400", closedBy: "time_cap" },
+        { sliceId: SLICE_ID, turnIds: ["a1b2c3"], closedBy: "idle_gap" },
+        { sliceId: "2026-08-09-1400", turnIds: ["d4e5f6"], closedBy: "time_cap" },
       ],
       evolutionDue: true,
       evolutionReasons: ["conversation_boundary", "daily_rollover"],
@@ -617,9 +617,9 @@ describe("handleBrief (v0.21 §5)", () => {
     });
 
     const prompt = runSubAgentMock.mock.calls[0][0].prompt as string;
-    // the material: every scoped slice named with its close cause…
-    expect(prompt).toContain("2026-08-09-1300 (closed by idle_gap)");
-    expect(prompt).toContain("2026-08-09-1400 (closed by time_cap)");
+    // the material: every scoped slice named with its owed turns + close cause…
+    expect(prompt).toContain("2026-08-09-1300: turns a1b2c3 (closed by idle_gap)");
+    expect(prompt).toContain("2026-08-09-1400: turns d4e5f6 (closed by time_cap)");
     // …the cursor the range starts after…
     expect(prompt).toContain("2026-08-09-1200");
     // …the evolution verdict with its enumerated reasons…

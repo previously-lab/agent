@@ -45,12 +45,27 @@ export const TRAILER_MARKER = "—";
 // ─── The reflection round message: build ──────────────────────────────────
 
 export interface ReflectionRoundTrailer {
-  /** Clean rounds only: the scope's furthest sealed slice — the water level. */
-  seen?: { sliceId: string };
+  /**
+   * Clean rounds only: the rounds' water level, PER SLICE — which turns of
+   * which slices this round processed (v0.42 — the work unit is a TURN).
+   * One mark per scoped slice, emitted in scope order; `turnIds` ABSENT
+   * means the WHOLE slice (the old `seen: <sliceId>` format — parsed as
+   * such for backward compatibility).
+   */
+  seen?: SeenMark[];
   /** Rounds that truly ran the evolution拍 (changed or not). */
   evolved?: { date: string };
   /** Superseded rounds — mutually exclusive with `seen`. */
   superseded?: boolean;
+}
+
+/**
+ * One slice's processed-turns mark. `turnIds` undefined = the whole slice
+ * (old format); present = exactly those turns.
+ */
+export interface SeenMark {
+  sliceId: string;
+  turnIds?: string[];
 }
 
 /**
@@ -72,7 +87,14 @@ export function buildReflectionRoundMessage(input: {
   const t = input.trailer;
   if (t && (t.seen || t.evolved || t.superseded)) {
     lines.push("", TRAILER_MARKER);
-    if (t.seen) lines.push(`seen: ${t.seen.sliceId}`);
+    // v0.42 — the water level is TURN-level: one line per scoped slice, the
+    // turn ids after `#` (old readers see a line they cannot split and
+    // degrade to "water level unknown", never to "all covered").
+    for (const mark of t.seen ?? []) {
+      lines.push(
+        `seen: ${mark.sliceId}${mark.turnIds?.length ? `#${mark.turnIds.join(",")}` : ""}`,
+      );
+    }
     if (t.evolved) lines.push(`evolved: ${t.evolved.date}`);
     if (t.superseded) lines.push("superseded: true");
   }
@@ -116,12 +138,27 @@ export function parseReflectionRoundMessage(
   const noteLines = markerIdx >= 0 ? lines.slice(0, markerIdx) : lines;
   const note = noteLines.join("\n").trim() || null;
 
+  const seenMarks: SeenMark[] = [];
   let trailer: ReflectionRoundTrailer | null = null;
   if (markerIdx >= 0) {
     for (const line of lines.slice(markerIdx + 1)) {
-      const m = /^seen: (\S+)$/.exec(line.trim());
+      // v0.42 — `seen: <sliceId>#<turnId>,<turnId>` (turn-level water level)
+      // or the OLD `seen: <sliceId>` (whole slice covered). Malformed seen
+      // lines are SKIPPED: an unparseable water level degrades to UNKNOWN
+      // (nothing covered), never to "all processed".
+      const m = /^seen: (\S+?)(?:#(\S+))?$/.exec(line.trim());
       if (m) {
-        trailer = { ...(trailer ?? {}), seen: { sliceId: m[1] } };
+        if (!/^\d{4}-\d{2}-\d{2}-\d{4}$/.test(m[1])) continue;
+        let turnIds: string[] | undefined;
+        if (m[2] !== undefined) {
+          const ids = m[2]
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (ids.length === 0) continue; // "seen: X#" — malformed, unknown
+          turnIds = ids;
+        }
+        seenMarks.push({ sliceId: m[1], ...(turnIds ? { turnIds } : {}) });
         continue;
       }
       const e = /^evolved: (\S+)$/.exec(line.trim());
@@ -134,6 +171,9 @@ export function parseReflectionRoundMessage(
       }
       // unknown trailer lines: tolerated, ignored
     }
+  }
+  if (seenMarks.length > 0) {
+    trailer = { ...(trailer ?? {}), seen: seenMarks };
   }
   return { date, note, trailer };
 }

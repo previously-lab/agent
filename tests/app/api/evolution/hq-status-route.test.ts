@@ -75,7 +75,7 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
         parsed: {
           date: "2026-10-02",
           note: "处理了周末安排。",
-          trailer: { seen: { sliceId: "2026-10-01-0900" }, evolved: { date: "2026-10-02" } },
+          trailer: { seen: [{ sliceId: "2026-10-01-0900" }], evolved: { date: "2026-10-02" } },
         },
         files: ["tasks/周末安排/index.md"],
       },

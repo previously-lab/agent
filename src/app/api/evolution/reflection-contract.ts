@@ -53,6 +53,19 @@ export interface ReflectionWakePayload {
 }
 
 /**
+ * The range a summary stream hands the reflection unit (v0.42 §4 — 触发携带
+ * 范围): the slice + the turn ids the summary just persisted. A HINT, not
+ * the only truth — a unit woken WITHOUT one (a lost bell, a zombie
+ * takeover's fresh run) derives its scope from the commit log itself
+ * (§3.5). Pure type — lives here so both reflection-wake.ts and
+ * reflection-run.ts can import it without a module cycle.
+ */
+export interface ReflectionWakeRange {
+  sliceId: string;
+  turnIds: string[];
+}
+
+/**
  * How a reflection run ended (its return value). A claiming run ends by
  * DEDUPING to a healthy holder, or by RETIRING when the world holds no work
  * (v0.38 §5: 无活即退 — no idle clock, the exit IS the world read coming back

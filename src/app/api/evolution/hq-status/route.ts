@@ -195,7 +195,9 @@ export async function GET(): Promise<Response> {
         date: e.parsed.date,
         note: e.parsed.note,
         at: e.committedAt,
-        seen: e.parsed.trailer?.seen?.sliceId ?? null,
+        // v0.42 — turn-level marks (scope order): the furthest slice id is
+        // the slice-level display water level.
+        seen: e.parsed.trailer?.seen?.at(-1)?.sliceId ?? null,
         evolved: e.parsed.trailer?.evolved?.date ?? null,
         superseded: e.parsed.trailer?.superseded === true,
       })),

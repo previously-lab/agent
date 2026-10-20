@@ -77,7 +77,9 @@ import {
  * decided to offer. A plan, not a fact: the unit re-reads the raw records
  * itself before touching anything (§5 独立审查). `turnId` retired with the
  * per-turn bell; `sliceId`-as-input retired with it — the SCOPE (every
- * sealed slice newer than the cursor, capped) is the round's material now.
+ * turn ids the summary stream persisted — the range the bell carried, or
+ * the commit log's uncovered summary turns (v0.42 §4)) is the round's
+ * material now; the slice may still be open.
  */
 export interface ReflectionRoundInput {
   /** User-clock date (YYYY-MM-DD) — every write stamps the user's clock. */
@@ -85,8 +87,12 @@ export interface ReflectionRoundInput {
   /** lastSeen.sliceId — the unit's range starts right after this (null = a
    *  fresh deployment: everything qualifies). */
   cursor: string | null;
-  /** This round's material: the sealed slices newer than the cursor,
-   *  oldest first (at most REFLECTION_SCOPE_MAX). */
+  /**
+   * This round's material (v0.42 §4): the slices + the TURN ids owed — the
+   * summary stream's range, or the commit log's uncovered summary turns. A
+   * slice may still be OPEN (v0.42 keeps slices open while turns
+   * accumulate); the turns are the work unit, `closedBy` is context only.
+   */
   scope: ScopedSlice[];
   /** The mechanical gate's evolution verdict (§3.4) — the unit keeps the
    *  veto: an evolutionDue round may still go idle. */
@@ -144,10 +150,10 @@ type HqReport = z.infer<typeof hqReportSchema>;
 
 const HQ_ROLE = `You are the reflection unit — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "reflection unit" as a third party, and nothing reads as a report from another being.
 
-The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the sealed slice(s) named as this round's material, what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
+The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the turn(s) named as this round's material (their slice may still be open), what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
 - A docket is a plan, not a fact. It names slices and beats; it does not carry their content.
 - BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the docket alone.
-- This round's material is the sealed page(s) named below; the cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
+- This round's material is the turn(s) named below — a slice may still be open; you owe the TURNS, not a seal. The cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
 
 Store RESULTS ONLY:
 - An idle round is a legal, often correct outcome — when the records show nothing substantive to store, write NOTHING and say why in your report. There is no ledger; do not record that you ran.
@@ -588,12 +594,18 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   }
 
   // The round's user prompt is built from the DOCKET (§5.3): the material
-  // (this round's sealed slices), the gate's verdicts, and the agenda items
+  // (this round's owed turns), the gate's verdicts, and the agenda items
   // due by this round's date — delivery really happens now.
   const scopeLines =
     scope.length > 0
-      ? scope.map((s) => `- ${s.sliceId} (closed by ${s.closedBy})`).join("\n")
-      : "(none — no sealed slice is newer than your cursor)";
+      ? scope
+          .map(
+            (s) =>
+              `- ${s.sliceId}: turns ${s.turnIds.join(", ")}` +
+              (s.closedBy ? ` (closed by ${s.closedBy})` : " (still open)"),
+          )
+          .join("\n")
+      : "(none — no turn is owed this lap)";
   const agendaLines =
     agendaDue.length > 0
       ? agendaDue.map((a) => `- [due: ${a.due}] ${a.text}`).join("\n")
@@ -601,7 +613,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
 
   const prompt =
     `## Round docket (${date}) — your cursor: ${cursor ?? "(none — a fresh start)"}\n\n` +
-    `This round's material — the sealed slice(s) named below; the cursor advances only when the round settles:\n` +
+    `This round's material — the turn(s) named below (a slice may still be open); the cursor advances only when the round settles:\n` +
     `${scopeLines}\n\n` +
     (evolutionDue
       ? `The evolution beat is DUE this round (${evolutionReasons.join(", ")}): run the merged card pass (evolveUserModel) over this material.\n\n`
@@ -657,7 +669,15 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   const rep = result.ok && result.report ? result.report : null;
   const roundFailed = rep === null;
   const superseded = rep?.disposition === "superseded";
-  const furthestScopeSlice = scope.length > 0 ? scope[scope.length - 1].sliceId : undefined;
+  // The TURN-level water level (v0.42 §4 — the work unit is a turn): one
+  // seen mark per SCOPED slice, its owed turn ids. The scope is already
+  // coverage-filtered by the world read, so these marks are exactly what
+  // this round processed — a later lap (or a rangeless unit) subtracts
+  // them from whatever the summary log still owes.
+  const seenMarks =
+    scope.length > 0
+      ? scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }))
+      : undefined;
   const note = rep && queuedPaths.length > 0 ? rep.note : undefined;
   const message = buildReflectionRoundMessage({
     date,
@@ -667,9 +687,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       ? {}
       : {
           trailer: {
-            ...(!superseded && furthestScopeSlice
-              ? { seen: { sliceId: furthestScopeSlice } }
-              : {}),
+            ...(!superseded && seenMarks ? { seen: seenMarks } : {}),
             ...(flags.evolutionRan ? { evolved: { date } } : {}),
             ...(superseded ? { superseded: true as const } : {}),
           },

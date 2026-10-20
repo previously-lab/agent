@@ -145,7 +145,7 @@ const CASE_PATH = "memory/research/手机购买调研/index.md";
 const DOCKET = {
   date: DATE,
   cursor: null,
-  scope: [{ sliceId: SLICE_ID, closedBy: "idle_gap" as const }],
+  scope: [{ sliceId: SLICE_ID, turnIds: ["a1b2c3"], closedBy: "idle_gap" as const }],
   evolutionDue: false,
   evolutionReasons: [],
   agendaDue: [],

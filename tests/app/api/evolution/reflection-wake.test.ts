@@ -13,8 +13,9 @@
  * 2026-10-16: a 38-minute "running" run held the token across restarts and
  * starved the unit, because the takeover claim needs a challenger run and
  * only a bell can start one); age UNREADABLE → conservative `rung`, never
- * a blind cancel; hook ABSENT → start a fresh short-lived unit with NO
- * payload.
+ * a blind cancel; hook ABSENT → start a fresh short-lived unit — the bell's
+ * range (v0.42 §4) rides the start args, `[null]` when there is none (the
+ * fresh unit then derives its scope from the commit log, §3.5).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -85,9 +86,10 @@ describe("deliverReflectionWake — the pure bell (v0.38 §3.3)", () => {
       expect(r).toEqual({ ok: true, delivered: "tookOver", runId: "reflection-fresh" });
       expect(cancel).toHaveBeenCalledTimes(1); // the zombie itself
       expect(h.start).toHaveBeenCalledTimes(1);
+      expect(h.start.mock.calls[0][1]).toEqual([null]); // the range was the dead holder's hint — the fresh unit reads the log (§3.5)
       const [workflowFn, args, opts] = h.start.mock.calls[0];
       expect(workflowFn).toBe(h.reflectionRun);
-      expect(args).toEqual([]); // the bell carries NO work (§3.3)
+      expect(args).toEqual([null]); // the range was the dead holder's hint — dropped (§3.5)
       expect(opts).toEqual({ region: "hkg1" });
       expect(h.resumeHook).not.toHaveBeenCalled();
       // the takeover leaves one observable line (age rounded to minutes)
@@ -163,7 +165,7 @@ describe("deliverReflectionWake — the pure bell (v0.38 §3.3)", () => {
     expect(h.start).not.toHaveBeenCalled();
   });
 
-  it("no live run (advisory miss) → start(reflectionRun, [], hkg1) — no payload", async () => {
+  it("no live run (advisory miss) → start(reflectionRun, [null], hkg1) — a rangeless fresh unit reads the log (§3.5)", async () => {
     h.getHookByToken.mockRejectedValue(new Error("HookNotFoundError: no hook"));
     h.start.mockResolvedValue({ runId: "reflection-fresh" });
 
@@ -173,9 +175,24 @@ describe("deliverReflectionWake — the pure bell (v0.38 §3.3)", () => {
     expect(h.start).toHaveBeenCalledTimes(1);
     const [workflowFn, args, opts] = h.start.mock.calls[0];
     expect(workflowFn).toBe(h.reflectionRun);
-    expect(args).toEqual([]); // the bell carries NO work (§3.3)
+    expect(args).toEqual([null]); // no range on a bare ring — the log scopes it
     expect(opts).toEqual({ region: "hkg1" });
     expect(h.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("the bell's range rides the start args (v0.42 §4 — 触发携带范围)", async () => {
+    h.getHookByToken.mockRejectedValue(new Error("HookNotFoundError: no hook"));
+    h.start.mockResolvedValue({ runId: "reflection-fresh" });
+    const range = { sliceId: "2026-10-20-1836", turnIds: ["a1b2c3"] };
+
+    const r = await deliverReflectionWake(range);
+
+    expect(r).toEqual({ ok: true, delivered: "started", runId: "reflection-fresh" });
+    expect(h.start).toHaveBeenCalledTimes(1);
+    const [workflowFn, args, opts] = h.start.mock.calls[0];
+    expect(workflowFn).toBe(h.reflectionRun);
+    expect(args).toEqual([range]);
+    expect(opts).toEqual({ region: "hkg1" });
   });
 
   it("start itself failing → { ok: false }, never a throw — a lost bell only warns", async () => {

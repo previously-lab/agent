@@ -1,15 +1,18 @@
 /**
  * Tests for the reflection lap's mechanical gate
- * (src/app/api/evolution/reflection-plan.ts, v0.34 §3.3/§3.4) — the pure
- * judgment the `loadReflectionWorld` step and the run-body lap loop share.
- * The contract that matters:
- *   - scope: sealed slices with id > cursor, ascending, oldest 5 (design
- *     cap); the cursor's own slice and anything older are excluded, ACTIVE
- *     slices never qualify;
+ * (src/app/api/evolution/reflection-plan.ts, v0.34 §3.3/§3.4; v0.42 §4 —
+ * the scope is TURNS). The contract that matters:
+ *   - scope: TURNS, not sealed slices — the summary stream's range when the
+ *     bell carries one, else the summary log's turns past the water level
+ *     (scopeFromSummaries): `sliceId > cursor` (everything on a fresh
+ *     deployment), grouped per slice with turn ids deduped, ascending,
+ *     oldest 5 slices (design cap); a slice may still be OPEN — `closedBy`
+ *     is context, never a scope gate;
  *   - archive beat: a non-empty scope IS the offer (no separate field);
  *   - evolution beat: boundary-class close in scope / daily rollover with a
  *     non-empty scope / due agenda — checkpoint closes never trigger it
- *     alone, and reasons come from the enumerated EVOLUTION_REASONS set;
+ *     alone, an UNSEALED slice never fires the boundary reason, and reasons
+ *     come from the enumerated EVOLUTION_REASONS set;
  *   - agenda parsing is tolerant by inheritance (parseAgenda): garbage
  *     content degrades to an empty agendaDue, never to a thrown lap.
  */
@@ -19,18 +22,30 @@ import {
   EVOLUTION_REASONS,
   REFLECTION_SCOPE_MAX,
   assembleLapPlan,
-  filterScope,
   judgeEvolutionBeat,
   lapHasWork,
+  scopeFromSummaries,
   type LapPlanInput,
-  type SliceHead,
+  type ScopeCoverage,
+  type ScopedSlice,
+  type SummaryHead,
 } from "@/app/api/evolution/reflection-plan";
 
 const CURSOR = "2026-10-14-1858";
 const DATE = "2026-10-16";
 
-function head(sliceId: string, closedBy?: SliceHead["closedBy"]): SliceHead {
-  return closedBy === undefined ? { sliceId } : { sliceId, closedBy };
+function scoped(
+  sliceId: string,
+  turnIds: string[],
+  closedBy?: ScopedSlice["closedBy"],
+): ScopedSlice {
+  return closedBy === undefined
+    ? { sliceId, turnIds }
+    : { sliceId, turnIds, closedBy };
+}
+
+function summary(sliceId: string, turnIds: string[]): SummaryHead {
+  return { sliceId, turnIds };
 }
 
 function plan(overrides: Partial<LapPlanInput> = {}) {
@@ -38,65 +53,103 @@ function plan(overrides: Partial<LapPlanInput> = {}) {
     nowIso: `${DATE}T08:00:00.000Z`,
     date: DATE,
     cursor: CURSOR,
-    slices: [],
+    scope: [],
     lastEvolutionDate: null,
     agendaContent: null,
     ...overrides,
   });
 }
 
-describe("filterScope — the §3.3 range filter", () => {
-  it("solo: one sealed slice past the cursor makes the scope", () => {
+describe("scopeFromSummaries — §3.5/§4's scope assembly (range ∪ log, coverage-filtered)", () => {
+  const NO_COVERAGE: ScopeCoverage | null = null;
+  const NOTHING_COVERED: ScopeCoverage = { covered: new Map(), wholeUpTo: null };
+  function coverage(
+    entries: Array<[string, "all" | string[]]>,
+    wholeUpTo: string | null = null,
+  ): ScopeCoverage {
+    return { covered: new Map(entries), wholeUpTo };
+  }
+
+  it("solo: one candidate past everything makes the scope, turns as given", () => {
     expect(
-      filterScope(CURSOR, [head("2026-10-15-0930", "idle_gap")]),
-    ).toEqual([{ sliceId: "2026-10-15-0930", closedBy: "idle_gap" }]);
+      scopeFromSummaries(NOTHING_COVERED, [summary("2026-10-15-0930", ["t1", "t2"])]),
+    ).toEqual([{ sliceId: "2026-10-15-0930", turnIds: ["t1", "t2"] }]);
   });
 
-  it("two in a row come back ascending, oldest first", () => {
+  it("two slices come back ascending, oldest first (input order does not matter)", () => {
     expect(
-      filterScope(CURSOR, [
-        head("2026-10-16-0712", "time_cap"),
-        head("2026-10-15-0930", "idle_gap"),
+      scopeFromSummaries(NOTHING_COVERED, [
+        summary("2026-10-16-0712", ["t3"]),
+        summary("2026-10-15-0930", ["t1", "t2"]),
       ]),
     ).toEqual([
-      { sliceId: "2026-10-15-0930", closedBy: "idle_gap" },
-      { sliceId: "2026-10-16-0712", closedBy: "time_cap" },
+      { sliceId: "2026-10-15-0930", turnIds: ["t1", "t2"] },
+      { sliceId: "2026-10-16-0712", turnIds: ["t3"] },
     ]);
   });
 
-  it("a backlog is capped at the OLDEST 5 — the rest waits for later laps", () => {
+  it("several candidates of ONE slice merge with their turn ids deduped, in arrival order (the range ∪ log union lands here)", () => {
+    expect(
+      scopeFromSummaries(NOTHING_COVERED, [
+        summary("2026-10-15-0930", ["t3"]), // the range leg
+        summary("2026-10-15-0930", ["t1", "t2"]), // the log leg
+        summary("2026-10-15-0930", ["t2", "t3"]), // overlap — deduped
+      ]),
+    ).toEqual([{ sliceId: "2026-10-15-0930", turnIds: ["t3", "t1", "t2"] }]);
+  });
+
+  it("a backlog is capped at the OLDEST 5 slices — the rest waits for later laps", () => {
     const ids = ["2026-10-15-0930", "2026-10-15-1200", "2026-10-15-1400", "2026-10-15-1800", "2026-10-15-2100", "2026-10-16-0712", "2026-10-16-0800"];
-    // Shuffled input: ordering is the filter's job, not the enumerator's.
-    const slices = [...ids].reverse().map((id) => head(id, "idle_gap"));
-    const scope = filterScope(CURSOR, slices);
+    const scope = scopeFromSummaries(NOTHING_COVERED, ids.map((id) => summary(id, ["t"])));
     expect(REFLECTION_SCOPE_MAX).toBe(5);
     expect(scope.map((s) => s.sliceId)).toEqual(ids.slice(0, 5));
   });
 
-  it("the cursor's own slice and anything older are excluded; ACTIVE slices never qualify", () => {
-    const scope = filterScope(CURSOR, [
-      head("2026-10-13-2200", "idle_gap"), // older than the cursor
-      head(CURSOR, "user_explicit"), // the cursor itself
-      head("2026-10-15-0930"), // still active — no closed_by
-      head("2026-10-15-1200", "time_cap"), // the one qualifier
+  it("the water level subtracts: a covered slice drops out; a PARTIALLY covered slice keeps only its unprocessed turns (同片第二轮)", () => {
+    const cov = coverage([["2026-10-19-1800", ["t1"]]]);
+    const scope = scopeFromSummaries(cov, [
+      summary("2026-10-19-1800", ["t1", "t2"]), // t1 covered → only t2 owed
+      summary("2026-10-20-0900", ["t3"]), // untouched slice — fully owed
     ]);
-    expect(scope).toEqual([{ sliceId: "2026-10-15-1200", closedBy: "time_cap" }]);
+    expect(scope).toEqual([
+      { sliceId: "2026-10-19-1800", turnIds: ["t2"] },
+      { sliceId: "2026-10-20-0900", turnIds: ["t3"] },
+    ]);
   });
 
-  it("a null cursor (fresh deployment) lets every sealed slice in", () => {
-    expect(filterScope(null, [head("2026-10-01-0001", "idle_gap")])).toHaveLength(1);
+  it("OLD-format backward compatibility: a bare `seen: <sliceId>` covers the WHOLE slice, and lifts the level for unmarked slices at or below it", () => {
+    const cov = coverage([], "2026-10-19-1800"); // old water level
+    const scope = scopeFromSummaries(cov, [
+      summary("2026-10-18-1200", ["old"]), // below the level, no mark → whole-covered
+      summary("2026-10-19-1800", ["tc"]), // the level slice itself → whole-covered
+      summary("2026-10-20-0900", ["t3"]), // past the level → owed
+    ]);
+    expect(scope).toEqual([{ sliceId: "2026-10-20-0900", turnIds: ["t3"] }]);
+  });
+
+  it("an explicit mark WINS over the old level for its slice (newest round subsumes)", () => {
+    const cov = coverage([["2026-10-19-1800", ["t1"]]], "2026-10-19-1800");
+    const scope = scopeFromSummaries(cov, [summary("2026-10-19-1800", ["t1", "t2"])]);
+    expect(scope).toEqual([{ sliceId: "2026-10-19-1800", turnIds: ["t2"] }]);
+  });
+
+  it("UNKNOWN coverage (null — unparseable level, unreadable log): NOTHING counts as covered, never 'all done'", () => {
+    expect(
+      scopeFromSummaries(NO_COVERAGE, [summary("2026-10-01-0001", ["t1"])]),
+    ).toEqual([{ sliceId: "2026-10-01-0001", turnIds: ["t1"] }]);
   });
 
   it("never mutates its input", () => {
-    const slices = [head("2026-10-16-0712", "idle_gap"), head("2026-10-15-0930", "idle_gap")];
-    filterScope(CURSOR, slices);
-    expect(slices.map((s) => s.sliceId)).toEqual(["2026-10-16-0712", "2026-10-15-0930"]);
+    const summaries = [summary("2026-10-16-0712", ["t2"]), summary("2026-10-15-0930", ["t1"])];
+    scopeFromSummaries(NOTHING_COVERED, summaries);
+    expect(summaries.map((s) => s.sliceId)).toEqual(["2026-10-16-0712", "2026-10-15-0930"]);
   });
 });
 
-describe("judgeEvolutionBeat — the §3.4 truth table", () => {
-  const scopeBoundary = [{ sliceId: "2026-10-15-0930", closedBy: "idle_gap" as const }];
-  const scopeCheckpoint = [{ sliceId: "2026-10-15-0930", closedBy: "time_cap" as const }];
+describe("judgeEvolutionBeat — the §3.4 truth table (v0.42: closedBy optional)", () => {
+  const scopeBoundary = [scoped("2026-10-15-0930", ["t1"], "idle_gap")];
+  const scopeCheckpoint = [scoped("2026-10-15-0930", ["t1"], "time_cap")];
+  const scopeOpen = [scoped("2026-10-15-0930", ["t1"])]; // no closedBy — an OPEN slice
   const dueAgenda = [{ due: DATE, text: "复查（据片 2026-10-14-1858）" }];
 
   it("a boundary-class close in scope offers the beat (conversation_boundary)", () => {
@@ -106,6 +159,11 @@ describe("judgeEvolutionBeat — the §3.4 truth table", () => {
 
   it("a CHECKPOINT-only scope does NOT trigger the beat by itself", () => {
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: DATE, agendaDue: [] });
+    expect(r).toEqual({ due: false, reasons: [] });
+  });
+
+  it("an OPEN slice (no closedBy) never fires the boundary reason — the criterion is unchanged, it simply needs a seal", () => {
+    const r = judgeEvolutionBeat({ date: DATE, scope: scopeOpen, lastEvolutionDate: DATE, agendaDue: [] });
     expect(r).toEqual({ due: false, reasons: [] });
   });
 
@@ -148,7 +206,7 @@ describe("judgeEvolutionBeat — the §3.4 truth table", () => {
 });
 
 describe("assembleLapPlan — the §3.3 docket", () => {
-  it("an idle world: nothing sealed, no agenda — no work, gate closed", () => {
+  it("an idle world: nothing owed, no agenda — no work, gate closed", () => {
     const p = plan();
     expect(p.scope).toEqual([]);
     expect(p.evolutionDue).toBe(false);
@@ -157,9 +215,9 @@ describe("assembleLapPlan — the §3.3 docket", () => {
     expect(lapHasWork(p)).toBe(false);
   });
 
-  it("a sealed boundary slice past the cursor offers archive AND evolution in one docket", () => {
-    const p = plan({ slices: [head("2026-10-15-0930", "idle_gap")], lastEvolutionDate: DATE });
-    expect(p.scope).toEqual([{ sliceId: "2026-10-15-0930", closedBy: "idle_gap" }]);
+  it("an owed slice past the cursor offers archive AND evolution in one docket", () => {
+    const p = plan({ scope: [scoped("2026-10-15-0930", ["t1"], "idle_gap")], lastEvolutionDate: DATE });
+    expect(p.scope).toEqual([{ sliceId: "2026-10-15-0930", turnIds: ["t1"], closedBy: "idle_gap" }]);
     expect(p.evolutionReasons).toEqual(["conversation_boundary"]);
     expect(lapHasWork(p)).toBe(true);
     // caller-owned fields ride through untouched
@@ -198,8 +256,8 @@ describe("assembleLapPlan — the §3.3 docket", () => {
   });
 
   it("lapHasWork: scope ∨ evolution ∨ agenda — the §3.1 idle lap blocks without any of them", () => {
-    // checkpoint-only same-day: scope non-empty → archive beat alone is work
-    expect(lapHasWork(plan({ slices: [head("2026-10-15-0930", "capacity")], lastEvolutionDate: DATE }))).toBe(true);
+    // an owed open slice: scope non-empty → archive beat alone is work
+    expect(lapHasWork(plan({ scope: [scoped("2026-10-15-0930", ["t1"], "capacity")], lastEvolutionDate: DATE }))).toBe(true);
     // agenda only
     expect(lapHasWork(plan({ agendaContent: `- [due: ${DATE}] 到期（据片 x）`, lastEvolutionDate: DATE }))).toBe(true);
     // nothing at all

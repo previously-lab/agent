@@ -1,9 +1,9 @@
 /**
- * The mechanical bell (v0.38 §3.3) — the reflection unit's ONLY trigger, now
- * a PURE DOORBELL: the mailbox retired to a mutex (the short-lived run
- * loops while the world has work and exits when it doesn't), so the wake
- * carries NO payload at all. The unit's range is everything past its
- * on-disk cursor — content is never delivered by the bell.
+ * The mechanical bell (v0.38 §3.3; v0.42 §4) — the reflection unit's ONLY
+ * trigger, a doorbell with ONE hint: the range a summary stream just
+ * persisted ({sliceId, turnIds}). The unit's range is everything past its
+ * on-disk evidence — the bell tells it WHERE to look first; content is never
+ * delivered by the bell.
  *
  * Delivery is a three-way call (observed 2026-10-16: a 38-minute "running"
  * ZOMBIE held the token across restarts, and the old two-way bell read every
@@ -36,29 +36,29 @@ import { getHookByToken, getRun, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { REFLECTION_TOKEN, reflectionRun } from "@/app/api/evolution/reflection-run";
 import { REFLECTION_TAKEOVER_MS } from "@/app/api/evolution/reflection-contract";
+import type { ReflectionWakeRange } from "@/app/api/evolution/reflection-contract";
+
+export type { ReflectionWakeRange };
 
 export type ReflectionWakeResult =
   | { ok: true; delivered: "rung" | "started" | "tookOver"; runId: string }
   | { ok: false; reason: string };
 
 /**
- * The range a summary stream hands the reflection unit (v0.42 §4 — 触发携带
- * 范围): the slice + the turn ids the summary just persisted. A HINT, not the
- * only truth — the unit re-checks the commit log itself (§3.5). Carried by
- * the bell from v0.42 on; the reflection side consumes it in a later phase
- * (this phase threads the parameter through only).
+ * Start a fresh short-lived reflection unit (a dead/absent token is free).
+ * `range` is the summary stream's hint (v0.42 §4) — absent on a zombie
+ * takeover's fresh run, which then derives its scope from the commit log
+ * (§3.5).
  */
-export interface ReflectionWakeRange {
-  sliceId: string;
-  turnIds: string[];
-}
-
-/** Start a fresh short-lived reflection unit (a dead/absent token is free). */
-async function startReflectionRun(): Promise<ReflectionWakeResult> {
+async function startReflectionRun(
+  range?: ReflectionWakeRange,
+): Promise<ReflectionWakeResult> {
   try {
     // Same start config as the question sub-flow — background runs live in
-    // one region, not two. No payload: the bell carries no work (§3.3).
-    const run = await start(reflectionRun, [], { region: "hkg1" });
+    // one region, not two. The range rides the args (the run's input), not
+    // the attributes (observability may read it from the run record either
+    // way — the args are what the body consumes).
+    const run = await start(reflectionRun, [range ?? null], { region: "hkg1" });
     return { ok: true, delivered: "started", runId: run.runId };
   } catch (e) {
     return {
@@ -116,31 +116,31 @@ async function readHolderAgeMs(runId: string): Promise<number | null> {
  * while STILL holding the token is a zombie — the ring that finds it IS
  * the challenger (cancel → start, `tookOver`). `range` (v0.42 §4) is the
  * summary stream's hint of what it just persisted (the slice + the turn
- * ids) — a hint, not the only truth (the unit re-reads the commit log
- * itself, §3.5). Never throws.
+ * ids) — a hint, not the only truth (a rangeless unit re-reads the commit
+ * log itself, §3.5). Never throws.
  */
 export async function deliverReflectionWake(
   range?: ReflectionWakeRange,
 ): Promise<ReflectionWakeResult> {
-  // v0.42 §4 — the range is threaded through this phase only; the reflection
-  // side starts consuming it in the next phase.
-  void range;
   let hook: Awaited<ReturnType<typeof getHookByToken>>;
   try {
     hook = await getHookByToken(REFLECTION_TOKEN);
   } catch {
-    return startReflectionRun();
+    return startReflectionRun(range);
   }
   const runId = (hook as { runId?: string } | null)?.runId ?? "";
   // A resolved hook IS a live holder by construction (the platform disposes
   // the token at run terminal state) — age is the only remaining question.
   const ageMs = runId ? await readHolderAgeMs(runId) : null;
   if (ageMs === null || ageMs <= REFLECTION_TAKEOVER_MS) {
+    // The healthy holder was started WITH its own range when it claimed the
+    // token — this redundant ring carries nothing new (触发即完成).
     return { ok: true, delivered: "rung", runId };
   }
   // Zombie takeover: the bell cancels the stale holder (best-effort — a
   // failed cancel only warns, the fresh start still happens) and starts a
-  // new unit; the stale run's claim step never runs again.
+  // new unit WITHOUT the range (it was the dead holder's hint; the fresh
+  // unit derives the scope from the commit log — §3.5).
   try {
     await getRun(runId).cancel();
   } catch (err) {

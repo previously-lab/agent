@@ -48,41 +48,78 @@ describe("the frozen prefixes (v0.39 §2.5; v0.42 §6-15 — user turn / reply r
 });
 
 describe("the reflection round message — build/parse round trip", () => {
-  it("a clean round with writes: note + seen + evolved trailers", () => {
+  it("a clean round with writes: note + seen + evolved trailers (v0.42 — turn-level seen)", () => {
     const message = buildReflectionRoundMessage({
       date: "2026-10-19",
       note: "处理了周末安排。",
       trailer: {
-        seen: { sliceId: "2026-10-19-1721" },
+        seen: [{ sliceId: "2026-10-19-1721", turnIds: ["a1b2c3", "d4e5f6"] }],
         evolved: { date: "2026-10-19" },
       },
     });
     expect(message).toBe(
-      "Reflection round — 2026-10-19\n\n处理了周末安排。\n\n—\nseen: 2026-10-19-1721\nevolved: 2026-10-19",
+      "Reflection round — 2026-10-19\n\n处理了周末安排。\n\n—\nseen: 2026-10-19-1721#a1b2c3,d4e5f6\nevolved: 2026-10-19",
     );
     const parsed = parseReflectionRoundMessage(message);
     expect(parsed).toEqual({
       date: "2026-10-19",
       note: "处理了周末安排。",
       trailer: {
-        seen: { sliceId: "2026-10-19-1721" },
+        seen: [{ sliceId: "2026-10-19-1721", turnIds: ["a1b2c3", "d4e5f6"] }],
         evolved: { date: "2026-10-19" },
         superseded: undefined,
       },
     });
   });
 
+  it("a multi-slice round: one seen line per scoped slice, scope order", () => {
+    const message = buildReflectionRoundMessage({
+      date: "2026-10-19",
+      trailer: {
+        seen: [
+          { sliceId: "2026-10-18-0900", turnIds: ["t1"] },
+          { sliceId: "2026-10-19-1721", turnIds: ["t2"] },
+        ],
+      },
+    });
+    expect(message).toContain("—\nseen: 2026-10-18-0900#t1\nseen: 2026-10-19-1721#t2");
+    const parsed = parseReflectionRoundMessage(message);
+    expect(parsed?.trailer?.seen).toEqual([
+      { sliceId: "2026-10-18-0900", turnIds: ["t1"] },
+      { sliceId: "2026-10-19-1721", turnIds: ["t2"] },
+    ]);
+  });
+
+  it("OLD format backward compatibility: a bare `seen: <sliceId>` parses as the WHOLE slice covered", () => {
+    const parsed = parseReflectionRoundMessage(
+      "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721",
+    );
+    expect(parsed?.trailer?.seen).toEqual([
+      { sliceId: "2026-10-19-1721" }, // no turnIds = whole slice
+    ]);
+  });
+
+  it("an UNPARSEABLE seen line degrades to UNKNOWN — skipped, never read as 'all processed'", () => {
+    const parsed = parseReflectionRoundMessage(
+      "Reflection round — 2026-10-19\n\n—\nseen: not-a-slice-id\nseen: 2026-10-19-1721#\nseen: 2026-10-19-1800#ok1",
+    );
+    // Only the well-formed mark survives; the garbage contributes NOTHING.
+    expect(parsed?.trailer?.seen).toEqual([
+      { sliceId: "2026-10-19-1800", turnIds: ["ok1"] },
+    ]);
+  });
+
   it("an idle round: NO note, the seen trailer alone (空轮空提交只载 trailer)", () => {
     const message = buildReflectionRoundMessage({
       date: "2026-10-19",
-      trailer: { seen: { sliceId: "2026-10-19-1721" } },
+      trailer: { seen: [{ sliceId: "2026-10-19-1721", turnIds: ["a1b2c3"] }] },
     });
     expect(message).toBe(
-      "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721",
+      "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721#a1b2c3",
     );
     const parsed = parseReflectionRoundMessage(message);
     expect(parsed?.note).toBeNull();
-    expect(parsed?.trailer?.seen?.sliceId).toBe("2026-10-19-1721");
+    expect(parsed?.trailer?.seen?.at(-1)?.sliceId).toBe("2026-10-19-1721");
   });
 
   it("a FAILED round: whatever writes it had land WITHOUT a trailer section", () => {
@@ -107,18 +144,18 @@ describe("the reflection round message — build/parse round trip", () => {
     const message = buildReflectionRoundMessage({
       date: "2026-10-19",
       note: "第一段。\n\n第二段。",
-      trailer: { seen: { sliceId: "2026-10-19-1721" } },
+      trailer: { seen: [{ sliceId: "2026-10-19-1721" }] },
     });
     const parsed = parseReflectionRoundMessage(message);
     expect(parsed?.note).toBe("第一段。\n\n第二段。");
-    expect(parsed?.trailer?.seen?.sliceId).toBe("2026-10-19-1721");
+    expect(parsed?.trailer?.seen?.at(-1)?.sliceId).toBe("2026-10-19-1721");
   });
 
   it("forward tolerance: unknown trailer lines are ignored, not fatal", () => {
     const parsed = parseReflectionRoundMessage(
       "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721\nfutureKey: whatever",
     );
-    expect(parsed?.trailer?.seen?.sliceId).toBe("2026-10-19-1721");
+    expect(parsed?.trailer?.seen?.at(-1)?.sliceId).toBe("2026-10-19-1721");
   });
 
   it("a non-reflection commit does not parse (the reader's filter)", () => {
