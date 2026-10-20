@@ -334,17 +334,21 @@ export async function readReflectionCursor(): Promise<{
 
 /**
  * The TURN-level water level (v0.42 §4 — the work unit is a turn): merge the
- * `seen` marks of every clean round in the bounded scan, NEWEST-first and
- * first-wins per slice (a newer round's mark for a slice subsumes the older
- * ones — the water only rises). A mark without turnIds (the old
- * `seen: <sliceId>` format) covers its WHOLE slice and lifts `wholeUpTo`:
- * slices at or below it with no explicit mark read as whole-covered (the
- * old water-level semantics, preserved for mixed-format histories).
+ * `seen` marks of every clean round in the bounded scan into a PER-SLICE
+ * UNION (coverage only grows — newest-wins was the slice-level semantics and
+ * is exactly wrong here: one round's single turn would subsume another
+ * round's other turn of the same slice and the unit would re-run the slice
+ * forever — observed on the real machine, slice 2026-10-20-0831 ping-
+ * ponging between two turns across five round commits). A mark without
+ * turnIds (the old `seen: <sliceId>` format) covers its WHOLE slice and
+ * lifts `wholeUpTo`: slices at or below it with no explicit mark read as
+ * whole-covered (the old water-level semantics, preserved for mixed-format
+ * histories), and a whole-slice mark is never shrunk back to a turn list.
  * Nothing found / log down → `degraded` — the scope judgment then treats
  * NOTHING as covered (unknown ≠ all-done, §3.5-2).
  */
 export interface ReflectionCoverage {
-  /** Per-slice covered turns, newest-wins deduped; null = the whole slice. */
+  /** Per-slice covered turns, UNION-merged across rounds; null = the whole slice. */
   covered: Array<{ sliceId: string; turnIds: string[] | null }>;
   /** The newest old-format whole-slice mark's slice id (null = none). */
   wholeUpTo: string | null;
@@ -358,8 +362,20 @@ export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
   if (!log.available) {
     return { covered: [], wholeUpTo: null, sha: null, at: null, degraded: true };
   }
-  const seenSlices = new Set<string>();
-  const covered: ReflectionCoverage["covered"] = [];
+  /**
+   * Per-slice UNION merge. The water level is TURN-level: each round covers
+   * the turns it names, and coverage only ever GROWS. Newest-wins was the
+   * slice-level semantics — under a turn-level level it is exactly wrong: a
+   * round covering ONE turn would subsume an earlier round's OTHER turn of
+   * the same slice, that turn reads as unprocessed again, and the unit
+   * re-runs the slice forever. Real machine, 2026-10-20-0831: five
+   * `Reflection round` commits alternating seen: …#YcuFGA / …#4HH9hQ —
+   * two turns of one slice ping-ponging as each newest mark hid the other.
+   * A whole-slice mark (old format, turnIds absent) covers EVERYTHING: it
+   * lands as turnIds null and the slice is never shrunk back to a list
+   * afterwards.
+   */
+  const bySlice = new Map<string, string[] | null>();
   let wholeUpTo: string | null = null;
   let sha: string | null = null;
   let at: string | null = null;
@@ -373,14 +389,23 @@ export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
     for (const mark of marks) {
       if (mark.turnIds === undefined) {
         // Old format: the whole slice is covered — and it is a water level
-        // for everything at or below it.
+        // for everything at or below it. Whole coverage is not shrinkable.
         if (wholeUpTo === null || mark.sliceId > wholeUpTo) wholeUpTo = mark.sliceId;
+        bySlice.set(mark.sliceId, null);
+        continue;
       }
-      if (seenSlices.has(mark.sliceId)) continue; // newest wins
-      seenSlices.add(mark.sliceId);
-      covered.push({ sliceId: mark.sliceId, turnIds: mark.turnIds ?? null });
+      const current = bySlice.get(mark.sliceId);
+      if (current === null) continue; // whole-slice mark already covers it
+      if (current === undefined) {
+        bySlice.set(mark.sliceId, [...mark.turnIds]);
+      } else {
+        for (const t of mark.turnIds) if (!current.includes(t)) current.push(t);
+      }
     }
   }
+  const covered: ReflectionCoverage["covered"] = [...bySlice.entries()].map(
+    ([sliceId, turnIds]) => ({ sliceId, turnIds }),
+  );
   if (covered.length === 0) {
     return { covered, wholeUpTo, sha: null, at: null, degraded: true };
   }

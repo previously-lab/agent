@@ -34,7 +34,7 @@ describe("the frozen prefixes (v0.39 §2.5; v0.42 §6-15 — user turn / reply r
     const read = (rel: string) =>
       readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
     const steps = read("../../../src/app/api/chat/steps.ts");
-    expect(steps).toContain("COMMIT_PREFIX.summary(payload.sliceId)");
+    expect(steps).toContain("COMMIT_PREFIX.summary(slice.slice_id)");
     expect(steps).toContain("Turn ${input.turnId} — finalize");
     expect(steps).not.toContain("Turn ${input.turnId} — user turn");
     expect(steps).not.toContain("Turn ${payload.turnId} — reply");

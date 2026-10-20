@@ -89,7 +89,6 @@ import {
 } from "@/lib/episodic/turn-merge";
 import { isRefConflictError } from "@/lib/tools/batch-write";
 import { getRepoConfig } from "@/lib/capabilities";
-import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
 import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
 import {
   dataUrlToBuffer,
@@ -135,8 +134,6 @@ import type {
   EvolutionResult,
   NestedTurnTail,
   InnerTurnReport,
-  SealedSliceRecord,
-  SliceBirthRecord,
   SummaryRunOutcome,
   SummaryRunPayload,
   TurnRunResult,
@@ -153,10 +150,10 @@ import {
   hasOverlappingParallelSibling,
   isBlockingParallelSibling,
   isBurstSibling,
+  hasLaterCreatedRun,
   isLastBurstTurn,
   isLiveRunStatus,
   isParallelTurnRun,
-  isLiveParallelSummary,
   type ParallelRunEntry,
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
@@ -165,6 +162,10 @@ import {
   type ReflectionWakeRange,
 } from "@/app/api/evolution/reflection-wake";
 import { COMMIT_PREFIX } from "@/lib/chat/commit-contract";
+import {
+  judgeSliceLanding,
+  type SliceLandingConfig,
+} from "@/lib/chat/slice-landing";
 import { readLatestReflectionNote } from "@/lib/chat/hq-log";
 import {
   runCardEvolution,
@@ -619,52 +620,6 @@ async function readPrevClosedSlice(
   return findClosed(all);
 }
 
-/**
- * The kill-matrix catch: a run killed mid-entry before this beat's ONE commit
- * landed (or a survivor from before v0.21, when the close executed post-reply)
- * leaves the OLD slice active on disk next to its ACTIVE successor. On
- * redelivery housekeeping recovers the successor (newer HHMM sorts first in
- * tryLoadTodaySlice), and this scan finds the orphan: the newest ACTIVE slice
- * in today/yesterday's dirs that is NOT the current one (and not NEWER than
- * it — clock skew must never close the future). An orphan found here is a
- * page judged ended at this entry: it is summarized + closed in the same
- * beat. Orphans older than the two-day window are HQ's to reconcile, not the
- * turn's.
- */
-async function findStaleActiveSlice(
-  excludeId: string,
-  batch?: WriteBatch,
-): Promise<TimeSlice | null> {
-  for (const id of await listRecentDaySliceIds()) {
-    if (id >= excludeId) continue;
-    const s = await readSliceById(id, batch);
-    if (s && s.status === "active") return s;
-  }
-  return null;
-}
-
-/**
- * Re-derive the close signal for an orphaned slice on a redelivered run (the
- * entry beat's close decision was never persisted). The three
- * clock/turn-count checks are monotone in wall time, so a signal that fired
- * on the first delivery MUST fire again — a null here means none ever did
- * (the orphan predates the close decision, or was left by a crash
- * mid-creation) and we skip rather than fabricate a cause.
- */
-function rederiveCloseSignal(
-  slice: TimeSlice,
-  config: UserConfig,
-): SlicingSignal | null {
-  const lastTurnTs = slice.turns.at(-1)?.timestamp;
-  if (lastTurnTs && checkIdleGap(lastTurnTs, config.slicing.idleGapMinutes * 60_000)) {
-    return "idle_gap";
-  }
-  if (checkSliceAge(slice.start, config.slicing.maxSliceMinutes * 60_000)) {
-    return "time_cap";
-  }
-  if (slice.turns.length >= config.slicing.maxTurnsPerSlice) return "capacity";
-  return null;
-}
 
 /**
  * The §A.3.3 delivery surface: tasks/ tail lines dated TODAY are the
@@ -728,12 +683,6 @@ export interface EntryReckoning {
   /** Client/bridge mode only: the raw bridge report — 序 6 applies its card
    *  mutations through the card-session machinery (applyBridgeCardEvolution). */
   bridgeReport: HousekeepingPhaseReport | null;
-  /** The page THIS beat sealed — carried BY VALUE to the burst's summary
-   *  run, which persists the seal (v0.42 §2 — 落盘归总结流; the beat no
-   *  longer flushes the close). null when nothing was sealed. */
-  sealed: SealedSliceRecord | null;
-  /** The slice born THIS beat — first persisted by the summary run. */
-  birth: SliceBirthRecord | null;
   /** Evidence attachments (names + base64 bytes) the user sent THIS
    *  beat — the entry beat commits nothing, so the summary stream
    *  persists them through the same fuse semantics (v0.42 review
@@ -743,6 +692,11 @@ export interface EntryReckoning {
    *  (a birth carries its own) — written to previously.md by the
    *  summary stream (v0.42 review should-fix 1). null = no change. */
   previouslyUpdate: string | null;
+  /** True when THIS beat's slice was READ from disk (the edge). False for
+   *  the UNSAVED context shell minted when no slice exists — the shell
+   *  must never reach a flush (the real-machine ghost slice: finalize's
+   *  序 6 evolution froze a summary into it and flushed it). */
+  sliceOnDisk: boolean;
 }
 
 /**
@@ -862,33 +816,17 @@ export async function housekeeping(
 
   const diskSlice = await tryLoadTodaySlice(batch);
 
-  // ── 1. Decide lifecycle (pure — no I/O, no LLM) ──────────────────────
-  let closeSignal: SlicingSignal | null = null;
-  /** True when the client-sent history mismatched the active slice: the
-   *  slice STAYS OPEN and the model window is rebuilt from the slice's own
-   *  turns (context_lost used to close the slice here — it is a rebuild
-   *  trigger now, never a close trigger). */
+  // ── 1. Context-only judgments (v0.42 §1 — 对话流不建片不封片; the
+  // landing judgment — 续写还是开新片 — moved to the summary stream,
+  // applied once the WHOLE burst has answered). The only entry-side
+  // judgment left: a client-history mismatch rebuilds the model window
+  // from the slice (a context concern, never a write).
   let rebuildFromSlice = false;
   if (diskSlice && diskSlice.status === "active") {
-    // Idle gap FIRST: a long silence since the last turn means the user left
-    // and came back — this is a genuinely new conversation, not a checkpoint.
-    // (Closes are lazy: this fires on the first turn after the gap.)
-    const lastTurnTs = diskSlice.turns.at(-1)?.timestamp;
-    if (
-      lastTurnTs &&
-      checkIdleGap(lastTurnTs, config.slicing.idleGapMinutes * 60_000)
-    ) {
-      closeSignal = "idle_gap";
-    } else if (checkSliceAge(diskSlice.start, config.slicing.maxSliceMinutes * 60_000)) {
-      // The age cap is a periodic autosave CHECKPOINT, not a conversation end
-      // — the new slice continues the same one (continuesFrom below).
-      closeSignal = "time_cap";
-    } else if (diskSlice.turns.length >= config.slicing.maxTurnsPerSlice) {
-      closeSignal = "capacity";
     // A regenerate turn legitimately carries a truncated client history (the
     // SDK dropped the rejected reply) — detection is skipped for this turn
     // shape, and demo mode never persists a slice so nothing to rebuild from.
-    } else if (
+    if (
       !input.regenerate &&
       !input.useDemo &&
       checkClientHistoryMismatch(modelMessages, diskSlice)
@@ -897,58 +835,34 @@ export async function housekeeping(
     }
   }
 
-  // ── 2. Materialize the successor / restore the active slice (IN MEMORY) ─
+  // ── 2. The current edge slice — READ-ONLY answering context ─────────
+  // v0.42 §1 (the user's words): the conversation flow ANSWERS inside the
+  // edge slice's context and changes NOTHING on disk; the summary stream
+  // judges the landing once the WHOLE burst has answered. With no edge
+  // the turn answers empty-context and the summary mints the first page.
   let slice: TimeSlice;
-  /** The page THIS entry judged ended (the close decision's target). It is
-   *  summarized + closed in the reckoning below — same beat, same commit. */
-  let closingDecision: { slice: TimeSlice; signal: SlicingSignal } | undefined;
-  /** The slice THIS beat sealed (set after the closeSlice below) — surfaced
-   *  on the result as `closedSliceId` (housekeeping context for the caller;
-   *  the reflection bell rings after EVERY successful turn commit, seal or
-   *  not — v0.38 §3.3). */
-  let closedSliceId: string | undefined;
-  /** The v0.42 seal record — captured when the close executes, ridden to
-   *  the summary run on this turn's structured result. */
-  let sealed: SealedSliceRecord | null = null;
   /** v0.42 — the evidence bytes + the mid-life previously snapshot ride
    *  the result to the summary stream (the entry beat commits nothing). */
   let evidenceAttachments: Array<{ name: string; dataBase64: string }> | null =
     null;
   let previouslyUpdate: string | null = null;
-  /** The slice we came from — set from the just-closed page (AFTER its
-   *  marking, so the continuity brief carries the fresh focus), or resolved
-   *  from disk when today has none. Drives the continuity brief. */
+  /** The slice we came from — resolved from disk (the newest closed page
+   *  before this one). Drives the continuity brief. */
   let prevSlice: PrevSliceRef | null = null;
-  /** True when this call minted the slice — createSlice stamps THIS turn's
-   *  turnId on turn 0, so userTurnRecorded alone cannot tell a birth apart
-   *  from a redelivery; the attachment wiring below needs the distinction. */
-  let sliceBornThisCall = false;
-  if (closeSignal && diskSlice) {
-    closingDecision = { slice: diskSlice, signal: closeSignal };
-    // Checkpoint continuation link: only time_cap/capacity closes are
-    // autosave checkpoints of the SAME conversation — the new slice carries
-    // the closed slice's tail as live context. idle_gap is a genuine
-    // conversation boundary and gets no link (no carry-over).
-    const checkpoint =
-      closeSignal === "time_cap" || closeSignal === "capacity";
-    slice = createSlice(
-      lastUserMessage,
-      clientTimezone,
-      input.turnId,
-      checkpoint ? diskSlice.slice_id : undefined,
-    );
-    sliceBornThisCall = true;
-    console.log(
-      `[Episodic] Close decided: ${diskSlice.slice_id} (${closeSignal}) — summarized + closed in this entry beat`,
-    );
-  } else if (diskSlice && diskSlice.status === "active") {
+  if (diskSlice) {
     slice = diskSlice;
-    console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
+    console.log(`[Episodic] Edge slice (read-only): ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
   } else {
+    // An UNSAVED context shell — feeds the model window only; the summary
+    // stream decides whether (and under which id) a real page is minted.
     slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
-    sliceBornThisCall = true;
-    console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
+    console.log(`[Episodic] No edge slice — empty-context answer (landing judged by the summary)`);
   }
+  // The batch key groups the burst's runs in the registry: the edge id
+  // when one exists, else a deterministic per-day key (an unsaved context
+  // shell mints no shared identity across turns).
+  const batchKey =
+    diskSlice?.slice_id ?? `new-slice:${input.startedAtIso.slice(0, 10)}`;
 
   // ── v0.33 连发并行 — registry stamp + live-sibling count ────────────────
   // Stamp THIS run into the Workflow run registry the moment the slice is
@@ -962,13 +876,13 @@ export async function housekeeping(
     try {
       const ownId = getWorkflowMetadata().workflowRunId;
       await setAttributes({
-        slice: slice.slice_id,
+        slice: batchKey,
         turn: input.turnId,
         ...(input.burstId ? { burst: input.burstId } : {}),
       });
       const live = await listLiveRuns();
       const count = live.filter((r) =>
-        isBlockingParallelSibling(r, slice.slice_id, ownId),
+        isBlockingParallelSibling(r, batchKey, ownId),
       ).length;
       if (count > 0) parallelSiblings = count;
     } catch (err) {
@@ -984,87 +898,25 @@ export async function housekeeping(
     localDateKey(input.startedAtIso, clientTimezone) ??
     input.startedAtIso.slice(0, 10);
 
-  // ── 2b. 归纳上一页 + 闭片归档 — the entry beat's reckoning (v0.21 §3) ──
-  // The page judged ended at THIS entry — and only that page — is summarized
-  // NOW (the turn's one semantic derivation; its input is the ended page's
-  // turns, never this turn's message) and closed, all before this turn's
-  // user message is appended below; the close and this turn's landing share
-  // the one commit at the end of the beat. No page ended → zero
-  // summarization: the living page waits for its real end. Idempotent via
-  // needs_marking semantics (store.ts:74 — a page already carrying
-  // focus+summary is never re-summarized; a kill before the commit re-runs
-  // the derivation on redelivery, a kill after it finds the page already
-  // closed + marked). Demo skips the reckoning entirely (read-only preview —
-  // the analysis has nowhere to land).
+  // ── 2b. The entry's one semantic derivation (v0.42 §1: 归纳随封口走) ──
+  // The analysis still runs every non-demo turn — its memoryUpdate reading
+  // feeds the post-reply explicit-instruction channel (序 6) — but with NO
+  // closing slice: no page "ends" at the entry anymore, so the derivation
+  // is always zero-归纳. The summary stream re-runs the same analyzer over
+  // the ended page when it seals one (same deterministic fallback).
   let analysis: TurnAnalysis | null = null;
   let bridgeReport: HousekeepingPhaseReport | null = null;
   if (!input.useDemo) {
-    // The page to close: this beat's decision target, or — on a redelivered
-    // run whose decision never persisted (or a pre-v0.21 survivor) — an
-    // orphaned ACTIVE slice on disk that is not the current one.
-    let closingSlice =
-      closingDecision?.slice ??
-      (await findStaleActiveSlice(slice.slice_id, batch)) ??
-      undefined;
-    let closingSignal: SlicingSignal | null = null;
-    if (closingSlice) {
-      closingSignal =
-        closingDecision?.slice.slice_id === closingSlice.slice_id
-          ? closingDecision.signal
-          : rederiveCloseSignal(closingSlice, config);
-      if (!closingSignal) {
-        console.warn(
-          `[Episodic] stale active slice ${closingSlice.slice_id} re-derives no close signal — never closed by the turn`,
-        );
-        closingSlice = undefined;
-      }
-    }
-
-    // ── The one semantic derivation — 归纳对象永远只是本轮进场时被判定结束
-    // 且尚无标记的那一页 (needs_marking: an already-marked page is closed
-    // as-is below, never re-summarized). No object → the derivation runs
-    // without a closing slice (zero 归纳) — its memoryUpdate reading still
-    // feeds the post-reply explicit-instruction channel (序 6).
     await emitStep("analyze", true);
-    const markingTarget =
-      closingSlice && !closingSlice.focus && !closingSlice.summary
-        ? closingSlice
-        : undefined;
     if (phaseOutsource) {
-      // Phase outsourcing (client mode + bridge brain, kill-switch
-      // PREVIOUSLY_PHASE_OUTSOURCE=0): ONE bridge call covers the analysis
-      // AND (on an explicit update) the card-mutation proposal. The payload
-      // is the minimal set: message, recent turns, the card, the closing
-      // slice — no dry slices / merge candidates / signals / playbooks /
-      // direction. A failed call degrades EXACTLY like an analyzer outage
-      // (memoryWorthy=true, no marking → the deterministic fallback below)
-      // and additionally SKIPS the evolution — no second bridge spawn on a
-      // broken bridge.
       const bridgeCardRaw =
         (await readUserModel(batch).catch(() => null))?.card ?? "";
-      // Forward the client agent's live tool activity into the turn stream
-      // so the user can watch the CLI work during the analysis — the same
-      // data-phase channel + payload the chat bridge model uses
-      // (createBridgeEventEmitter), on a distinct id/phase so the two
-      // indicators never merge. Frames ride this step's serial stream queue
-      // (stream.send), throttled inside the emitter. Deltas ARE forwarded
-      // here: for phase "housekeeping" the client suppresses the JSON report
-      // block and deltas carry only narration/thinking — they become the
-      // indicator's rolling "current activity" line (data.live), so the wait
-      // is visible even when the CLI makes zero tool calls. The activity
-      // state is folded into the shared card frame (hkActivity) so wrap-up
-      // rows (emitStep) and tool/narration frames never overwrite each
-      // other — every frame carries the full cumulative state
-      // (build-stream: last chunk wins).
       const bridgeActivity = createBridgeEventEmitter({
         id: "phase-bridge-housekeeping",
         phase: "bridgeHousekeeping",
         write: (data: BridgePhaseData) => {
           hkActivity.tools = data.tools;
           hkActivity.live = data.live;
-          // The emitter's settle (running:false) fires the moment the bridge
-          // call returns, while wrap-up rows (analyze → close) are still
-          // being applied — keep the card spinning until they settle too.
           sendHousekeepingCard(
             data.running || hkSteps.some((s) => s.running),
           );
@@ -1076,26 +928,21 @@ export async function housekeeping(
           recentTurns: input.recentTurns,
           cardContent: bridgeCardRaw,
           sliceId: slice.slice_id,
-          closingSlice: markingTarget
-            ? { sliceId: markingTarget.slice_id, turns: markingTarget.turns }
-            : undefined,
+          closingSlice: undefined,
           todayLocal,
           locale: input.locale,
         },
         { onEvent: bridgeActivity.onEvent, onDelta: bridgeActivity.onDelta },
       );
-      // Settle the indicator (running: false) whatever the outcome.
       bridgeActivity.finish();
       if (bridgeResult.ok) {
         bridgeReport = bridgeResult.report;
-        analysis = adaptHousekeepingReport(bridgeResult.report, !!markingTarget);
+        analysis = adaptHousekeepingReport(bridgeResult.report, false);
       } else {
         console.warn(
           `[HousekeepingBridge] ${bridgeResult.reason} — degraded to the deterministic path`,
         );
         analysis = degradedAnalysis();
-        // Surface the degradation on the card — it must not settle silently
-        // green when the memory analysis fell back to heuristics.
         hkActivity.warning = bridgeResult.reason;
         sendHousekeepingCard(hkSteps.some((s) => s.running));
       }
@@ -1103,67 +950,10 @@ export async function housekeeping(
       analysis = await analyzeTurn({
         model: input.modelConfig,
         userMessage: lastUserMessage,
-        closingSlice: markingTarget ? { turns: markingTarget.turns } : undefined,
+        closingSlice: undefined,
       });
     }
     await emitStep("analyze", false);
-
-    // ── Close the ended page — marks BEFORE the slice persists ────────────
-    // Idempotent: a slice already closed on disk (a previous delivery got
-    // this far) is not touched again.
-    if (closingSlice && closingSignal && closingSlice.status === "active") {
-      if (analysis?.closedMarking && markingTarget) {
-        if (analysis.closedMarking.focus) closingSlice.focus = analysis.closedMarking.focus;
-        if (analysis.closedMarking.summary) closingSlice.summary = analysis.closedMarking.summary;
-        if (analysis.closedMarking.tone) closingSlice.emotional_tone = analysis.closedMarking.tone;
-        // The other half of the closed-slice archive quartet (v0.21 §3):
-        // inductively produced by the analyzer, empty array = none.
-        if (analysis.closedMarking.openLoops) closingSlice.open_loops = analysis.closedMarking.openLoops;
-        if (analysis.closedMarking.decisions) closingSlice.decisions = analysis.closedMarking.decisions;
-      }
-      // Never close a slice dry when it has content: the analyzer silently
-      // returns EMPTY on any failure (worker outage, schema mismatch), which
-      // used to leave focus/summary empty — the "39% dry" timeline. Fill any
-      // gap with a deterministic mark from the slice itself.
-      if (!closingSlice.focus || !closingSlice.summary) {
-        const fallback = deterministicSliceMark(closingSlice);
-        if (!closingSlice.focus) closingSlice.focus = fallback.focus;
-        if (!closingSlice.summary) closingSlice.summary = fallback.summary;
-        console.log(
-          `[Episodic] ${closingSlice.slice_id} closed with deterministic mark (analyzer output incomplete)`,
-        );
-      }
-      await closeSlice(closingSlice, closingSignal, batch);
-      // Surface the seal on the result (housekeeping context only — the
-      // reflection bell rings after every successful commit, seal or not).
-      closedSliceId = closingSlice.slice_id;
-      // v0.42 §2 — 落盘归总结流: the seal rides THIS turn's structured
-      // result to the burst's summary run; the beat no longer flushes it.
-      sealed = {
-        sliceId: closingSlice.slice_id,
-        signal: closingSignal,
-        focus: closingSlice.focus,
-        summary: closingSlice.summary,
-        ...(closingSlice.emotional_tone
-          ? { tone: String(closingSlice.emotional_tone) }
-          : {}),
-        openLoops: closingSlice.open_loops ?? [],
-        decisions: closingSlice.decisions ?? [],
-        end: closingSlice.end ?? new Date().toISOString(),
-      };
-      console.log(`[Episodic] Closed slice: ${closingSlice.slice_id} (${closingSignal})`);
-      // Signal the client that a slice closed (rendered as a housekeeping
-      // checklist row).
-      await emitStep("slice-closed", false, [closingSlice.slice_id]);
-    }
-    // The continuity reference reads the JUST-CLOSED page — after its
-    // marking, so the slice-birth brief carries the fresh focus (and stays
-    // byte-identical to what later turns re-derive from disk).
-    if (closingDecision) prevSlice = toPrevRef(closingDecision.slice);
-  } else if (closingDecision) {
-    // Demo: the reckoning is skipped — the reference is the decision target
-    // as it stood (demo never marks).
-    prevSlice = toPrevRef(closingDecision.slice);
   }
 
   // ── 3. Append user turn ───────────────────────────────────────────────
@@ -1201,7 +991,10 @@ export async function housekeeping(
   if (
     !input.regenerate &&
     input.turnId &&
-    (sliceBornThisCall || !userTurnRecorded)
+    // The turn's evidence rides its user turn: an UNSAVED context shell's
+    // turn 0 IS this turn (userTurnRecorded reads true from the shell — the
+    // old birth case), so the gate also opens when there was no edge.
+    (!diskSlice || !userTurnRecorded)
   ) {
     const { files, unfetched } = collectTurnAttachments(input);
     for (const name of unfetched) {
@@ -1253,16 +1046,11 @@ export async function housekeeping(
   if (modelSnapshot.trim()) {
     const existingSnap = await readPreviously(slice.slice_id).catch(() => "");
     if (existingSnap !== modelSnapshot) {
-      // v0.42 — a NEW slice's snapshot rides its birth record (the
-      // return-site carries it); an EXISTING slice's mid-life update
-      // rides the result — the batch here never flushes, so the old
-      // queued write died with it (stale window = the slice's life).
-      if (sliceBornThisCall) {
-        console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (birth)`);
-      } else {
-        previouslyUpdate = modelSnapshot;
-        console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (rides the summary)`);
-      }
+      // v0.42 — the snapshot ALWAYS rides the result (the batch here
+      // never flushes; the old queued write died with it). The summary
+      // stream writes it into the slice IT judges — continued or new.
+      previouslyUpdate = modelSnapshot;
+      console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (rides the summary)`);
     }
   }
 
@@ -1305,10 +1093,9 @@ export async function housekeeping(
   // sanitizeCheckpointPrefix in turn-workflow.ts.
   let contextPrefix: ModelMessage[] | undefined;
   if (slice.continuesFrom) {
-    const prevTurns =
-      closingDecision && closingDecision.slice.slice_id === slice.continuesFrom
-        ? closingDecision.slice.turns // closing this call — already in memory
-        : (await loadSlice(slice.continuesFrom))?.turns;
+    // (The shell created for an edgeless turn never carries continuesFrom —
+    // the summary stream owns every real slice's lineage.)
+    const prevTurns = (await loadSlice(slice.continuesFrom))?.turns;
     const tail = prevTurns?.slice(-CHECKPOINT_CARRY_OVER_TURNS) ?? [];
     if (tail.length > 0) {
       contextPrefix = sliceTurnsToMessages(tail);
@@ -1404,23 +1191,6 @@ export async function housekeeping(
   await stream.write({ type: "start" } as UIMessageChunk);
   await stream.write({ type: "start-step" } as UIMessageChunk);
 
-  // v0.42 §2 — the birth record lets the summary run materialize a slice
-  // whose core.md does not exist yet (the beat no longer flushes it).
-  const birth: SliceBirthRecord | null = sliceBornThisCall
-    ? {
-        sliceId: slice.slice_id,
-        start: slice.start,
-        timezone: slice.timezone,
-        ...(slice.continuesFrom ? { continuesFrom: slice.continuesFrom } : {}),
-        turn: {
-          turnId: input.turnId,
-          timestamp: slice.start,
-          content: lastUserMessage,
-        },
-        ...(modelSnapshot.trim() ? { previously: modelSnapshot } : {}),
-      }
-    : null;
-
   return {
     slice,
     previouslyContent,
@@ -1428,11 +1198,10 @@ export async function housekeeping(
     identityPrompt,
     analysis,
     bridgeReport,
-    sealed,
-    birth,
     evidenceAttachments,
     previouslyUpdate,
-    ...(closedSliceId ? { closedSliceId } : {}),
+    sliceOnDisk: !!diskSlice,
+
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
     ...(dueTasksBlock ? { dueTasksBlock } : {}),
@@ -1521,7 +1290,9 @@ const MAX_FLUSH_RETRIES = 2;
 async function flushTurnBatch(
   batch: WriteBatch,
   message: string,
-  slice: TimeSlice,
+  /** null = no slice file backs this batch (a context shell's turn):
+   *  a ref conflict retries as-is — there is nothing to merge against. */
+  slice: TimeSlice | null,
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -1530,6 +1301,13 @@ async function flushTurnBatch(
     } catch (err) {
       if (!isRefConflictError(err) || attempt >= MAX_FLUSH_RETRIES) {
         throw err;
+      }
+      if (slice === null) {
+        console.warn(
+          "[Episodic] flush conflict on a batch with no slice file — retrying as-is:",
+          err instanceof Error ? err.message : err,
+        );
+        continue;
       }
       const corePath = sliceIdToFilePath(slice.slice_id);
       try {
@@ -1634,7 +1412,9 @@ export async function finalizeTurn(
       );
     }
   }
-  if (nested?.bubbles.some((b) => b.text)) {
+  if (nested?.bubbles.some((b) => b.text) && hk.sliceOnDisk) {
+    // v0.42 A-fix: a context shell is never written — the bubble appends
+    // stay in memory only (the retiring episode machinery degrades).
     await saveSliceSnapshot(slice, batch);
   }
   mark("episode bubbles", before1);
@@ -1703,11 +1483,14 @@ export async function finalizeTurn(
   // agent error is reported to the client as an error chunk and the turn
   // continues.
   let evolutionResult: EvolutionResult | undefined;
-  /** Freeze a changed evolution's summary into the slice (single line, YAML-safe). */
+  /** Freeze a changed evolution's summary into the slice (single line, YAML-safe).
+   *  A context SHELL (no slice on disk) is never snapshotted — the
+   *  evolution's own case/user-model writes land; the slice file does
+   *  not (the real-machine ghost slice, v0.42 A-fix). */
   const freezeEvolutionSummary = async (target: TimeSlice) => {
     if (evolutionResult?.ran && evolutionResult.changed && evolutionResult.summary) {
       target.evolutionSummary = evolutionResult.summary.replace(/\s+/g, " ").trim();
-      await saveSliceSnapshot(target, batch);
+      if (hk.sliceOnDisk) await saveSliceSnapshot(target, batch);
     }
   };
   const explicitUpdate = hk.analysis?.memoryUpdate;
@@ -1804,7 +1587,7 @@ export async function finalizeTurn(
     segments.length > 0
       ? `${headline}\n\n${segments.map((s) => `- ${s}`).join("\n")}`
       : headline;
-  await flushTurnBatch(batch, message, slice);
+  await flushTurnBatch(batch, message, hk.sliceOnDisk ? slice : null);
   });
   } finally {
     stream.close();
@@ -2357,14 +2140,21 @@ async function runMergeLineCall(
 }
 
 /**
- * Should THIS turn start the burst's summary run (v0.42 §1 — 对话流完成后
- * 查自己是不是最后一个)? True when no other same-burst turn is still
- * answering AND no live summary run already owns the slice's persistence.
- * The merge decision (decideBurstMergeLine, above) stamps `phase: "tail"`
- * first, so a sibling mid-check yields instead of mutual-skipping (the
- * v0.33 window, unchanged). A last-one check failure degrades to TRUE — a
- * missed summary starves the burst's 被动存盘, the expensive miss by far.
- * Never throws.
+ * Should THIS turn start a summary run (v0.42 §1 — 对话流完成后唤起总结流)?
+ *
+ * FINAL SHAPE (after the real machine kept losing content): EVERY turn of a
+ * burst starts its own summary run — no election, no waiting. Both election
+ * directions failed on the real machine: the collector could not see a
+ * sibling on another entry shell (cross-minute shells), and a run that
+ * yielded to a live sibling never came back, leaving the WHOLE batch
+ * unpersisted. The summary run is INCREMENTAL — it writes only what is not
+ * on disk and no-ops when THIS turn already landed — so overlapping runs
+ * converge instead of duplicating, at the cost of an occasional extra
+ * `Summary —` commit. 丢内容比多一条提交严重得多.
+ *
+ * The legacy (no-burstId) path is unchanged: the overlap heuristic decides.
+ * A gate failure degrades to TRUE — a missed summary starves the turn's
+ * 被动存盘, the expensive miss by far. Never throws.
  */
 export async function shouldStartSummary(params: {
   sliceId: string;
@@ -2373,19 +2163,28 @@ export async function shouldStartSummary(params: {
 }): Promise<boolean> {
   "use step";
   try {
+    if (params.burstId) {
+      // Every burst turn starts its own summary run; the run-side dedupe
+      // (this turn already on disk) is the only gate — see persistTurnSummary.
+      return true;
+    }
     const ownId = getWorkflowMetadata().workflowRunId;
     const runs = await listRegistryRuns();
-    if (runs.some((r) => isLiveParallelSummary(r, params.sliceId, ownId))) {
-      console.log(
-        `[Summary] skipped (turn ${params.turnId}): a live summary already owns ${params.sliceId}`,
-      );
-      return false;
-    }
-    if (params.burstId) {
-      return isLastBurstTurn(runs, params.sliceId, params.burstId, ownId, params.turnId);
-    }
     if (runs.some((r) => isBlockingParallelSibling(r, params.sliceId, ownId))) {
       return false; // a sibling is still answering — not the last yet
+    }
+    // v0.42 double-summary fix: the overlap window's YOUNGEST run is its
+    // last survivor — an older run yields to any later-created sibling
+    // (live or just completed), else two survivors in one registry window
+    // both generate the legacy merge path.
+    if (
+      hasLaterCreatedRun(
+        runs,
+        runs.filter((r) => r.runId !== ownId && isParallelTurnRun(r, params.sliceId)),
+        ownId,
+      )
+    ) {
+      return false;
     }
     return true; // solo (or the overlap window's last survivor): I persist
   } catch (err) {
@@ -2433,33 +2232,32 @@ export async function startSummaryRun(
 }
 
 /**
- * The summary run's whole job (v0.42 §1/§2) — ONE step, ONE batch, ONE
- * commit: the burst's whole 被动存盘. Members: THIS (the last) turn's record
- * rides the payload; the other same-slice turn runs whose turn is NOT yet
- * on disk are the remaining members — completed ones contribute their
- * returnValue records, non-completed ones are recorded honestly in the
- * commit message (第 k 条没答成 — v0.42 §5; the not-yet-on-disk scoping makes
- * re-runs idempotent and lets a later burst pick up a leaked member). The
- * batch:
+ * The summary run's whole job (v0.42 §1/§2 — the user's words: 「最后一个完
+ * 成之后才会唤起总结流。总结流是去看这几个已经完成的对话流，然后决定
+ * 开新片还是续写」) — ONE step, ONE batch, ONE commit:
  *
- *   1. the page seals — each member's `sealed` record applied to the old
- *      slice on disk (the entry beat no longer flushes the close);
- *   2. the slice — materialized from `birth` when core.md does not exist
- *      yet, then every member's user turn + reply turn + merge turn appended
- *      (turnId-deduped; the merge turn's id is deterministic `m{turnId}` so
- *      redeliveries converge), the snapshot riding along;
- *   3. every member's cognition → the slice's agent.md (a
- *      `## Cognition {turnId}` header guard keeps redeliveries from
- *      double-appending).
+ *   1. MEMBERS — this (the last) turn's record rides the payload; the other
+ *      same-batch turn runs contribute their returnValue records; terminal
+ *      failures are noted honestly; still-running runs are skipped (§3/§5
+ *      [7189] — they answer for themselves).
+ *   2. THE LANDING JUDGMENT — the step reads the current EDGE slice from
+ *      disk (tryLoadTodaySlice — the same reader the entry beat used) and
+ *      applies the SAME continuity rules (judgeSliceLanding: idle gap /
+ *      time cap / capacity — the entry beat's old thresholds), with the
+ *      batch's FIRST turn as the reference moment: CONTINUE the edge, or
+ *      seal it and OPEN A NEW PAGE (checkpoint closes — time_cap/capacity —
+ *      carry `continuesFrom`; idle_gap does not).
+ *   3. THE SEAL — when a new page opens, the edge is sealed HERE: the same
+ *      analyzer the entry beat used (analyzeTurn over the ended page), with
+ *      the deterministic fallback (never close dry), stamped closed_by /
+ *      end / focus / summary / open_loops / decisions into the SAME batch.
+ *   4. THE LANDINGS — every member's user turn + reply + merge + cognition
+ *      + evidence attachments lands in the JUDGED slice (turnId-deduped);
+ *      the mid-life previously snapshot refreshes the judged slice too.
  *
- * Flushed as `Summary — {sliceId}` (COMMIT_PREFIX.summary), then the
- * reflection bell with the range {sliceId, turnIds} (v0.42 §4 — 触发携带
- * 范围; a hint, not the only truth — §3.5). Deduped when a live summary
- * already owns the slice (the double-fire race). When there is NOTHING to
- * write (everything already landed — the losing racer), reports "nothing"
- * without a commit or a bell: the winner already rang. On flush exhaustion
- * the outcome reports `failed` honestly — the log shows the gap and the
- * next unit re-covers the range (§3.5). Never throws.
+ * Flushed as `Summary — {landingSliceId}`, then the reflection bell with the
+ * persisted range. Deduped only when MY reply already landed AND a live
+ * summary owns the rest (f2f4f80). Never throws.
  */
 async function persistTurnSummaryAttempt(
   payload: SummaryRunPayload,
@@ -2470,93 +2268,14 @@ async function persistTurnSummaryAttempt(
     console.warn(`[Summary] ${payload.sliceId} commit failed: ${msg}`);
     return { kind: "failed", error: msg };
   };
-  const readCore = async (sliceId: string): Promise<string> => {
-    const path = sliceIdToFilePath(sliceId);
-    if (payload.useDemo) return await readFileDemo(path);
-    if (payload.useGithub) return await readFileFresh(path, payload.repo, payload.owner);
-    return await readFileLocal(path);
-  };
   try {
     const ownId = getWorkflowMetadata().workflowRunId;
     const runs = await listRegistryRuns();
     const batch = createBatch();
 
-    // ── The slice: fresh from disk, or materialized from a member's birth
-    //    record (the entry beat no longer flushes a birth).
-    let slice: TimeSlice;
-    try {
-      slice = parseSlice(await readCore(payload.sliceId));
-    } catch {
-      const birth = payload.own.birth;
-      if (!birth) {
-        return fail(
-          new Error(`slice ${payload.sliceId} unreadable and no birth record carried`),
-        );
-      }
-      slice = {
-        slice_id: birth.sliceId,
-        focus: "",
-        status: "active",
-        start: birth.start,
-        timezone: birth.timezone,
-        summary: "",
-        open_loops: [],
-        decisions: [],
-        tags: [],
-        related_slices: [],
-        loops: [],
-        turns: [
-          {
-            timestamp: birth.turn.timestamp,
-            role: "user",
-            content: birth.turn.content,
-            turnId: birth.turn.turnId,
-          },
-        ],
-        estimatedTokens: Math.ceil(birth.turn.content.length / 4) + 8,
-        ...(birth.continuesFrom ? { continuesFrom: birth.continuesFrom } : {}),
-      };
-      if (birth.previously?.trim()) {
-        await writePreviously(birth.sliceId, birth.previously, batch);
-      }
-    }
-    const turnOnDisk = (turnId: string): boolean =>
-      slice.turns.some((t) => t.turnId === turnId);
-
-    // v0.42 §5 (observed 2026-10-21) — dedupe ONLY stands when MY turn
-    // already landed: a live summary may have snapshotted its members while
-    // THIS turn was still running and will never collect it (the real-
-    // machine shape: A's summary deduped B's, and B's answer was lost
-    // forever). When my reply is not on disk yet, DO MY OWN JOB — two live
-    // summaries write DIFFERENT turns and the flush's key-controlled merge
-    // absorbs the overlap (按 git 理解、冲突自愈 [10631]; every write is
-    // turnId-idempotent).
-    const ownReplyOnDisk = slice.turns.some(
-      (t) => t.role === "agent" && t.turnId === payload.own.turnId,
-    );
-    if (
-      ownReplyOnDisk &&
-      runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))
-    ) {
-      console.log(
-        `[Summary] ${payload.sliceId} deduped — my turn already landed, a live summary owns the rest`,
-      );
-      return { kind: "deduped" };
-    }
-
-    // The mid-life previously snapshot for an EXISTING slice (a birth slice
-    // carries its own in the record) — lands in THIS batch.
-    if (payload.own.previously?.trim()) {
-      await writePreviously(payload.sliceId, payload.own.previously, batch);
-    }
-
-    // ── Members: own record + the same-slice turn runs whose turn is not
-    //    yet persisted; failed/cancelled ones recorded honestly (v0.42 §5).
-    //    Own's test is the REPLY's presence, not the user turn's — a slice
-    //    just materialized from a birth record already carries turn 0 (the
-    //    birth user turn IS own's user message).
-    const members: TurnRunResult[] = [];
-    if (!ownReplyOnDisk) members.push(payload.own);
+    // ── 1. Members — records only; the disk dedupe happens per append
+    //    against the JUDGED slice (which does not exist until step 2).
+    const candidates: TurnRunResult[] = [payload.own];
     const failedTurns: Array<{ turn: string; note: string }> = [];
     const noAnswerNote = (turn: string, status: string): string =>
       payload.locale === "zh"
@@ -2564,17 +2283,18 @@ async function persistTurnSummaryAttempt(
         : `turn ${turn} produced no answer (${status})`;
     for (const r of runs) {
       if (r.runId === ownId) continue;
-      if (!isParallelTurnRun(r, payload.sliceId)) continue;
-      if (payload.burstId && r.attributes?.burst !== payload.burstId) continue;
+      if (payload.burstId) {
+        // The burst id IS the batch identity (v0.42): entry shells differ
+        // across a minute (0837 / 0838), so slice-equality would hide the
+        // sibling on the other shell and its turn would never be collected.
+        // Summary/assistant runs stamp no `turn` — they are nobody's sibling.
+        if (r.attributes?.burst !== payload.burstId) continue;
+        if (typeof r.attributes?.turn !== "string") continue;
+      } else if (!isParallelTurnRun(r, payload.sliceId)) continue;
       const turn = r.attributes?.turn ?? r.runId;
-      if (turnOnDisk(turn)) continue; // already persisted — nobody's member
       if (r.status !== "completed") {
-        // §3/§5 [7189] — a still-RUNNING sibling is not a failure and not
-        // material: the summary 只对已完成的内容总结, and the running
-        // turn's own last-one check wakes its own summary when it answers.
-        // Only a TERMINAL non-completed run is an honest 没答成. (Observed
-        // 2026-10-21: a running sibling was recorded as a failure and its
-        // answer was never collected.)
+        // A still-RUNNING sibling is not a failure and not material (§3/§5
+        // [7189]); only a TERMINAL non-completed run is an honest 没答成.
         if (isLiveRunStatus(r.status)) continue;
         failedTurns.push({ turn, note: noAnswerNote(turn, r.status) });
         continue;
@@ -2586,14 +2306,18 @@ async function persistTurnSummaryAttempt(
             ? {
                 turnId: turn,
                 sliceId: payload.sliceId,
-                at: r.createdAt ? new Date(Date.parse(String(r.createdAt)) || Date.now()).toISOString() : new Date().toISOString(),
+                at: r.createdAt
+                  ? new Date(
+                      Date.parse(String(r.createdAt)) || Date.now(),
+                    ).toISOString()
+                  : new Date().toISOString(),
                 userText: "",
                 replyText: rv,
                 cognition: "",
               }
             : rv;
         if (record && typeof record.replyText === "string") {
-          members.push({ ...record, turnId: record.turnId ?? turn });
+          candidates.push({ ...record, turnId: record.turnId ?? turn });
         } else {
           failedTurns.push({ turn, note: noAnswerNote(turn, "unreadable result") });
         }
@@ -2603,76 +2327,117 @@ async function persistTurnSummaryAttempt(
     }
     // Burst chronology: the appended turns follow each member's turn-start
     // stamp (own — the last survivor — sorts last).
-    members.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    candidates.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
+    // ── 2+3. The edge + the landing judgment + the seal.
+    const landing = await resolveLanding(payload, candidates[0], batch);
+    if ("error" in landing) return fail(landing.error);
+    const { slice, sealedEdge } = landing;
+
+    // ── The dedupe (f2f4f80, narrowed): ONLY "this turn already landed".
+    //    A live sibling summary must NOT exit this run — it cannot see this
+    //    turn (cross-shell enumeration gaps cost content on the real
+    //    machine); the incremental appends below converge under it.
+    const ownReplyOnDisk = slice.turns.some(
+      (t) => t.role === "agent" && t.turnId === payload.own.turnId,
+    );
+    if (ownReplyOnDisk) {
+      console.log(
+        `[Summary] ${slice.slice_id} deduped — my turn already landed`,
+      );
+      return { kind: "deduped" };
+    }
+
+    const turnOnDisk = (turnId: string): boolean =>
+      slice.turns.some((t) => t.turnId === turnId);
+    const members = candidates;
     /** The commit body names what actually queued (v0.37 §7-1 wording). */
     const bodyLines: string[] = [];
 
-    // ── 1. The page seals (v0.42 §2 — 落盘归总结流).
-    const sealedIds = new Set<string>();
-    for (const m of [payload.own, ...members]) {
-      const seal = m.sealed;
-      if (!seal || seal.sliceId === payload.sliceId || sealedIds.has(seal.sliceId)) {
-        continue;
-      }
-      sealedIds.add(seal.sliceId);
+    if (sealedEdge) {
+      // The full pass earns the analyzer's marks; the deterministic fallback
+      // covers any analyzer outage (never close dry).
       try {
-        const target = parseSlice(await readCore(seal.sliceId));
-        if (target.status === "active" && !target.closedBy) {
-          target.status = "closed";
-          target.closedBy = seal.signal;
-          target.end = seal.end;
-          if (seal.focus) target.focus = seal.focus;
-          if (seal.summary) target.summary = seal.summary;
-          if (seal.tone) target.emotional_tone = seal.tone as TimeSlice["emotional_tone"];
-          target.open_loops = seal.openLoops;
-          target.decisions = seal.decisions;
-          await saveSliceSnapshot(target, batch);
-          bodyLines.push(`sealed ${seal.sliceId} (${seal.signal})`);
+        const analysis = await analyzeTurn({
+          model: payload.modelConfig,
+          userMessage: members[0]?.userText ?? "",
+          closingSlice: { turns: sealedEdge.edge.turns },
+        });
+        const marking = analysis?.closedMarking;
+        if (marking) {
+          if (marking.focus) sealedEdge.edge.focus = marking.focus;
+          if (marking.summary) sealedEdge.edge.summary = marking.summary;
+          if (marking.tone) sealedEdge.edge.emotional_tone = marking.tone;
+          if (marking.openLoops) sealedEdge.edge.open_loops = marking.openLoops;
+          if (marking.decisions) sealedEdge.edge.decisions = marking.decisions;
         }
-      } catch (err) {
-        console.warn(
-          `[Summary] seal of ${seal.sliceId} could not be applied (ignored):`,
-          err instanceof Error ? err.message : err,
-        );
+      } catch {
+        /* the analyzer never blocks the seal — the fallback below fills */
       }
+      if (!sealedEdge.edge.focus || !sealedEdge.edge.summary) {
+        const fallback = deterministicSliceMark(sealedEdge.edge);
+        if (!sealedEdge.edge.focus) sealedEdge.edge.focus = fallback.focus;
+        if (!sealedEdge.edge.summary) sealedEdge.edge.summary = fallback.summary;
+      }
+      await closeSlice(sealedEdge.edge, sealedEdge.signal, batch);
+      bodyLines.push(`sealed ${sealedEdge.edge.slice_id} (${sealedEdge.signal})`);
     }
 
-    // ── 2. The turns: user + reply + merge per member (turnId-deduped).
+    // ── 4. The landings: user + reply + merge + cognition + attachments,
+    //    everything into the JUDGED slice.
+    /** Persist a member's evidence into THIS batch; return the marker. */
+    const attachMarker = async (m: TurnRunResult): Promise<string> => {
+      if (!m.attachments || m.attachments.length === 0) return "";
+      // The evidence rides the result (the entry beat commits nothing): the
+      // SAME fuse semantics persist it into THIS batch. Skips stay visible.
+      const result = await persistEvidenceAttachments({
+        sliceId: slice.slice_id,
+        turnId: m.turnId,
+        files: m.attachments.map((a) => ({
+          name: a.name,
+          data: Buffer.from(a.dataBase64, "base64"),
+        })),
+        batch,
+      });
+      for (const s of result.skipped) {
+        console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
+      }
+      return result.saved.length > 0
+        ? `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`
+        : "";
+    };
+    if (payload.own.previously?.trim()) {
+      await writePreviously(slice.slice_id, payload.own.previously, batch);
+    }
+    let wroteTurns = false;
     for (const m of members) {
       const burst = m.burstId ?? payload.burstId;
       if (m.userText && !turnOnDisk(m.turnId)) {
-        let content = m.userText;
-        if (m.attachments && m.attachments.length > 0) {
-          // The evidence rides the result (the entry beat commits nothing):
-          // the SAME fuse semantics persist it into THIS batch, and the
-          // persisted turn carries the LANDED names. Skips stay visible.
-          const result = await persistEvidenceAttachments({
-            sliceId: payload.sliceId,
-            turnId: m.turnId,
-            files: m.attachments.map((a) => ({
-              name: a.name,
-              data: Buffer.from(a.dataBase64, "base64"),
-            })),
-            batch,
-          });
-          for (const s of result.skipped) {
-            console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
-          }
-          if (result.saved.length > 0) {
-            content += `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
-          }
-        }
         appendTurn(slice, {
           timestamp: m.at,
           role: "user",
-          content,
+          content: m.userText + (await attachMarker(m)),
           turnId: m.turnId,
           ...(burst ? { burst } : {}),
         });
         bodyLines.push(`user turn ${m.turnId}`);
+        wroteTurns = true;
+      } else if (m.attachments?.length) {
+        // The member's user turn is THIS slice's turn 0 (a minted page stamps
+        // it by createSlice) — the append is skipped, so annotate it in place.
+        const t0 = slice.turns.find(
+          (t) => t.role === "user" && t.turnId === m.turnId,
+        );
+        const marker = await attachMarker(m);
+        if (t0 && marker && !t0.content.includes("[attachments:")) {
+          t0.content += marker;
+          wroteTurns = true;
+        }
       }
-      if (m.replyText && !slice.turns.some((t) => t.role === "agent" && t.turnId === m.turnId)) {
+      if (
+        m.replyText &&
+        !slice.turns.some((t) => t.role === "agent" && t.turnId === m.turnId)
+      ) {
         appendTurn(slice, {
           timestamp: m.at,
           role: "agent",
@@ -2681,6 +2446,7 @@ async function persistTurnSummaryAttempt(
           ...(burst ? { burst } : {}),
         });
         bodyLines.push(`reply ${m.turnId}`);
+        wroteTurns = true;
       }
       if (m.mergeLine?.trim()) {
         const mergeTurnId = `m${m.turnId}`;
@@ -2694,13 +2460,13 @@ async function persistTurnSummaryAttempt(
             ...(burst ? { burst } : {}),
           });
           bodyLines.push(`merge ${m.turnId}`);
+          wroteTurns = true;
         }
       }
     }
-
-    // ── 3. The cognitions → agent.md (a `## Cognition {turnId}` header guard
-    //    keeps redeliveries from double-appending).
-    let agentKnown = await readSlicePart(payload.sliceId, "agent", batch).catch(
+    // The cognitions → agent.md (a `## Cognition {turnId}` header guard
+    // keeps redeliveries from double-appending).
+    let agentKnown = await readSlicePart(slice.slice_id, "agent", batch).catch(
       () => "",
     );
     for (const m of members) {
@@ -2708,51 +2474,94 @@ async function persistTurnSummaryAttempt(
         continue;
       }
       const block = `## Cognition ${m.turnId} — ${new Date().toISOString()}\n${m.cognition}`;
-      await writeAgentTimeline(payload.sliceId, block, batch);
+      await writeAgentTimeline(slice.slice_id, block, batch);
       agentKnown += `\n\n${block}`;
       bodyLines.push(`cognition ${m.turnId}`);
     }
 
-    // ── 4. The snapshot + the ONE commit.
-    let wrote = false;
-    for (const line of bodyLines) {
-      if (line.startsWith("user turn") || line.startsWith("reply") || line.startsWith("merge")) {
-        wrote = true;
-        break;
-      }
-    }
-    if (wrote) {
+    if (wroteTurns) {
       await saveSliceSnapshot(slice, batch);
       bodyLines.push("snapshot");
     }
     for (const f of failedTurns) bodyLines.push(f.note);
     if (batch.entries.size === 0 && failedTurns.length === 0) {
-      console.log(`[Summary] ${payload.sliceId}: nothing to persist — the owner already landed it`);
+      console.log(
+        `[Summary] ${slice.slice_id}: nothing to persist — the owner already landed it`,
+      );
       return { kind: "nothing" };
     }
     const message =
-      COMMIT_PREFIX.summary(payload.sliceId) +
+      COMMIT_PREFIX.summary(slice.slice_id) +
       (bodyLines.length > 0
         ? `\n\n${bodyLines.map((s) => `- ${s}`).join("\n")}`
         : "");
     await flushTurnBatch(batch, message, slice);
 
-    // ── 5. The reflection bell with the range (v0.42 §4 — 触发携带范围;
-    //    a hint, not the only truth — the unit re-reads the log, §3.5).
+    // The reflection bell with the range (v0.42 §4 — 触发携带范围; a hint,
+    // not the only truth — the unit re-reads the log, §3.5).
     const persistedTurnIds = members
       .filter((m) => m.replyText.trim() || m.userText.trim())
       .map((m) => m.turnId);
-    await ringReflection(payload.sliceId, {
-      sliceId: payload.sliceId,
+    await ringReflection(slice.slice_id, {
+      sliceId: slice.slice_id,
       turnIds: persistedTurnIds,
     });
     console.log(
-      `[Summary] ${payload.sliceId} committed: ${bodyLines.join(", ") || "failure notes only"}`,
+      `[Summary] ${slice.slice_id} committed: ${bodyLines.join(", ") || "failure notes only"}`,
     );
     return { kind: "committed", segments: bodyLines };
   } catch (err) {
     return fail(err);
   }
+}
+
+/**
+ * THE LANDING RESOLUTION (v0.42 §1 — the user's words): read the current
+ * edge slice from disk and judge 续写还是开新片 with the SAME thresholds
+ * the entry beat used. Shared by the full pass and the minimal commit.
+ * Never throws — a failure lands in `.error`.
+ */
+async function resolveLanding(
+  payload: SummaryRunPayload,
+  first: TurnRunResult | undefined,
+  batch: WriteBatch,
+): Promise<
+  | { slice: TimeSlice; sealedEdge: { edge: TimeSlice; signal: SlicingSignal } | null }
+  | { error: Error }
+> {
+  const firstAtMs = Date.parse(first?.at ?? "") || Date.now();
+  const edge = await tryLoadTodaySlice(batch).catch(() => null);
+  const landing = judgeSliceLanding(
+    edge
+      ? {
+          sliceId: edge.slice_id,
+          start: edge.start,
+          lastTurnAt: edge.turns.at(-1)?.timestamp ?? null,
+          turnCount: edge.turns.length,
+        }
+      : null,
+    firstAtMs,
+    payload.slicing,
+  );
+  if (landing.kind === "continue-edge" && edge) {
+    return { slice: edge, sealedEdge: null };
+  }
+  if (landing.kind === "open-new" && edge) {
+    const slice = createSlice(
+      first?.userText || "(empty)",
+      payload.clientTimezone,
+      first?.turnId ?? payload.own.turnId,
+      landing.checkpoint ? edge.slice_id : undefined,
+    );
+    return { slice, sealedEdge: { edge, signal: landing.signal } };
+  }
+  // fresh — no edge on disk at all: mint the first page, nothing to seal.
+  const slice = createSlice(
+    first?.userText || "(empty)",
+    payload.clientTimezone,
+    first?.turnId ?? payload.own.turnId,
+  );
+  return { slice, sealedEdge: null };
 }
 
 /**
@@ -2789,12 +2598,13 @@ export async function persistTurnSummary(
 /**
  * §5's minimal commit — the floor of "把能提交的都提交上去": THIS turn's
  * user message (it exists by definition — the turn started from it) plus
- * whatever reply text it produced, NOTHING else (siblings, cognitions,
- * seals are the full pass's riders; 没产出的就是没有). The SAME batch +
- * flushTurnBatch discipline — no second write channel — and the commit
- * body names the degradation so the log's next reader knows what happened.
- * The bell still rings with the landed turn: the reflection unit reads the
- * log and finds what it must (§3.5). Never throws.
+ * whatever reply text it produced, NOTHING else (siblings, cognitions are
+ * the full pass's riders; 没产出的就是没有). The SAME batch + flushTurnBatch
+ * discipline — no second write channel — and the commit body names the
+ * degradation so the log's next reader knows what happened. The landing is
+ * judged the SAME way (a wrong-page write would be worse than none); the
+ * seal, when one is due, uses the deterministic marks only (no LLM on the
+ * degraded path). The bell still rings with the landed turn. Never throws.
  */
 async function persistMinimalSummary(
   payload: SummaryRunPayload,
@@ -2805,94 +2615,54 @@ async function persistMinimalSummary(
     console.warn(`[Summary] ${payload.sliceId} minimal commit failed: ${msg}`);
     return { kind: "failed", error: msg };
   };
-  const readCore = async (sliceId: string): Promise<string> => {
-    const path = sliceIdToFilePath(sliceId);
-    if (payload.useDemo) return await readFileDemo(path);
-    if (payload.useGithub) return await readFileFresh(path, payload.repo, payload.owner);
-    return await readFileLocal(path);
-  };
   try {
-    const ownId = getWorkflowMetadata().workflowRunId;
-    const runs = await listRegistryRuns();
-    if (runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))) {
-      return { kind: "deduped" };
-    }
     const batch = createBatch();
-    let slice: TimeSlice;
-    try {
-      slice = parseSlice(await readCore(payload.sliceId));
-    } catch {
-      const birth = payload.own.birth;
-      if (!birth) {
-        return fail(
-          new Error(`slice ${payload.sliceId} unreadable and no birth record carried`),
-        );
-      }
-      slice = {
-        slice_id: birth.sliceId,
-        focus: "",
-        status: "active",
-        start: birth.start,
-        timezone: birth.timezone,
-        summary: "",
-        open_loops: [],
-        decisions: [],
-        tags: [],
-        related_slices: [],
-        loops: [],
-        turns: [
-          {
-            timestamp: birth.turn.timestamp,
-            role: "user",
-            content: birth.turn.content,
-            turnId: birth.turn.turnId,
-          },
-        ],
-        estimatedTokens: Math.ceil(birth.turn.content.length / 4) + 8,
-        ...(birth.continuesFrom ? { continuesFrom: birth.continuesFrom } : {}),
-      };
-      if (birth.previously?.trim()) {
-        await writePreviously(birth.sliceId, birth.previously, batch);
-      }
-    }
+    const landing = await resolveLanding(payload, payload.own, batch);
+    if ("error" in landing) return fail(landing.error);
+    const { slice, sealedEdge } = landing;
     /** What actually exists — 没产出的就是没有, even in the fallback. */
     const bodyLines: string[] = [];
-    const burst = payload.own.burstId;
-    // The mid-life previously snapshot rides the result — land it in THIS
-    // batch (a birth slice's own copy lives in the record, handled above).
-    if (payload.own.previously?.trim()) {
-      await writePreviously(payload.sliceId, payload.own.previously, batch);
-    }
-    if (
-      payload.own.userText &&
-      !slice.turns.some((t) => t.role === "user" && t.turnId === payload.own.turnId)
-    ) {
-      let content = payload.own.userText;
-      if (payload.own.attachments && payload.own.attachments.length > 0) {
-        const result = await persistEvidenceAttachments({
-          sliceId: payload.sliceId,
-          turnId: payload.own.turnId,
-          files: payload.own.attachments.map((a) => ({
-            name: a.name,
-            data: Buffer.from(a.dataBase64, "base64"),
-          })),
-          batch,
-        });
-        for (const s of result.skipped) {
-          console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
-        }
-        if (result.saved.length > 0) {
-          content += `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
-        }
+    /** Persist own's evidence into THIS batch; return the marker. */
+    const ownMarker = async (): Promise<string> => {
+      if (!payload.own.attachments?.length) return "";
+      const result = await persistEvidenceAttachments({
+        sliceId: slice.slice_id,
+        turnId: payload.own.turnId,
+        files: payload.own.attachments.map((a) => ({
+          name: a.name,
+          data: Buffer.from(a.dataBase64, "base64"),
+        })),
+        batch,
+      });
+      for (const s of result.skipped) {
+        console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
       }
+      return result.saved.length > 0
+        ? `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`
+        : "";
+    };
+    const ownUserOnDisk = slice.turns.some(
+      (t) => t.role === "user" && t.turnId === payload.own.turnId,
+    );
+    if (payload.own.userText && !ownUserOnDisk) {
       appendTurn(slice, {
         timestamp: payload.own.at,
         role: "user",
-        content,
+        content: payload.own.userText + (await ownMarker()),
         turnId: payload.own.turnId,
-        ...(burst ? { burst } : {}),
+        ...(payload.own.burstId ? { burst: payload.own.burstId } : {}),
       });
       bodyLines.push(`user turn ${payload.own.turnId}`);
+    } else if (payload.own.attachments?.length) {
+      // own's user turn is THIS slice's turn 0 — annotate in place.
+      const t0 = slice.turns.find(
+        (t) => t.role === "user" && t.turnId === payload.own.turnId,
+      );
+      const marker = await ownMarker();
+      if (t0 && marker && !t0.content.includes("[attachments:")) {
+        t0.content += marker;
+        bodyLines.push(`user turn ${payload.own.turnId}`);
+      }
     }
     if (
       payload.own.replyText.trim() &&
@@ -2903,9 +2673,22 @@ async function persistMinimalSummary(
         role: "agent",
         content: payload.own.replyText,
         turnId: payload.own.turnId,
-        ...(burst ? { burst } : {}),
+        ...(payload.own.burstId ? { burst: payload.own.burstId } : {}),
       });
       bodyLines.push(`reply ${payload.own.turnId}`);
+    }
+    if (sealedEdge) {
+      // Degraded path: deterministic marks only — never close dry.
+      if (!sealedEdge.edge.focus || !sealedEdge.edge.summary) {
+        const fallback = deterministicSliceMark(sealedEdge.edge);
+        if (!sealedEdge.edge.focus) sealedEdge.edge.focus = fallback.focus;
+        if (!sealedEdge.edge.summary) sealedEdge.edge.summary = fallback.summary;
+      }
+      await closeSlice(sealedEdge.edge, sealedEdge.signal, batch);
+      bodyLines.push(`sealed ${sealedEdge.edge.slice_id} (${sealedEdge.signal})`);
+    }
+    if (payload.own.previously?.trim()) {
+      await writePreviously(slice.slice_id, payload.own.previously, batch);
     }
     if (bodyLines.length === 0) {
       return { kind: "nothing" };
@@ -2913,17 +2696,17 @@ async function persistMinimalSummary(
     await saveSliceSnapshot(slice, batch);
     bodyLines.push("snapshot");
     const message =
-      COMMIT_PREFIX.summary(payload.sliceId) +
+      COMMIT_PREFIX.summary(slice.slice_id) +
       `\n\n- degraded commit — the full summary failed twice; ` +
       `landed the user turn + produced reply only (v0.42 §5)\n` +
       bodyLines.map((s) => `- ${s}`).join("\n");
     await flushTurnBatch(batch, message, slice);
-    await ringReflection(payload.sliceId, {
-      sliceId: payload.sliceId,
+    await ringReflection(slice.slice_id, {
+      sliceId: slice.slice_id,
       turnIds: [payload.own.turnId],
     });
     console.log(
-      `[Summary] ${payload.sliceId} minimal commit landed: ${bodyLines.join(", ")}`,
+      `[Summary] ${slice.slice_id} minimal commit landed: ${bodyLines.join(", ")}`,
     );
     return { kind: "committed", segments: bodyLines };
   } catch (err) {

@@ -6,7 +6,14 @@
  * run returnValues), the merge-line model, and the reflection-wake engine
  * are mocked. persistTurnSummary + shouldStartSummary run REAL.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.hoisted(() => {
+  // The edge reader (tryLoadTodaySlice) routes through io-helpers' backend
+  // switch — pin the local backend (unset STORAGE resolves to demo under
+  // vitest, where fsReadFile/fsListFiles would bypass our mocks).
+  process.env.STORAGE = "local";
+});
 
 const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -27,7 +34,21 @@ vi.mock("@/lib/tools/local-fs", () => ({
     if (content === undefined) throw new Error(`File not found: "${path}"`);
     return content;
   }),
-  listFilesLocal: vi.fn(async () => []),
+  // A fake directory tree over io.files — tryLoadTodaySlice (the summary
+  // stream's edge reader) walks day dirs through this.
+  listFilesLocal: vi.fn(async (path: string) => {
+    const prefix = `${path}/`;
+    const names = new Set<string>();
+    for (const key of io.files.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      names.add(key.slice(prefix.length).split("/")[0]!);
+    }
+    return [...names].map((name) => ({
+      name,
+      type: (io.files.has(`${prefix}${name}`) ? "file" : "dir") as "file" | "dir",
+      path: `${prefix}${name}`,
+    }));
+  }),
   writeFileLocal: vi.fn(async (path: string, content: string) => {
     io.files.set(path, content);
     return { path, created: true };
@@ -56,6 +77,38 @@ vi.mock("@/lib/episodic", async (importOriginal) => {
     await importOriginal<typeof import("@/lib/episodic")>();
   return {
     ...actual,
+    // Deterministic mint: a landed NEW page always takes NEW_SLICE_ID (the
+    // real createSlice mints from the wall clock — minute-flaky in tests).
+    createSlice: vi.fn(
+      (
+        userMessage: string,
+        timezone: string,
+        turnId: string,
+        continuesFrom?: string,
+      ) => ({
+        slice_id: NEW_SLICE_ID,
+        focus: "",
+        summary: "",
+        status: "active" as const,
+        start: "2026-10-20T05:00:00.000Z",
+        timezone,
+        open_loops: [] as string[],
+        decisions: [] as string[],
+        tags: [] as string[],
+        related_slices: [] as string[],
+        loops: [] as string[],
+        turns: [
+          {
+            timestamp: "2026-10-20T05:00:00.000Z",
+            role: "user" as const,
+            content: userMessage,
+            turnId,
+          },
+        ],
+        estimatedTokens: 16,
+        ...(continuesFrom ? { continuesFrom } : {}),
+      }),
+    ),
     createBatch: () => ({
       entries: new Map<string, string | null>(),
       encodings: new Map<string, "base64">(),
@@ -140,6 +193,9 @@ import type {
 const SLICE_ID = "2026-10-20-1836";
 const CORE_PATH = "memory/records/2026/10/20/1836/core.md";
 const AGENT_PATH = "memory/records/2026/10/20/1836/agent.md";
+/** The deterministic id the createSlice mock mints (a landed NEW page). */
+const NEW_SLICE_ID = "2026-10-20-0500";
+const NEW_CORE_PATH = "memory/records/2026/10/20/0500/core.md";
 
 const BASE_CORE = `---
 slice_id: 2026-10-20-1836
@@ -168,6 +224,9 @@ function payload(over: Partial<SummaryRunPayload> = {}): SummaryRunPayload {
     sliceId: SLICE_ID,
     date: "2026-10-20",
     own: ownRecord(),
+    slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 40 },
+    clientTimezone: "Asia/Shanghai",
+    modelConfig: { id: "test-model", sdk: "deepseek" } as SummaryRunPayload["modelConfig"],
     useGithub: false,
     useDemo: false,
     owner: "local",
@@ -181,23 +240,33 @@ function turnRun(
   runId: string,
   turn: string,
   status: string,
-  over: { burst?: string; createdAt?: string } = {},
+  over: { burst?: string; createdAt?: string; slice?: string } = {},
 ) {
   return {
     runId,
     status,
     createdAt: over.createdAt ?? null,
-    attributes: { slice: SLICE_ID, turn, ...(over.burst ? { burst: over.burst } : {}) },
+    attributes: {
+      slice: over.slice ?? SLICE_ID,
+      turn,
+      ...(over.burst !== undefined ? { burst: over.burst } : {}),
+    },
   };
 }
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z")); // yesterday's (10-20) dirs are scanned
   vi.clearAllMocks();
   io.files.clear();
   io.flushes.length = 0;
   io.registry.length = 0;
   io.returnValues.clear();
   io.files.set(CORE_PATH, BASE_CORE);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 §2)", () => {
@@ -364,10 +433,98 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
     }
   });
 
-  it("a live summary for the slice + MY turn already on disk → deduped, no flush, no bell", async () => {
-    // Dedupe only stands when the owner's work covers THIS turn — seed own's
-    // turns on disk first (the semantics narrowed 2026-10-21: a live summary
-    // that snapshotted before this turn finished must NOT block this run).
+  it("a. ONE burst across DIFFERENT entry shells (0837/0838): the survivor's member collection gathers BOTH turns — one commit, two user turns + two replies", async () => {
+    io.registry.push(
+      turnRun("turn-a", "YjTtMg", "completed", { burst: "ead59415", slice: "2026-10-20-0837", createdAt: "2026-10-20T08:37:56.000Z" }),
+      turnRun("summary-own", "a1b2c3", "completed", { burst: "ead59415", slice: "2026-10-20-0838" }),
+    );
+    io.returnValues.set("turn-a", {
+      turnId: "YjTtMg",
+      sliceId: "2026-10-20-0837",
+      at: "2026-10-20T08:37:56.000Z",
+      userText: "第一条",
+      replyText: "第一条的回答。",
+      cognition: "",
+      burstId: "ead59415",
+    } satisfies TurnRunResult);
+
+    const outcome = await persistTurnSummary(payload({ burstId: "ead59415" }));
+
+    expect(outcome.kind).toBe("committed");
+    expect(io.flushes).toHaveLength(1);
+    expect(io.flushes[0]!.message).toContain("- user turn YjTtMg");
+    expect(io.flushes[0]!.message).toContain("- reply YjTtMg");
+    expect(io.flushes[0]!.message).toContain("- user turn a1b2c3");
+    expect(io.flushes[0]!.message).toContain("- reply a1b2c3");
+    const core = io.files.get(CORE_PATH)!; // the judged landing (the seeded edge)
+    expect(core).toContain("第一条");
+    expect(core).toContain("第一条的回答。");
+    expect(core).toContain("推荐看看小屏旗舰。");
+  });
+
+  it("b2. my turn already on disk → deduped (f2f4f80) — regardless of any live summary", async () => {
+    io.files.set(
+      CORE_PATH,
+      BASE_CORE +
+        "\n## Turn a1b2c3 — 2026-10-20T18:40:00.000Z (user)\n\n我想换手机，预算 5000。\n" +
+        "\n## Turn a1b2c3 — 2026-10-20T18:40:00.000Z (agent)\n\n推荐看看小屏旗舰。\n",
+    );
+    io.registry.push(
+      { runId: "summary-other", status: "running", attributes: { role: "summary", slice: "2026-10-20-0837", burst: "ead59415" } },
+      turnRun("summary-own", "a1b2c3", "completed", { burst: "ead59415", slice: "2026-10-20-0838" }),
+    );
+
+    const outcome = await persistTurnSummary(payload({ burstId: "ead59415" }));
+
+    expect(outcome.kind).toBe("deduped");
+    expect(io.flushes).toHaveLength(0);
+  });
+
+  it("b3. a live summary is running but MY turn is NOT on disk → I proceed and write it — no whole-run exit (the real-machine loss)", async () => {
+    // The live summary cannot see this turn (cross-shell enumeration gaps);
+    // exiting here would lose the turn forever. The incremental append
+    // converges under the live summary instead.
+    io.registry.push(
+      { runId: "summary-other", status: "running", attributes: { role: "summary", slice: "2026-10-20-0837", burst: "ead59415" } },
+      turnRun("summary-own", "a1b2c3", "completed", { burst: "ead59415", slice: "2026-10-20-0838" }),
+    );
+
+    const outcome = await persistTurnSummary(payload({ burstId: "ead59415" }));
+
+    expect(outcome.kind).toBe("committed");
+    expect(io.flushes).toHaveLength(1);
+    const core = io.files.get(CORE_PATH)!;
+    expect(core).toContain("我想换手机，预算 5000。");
+    expect(core).toContain("推荐看看小屏旗舰。");
+  });
+
+  it("c. NO burstId: a completed run on a DIFFERENT slice is NOT a member, and a live summary on another slice does NOT dedupe (legacy shape unchanged)", async () => {
+    io.registry.push(
+      turnRun("turn-other", "zz9yy8", "completed", { slice: "2026-10-20-0837" }),
+      { runId: "summary-other", status: "running", attributes: { role: "summary", slice: "2026-10-20-0837" } },
+      turnRun("summary-own", "a1b2c3", "completed"),
+    );
+    io.returnValues.set("turn-other", {
+      turnId: "zz9yy8",
+      sliceId: "2026-10-20-0837",
+      at: "2026-10-20T08:39:00.000Z",
+      userText: "别片的轮",
+      replyText: "不该被收。",
+      cognition: "",
+    } satisfies TurnRunResult);
+
+    const outcome = await persistTurnSummary(payload());
+
+    // own is not on disk → proceeds and lands; the cross-slice run is NOT a
+    // member without a burst id (legacy shape unchanged), and the live
+    // summary on the other slice does not gate anything.
+    expect(outcome.kind).toBe("committed");
+    const core = io.files.get(CORE_PATH)!;
+    expect(core).not.toContain("别片的轮");
+    expect(core).toContain("推荐看看小屏旗舰。");
+  });
+
+  it("my turn already on disk → deduped, no flush, no bell (f2f4f80 — the only dedupe; a live summary is irrelevant to it)", async () => {
     io.files.set(
       CORE_PATH,
       BASE_CORE +
@@ -457,64 +614,137 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
     expect(io.flushes).toHaveLength(2);
   });
 
-  it("a slice that does not exist yet is materialized from the birth record (turn 0 never re-appended)", async () => {
-    io.files.delete(CORE_PATH);
-    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
-
-    const outcome = await persistTurnSummary(
-      payload({
-        own: ownRecord({
-          birth: {
-            sliceId: SLICE_ID,
-            start: "2026-10-20T18:40:00.000Z",
-            timezone: "Asia/Shanghai",
-            turn: {
-              turnId: "a1b2c3",
-              timestamp: "2026-10-20T18:40:00.000Z",
-              content: "我想换手机，预算 5000。",
-            },
-          },
-        }),
-      }),
+  it("LANDING (the real-machine bug): no edge on disk + two members 8s apart across a minute → ONE fresh slice, BOTH land — not two slices", async () => {
+    io.files.delete(CORE_PATH); // no edge
+    io.registry.push(
+      turnRun("turn-a", "AR6sLw", "completed", { burst: "b1", createdAt: "2026-10-20T04:17:56.000Z" }),
+      turnRun("summary-own", "a1b2c3", "completed", { burst: "b1" }),
     );
+    io.returnValues.set("turn-a", {
+      turnId: "AR6sLw",
+      sliceId: SLICE_ID,
+      at: "2026-10-20T04:17:56.000Z",
+      userText: "第一条",
+      replyText: "第一条的回答。",
+      cognition: "",
+      burstId: "b1",
+    } satisfies TurnRunResult);
+    // the second member crosses the minute (04:17:56 → 04:18:04)
+    const own = ownRecord({ at: "2026-10-20T04:18:04.000Z", burstId: "b1" });
+
+    const outcome = await persistTurnSummary(payload({ burstId: "b1", own }));
 
     expect(outcome.kind).toBe("committed");
-    const core = io.files.get(CORE_PATH)!;
-    // the birth user turn is turn 0 — appended ONCE, not twice
-    expect(core.match(/我想换手机，预算 5000。/g)?.length).toBe(1);
+    expect(io.flushes).toHaveLength(1); // ONE commit…
+    expect(io.flushes[0]!.message).toContain(`Summary — ${NEW_SLICE_ID}`);
+    expect(io.flushes[0]!.paths).toContain(NEW_CORE_PATH);
+    expect(io.flushes[0]!.paths).not.toContain(CORE_PATH);
+    const core = io.files.get(NEW_CORE_PATH)!;
+    expect(core).toContain("第一条"); // …carrying BOTH members
+    expect(core).toContain("第一条的回答。");
+    expect(core.match(/我想换手机，预算 5000。/g)?.length).toBe(1); // own's user turn once
     expect(core).toContain("推荐看看小屏旗舰。");
   });
 
-  it("a member's seal closes the old page on disk (落盘归总结流, v0.42 §2)", async () => {
-    const OLD_SLICE = "2026-10-20-1200";
-    const OLD_CORE = "memory/records/2026/10/20/1200/core.md";
+  it("LANDING b. idle gap beyond the threshold → TWO pages: the edge sealed idle_gap, the batch lands in a NEW slice WITHOUT continuesFrom", async () => {
     io.files.set(
-      OLD_CORE,
-      `---\nslice_id: 2026-10-20-1200\nstart: 2026-10-20T12:00:00.000Z\n---\n\n## Turn u9 — 2026-10-20T12:30:00.000Z (user)\n\n旧页内容。\n`,
+      CORE_PATH,
+      `---
+slice_id: 2026-10-20-1836
+start: 2026-10-20T01:00:00.000Z
+---
+
+## Turn u0 — 2026-10-20T01:00:00.000Z (user)
+
+凌晨那句。
+`,
     );
     io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const own = ownRecord({ at: "2026-10-20T03:00:00.000Z" }); // 2h silence ≥ 60min
 
     const outcome = await persistTurnSummary(
-      payload({
-        own: ownRecord({
-          sealed: {
-            sliceId: OLD_SLICE,
-            signal: "idle_gap",
-            focus: "旧话题",
-            summary: "旧页已收束。",
-            openLoops: [],
-            decisions: [],
-            end: "2026-10-20T12:30:00.000Z",
-          },
-        }),
-      }),
+      payload({ own, slicing: { idleGapMinutes: 60, maxSliceMinutes: 30, maxTurnsPerSlice: 40 } }),
     );
 
     expect(outcome.kind).toBe("committed");
-    const oldCore = io.files.get(OLD_CORE)!;
-    expect(oldCore).toContain("closed_by: idle_gap");
-    expect(oldCore).toContain("旧页已收束。");
-    expect(io.flushes[0].message).toContain("- sealed 2026-10-20-1200 (idle_gap)");
+    // the edge is sealed as a conversation boundary…
+    const edgeCore = io.files.get(CORE_PATH)!;
+    expect(edgeCore).toContain("closed_by: idle_gap");
+    // …and the batch lands in a fresh page with NO checkpoint link
+    const { parseSlice } = await import("@/lib/episodic");
+    expect(parseSlice(io.files.get(NEW_CORE_PATH)!).continuesFrom).toBeUndefined();
+    expect(io.files.get(NEW_CORE_PATH)!).toContain("我想换手机，预算 5000。");
+    expect(io.flushes[0]!.message).toContain("- sealed 2026-10-20-1836 (idle_gap)");
+  });
+
+  it("LANDING c. the time cap → the edge sealed time_cap, the NEW slice carries continuesFrom to it (checkpoint)", async () => {
+    io.files.set(
+      CORE_PATH,
+      `---
+slice_id: 2026-10-20-1836
+start: 2026-10-20T02:30:00.000Z
+---
+
+## Turn u0 — 2026-10-20T02:31:00.000Z (user)
+
+半小时前那句。
+`,
+    );
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const own = ownRecord({ at: "2026-10-20T03:00:00.000Z" }); // 30min ≥ cap
+
+    const outcome = await persistTurnSummary(
+      payload({ own, slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 40 } }),
+    );
+
+    expect(outcome.kind).toBe("committed");
+    expect(io.files.get(CORE_PATH)!).toContain("closed_by: time_cap");
+    const { parseSlice } = await import("@/lib/episodic");
+    const landed = parseSlice(io.files.get(NEW_CORE_PATH)!);
+    expect(landed.continuesFrom).toBe(SLICE_ID); // the SAME conversation continues
+    expect(landed.turns.some((t) => t.content.includes("我想换手机"))).toBe(true);
+  });
+
+  it("LANDING c2. the capacity cap → sealed capacity, continuesFrom carried", async () => {
+    io.files.set(
+      CORE_PATH,
+      `---
+slice_id: 2026-10-20-1836
+start: 2026-10-20T18:39:00.000Z
+---
+
+## Turn u1 — 2026-10-20T18:39:01.000Z (user)
+
+一。
+
+## Turn u2 — 2026-10-20T18:39:02.000Z (user)
+
+二。
+
+## Turn u3 — 2026-10-20T18:39:03.000Z (user)
+
+三。
+`,
+    );
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const outcome = await persistTurnSummary(
+      payload({
+        slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 2 }, // 3 turns ≥ 2
+      }),
+    );
+    expect(outcome.kind).toBe("committed");
+    expect(io.files.get(CORE_PATH)!).toContain("closed_by: capacity");
+    const { parseSlice } = await import("@/lib/episodic");
+    expect(parseSlice(io.files.get(NEW_CORE_PATH)!).continuesFrom).toBe(SLICE_ID);
+  });
+
+  it("LANDING d. a SOLO turn with a live edge → continues the edge, NO new page", async () => {
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const outcome = await persistTurnSummary(payload());
+    expect(outcome.kind).toBe("committed");
+    expect(io.files.has(NEW_CORE_PATH)).toBe(false);
+    expect(io.files.get(CORE_PATH)!).toContain("推荐看看小屏旗舰。");
+    expect(io.flushes).toHaveLength(1);
   });
 
   it("b. the full summary's first attempt fails transiently → ONE bounded retry succeeds", async () => {
@@ -584,46 +814,40 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
         "\n## Turn a1b2c3 — 2026-10-20T18:40:00.000Z (user)\n\n我想换手机，预算 5000。\n" +
         "\n## Turn a1b2c3 — 2026-10-20T18:40:00.000Z (agent)\n\n推荐看看小屏旗舰。\n",
     );
+    io.files.set(
+      AGENT_PATH,
+      `## Cognition a1b2c3 — 2026-10-20T18:40:00.000Z
+### Thinking
+权衡过续航。`,
+    );
     io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
 
     const outcome = await persistTurnSummary(payload());
 
-    expect(outcome.kind).toBe("nothing");
+    // own-on-disk IS the dedupe condition now — the run exits as "deduped"
+    // (the older "nothing" tail is unreachable for an on-disk own turn).
+    expect(outcome.kind).toBe("deduped");
     expect(io.flushes).toHaveLength(0);
     expect(wake.deliverReflectionWake).not.toHaveBeenCalled();
   });
 });
 
-describe("shouldStartSummary — 对话流完成后查自己是不是最后一个 (v0.42 §1)", () => {
-  it("a burst sibling still answering → NOT the last → no summary (不是最后一个什么都不做)", async () => {
+describe("shouldStartSummary — 每一轮都唤起总结流，总结流只做增量 (v0.42 §1, election-free)", () => {
+  it("burst path: EVERY turn returns true — a live sibling, a live summary, any registry shape (the summary run dedupes on its own)", async () => {
     io.registry.push(
       turnRun("turn-sib", "x9y8z7", "running", { burst: "b1" }),
+      { runId: "summary-other", status: "running", attributes: { role: "summary", slice: SLICE_ID, burst: "b1" } },
       turnRun("summary-own", "a1b2c3", "running", { burst: "b1" }),
     );
-
-    expect(
-      await shouldStartSummary({ sliceId: SLICE_ID, turnId: "a1b2c3", burstId: "b1" }),
-    ).toBe(false);
-  });
-
-  it("a tail-stamped sibling yields → THIS is the last → start the summary", async () => {
-    io.registry.push(
-      turnRun("turn-sib", "x9y8z7", "running", { burst: "b1" }),
-      turnRun("summary-own", "a1b2c3", "running", { burst: "b1" }),
-    );
-    io.registry[0] = {
-      ...io.registry[0],
-      attributes: { ...io.registry[0].attributes, phase: "tail" },
-    };
 
     expect(
       await shouldStartSummary({ sliceId: SLICE_ID, turnId: "a1b2c3", burstId: "b1" }),
     ).toBe(true);
   });
 
-  it("a live summary already owns the slice → no second one", async () => {
+  it("d. NO burstId → the legacy overlap path is unchanged: a blocking sibling still yields", async () => {
     io.registry.push(
-      { runId: "summary-other", status: "running", attributes: { role: "summary", slice: SLICE_ID } },
+      turnRun("turn-sib", "x9y8z7", "running"),
       turnRun("summary-own", "a1b2c3", "running"),
     );
 
@@ -632,7 +856,7 @@ describe("shouldStartSummary — 对话流完成后查自己是不是最后一�
     ).toBe(false);
   });
 
-  it("a SOLO turn is trivially the last → its persistence must happen (no overlapping-sibling gate can skip it)", async () => {
+  it("d2. NO burstId + no live siblings → true (solo persistence, unchanged)", async () => {
     io.registry.push(turnRun("summary-own", "a1b2c3", "running"));
 
     expect(await shouldStartSummary({ sliceId: SLICE_ID, turnId: "a1b2c3" })).toBe(true);

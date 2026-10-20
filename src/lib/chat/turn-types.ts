@@ -18,6 +18,7 @@ import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { CurrentView } from "@/lib/chat/current-view";
+import type { SliceLandingConfig } from "@/lib/chat/slice-landing";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 
 /**
@@ -484,10 +485,6 @@ export interface TurnRunResult {
   mergeLine?: string;
   /** The burst id (rides the [burst {id}] turn-header segment). */
   burstId?: string;
-  /** The page THIS beat sealed — the summary run persists the seal (v0.42 §2). */
-  sealed?: SealedSliceRecord;
-  /** The slice born THIS beat — first persisted by the summary run. */
-  birth?: SliceBirthRecord;
   /**
    * Evidence attachments the user sent THIS turn (names + base64 bytes —
    * v0.42 review blocker 1). The entry beat commits nothing, so the summary
@@ -503,46 +500,16 @@ export interface TurnRunResult {
 }
 
 /**
- * The page-seal record (v0.42 §2 — 落盘归总结流): everything closeSlice would
- * have written, carried BY VALUE from the sealing beat to the summary run.
- * Plain serializable data — safe across the run boundary.
- */
-export interface SealedSliceRecord {
-  sliceId: string;
-  signal: SlicingSignal;
-  /** The analyzer's (or deterministic fallback's) closing marks. */
-  focus: string;
-  summary: string;
-  tone?: string;
-  openLoops: string[];
-  decisions: string[];
-  /** The conversation's real end = the sealed page's last turn's timestamp. */
-  end: string;
-}
-
-/** The slice-birth record (v0.42 §2): lets the summary run materialize a slice
- *  whose core.md does not exist yet (the entry beat no longer flushes it). */
-export interface SliceBirthRecord {
-  sliceId: string;
-  start: string;
-  timezone: string;
-  continuesFrom?: string;
-  /** createSlice's turn 0 — the birth user turn, never re-appended. */
-  turn: { turnId: string; timestamp: string; content: string };
-  /** The people/user snapshot at birth (§B.7 — the summary run writes
-   *  previously.md alongside the first core.md). */
-  previously?: string;
-}
-
-/**
  * The summary run's durable payload (v0.42 §1 — 总结流由最后一个对话流唤起,
  * 唤起即完成). The burst's LAST turn carries its OWN record here (its
  * returnValue may not be readable yet — the turn run completes after starting
  * the summary); the other members are enumerated from the run registry inside
- * the step.
+ * the step. `sliceId` is the BATCH KEY (the edge slice's id the turn runs
+ * stamped, or a per-day key when no edge existed) — the LANDING slice is the
+ * summary stream's own judgment.
  */
 export interface SummaryRunPayload {
-  /** The slice the burst attached to. */
+  /** The batch key (registry enumeration + dedupe) — NOT the landing slice. */
   sliceId: string;
   /** The burst id (registry-exact member enumeration); absent → same-slice
    *  terminal turn runs are the members. */
@@ -551,6 +518,13 @@ export interface SummaryRunPayload {
   date: string;
   /** The last turn's own record. */
   own: TurnRunResult;
+  /** The SAME continuity thresholds the entry beat used (idle gap / time
+   *  cap / capacity) — the landing judgment applies them. */
+  slicing: SliceLandingConfig;
+  /** The client timezone — a minted slice stamps it. */
+  clientTimezone: string;
+  /** The turn's model config — the seal-time analyzer's model. */
+  modelConfig: TurnInput["modelConfig"];
   /** Backend flags, exactly as TurnInput carries them. */
   useGithub: boolean;
   useDemo: boolean;

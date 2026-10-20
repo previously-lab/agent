@@ -106,12 +106,12 @@ describe("readReflectionCursor — the water level (v0.39 §2.4)", () => {
 });
 
 describe("readReflectionCoverage — the TURN-level water level (v0.42 §4)", () => {
-  it("turn-level marks merge newest-first, first-wins per slice; sha/at ride the NEWEST marked round", async () => {
+  it("turn-level marks UNION per slice across rounds; sha/at ride the NEWEST marked round", async () => {
     h.logCommits.mockResolvedValue([
       // newest: a round that marked two slices
       ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t3\nseen: 2026-10-19-1800#t2", oid: "new" }),
-      // older: t1 of the 19th slice — SUBSUMED by the newer round's t2 mark? NO:
-      // first-wins per slice means the NEWER mark stands; t1's round is older.
+      // older: t1 of the 19th slice — under the UNION it ACCUMULATES with t2
+      // (turn-level coverage only grows; newest-wins was the slice-level bug).
       ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1800#t1", oid: "old" }),
     ]);
 
@@ -121,11 +121,57 @@ describe("readReflectionCoverage — the TURN-level water level (v0.42 §4)", ()
     expect(coverage.sha).toBe("new");
     expect(coverage.covered).toEqual([
       { sliceId: "2026-10-20-0900", turnIds: ["t3"] },
-      { sliceId: "2026-10-19-1800", turnIds: ["t2"] }, // newest wins for this slice
+      { sliceId: "2026-10-19-1800", turnIds: ["t2", "t1"] }, // the union
     ]);
   });
 
-  it("an OLD-format bare `seen: <sliceId>` covers the WHOLE slice and lifts wholeUpTo", async () => {
+  it("turn-level marks UNION per slice: one round's turn never subsume another round's turn of the SAME slice (the 2026-10-20-0831 livelock)", async () => {
+    // The real-machine shape: two rounds, each covering ONE turn of the same
+    // slice. Newest-wins hid the older turn → it read as unprocessed → the
+    // unit re-ran the slice forever (five round commits ping-ponging).
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0831#YcuFGA", oid: "n" }),
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0831#4HH9hQ", oid: "o" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.degraded).toBe(false);
+    expect(coverage.covered).toEqual([
+      // BOTH turns of the slice are covered — the union, not the newest mark.
+      { sliceId: "2026-10-20-0831", turnIds: ["YcuFGA", "4HH9hQ"] },
+    ]);
+  });
+
+  it("mixed history, turn-level FIRST then a whole-slice mark → the slice reads as WHOLE-covered", async () => {
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900", oid: "whole" }),
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t1", oid: "turn" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-20-0900", turnIds: null },
+    ]);
+  });
+
+  it("mixed history, whole-slice FIRST then turn-level → still WHOLE-covered, never shrunk back to a list", async () => {
+    h.logCommits.mockResolvedValue([
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t1", oid: "turn" }),
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900", oid: "whole" }),
+      // …and a later turn-level mark must NOT shrink it either.
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t2", oid: "turn2" }),
+    ]);
+
+    const coverage = await readReflectionCoverage();
+
+    expect(coverage.covered).toEqual([
+      { sliceId: "2026-10-20-0900", turnIds: null },
+    ]);
+  });
+
+  it("an OLD-format bare `seen: <sliceId>` still covers the WHOLE slice and lifts wholeUpTo", async () => {
     h.logCommits.mockResolvedValue([
       ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721", oid: "s1" }),
     ]);

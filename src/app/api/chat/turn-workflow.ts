@@ -1964,8 +1964,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     cognition: outcome.cognition,
     ...(mergeLine ? { mergeLine } : {}),
     ...(input.burstId ? { burstId: input.burstId } : {}),
-    ...(hk.sealed ? { sealed: hk.sealed } : {}),
-    ...(hk.birth ? { birth: hk.birth } : {}),
     ...(hk.evidenceAttachments ? { attachments: hk.evidenceAttachments } : {}),
     ...(hk.previouslyUpdate ? { previously: hk.previouslyUpdate } : {}),
   };
@@ -1992,6 +1990,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         ...(input.burstId ? { burstId: input.burstId } : {}),
         date: dateAnchor,
         own: turnResult,
+        slicing: input.config.slicing,
+        clientTimezone: input.clientTimezone,
+        modelConfig: input.modelConfig,
         useGithub: input.useGithub,
         useDemo: input.useDemo,
         owner: input.owner,

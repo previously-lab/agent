@@ -113,19 +113,25 @@ export function hasOverlappingParallelSibling(
 }
 
 /**
- * A LIVE summary run for this slice (started by some sibling's tail check,
+ * A LIVE summary run for this batch (started by some sibling's tail check,
  * possibly milliseconds ago — seeded attributes make it visible at creation).
- * The summary workflow's opening step exits silently when one exists.
+ * The summary workflow's opening step exits silently when one exists. Batch
+ * identity: with a burst id, the BURST is the batch (the entry shells differ
+ * across a minute — slice-equality would let two summaries of ONE burst
+ * coexist, one per shell); without one, the legacy same-slice shape.
  */
 export function isLiveParallelSummary(
   run: ParallelRunEntry,
   sliceId: string,
   ownRunId: string,
+  burstId?: string,
 ): boolean {
   if (run.runId === ownRunId) return false;
   if (!isLiveRunStatus(run.status)) return false;
   const attrs = run.attributes;
-  return !!attrs && attrs.role === "summary" && attrs.slice === sliceId;
+  if (!attrs || attrs.role !== "summary") return false;
+  if (burstId) return attrs.burst === burstId;
+  return attrs.slice === sliceId;
 }
 
 /**
@@ -169,12 +175,67 @@ export function isBurstSibling(
 ): boolean {
   if (run.runId === ownRunId) return false;
   const attrs = run.attributes;
-  return (
-    !!attrs &&
-    attrs.slice === sliceId &&
-    typeof attrs.turn === "string" &&
-    attrs.burst === burstId
-  );
+  if (!attrs || typeof attrs.turn !== "string") return false;
+  if (burstId) {
+    // The client-minted burst id IS the batch identity. The `slice`
+    // attribute is the entry beat's TEMPORARY context shell: sends crossing
+    // a minute mint different shell ids (0837 / 0838), and keying the batch
+    // on the shell splits ONE burst into several "each-unique" batches — the
+    // real-machine double summary (two turns of burst ead59415, shells
+    // 0837/0838, each thinking itself the burst's only member). The landing
+    // slice is the summary stream's judgment (v0.42 §1/§2), never the key.
+    return attrs.burst === burstId;
+  }
+  // No burst id (legacy client): the overlap window falls back to the
+  // same-slice shape — the original three-condition check, unchanged.
+  return attrs.slice === sliceId && attrs.burst === burstId;
+}
+
+/**
+ * Should THIS run yield because a LATER-CREATED run exists? v0.42's
+ * double-summary fix: two survivors of one burst can pass the live-check in
+ * the same registry window (both completed within milliseconds of each
+ * other) and both would start a summary. The tiebreak is creation order:
+ * the batch's YOUNGEST run is its last survivor — anyone older yields to
+ * it, whether the younger is still live or just completed.
+ *
+ * ORDER KEY: the registry's `createdAt` when the backend provides it. When
+ * it does NOT (the local world drops `createdAt` for COMPLETED runs — the
+ * exact moment the rule matters most), the runId stands in: these ids are
+ * `wrun_<ULID>`, and a ULID encodes its timestamp in the leading characters
+ * with the same lexicographic order as creation time (time-ordered,
+ * k-sortable by design), so same-prefix runIds compare chronologically.
+ * Prerequisite: the ids share the `wrun_` prefix and the world's id scheme
+ * stays ULID-based — anything else is unreadable order and never yields a
+ * verdict (宁多勿丢 — the summary side's dedupe absorbs the overlap).
+ */
+export function hasLaterCreatedRun(
+  runs: ParallelRunEntry[],
+  candidates: ParallelRunEntry[],
+  ownRunId: string,
+): boolean {
+  /** ms since epoch when the registry says; the `wrun_` runId as the ULID
+   *  fallback; null = no order readable from this side. */
+  const orderKey = (
+    runId: string,
+    createdAt: Date | string | null | undefined,
+  ): number | string | null => {
+    const ms = toEpochMs(createdAt);
+    if (ms != null) return ms;
+    return runId.startsWith("wrun_") ? runId : null;
+  };
+  const own = runs.find((r) => r.runId === ownRunId);
+  const ownKey = orderKey(ownRunId, own?.createdAt);
+  if (ownKey === null) return false;
+  return candidates.some((r) => {
+    const key = orderKey(r.runId, r.createdAt);
+    if (key === null) return false;
+    // Only same-kind keys compare: timestamp vs timestamp, runId vs runId —
+    // a time and an id have no common order.
+    if (typeof ownKey === "number" && typeof key === "number") return key > ownKey;
+    if (typeof ownKey === "string" && typeof key === "string") return key > ownKey;
+    return false;
+  });
 }
 
 /**
@@ -183,7 +244,11 @@ export function isBurstSibling(
  * change the picture), and at least one burst sibling must exist (a solo turn
  * never merges). (The v0.38 writer-dedupe leg retired with the writer —
  * v0.42: a double-fired summary is absorbed by the summary run's own opening
- * dedupe, isLiveParallelSummary.) Pure — the registry read stays in the step.
+ * dedupe, isLiveParallelSummary.) The v0.42 double-summary fix: the burst's
+ * YOUNGEST run is its last survivor — an OLDER run yields to any
+ * later-created burst sibling (live or just completed), because two
+ * survivors passing the live-check in the same registry window would
+ * otherwise both start a summary and write the batch twice.
  */
 export function isLastBurstTurn(
   runs: ParallelRunEntry[],
@@ -212,6 +277,16 @@ export function isLastBurstTurn(
     // sending burst ids — v0.42 review should-fix 4. The merge decision
     // upstream degrades gracefully: no siblings → no replies → no line.)
     return true;
+  }
+  // v0.42 double-summary fix: yield to any LATER-CREATED burst sibling.
+  if (
+    hasLaterCreatedRun(
+      runs,
+      runs.filter((r) => isBurstSibling(r, sliceId, burstId, ownRunId)),
+      ownRunId,
+    )
+  ) {
+    return false;
   }
   return true;
 }
