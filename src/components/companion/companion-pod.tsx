@@ -888,7 +888,14 @@ export function CompanionPod({
   return (
     <div
       data-companion-pod-root
-      className="pointer-events-none fixed right-2 z-40 flex flex-col items-end md:right-4 companion-pod-root"
+      // z-[51]: the fullscreen conversation takes z-50 and is mounted AFTER
+      // this subtree, so an equal z loses the tie and the pod disappears
+      // behind the chat. One step above keeps the pod reachable at every
+      // tier; the panel itself never goes this high, so a portaled dialog
+      // still paints over the conversation (the fault that note records).
+      // No z-token exists between 50 and the next step, hence the arbitrary
+      // value; it is the single justified exception here.
+      className="pointer-events-none fixed right-2 z-[51] flex flex-col items-end md:right-4 companion-pod-root"
     >
       <button
         type="button"
