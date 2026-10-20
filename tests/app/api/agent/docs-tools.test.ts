@@ -77,7 +77,6 @@ import {
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
-  readRawBackend,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
 import {
@@ -403,18 +402,18 @@ describe("GitHub backend routing (cached reads)", () => {
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 
-  it("readRawBackend defaults to the cached layer; opts.fresh stays direct", async () => {
-    const ctx = makeGithubCtx("2026-09-10-1000");
-
-    const cached = await readRawBackend(ctx, CORE_PATH);
-    expect(cached).toBe(CORE_RAW);
-    expect(githubReadFileViaTree).toHaveBeenCalledWith(CORE_PATH, "mem", "me", undefined);
+  it("recallRead reads the file through the cached tree layer, never the direct read", async () => {
+    const out = await recallReadExecute(
+      { ref: "records/2026-09-04-2130" },
+      opts(makeGithubCtx("2026-09-10-1000")),
+    );
+    expect(out).toContain("我想换手机");
+    expect(githubReadFileViaTree).toHaveBeenCalledWith(
+      CORE_PATH,
+      "mem",
+      "me",
+      undefined,
+    );
     expect(githubReadFile).not.toHaveBeenCalled();
-
-    const fresh = await readRawBackend(ctx, CORE_PATH, { fresh: true });
-    expect(fresh).toBe(CORE_RAW);
-    expect(githubReadFile).toHaveBeenCalledTimes(1);
-    // The fresh read does NOT add another cached-layer call.
-    expect(githubReadFileViaTree).toHaveBeenCalledTimes(1);
   });
 });

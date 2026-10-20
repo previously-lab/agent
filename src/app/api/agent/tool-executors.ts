@@ -222,16 +222,18 @@ function emitToolProgress(
  * zero per-file API calls on a warm instance instead of N direct reads. The
  * recall surface only ever reads history (committed slices), so staleness is
  * bounded by the tree TTL; `opts.fresh` keeps the direct per-file read for a
- * caller that must see the bytes on the other side NOW (same contract as
- * io-helpers' `fsReadFile`).
+ * caller that must see the bytes on the other side NOW.
  */
-export async function readRawBackend(
+async function readRawBackend(
   ctx: ToolContext,
   path: string,
   opts?: { fresh?: boolean },
 ): Promise<string> {
   if (ctx.useDemo) return readFileDemo(path);
   if (ctx.useGithub) {
+    // The recall surface only reads history (committed slices), so the tree's
+    // TTL is the only staleness bound — `fresh` stays available for a caller
+    // that must see the bytes on the other side of a write.
     return opts?.fresh
       ? readFile(path, ctx.repo, ctx.owner, opts)
       : readFileViaTree(path, ctx.repo, ctx.owner, opts);
