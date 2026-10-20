@@ -52,6 +52,15 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 - Where the discussion is silent, write it down as 待裁决 and ask. Do not pick a default; do not present an inference as a decision.
 - Design docs record *decisions with their source* and *open points*, not the author's preferred shape. A doc that reads as settled while it encodes an inference is worse than no doc.
 
+## Verification must not cost the owner money (mandated 2026-10-21)
+
+**Never verify a change by calling a paid model API from a local test or probe.** The owner pays per token; a "quick real run" to look at a screen spends his money and is not more truthful than a fixture.
+
+- Unit / integration tests with a mocked model are the default proof.
+- Visual checks use the isolated kernel with **seeded fixtures or a mocked stream**, never a live turn.
+- The agent e2e in `tests/e2e/agent-flow.spec.ts` is blacklisted for this exact reason; re-enabling it needs the owner's explicit go-ahead and a cheap, non-billable channel.
+- If a behaviour genuinely cannot be shown without a live call, say so and ask — do not run it first.
+
 ## Constraints
 
 - Agent tools operate on whitelisted paths only: `memory/`, `tasks/`, `sessions/`
