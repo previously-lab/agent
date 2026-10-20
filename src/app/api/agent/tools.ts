@@ -183,12 +183,17 @@ export const chatTools = {
       "name, e.g. category 'events', name '换手机'), a self document " +
       "(category 'self': 'search', 'thinkdeep', … or the reserved bare file " +
       "'agenda'), a slice by id (category 'records' or 'timeline', " +
-      "'2026-10-14-1836' — or a day '2026-10-14' for timeline). " +
+      "'2026-10-14-1836' — or a day '2026-10-14' for timeline). Give the " +
+      "name as you remember it — approximate names (a missing space, " +
+      "full/half-width punctuation, letter case) resolve automatically, " +
+      "and an approximate hit tells you the stored name it matched. " +
       "FIXED result wording: a hit opens `The 1 most recent {category} " +
-      "entries:`; a miss opens `Nothing named \"{name}\" exists in " +
-      "{category}. Closest matches: …` (or `…and nothing similar.`) — a " +
-      "miss is NOT proof of absence; check the near misses before telling " +
-      "the user anything is missing. Then recallRead(ref) for the content.",
+      "entries:`; an approximate hit appends `(matched the near-name " +
+      "\"{stored name}\" — that is the stored name)`; a miss opens " +
+      "`Nothing named \"{name}\" exists in {category}. Closest matches: …` " +
+      "(or `…and nothing similar.`) — a miss is NOT proof of absence; " +
+      "check the near matches before telling the user anything is " +
+      "missing. Then recallRead(ref) for the content.",
     inputSchema: z.object({
       category: z
         .enum(RECALL_CATEGORIES)
@@ -198,7 +203,8 @@ export const chatTools = {
         .min(1)
         .describe(
           "Case name / self document name ('agenda' included) / slice id " +
-          "(YYYY-MM-DD-HHMM) or day (YYYY-MM-DD for timeline).",
+          "(YYYY-MM-DD-HHMM) or day (YYYY-MM-DD for timeline) — as you " +
+          "remember it; near names resolve automatically.",
         ),
     }),
     contextSchema: toolContextSchema,
@@ -285,10 +291,12 @@ export const chatTools = {
   // ④ Continue reading — the "出处" verb: entries cite refs, refs read here.
   recallRead: tool({
     description:
-      "Continue reading an entry — pass the `ref` from any recall result, " +
-      "exactly as given (e.g. 'events/换手机', 'research/手机调研/" +
+      "Continue reading an entry — pass the `ref` from any recall result " +
+      "(e.g. 'events/换手机', 'research/手机调研/" +
       "2026-09-08-报价篇', 'self/agenda', 'people/user/profile', " +
-      "'records/2026-10-14-1836'). Case refs return the whole document; the " +
+      "'records/2026-10-14-1836'). An approximate name in the ref also " +
+      "resolves — the result opens by telling you which stored name it " +
+      "matched. Case refs return the whole document; the " +
       "records ref returns that conversation's core record — the ONLY " +
       "source for specific facts (numbers, dates, quotes, promises): read " +
       "it BEFORE answering from memory, and prefer a `range` over a full " +
@@ -299,17 +307,21 @@ export const chatTools = {
       "'turns' by 0-based index, 'date' turns after an ISO timestamp, " +
       "'search' keywords (matched turns + one turn of context; a miss " +
       "returns the full slice with a note), 'lines' a 1-indexed line range " +
-      "like a code file. FIXED result wording: an unresolvable ref returns " +
-      "`Nothing named \"{ref}\" exists in memory — and nothing similar.`; a " +
-      "read failure returns `This could not be read right now (…). That is " +
-      "a read failure, not absence — it may still exist.` — never report " +
-      "either as the user not having remembered something.",
+      "like a code file. FIXED result wording: an approximate match " +
+      "opens `(matched the near-name \"{stored ref}\" — read it under " +
+      "that stored name)`; an unresolvable ref returns `Nothing named " +
+      "\"{ref}\" exists in memory. Closest matches: …` (or `…and nothing " +
+      "similar.`); a read failure returns `This could not be read right " +
+      "now (…). That is a read failure, not absence — it may still " +
+      "exist.` — never report either as the user not having remembered " +
+      "something.",
     inputSchema: z.object({
       ref: z
         .string()
         .min(1)
         .describe(
-          "The entry ref, copied verbatim from a recall result.",
+          "The entry ref from any recall result — an approximate name " +
+          "also resolves; the result tells you which stored name it matched.",
         ),
       part: z
         .enum(["core", "agent", "previously"])

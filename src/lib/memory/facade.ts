@@ -111,6 +111,11 @@ export type RecallResult =
       pastEnd?: boolean;
       /** Total matching entries in scope (search only: scanned ≠ total). */
       total?: number;
+      /**
+       * recallFind only: the hit was adopted by approximate name matching —
+       * this is the stored (true) name the query resolved to.
+       */
+      matchedName?: string;
     }
   | { kind: "fallback"; reason: "no_match"; entries: MemoryEntry[] }
   | { kind: "empty" }
@@ -119,8 +124,14 @@ export type RecallResult =
 
 /** The read verb's own outcome union. */
 export type RecallReadResult =
-  | { kind: "content"; content: string; path: string }
-  | { kind: "not_found" }
+  | {
+      kind: "content";
+      content: string;
+      path: string;
+      /** The ref actually read when it was resolved approximately. */
+      matchedRef?: string;
+    }
+  | { kind: "not_found"; nearMisses?: MemoryEntry[] }
   | { kind: "unavailable"; note: string };
 
 // ─── Defaults and caps (v0.36 §2 / §5, ruling #4) ─────────────────────────
@@ -632,6 +643,145 @@ function foldName(s: string): string {
   return s.normalize("NFKC");
 }
 
+// ─── Approximate name matching (v0.11 — the "只差一个空格" lesson) ─────────
+//
+// The agent recalls names from memory, not by copy-paste: one missing space,
+// one full-width paren, one half-width comma and the verbatim compare dies.
+// So names are normalized before scoring, scored by three bounded signals,
+// and a UNIQUE STRONG candidate is adopted outright (with the true name
+// reported back) instead of returning a miss.
+
+/**
+ * Punctuation the NFKC fold does not touch, mapped to a canonical ASCII
+ * form: 、。… the dash family, and the CJK quote marks. (NFKC itself already
+ * folds the full-width ASCII shapes （），：；！？ to half-width.)
+ */
+const CJK_PUNCT_MAP: Record<string, string> = {
+  "、": ",",
+  "。": ".",
+  "…": ".",
+  "—": "-",
+  "–": "-",
+  "―": "-",
+  "‐": "-",
+  "‑": "-",
+  "‒": "-",
+  "−": "-",
+  "「": '"',
+  "」": '"',
+  "『": '"',
+  "』": '"',
+  "“": '"',
+  "”": '"',
+  "‘": "'",
+  "’": "'",
+};
+
+/**
+ * The name-normalization both sides go through before comparison: NFKC,
+ * case fold, CJK punctuation map, collapse runs of identical punctuation,
+ * strip ALL whitespace. Pure and total.
+ */
+export function normalizeRecallName(s: string): string {
+  const folded = s.normalize("NFKC").toLowerCase();
+  let out = "";
+  for (const ch of folded) out += CJK_PUNCT_MAP[ch] ?? ch;
+  return out
+    .replace(/([\p{P}\p{S}])\1+/gu, "$1")
+    .replace(/\s+/g, "");
+}
+
+/** Levenshtein beyond this length is skipped — bigram dice covers long names. */
+const NAME_SCORE_LEN_CAP = 64;
+
+/** Char-bigram Dice coefficient — the CJK-friendly similarity signal. */
+function bigramDice(a: string, b: string): number {
+  const grams = (s: string): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (let i = 0; i < s.length - 1; i += 1) {
+      const g = s.slice(i, i + 2);
+      m.set(g, (m.get(g) ?? 0) + 1);
+    }
+    return m;
+  };
+  const ga = grams(a);
+  const gb = grams(b);
+  let overlap = 0;
+  for (const [g, n] of ga) overlap += Math.min(n, gb.get(g) ?? 0);
+  const total = a.length - 1 + (b.length - 1);
+  return total > 0 ? (2 * overlap) / total : 0;
+}
+
+/** 1 − (edit distance / max length), two-row DP, bounded by NAME_SCORE_LEN_CAP. */
+function levenshteinRatio(a: string, b: string): number {
+  const n = a.length;
+  const m = b.length;
+  if (Math.max(n, m) > NAME_SCORE_LEN_CAP) return 0;
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i += 1) {
+    const cur: number[] = [i];
+    for (let j = 1; j <= m; j += 1) {
+      cur[j] = Math.min(
+        prev[j]! + 1,
+        cur[j - 1]! + 1,
+        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = cur;
+  }
+  return 1 - prev[m]! / Math.max(n, m);
+}
+
+/**
+ * Similarity of two ALREADY-normalized names in [0, 1] — the strongest of:
+ * substring containment (length-weighted), char-bigram Dice, Levenshtein
+ * ratio. Every signal is O(len²) at worst and length-capped.
+ */
+export function nameSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  let score = 0;
+  if (a.includes(b) || b.includes(a)) {
+    const short = Math.min(a.length, b.length);
+    const long = Math.max(a.length, b.length);
+    score = 0.55 + 0.45 * (short / long);
+  }
+  return Math.max(score, bigramDice(a, b), levenshteinRatio(a, b));
+}
+
+/** Auto-adopt floor: the best candidate must reach this score… */
+const NAME_MATCH_MIN_SCORE = 0.85;
+/** …and lead the runner-up by at least this margin (both "very alike" → ask). */
+const NAME_MATCH_MIN_MARGIN = 0.1;
+/** Below this score a candidate is not even worth listing as a near miss. */
+const NEAR_MISS_MIN_SCORE = 0.3;
+const NEAR_MISS_MAX = 5;
+
+/**
+ * The unique-strong-candidate rule: highest score ≥ NAME_MATCH_MIN_SCORE AND
+ * ahead of the second-highest by ≥ NAME_MATCH_MIN_MARGIN. Returns null when
+ * the field is ambiguous or weak — the caller then reports near misses.
+ */
+function bestUniqueNameMatch<T>(
+  items: readonly T[],
+  scoreOf: (item: T) => number,
+): { item: T; score: number } | null {
+  let best: { item: T; score: number } | null = null;
+  let second = 0;
+  for (const item of items) {
+    const score = scoreOf(item);
+    if (!best || score > best.score) {
+      second = best?.score ?? 0;
+      best = { item, score };
+    } else if (score > second) {
+      second = score;
+    }
+  }
+  if (!best) return null;
+  if (best.score < NAME_MATCH_MIN_SCORE) return null;
+  if (best.score - second < NAME_MATCH_MIN_MARGIN) return null;
+  return best;
+}
+
 export async function recallFind(
   backend: RecallBackend,
   input: RecallFindInput,
@@ -700,22 +850,37 @@ export async function recallFind(
     return { kind: "unavailable", note: `${exactNode.indexPath} could not be read` };
   }
 
-  // Near misses: prefix / substring / NFKC containment over the same scope.
-  const nearNodes = nodes
-    .filter((n) => {
-      const c = n.caseName;
-      const f = foldName(c);
-      return (
-        c.startsWith(name) ||
-        name.startsWith(c) ||
-        c.includes(name) ||
-        f.includes(folded)
-      );
-    })
-    .slice(0, 5);
+  // Fuzzy fallback: normalized-name scoring over the same scope. A unique
+  // strong candidate is adopted outright (the true name rides the result);
+  // otherwise the scored near misses come back sorted best-first — a miss is
+  // still not proof of absence.
+  const queryNorm = normalizeRecallName(name);
+  const scored = nodes
+    .map((node) => ({
+      node,
+      score: nameSimilarity(normalizeRecallName(node.caseName), queryNorm),
+    }))
+    .sort((x, y) => y.score - x.score);
+  const unique = bestUniqueNameMatch(scored, (s) => s.score);
+  if (unique) {
+    const built = await buildCaseEntry(backend, unique.item.node);
+    if (built) {
+      return {
+        kind: "entries",
+        entries: [built.entry],
+        scanned: 1,
+        truncated: false,
+        matchedName: unique.item.node.caseName,
+      };
+    }
+    return { kind: "unavailable", note: `${unique.item.node.indexPath} could not be read` };
+  }
+  const nearNodes = scored
+    .filter((s) => s.score >= NEAR_MISS_MIN_SCORE)
+    .slice(0, NEAR_MISS_MAX);
   const nearMisses: MemoryEntry[] = [];
   let nearFailures = 0;
-  for (const node of nearNodes) {
+  for (const { node } of nearNodes) {
     const built = await buildCaseEntry(backend, node);
     if (built) nearMisses.push(built.entry);
     else nearFailures += 1;
@@ -1079,6 +1244,80 @@ function recallReadCandidates(ref: string): string[] | null {
   return candidates;
 }
 
+/** Probe the ordered candidate paths once: first hit, total absence, or a
+ *  genuine read failure (strictly separate from "not there"). */
+async function readFirstCandidate(
+  backend: RecallBackend,
+  candidates: string[],
+): Promise<
+  | { kind: "content"; content: string; path: string }
+  | { kind: "allAbsent" }
+  | { kind: "unavailable"; note: string }
+> {
+  for (const path of candidates) {
+    try {
+      const content = await backend.readFile(path);
+      return { kind: "content", content, path };
+    } catch (e) {
+      if (!isAbsentError(e)) {
+        return { kind: "unavailable", note: e instanceof Error ? e.message : String(e) };
+      }
+    }
+  }
+  return { kind: "allAbsent" };
+}
+
+/**
+ * Approximate ref resolution (v0.11): the ref parsed but nothing was there —
+ * re-score the case-name component against the category's cases with the
+ * shared normalize+score machinery, and on a unique strong candidate rebuild
+ * the ref with the TRUE on-disk name (research probes both roots, so a
+ * hypotheses case resolves too).
+ */
+async function fuzzyResolveCaseRef(
+  backend: RecallBackend,
+  ref: string,
+): Promise<{
+  matched: { ref: string; candidates: string[] } | null;
+  nearMisses: MemoryEntry[];
+ } | null> {
+  const parsed = parseCaseRef(ref);
+  if (!parsed || parsed.kind === "legacy") return null;
+  const index = buildTreeIndex(await backend.listMemoryFiles());
+  const dirs =
+    parsed.category === "research"
+      ? (["research", "hypotheses"] as const)
+      : ([parsed.category] as const);
+  const nodes = index.cases.filter(
+    (n) => (dirs as readonly string[]).includes(n.treeDir) && n.indexPath,
+  );
+  const queryNorm = normalizeRecallName(parsed.caseName);
+  const scored = nodes
+    .map((node) => ({
+      node,
+      score: nameSimilarity(normalizeRecallName(node.caseName), queryNorm),
+    }))
+    .sort((x, y) => y.score - x.score);
+  const unique = bestUniqueNameMatch(scored, (s) => s.score);
+  let matched: { ref: string; candidates: string[] } | null = null;
+  if (unique) {
+    const rebuilt =
+      parsed.kind === "case"
+        ? `${parsed.category}/${unique.item.node.caseName}`
+        : `${parsed.category}/${unique.item.node.caseName}/${parsed.pieceFileName.replace(/\.md$/, "")}`;
+    const candidates = recallReadCandidates(rebuilt);
+    matched = candidates ? { ref: rebuilt, candidates } : null;
+  }
+  const nearMisses: MemoryEntry[] = [];
+  for (const { node } of scored
+    .filter((s) => s.score >= NEAR_MISS_MIN_SCORE)
+    .slice(0, NEAR_MISS_MAX)) {
+    const built = await buildCaseEntry(backend, node);
+    if (built) nearMisses.push(built.entry);
+  }
+  return { matched, nearMisses };
+}
+
 export async function recallRead(
   backend: RecallBackend,
   input: RecallReadInput,
@@ -1125,18 +1364,34 @@ export async function recallRead(
 
   const candidates = recallReadCandidates(ref);
   if (!candidates) return { kind: "not_found" };
-  let lastError: unknown = null;
-  for (const path of candidates) {
-    try {
-      const content = await backend.readFile(path);
-      return { kind: "content", content, path };
-    } catch (e) {
-      lastError = e;
-      if (!isAbsentError(e)) return { kind: "unavailable", note: e instanceof Error ? e.message : String(e) };
-    }
+  const direct = await readFirstCandidate(backend, candidates);
+  if (direct.kind === "content") {
+    return { kind: "content", content: direct.content, path: direct.path };
   }
-  void lastError;
-  return { kind: "not_found" };
+  if (direct.kind === "unavailable") return direct;
+
+  // Exact resolution missed every candidate — approximate the case-name
+  // component with the shared normalize+score machinery. A unique strong
+  // candidate is read as-is (the true ref rides the result for the render
+  // note); otherwise the near misses come back sorted best-first.
+  const fuzzy = await fuzzyResolveCaseRef(backend, ref);
+  if (!fuzzy) return { kind: "not_found" };
+  if (fuzzy.matched) {
+    const retry = await readFirstCandidate(backend, fuzzy.matched.candidates);
+    if (retry.kind === "content") {
+      return {
+        kind: "content",
+        content: retry.content,
+        path: retry.path,
+        matchedRef: fuzzy.matched.ref,
+      };
+    }
+    if (retry.kind === "unavailable") return retry;
+    // the adopted candidate vanished mid-flight — fall through to near misses
+  }
+  return fuzzy.nearMisses.length > 0
+    ? { kind: "not_found", nearMisses: fuzzy.nearMisses }
+    : { kind: "not_found" };
 }
 
 async function readBareFile(backend: RecallBackend, path: string): Promise<RecallReadResult> {
@@ -1195,7 +1450,10 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
           ? `\nShowing ${result.entries.length} from offset ${result.offset} — ` +
             `pass offset=${result.offset + result.entries.length} for older ones.`
           : `\nShowing the newest ${meta.limit ?? result.entries.length} of ${result.scanned} scanned — narrow by date or add keywords for the older ones.`;
-      return lines ? `${head}\n${lines}${note}` : `${head}${note}`;
+      const matched = result.matchedName
+        ? `\n(matched the near-name "${result.matchedName}" — that is the stored name)`
+        : "";
+      return lines ? `${head}\n${lines}${note}${matched}` : `${head}${note}${matched}`;
     }
     case "fallback": {
       const head = `Nothing matches "${meta.query ?? ""}". Here are the ${result.entries.length} most recent entries instead:`;
@@ -1218,9 +1476,15 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
 export function renderRecallReadResult(result: RecallReadResult, ref: string): string {
   switch (result.kind) {
     case "content":
-      return result.content;
-    case "not_found":
-      return `Nothing named "${ref}" exists in memory — and nothing similar.`;
+      return result.matchedRef
+        ? `(matched the near-name "${result.matchedRef}" — read it under that stored name)\n\n${result.content}`
+        : result.content;
+    case "not_found": {
+      const near = result.nearMisses?.map((e) => e.ref) ?? [];
+      return near.length > 0
+        ? `Nothing named "${ref}" exists in memory. Closest matches: ${near.join(", ")}.`
+        : `Nothing named "${ref}" exists in memory — and nothing similar.`;
+    }
     case "unavailable":
       return `This could not be read right now (${result.note}). That is a read failure, not absence — it may still exist.`;
   }

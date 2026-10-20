@@ -653,3 +653,162 @@ describe("sliceHeadText", () => {
     expect(head).not.toContain("填充行 60");
   });
 });
+
+// ─── Approximate name matching (v0.11 — 只差一个空格的真机教训) ─────────────
+
+const FUZZY_FILES: Record<string, string> = {
+  // the real-machine case: stored with a space inside the full-width parens
+  "memory/research/厄尔尼诺对我国天气的影响（2026 年秋冬）/index.md": `---
+opened: 2026-10-01
+updated: 2026-10-01T09:00:00.000Z
+---
+
+厄尔尼诺与东亚冬季风偏弱。
+`,
+  // a near-twin of the stored name — the "two very alike" ambiguity probe
+  "memory/research/厄尔尼诺对我国天气的影响（2026 年秋冬报告）/index.md": `---
+opened: 2026-10-02
+updated: 2026-10-02T09:00:00.000Z
+---
+
+跟进报告版。
+`,
+  // CJK dashes + full-width parens + the 、 enumerator
+  "memory/events/周末——爬山（待定）/index.md": `---
+opened: 2026-09-20
+updated: 2026-09-20T09:00:00.000Z
+---
+
+周末爬山计划。
+`,
+  "memory/tasks/买牛奶、鸡蛋/index.md": `---
+opened: 2026-09-21
+updated: 2026-09-21T09:00:00.000Z
+---
+
+购物清单。
+`,
+  // an English name — the case-fold probe
+  "memory/things/iPhone 选购备忘录/index.md": `---
+opened: 2026-09-22
+updated: 2026-09-22T09:00:00.000Z
+---
+
+大小写不敏感。
+`,
+};
+
+describe("approximate name matching (recallFind)", () => {
+  const fuzzyBackend = () => makeBackend(FUZZY_FILES);
+  // the 报告 twin excluded — the "one strong candidate" scenario
+  const soloBackend = () =>
+    makeBackend(
+      Object.fromEntries(
+        Object.entries(FUZZY_FILES).filter(
+          ([p]) => !p.includes("年秋冬报告"),
+        ),
+      ),
+    );
+
+  it("adopts a unique strong candidate that differs only by a space (the real-machine case)", async () => {
+    const r = await recallFind(soloBackend(), {
+      category: "research",
+      name: "厄尔尼诺对我国天气的影响（2026年秋冬）",
+    });
+    if (r.kind !== "entries") throw new Error(`expected entries, got ${r.kind}`);
+    expect(r.entries[0]!.ref).toBe("research/厄尔尼诺对我国天气的影响（2026 年秋冬）");
+    expect(r.matchedName).toBe("厄尔尼诺对我国天气的影响（2026 年秋冬）");
+    const text = renderRecallResult(r, { category: "research", name: "厄尔尼诺对我国天气的影响（2026年秋冬）" });
+    expect(text).toContain('(matched the near-name "厄尔尼诺对我国天气的影响（2026 年秋冬）"');
+  });
+
+  it("adopts across full/half-width parens, CJK dashes, and the 、 enumerator", async () => {
+    const dash = await recallFind(fuzzyBackend(), {
+      category: "events",
+      name: "周末--爬山(待定)",
+    });
+    if (dash.kind !== "entries") throw new Error(`expected entries, got ${dash.kind}`);
+    expect(dash.entries[0]!.ref).toBe("events/周末——爬山（待定）");
+    const comma = await recallFind(fuzzyBackend(), {
+      category: "tasks",
+      name: "买牛奶,鸡蛋",
+    });
+    if (comma.kind !== "entries") throw new Error(`expected entries, got ${comma.kind}`);
+    expect(comma.entries[0]!.ref).toBe("tasks/买牛奶、鸡蛋");
+  });
+
+  it("adopts across letter case (English name)", async () => {
+    const r = await recallFind(fuzzyBackend(), {
+      category: "things",
+      name: "iphone 选购备忘录",
+    });
+    if (r.kind !== "entries") throw new Error(`expected entries, got ${r.kind}`);
+    expect(r.entries[0]!.ref).toBe("things/iPhone 选购备忘录");
+  });
+
+  it("does NOT adopt when two candidates are both very alike — near misses sorted best-first", async () => {
+    const r = await recallFind(fuzzyBackend(), {
+      category: "research",
+      name: "厄尔尼诺对我国天气的影响（2026年秋冬）",
+    });
+    // The base name scores 1.0, the 报告 twin ~0.96 — margin < 0.1, so the
+    // field is ambiguous: no adoption, both come back as scored near misses.
+    if (r.kind !== "not_found") throw new Error(`expected not_found, got ${r.kind}`);
+    expect(r.nearMisses.map((e) => e.ref)).toEqual([
+      "research/厄尔尼诺对我国天气的影响（2026 年秋冬）",
+      "research/厄尔尼诺对我国天气的影响（2026 年秋冬报告）",
+    ]);
+  });
+
+  it("returns not_found with an empty near-miss list for an unrelated name", async () => {
+    const r = await recallFind(fuzzyBackend(), { category: "research", name: "量子引力波探测" });
+    expect(r).toEqual({ kind: "not_found", nearMisses: [] });
+  });
+
+  it("exact matches still win verbatim — regression (no matchedName attached)", async () => {
+    const r = await recallFind(fuzzyBackend(), {
+      category: "events",
+      name: "周末——爬山（待定）",
+    });
+    if (r.kind !== "entries") throw new Error(`expected entries, got ${r.kind}`);
+    expect(r.matchedName).toBeUndefined();
+    expect(renderRecallResult(r, { category: "events" })).not.toContain("matched the near-name");
+  });
+});
+
+describe("approximate name matching (recallRead)", () => {
+  const fuzzyBackend = () => makeBackend(FUZZY_FILES);
+  // the 报告 twin excluded — the "one strong candidate" scenario
+  const soloBackend = () =>
+    makeBackend(
+      Object.fromEntries(
+        Object.entries(FUZZY_FILES).filter(
+          ([p]) => !p.includes("年秋冬报告"),
+        ),
+      ),
+    );
+
+  it("resolves an approximate ref and reads it, reporting the stored ref", async () => {
+    const r = await recallRead(soloBackend(), {
+      ref: "research/厄尔尼诺对我国天气的影响（2026年秋冬）",
+    });
+    if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
+    expect(r.content).toContain("厄尔尼诺与东亚冬季风偏弱。");
+    expect(r.matchedRef).toBe("research/厄尔尼诺对我国天气的影响（2026 年秋冬）");
+    const text = renderRecallReadResult(r, "research/厄尔尼诺对我国天气的影响（2026年秋冬）");
+    expect(text.startsWith('(matched the near-name "research/厄尔尼诺对我国天气的影响（2026 年秋冬）"')).toBe(true);
+  });
+
+  it("an ambiguous approximate ref returns not_found with scored near misses", async () => {
+    const r = await recallRead(fuzzyBackend(), {
+      ref: "research/厄尔尼诺对我国天气的影响（2026年冬）",
+    });
+    if (r.kind !== "not_found") throw new Error(`expected not_found, got ${r.kind}`);
+    const refs = r.nearMisses?.map((e) => e.ref) ?? [];
+    expect(refs.length).toBeGreaterThan(0);
+    // best-first: the shorter base name outranks the 报告 twin
+    expect(refs[0]).toBe("research/厄尔尼诺对我国天气的影响（2026 年秋冬）");
+    const text = renderRecallReadResult(r, "research/厄尔尼诺对我国天气的影响（2026年冬）");
+    expect(text).toContain("Closest matches:");
+  });
+});
