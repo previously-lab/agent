@@ -63,6 +63,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
+import { createPortal } from "react-dom";
 import { CircleAlert, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
@@ -588,7 +589,7 @@ function MemoryDebugSection({
   );
 }
 
-export function CompanionPod({
+function CompanionPodBody({
   target,
   onDismiss,
   onRetry,
@@ -1136,4 +1137,22 @@ export function CompanionPod({
       </AnimatePresence>
     </div>
   );
+}
+
+/**
+ * The pod is PORTALED to <body> (2026-10-20). It used to live inside the
+ * shell subtree, and that subtree carries its own stacking context: a
+ * z-index on the pod only ordered it among its own siblings, so the
+ * fullscreen conversation (z-50, later in the shell) covered it however high
+ * that number went. Mounted at the end of <body> it competes on the page's
+ * own scale, and DOM order gives it the tie against the conversation panel —
+ * while a dialog, portaled later still, keeps painting over it.
+ */
+export function CompanionPod(
+  props: React.ComponentProps<typeof CompanionPodBody>,
+) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  return createPortal(<CompanionPodBody {...props} />, document.body);
 }
