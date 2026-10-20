@@ -61,6 +61,15 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 - The agent e2e in `tests/e2e/agent-flow.spec.ts` is blacklisted for this exact reason; re-enabling it needs the owner's explicit go-ahead and a cheap, non-billable channel.
 - If a behaviour genuinely cannot be shown without a live call, say so and ask — do not run it first.
 
+## The workflow sandbox has a static boundary — respect it, do not disable it (learned 2026-10-22)
+
+The Workflow 5 bundler analyses **what is reachable from an entry** and tree-shakes the rest. A `"use step"` module (`src/app/api/agent/tool-executors.ts`, `src/app/api/chat/steps.ts`, …) is compiled twice: the step bodies go to the step runtime, and everything still reachable goes into the deterministic sandbox, where Node built-ins and anything depending on them (`fs`, `path`, `node:async_hooks`, `next`/`unstable_cache`, …) are rejected at build time.
+
+- **Never `export` a helper from a step module just so a unit test can call it.** A private helper is dead weight in the sandbox and gets tree-shaken; an exported one is reachable, so its whole transitive graph is compiled into the sandbox and the build fails with `node-module-in-workflow`. Assert the behaviour through the public step executor instead (`recallReadExecute`, not `readRawBackend` — that exact export cost a broken production deploy on 2026-10-21).
+- A new import in a step module is a graph change, not a local edit: check what it drags in (`@/lib/tools/readFile`, `local-fs`, `demo-fs`, `whitelist`, `data-cache` all reach Node modules).
+- Do not "fix" a violation by silencing it — no `serverExternalPackages` entries, no try/catch around the require, no downgrading to Workflow v4 (v5 is required for region selection). The remedy is to keep the offending code out of the sandbox graph: an independent module, or a `"use step"` boundary of its own.
+- **`pnpm build` is part of the acceptance gate for any change under `src/app/api/**`, `src/lib/{tools,episodic,cache,memory}/**`, or anything a workflow imports.** `tsc --noEmit`, `pnpm lint` and `pnpm test` are all blind to this boundary — the 2026-10-21 regression passed every one of them.
+
 ## Constraints
 
 - Agent tools operate on whitelisted paths only: `memory/`, `tasks/`, `sessions/`
