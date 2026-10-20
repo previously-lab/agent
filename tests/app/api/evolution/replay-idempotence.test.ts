@@ -177,7 +177,7 @@ beforeEach(() => {
 });
 
 describe("HQ replay idempotence — same closed slice processed twice (D-10)", () => {
-  it("archiveSliceCases twice: the second pass is an empty spin and the first pass's product stays byte-identical", async () => {
+  it("archiveRound twice: the second pass is an empty spin and the first pass's product stays byte-identical", async () => {
     // The librarian pass mock behaves writer-is-reader: it writes the case the
     // first time it sees the slice and skips it as already-covered on replay.
     passes.runLibrarianPass.mockImplementation(async () => {
@@ -197,7 +197,7 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
     });
 
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
+      const r = await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
       expect(r).toContain("queued (lands when this round commits):");
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });

@@ -100,10 +100,12 @@
         "recallFind": "正在记忆里定位…",
         "recallSearch": "正在搜索记忆…",
         "recallRead": "正在读取记忆…",
+        "recallSince": "正在回忆变更…",
         "name": {
           "recallRecent": "回忆最近",
           "recallFind": "定位",
-          "recallSearch": "搜索记忆"
+          "recallSearch": "搜索记忆",
+          "recallSince": "回忆变更"
         },
         "nameRead": "读取",
         "scope": {
@@ -137,7 +139,13 @@
         "pastEndBody": "没有更多条目了 — offset {offset} 已越过末尾，此范围共 {total} 条，最新在前。空页不等于没有。",
         "readFailureBody": "现在读不到这条内容 — 这是读取失败，不是不存在，它可能还在。",
         "pageOffset": "还有更旧的条目（从 offset {offset} 继续）。",
-        "pageCapped": "仅显示最新 {shown} 条（共扫描 {scanned} 条）— 缩小日期范围或增加关键词可以看到更早的。"
+        "pageCapped": "仅显示最新 {shown} 条（共扫描 {scanned} 条）— 缩小日期范围或增加关键词可以看到更早的。",
+        "matchedName": "按近名「{name}」命中 — 这是它存放时用的名字。",
+        "nearNameBanner": "按近名「{name}」读取 — 这是它存放时用的名字。",
+        "summaryChanges": "自 {since} 起的变更 · {count} 条",
+        "changesEmpty": "{since} 到 {until} 之间没有任何变更 — 提交历史在此窗口为空。",
+        "changesIncomplete": "结果不完整 — 提交历史扫描被截断，之外可能还有变更。",
+        "changesCursor": "仅显示最新条目 — 传 cursor {cursor} 可看更早的变更。"
       },
       "writeCase": {
         "verb": "写入档案",
@@ -610,6 +618,7 @@
     "hqRuns": "在跑",
     "hqRunsUnavailable": "运行表不可用（运行时接口）——反思行照常。",
     "hqRunRow": "{role} · {page}{turn}{burst} · {age}",
+    "hqRunRowBurst": "同批 {suffix}",
     "hqTookOver": "接管过一条卡住的后台整理",
     "hqStop": "停",
     "hqLoading": "读取中…",

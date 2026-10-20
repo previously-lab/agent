@@ -95,7 +95,18 @@ export function resolveStopTargets(
   return [row.runId];
 }
 
-// ─── 面板降级旁注 (§6 — 看不到 ≠ 没有) ──────────────────────────────────────
+// ─── 批次标签 (burst 的人话显示) ────────────────────────────────────────────
+
+/**
+ * The burst id's READABLE suffix for the panel — the user-facing label shows
+ * 同批 <suffix>, never the raw id: a `burst-` prefix is stripped, and a long
+ * id (a UUID in production) collapses to its last 4 chars. The internal
+ * field stays `burst`; only the display goes through here.
+ */
+export function burstDisplaySuffix(burst: string): string {
+  const body = burst.replace(/^burst-/, "");
+  return body.length <= 4 ? body : body.slice(-4);
+}
 
 /**
  * The 人话旁注 for a layer that could NOT be read — null for a layer that

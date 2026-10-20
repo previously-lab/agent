@@ -118,7 +118,7 @@ export interface HqOutcome {
   disposition?: "completed" | "superseded";
   /**
    * v0.34 R2 (§4.2): true when an evolution pass truly RAN this round (the
-   * evolveUserModel tool executed, changed or not) — the shell's settle
+   * evolveProfile tool executed, changed or not) — the shell's settle
    * stamps `lastEvolution` with the round's date. Absent = no pass ran.
    */
   evolved?: boolean;
@@ -416,7 +416,7 @@ function buildHqTools(
         "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
         "addPiece: a dated piece (title + body, always allowed). " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
-        "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveUserModel; writes there are rejected. " +
+        "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
         DOC_WRITE_WINDOW_RULE +
         `\n\n${MEMORY_IS_GIT_RULE}`,
@@ -454,11 +454,11 @@ function buildHqTools(
       }),
       execute: async (args) => {
         // people/user/index.md is the USER MODEL — pure prose maintained by
-        // the merged card pass (evolveUserModel), every byte of it injected
+        // the merged card pass (evolveProfile), every byte of it injected
         // into each turn. Routing it through the case machinery would stamp
         // case frontmatter into that prose; refuse mechanically instead.
         if (args.category === "people" && args.caseName === "user") {
-          return "REJECTED: people/user is the user model, not a case — use evolveUserModel (other people/* cases stay legal).";
+          return "REJECTED: people/user is the user model, not a case — use evolveProfile (other people/* cases stay legal).";
         }
         // The runtime category check lives in applyCaseWriteIntent
         // (isCaseCategory throws on an unknown category) — one enforcement point.
@@ -506,7 +506,7 @@ function buildHqTools(
       },
     }),
 
-    archiveSliceCases: tool({
+    archiveRound: tool({
       description:
         "Run the case-writer pass AND the scribe pass over a slice: which cases did this slice touch, " +
         "and which sediment/task markers in its mailbox are still unwritten? " +
@@ -555,7 +555,7 @@ function buildHqTools(
       },
     }),
 
-    evolveUserModel: tool({
+    evolveProfile: tool({
       description:
         "Run the merged card pass (the Previously Agent) over a slice — closed or still open, the pass is told which: " +
         "updates people/user/index.md (card + direction halves) and may rewrite the allowlisted self/ SOPs (search, thinkdeep). " +
@@ -576,7 +576,7 @@ function buildHqTools(
         }
         if (!slice) return `(slice ${sliceId} unreadable — evolve skipped.)`;
         // The round's batch rides the read (v0.37 §5): the direction half may
-        // have been queued by an earlier evolveUserModel THIS round.
+        // have been queued by an earlier evolveProfile THIS round.
         const userModel = await readUserModel(batch).catch(() => null);
         const directionCurrent = userModel?.direction ?? null;
         // HQ owns no turn analysis — the direction half gets the minimal one
@@ -624,7 +624,7 @@ function buildHqTools(
       },
     }),
 
-    researchSliceQuestions: tool({
+    noteQuestions: tool({
       description:
         "Run the doc-research pass over a slice's mailbox: investigates the unanswered question markers " +
         "and writes research/ hypotheses/ cases (hypotheses must carry a falsification condition). " +
@@ -675,7 +675,7 @@ function buildHqTools(
         content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),
       }),
       execute: async ({ agent, content }) => {
-        // Same evolution lock as evolveUserModel above — an SOP rewrite is a
+        // Same evolution lock as evolveProfile above — an SOP rewrite is a
         // whole-file write that must not interleave with a live turn's run.
         await withSliceLock("evolution", () =>
           writeSelfSop(agent, content, batch),
@@ -761,7 +761,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     `This round's material — the turn(s) named below (a slice may still be open); the cursor advances only when the round settles:\n` +
     `${scopeLines}\n\n` +
     (evolutionDue
-      ? `The evolution beat is DUE this round (${evolutionReasons.join(", ")}): run the merged card pass (evolveUserModel) over this material.\n\n`
+      ? `The evolution beat is DUE this round (${evolutionReasons.join(", ")}): run the merged card pass (evolveProfile) over this material.\n\n`
       : "") +
     (agendaLines !== null
       ? `Your agenda — due items ride WITH this round (work each, reschedule it, or consume it via setAgenda):\n${agendaLines}\n\n`

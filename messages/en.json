@@ -100,10 +100,12 @@
         "recallFind": "Locating in memory…",
         "recallSearch": "Searching memory…",
         "recallRead": "Reading from memory…",
+        "recallSince": "Recalling what changed…",
         "name": {
           "recallRecent": "Recalled recent",
           "recallFind": "Located",
-          "recallSearch": "Searched memory"
+          "recallSearch": "Searched memory",
+          "recallSince": "Recalled changes"
         },
         "nameRead": "Read",
         "scope": {
@@ -137,7 +139,13 @@
         "pastEndBody": "No more entries — offset {offset} is past the end; {total} exist in this scope, newest first. An empty page is not absence.",
         "readFailureBody": "This could not be read right now — a read failure, not absence; it may still exist.",
         "pageOffset": "Older entries exist (continue from offset {offset}).",
-        "pageCapped": "Showing the newest {shown} of {scanned} scanned — narrow by date or add keywords for older ones."
+        "pageCapped": "Showing the newest {shown} of {scanned} scanned — narrow by date or add keywords for older ones.",
+        "matchedName": "Matched the near name \"{name}\" — that is its stored name.",
+        "nearNameBanner": "Read under the near name \"{name}\" — that is its stored name.",
+        "summaryChanges": "Changes since {since} · {count} entries",
+        "changesEmpty": "Nothing changed between {since} and {until} — the change log shows nothing in this window.",
+        "changesIncomplete": "Result incomplete — the history scan was truncated; more changes may exist beyond those shown.",
+        "changesCursor": "Showing the newest entries only — pass cursor {cursor} for older changes."
       },
       "writeCase": {
         "verb": "Write case",
@@ -610,6 +618,7 @@
     "hqRuns": "Running now",
     "hqRunsUnavailable": "The activity table is unavailable (platform interface) — the reflection row stands.",
     "hqRunRow": "{role} · {page}{turn}{burst} · {age}",
+    "hqRunRowBurst": "same batch {suffix}",
     "hqTookOver": "rescued a stuck background round",
     "hqStop": "Stop",
     "hqLoading": "Reading…",

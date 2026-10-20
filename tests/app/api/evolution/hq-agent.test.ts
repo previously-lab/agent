@@ -402,9 +402,9 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(raw).toContain("records/2026/08/09/1300");
   });
 
-  it("HQ chooses its own order — evolveUserModel alone, no archive pass", async () => {
+  it("HQ chooses its own order — evolveProfile alone, no archive pass", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "evolveUserModel", {
+      const r = await callTool(opts, "evolveProfile", {
         sliceId: SLICE_ID,
         focus: "①空转；直接复核用户模型。",
       });
@@ -447,7 +447,7 @@ describe("handleBrief (v0.21 §5)", () => {
       turns: [{ timestamp: "t0", role: "user", content: "还在聊" }],
     });
     runSubAgentMock.mockImplementation(async (opts) => {
-      await callTool(opts, "evolveUserModel", { sliceId: SLICE_ID, focus: "living 片复核。" });
+      await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "living 片复核。" });
       return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
     });
 
@@ -463,7 +463,7 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(cardInput.closedSliceId).toBeUndefined();
   });
 
-  it("writeCase refuses people/user — the user model is evolveUserModel's, other people/* stay legal", async () => {
+  it("writeCase refuses people/user — the user model is evolveProfile's, other people/* stay legal", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
       const refused = await callTool(opts, "writeCase", {
         action: "open",
@@ -472,7 +472,7 @@ describe("handleBrief (v0.21 §5)", () => {
         body: "试图往用户模型里写 frontmatter。",
       });
       expect(refused).toContain("REJECTED:");
-      expect(refused).toContain("evolveUserModel");
+      expect(refused).toContain("evolveProfile");
       const legal = await callTool(opts, "writeCase", {
         action: "open",
         category: "people",
@@ -633,7 +633,7 @@ describe("handleBrief (v0.21 §5)", () => {
   it("v0.34 R2 (§4.2): an evolution pass that TRULY ran flags the outcome `evolved` — even when the model changed nothing; an unreadable slice never counts", async () => {
     // changed:false — the pass still RAN, the beat still stamps
     runSubAgentMock.mockImplementation(async (opts) => {
-      await callTool(opts, "evolveUserModel", { sliceId: SLICE_ID, focus: "复核。" });
+      await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "复核。" });
       return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
     });
     let outcome = await handleBrief(DOCKET);
@@ -650,14 +650,14 @@ describe("handleBrief (v0.21 §5)", () => {
     expect("evolved" in outcome).toBe(false);
   });
 
-  it("archiveSliceCases runs the case-writer AND the scribe over the same slice", async () => {
+  it("archiveRound runs the case-writer AND the scribe over the same slice", async () => {
     passes.runScribePass.mockResolvedValue({
       ran: true,
       written: ["tasks/团队on-site/index.md"],
       skipped: [{ id: "t1-2", reason: "illegal case name" }],
     });
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
+      const r = await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
       expect(r).toContain("queued (lands when this round commits): (none)");
       expect(r).toContain("scribe queued (lands when this round commits): tasks/团队on-site/index.md");
       expect(r).toContain("scribe skipped: t1-2 (illegal case name)");
@@ -837,11 +837,11 @@ describe("handleBrief (v0.21 §5)", () => {
 
   it("the three slice passes (archive / evolve / research) refuse a malformed id the same way", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
-      const archive = await callTool(opts, "archiveSliceCases", { sliceId: "../escape" });
+      const archive = await callTool(opts, "archiveRound", { sliceId: "../escape" });
       expect(archive).toContain("rejected");
-      const evolve = await callTool(opts, "evolveUserModel", { sliceId: "../escape", focus: "x" });
+      const evolve = await callTool(opts, "evolveProfile", { sliceId: "../escape", focus: "x" });
       expect(evolve).toContain("rejected");
-      const research = await callTool(opts, "researchSliceQuestions", { sliceId: "../escape" });
+      const research = await callTool(opts, "noteQuestions", { sliceId: "../escape" });
       expect(research).toContain("rejected");
       // The passes (and the evolution lock) never ran — no evolution beat.
       expect(passes.runLibrarianPass).not.toHaveBeenCalled();
@@ -1110,8 +1110,8 @@ describe("the batch-threading mechanical audit (v0.37 §5 — 漏接即红)", ()
 
   it("every HQ read assembly point threads the round's batch", () => {
     // readRound → readSlicePart; readCase → makeCaseReadTool; the four
-    // loadSlice pre-reads (markOrphan / archiveSliceCases / evolveUserModel /
-    // researchSliceQuestions); the user-model read; the card readers.
+    // loadSlice pre-reads (markOrphan / archiveRound / evolveProfile /
+    // noteQuestions); the user-model read; the card readers.
     expect(hqSrc).toContain("readSlicePart(sliceId, part, batch)");
     expect(hqSrc).toContain("makeCaseReadTool(batch)");
     expect(hqSrc).toContain("readUserModel(batch)");
@@ -1153,7 +1153,7 @@ describe("queued vs committed wording + the memory-is-git contract (v0.37 §7-1,
     });
     passes.runScribePass.mockResolvedValue({ ran: true, written: [], skipped: [] });
     runSubAgentMock.mockImplementation(async (opts) => {
-      const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
+      const r = await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
       expect(r).toContain("queued (lands when this round commits): research/手机话题/index.md");
       expect(r).not.toMatch(/^written:/m);
       return { ok: true, report: { actions: [], note: "x" }, text: "" };

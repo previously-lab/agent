@@ -2,7 +2,7 @@
  * Case writers + scribe — the document write path (v0.19 §A.2.3, §B.3, §B.6).
  *
  * THE CASE WRITER (the old librarian re-shaped; the production caller is
- * HQ's `archiveSliceCases` tool, api/evolution/hq-agent.ts): invoked once per
+ * HQ's `archiveRound` tool, api/evolution/hq-agent.ts): invoked once per
  * closed slice, it judges FOR ITSELF whether anything is worth writing — an
  * empty run is a legal outcome (强制触发 ≠ 强制变异; axiom D: no semantic
  * gates). Tags are dead (R2): "which cases did this slice touch" is the
@@ -483,7 +483,7 @@ export function renderManifest(tree: Record<string, string[]>): string {
   return blocks || "(empty manifest — no cases in memory yet)";
 }
 
-// ─── The case-writer pass (driven by HQ's archiveSliceCases tool) ──────────
+// ─── The case-writer pass (driven by HQ's archiveRound tool) ──────────
 
 const caseWriterSchema = z.object({
   cases: z
@@ -573,7 +573,7 @@ export interface LibrarianPassResult {
 }
 
 /**
- * The case-writer pass (production caller: HQ's `archiveSliceCases` tool).
+ * The case-writer pass (production caller: HQ's `archiveRound` tool).
  * The writer judges over the manifest +
  * its own readCase reads which cases the closed slice touched; engineering
  * applies the returned intents through the case write ops under the per-case lock.

@@ -75,6 +75,7 @@ import {
   type PanelRunRow,
 } from "@/lib/chat/hq-status";
 import {
+  burstDisplaySuffix,
   layerDegradationNote,
   reflectionStopTier,
   resolveStopTargets,
@@ -413,7 +414,7 @@ function RunRow({
         {(row.status !== "running" || row.burst) && (
           <div className="font-mono text-[10px] text-muted-foreground/70">
             {row.status}
-            {row.burst ? ` · ${row.burst.slice(0, 8)}` : ""}
+            {row.burst ? ` · ${t("hqRunRowBurst", { suffix: burstDisplaySuffix(row.burst) })}` : ""}
           </div>
         )}
       </div>

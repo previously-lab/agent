@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  burstDisplaySuffix,
   layerDegradationNote,
   reflectionStopTier,
   resolveStopTargets,
@@ -93,6 +94,20 @@ describe("resolveStopTargets — 每档的调用目标 (走既有取消路径)",
   it("停后台反思 targets the reflection run's id; an absent unit yields nothing", () => {
     expect(resolveStopTargets("reflection", row(), [], "wrun-hq")).toEqual(["wrun-hq"]);
     expect(resolveStopTargets("reflection", row(), [], null)).toEqual([]);
+  });
+});
+
+describe("burstDisplaySuffix — 批次标签只露可读后缀", () => {
+  it("a `burst-` prefix is stripped: burst-ab reads ab", () => {
+    expect(burstDisplaySuffix("burst-ab")).toBe("ab");
+  });
+
+  it("a long id (UUID in production) collapses to its last 4 chars", () => {
+    expect(burstDisplaySuffix("3f2a1b9c-7d4e-4a5f-9b1c-2e8a6d4c0f12")).toBe("0f12");
+  });
+
+  it("a short prefix-less id passes through whole", () => {
+    expect(burstDisplaySuffix("b1")).toBe("b1");
   });
 });
 
