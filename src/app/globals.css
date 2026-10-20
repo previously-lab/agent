@@ -86,9 +86,10 @@
 }
 
 :root {
-  /* v0.43 — user decision: back to shadcn/ui's default rounded look; one
-     dial (--radius) still drives every rounded-sm/md/lg/xl. */
-  --radius: 0.625rem;
+  /* v0.43 — user decision: back to shadcn/ui's default rounded look, taken
+     one notch larger (0.75rem); one dial (--radius) still drives every
+     rounded-sm/md/lg/xl. */
+  --radius: 0.75rem;
   --brand: oklch(0.55 0.25 262);
   --brand-50: oklch(0.97 0.02 262);
   --brand-100: oklch(0.935 0.045 262);

@@ -80,10 +80,10 @@ export function NavOverflowMenu() {
         align="end"
         side="bottom"
         sideOffset={8}
-        // The panel is a tool tray: matte, square, hairline-ruled. The class
-        // overrides the primitives' rounded/glass defaults through the same
-        // tailwind-merge the primitives use.
-        className="w-44 rounded-none! bg-tool text-foreground shadow-paper-contact ring-tool-line"
+        // The panel is a tool tray: matte, hairline-ruled, with the
+        // instrument radius. The class overrides the primitives' rounded/glass
+        // defaults through the same tailwind-merge the primitives use.
+        className="w-44 rounded-lg! bg-tool text-foreground shadow-paper-contact ring-tool-line"
       >
         <DropdownMenuGroup>
           {/* Disabled, not hidden: the entry is where the reader left it, and

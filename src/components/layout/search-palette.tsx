@@ -156,13 +156,14 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
         onOpenChange={setOpen}
         title={t("title")}
         description={t("title")}
-        // The palette is a tool tray: matte, square, hairline-ruled — the
-        // overrides merge over the dialog/command primitives' rounded
-        // defaults through the same tailwind-merge the primitives use.
-        className="overflow-hidden rounded-none! border border-tool-line bg-tool p-0 text-foreground shadow-paper-contact ring-0"
+        // The palette is a tool tray: matte, hairline-ruled, with the
+        // instrument radius — the overrides merge over the dialog/command
+        // primitives' rounded defaults through the same tailwind-merge the
+        // primitives use.
+        className="overflow-hidden rounded-lg! border border-tool-line bg-tool p-0 text-foreground shadow-paper-contact ring-0"
       >
         {/* The server does the matching — cmdk's own filter must stay off. */}
-        <Command shouldFilter={false} className="rounded-none! bg-tool text-foreground">
+        <Command shouldFilter={false} className="rounded-lg bg-tool text-foreground">
           <CommandInput
             value={query}
             onValueChange={setQuery}
@@ -192,7 +193,7 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
                   // occupy a row of its own in this stacked layout.
                   // chrome-menu-item: the highlighted row's hairline turns
                   // to ink — the instrument hover, not a grey wash.
-                  className="chrome-menu-item flex-col items-start gap-0.5 rounded-none! py-2 in-data-[slot=dialog-content]:rounded-none! [&>svg]:hidden"
+                  className="chrome-menu-item flex-col items-start gap-0.5 py-2 [&>svg]:hidden"
                 >
                   <span className="flex w-full items-baseline gap-2">
                     <span className="shrink-0 font-mono text-[0.65rem] text-muted-foreground">
