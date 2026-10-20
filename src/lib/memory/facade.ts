@@ -131,8 +131,25 @@ export type RecallReadResult =
       /** The ref actually read when it was resolved approximately. */
       matchedRef?: string;
     }
+  | {
+      /** outline: true — the document's heading skeleton, not its body. */
+      kind: "outline";
+      ref: string;
+      totalLines: number;
+      headings: OutlineHeading[];
+    }
   | { kind: "not_found"; nearMisses?: MemoryEntry[] }
   | { kind: "unavailable"; note: string };
+
+/** One heading span in a document outline (1-based line numbers). */
+export interface OutlineHeading {
+  level: number;
+  title: string;
+  /** First line of the heading's own text (the `# …` line). */
+  from: number;
+  /** Last line of the section under this heading. */
+  to: number;
+}
 
 // ─── Defaults and caps (v0.36 §2 / §5, ruling #4) ─────────────────────────
 
@@ -1178,6 +1195,9 @@ export interface RecallReadInput {
   range?: RecallReadRange;
   /** User-local rendering for slice parts (turn annotation / snapshot banner). */
   timezone?: string;
+  /** true: return the document's heading skeleton instead of its body —
+   *  then fetch the sections you need with range: { type: "lines" }. */
+  outline?: boolean;
 }
 
 /** Apply the five range filters to a slice core — the readSlice protocol. */
@@ -1318,7 +1338,48 @@ async function fuzzyResolveCaseRef(
   return { matched, nearMisses };
 }
 
+/**
+ * Extract a document's heading skeleton. Pure: only `^#{1,6}\s+` lines count;
+ * `#` inside fenced code blocks is not a heading. Line numbers are 1-based;
+ * a heading's `to` is the line before the NEXT heading (any level) or the
+ * end of the document.
+ */
+export function parseDocumentOutline(raw: string): {
+  totalLines: number;
+  headings: OutlineHeading[];
+} {
+  const lines = raw.split("\n");
+  const headings: OutlineHeading[] = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const prev = headings[headings.length - 1];
+    if (prev) prev.to = i; // next heading starts at i+1 → prev section ends at i
+    headings.push({ level: m[1]!.length, title: m[2]!.trim(), from: i + 1, to: lines.length });
+  }
+  return { totalLines: lines.length, headings };
+}
+
 export async function recallRead(
+  backend: RecallBackend,
+  input: RecallReadInput,
+): Promise<RecallReadResult> {
+  const result = await recallReadBody(backend, input);
+  if (input.outline && result.kind === "content") {
+    const { totalLines, headings } = parseDocumentOutline(result.content);
+    return { kind: "outline", ref: input.ref, totalLines, headings };
+  }
+  return result;
+}
+
+async function recallReadBody(
   backend: RecallBackend,
   input: RecallReadInput,
 ): Promise<RecallReadResult> {
@@ -1479,6 +1540,8 @@ export function renderRecallReadResult(result: RecallReadResult, ref: string): s
       return result.matchedRef
         ? `(matched the near-name "${result.matchedRef}" — read it under that stored name)\n\n${result.content}`
         : result.content;
+    case "outline":
+      return renderOutlineResult(result);
     case "not_found": {
       const near = result.nearMisses?.map((e) => e.ref) ?? [];
       return near.length > 0
@@ -1488,4 +1551,24 @@ export function renderRecallReadResult(result: RecallReadResult, ref: string): s
     case "unavailable":
       return `This could not be read right now (${result.note}). That is a read failure, not absence — it may still exist.`;
   }
+}
+
+/** Render a recallRead outline (heading skeleton) with the fixed template. */
+export function renderOutlineResult(
+  result: Extract<RecallReadResult, { kind: "outline" }>,
+): string {
+  if (result.headings.length === 0) {
+    return (
+      `Outline of ${result.ref}: no heading skeleton — this document has no ` +
+      `headings. Read it directly with range: "lines:a-b" (it has ` +
+      `${result.totalLines} lines).`
+    );
+  }
+  const lines = result.headings.map(
+    (h) => `${"  ".repeat(h.level - 1)}L${h.from}-${h.to}  ${h.title}`,
+  );
+  return (
+    `Outline of ${result.ref} (${result.totalLines} lines) — pick a span, ` +
+    `then read it with range: "lines:a-b":\n${lines.join("\n")}`
+  );
 }

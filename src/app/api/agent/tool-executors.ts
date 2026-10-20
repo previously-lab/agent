@@ -380,6 +380,7 @@ export async function recallReadExecute(
     ref: string;
     part?: "core" | "agent" | "previously";
     range?: RecallReadRange;
+    outline?: boolean;
   },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
@@ -398,6 +399,7 @@ export async function recallReadExecute(
     ref,
     ...(input.part ? { part: input.part } : {}),
     ...(input.range ? { range: input.range } : {}),
+    ...(input.outline ? { outline: true } : {}),
     ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
   });
 

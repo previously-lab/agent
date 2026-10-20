@@ -129,6 +129,8 @@
         "summaryPastEnd": "没有更多条目了（共 {total} 条）",
         "summaryReadFailure": "现在读不到 · 这是读取失败",
         "summaryRead": "{reference}",
+        "summaryOutline": "标题骨架 · {reference}",
+        "outlineEmpty": "没有标题骨架 — 直接按行号范围读。",
         "fallbackNote": "关键词「{query}」没有命中 — 以下是该范围最近的条目（回退，不是搜索结果）：",
         "emptyBody": "{scope} 里还没有任何内容 — 这是空范围，不是未命中。",
         "missBody": "没有找到「{name}」— 未命中不等于不存在，先看看这些近似项。",

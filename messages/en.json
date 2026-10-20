@@ -129,6 +129,8 @@
         "summaryPastEnd": "No more entries ({total} total)",
         "summaryReadFailure": "Unreadable right now · read failure",
         "summaryRead": "{reference}",
+        "summaryOutline": "Outline · {reference}",
+        "outlineEmpty": "No headings — read it directly by line range.",
         "fallbackNote": "No matches for \"{query}\" — here are the most recent entries in scope (a fallback, not search results):",
         "emptyBody": "There is nothing in {scope} yet — an empty scope, not a miss.",
         "missBody": "Nothing named \"{name}\" was found — a miss is not proof of absence; check these close matches first.",

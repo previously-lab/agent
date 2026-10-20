@@ -9,6 +9,7 @@ import {
 import {
   BookOpenText,
   Inbox,
+  ListTree,
   Search,
   SearchX,
   TriangleAlert,
@@ -42,6 +43,16 @@ const TONE_CLASS: Record<SummarySpec["tone"], string | undefined> = {
   miss: "text-amber-600 dark:text-amber-400",
   failure: "text-red-500 dark:text-red-400",
   muted: undefined,
+};
+
+/** Heading indent per level (outline list) — a real semantic state, keyed. */
+const OUTLINE_INDENT: Record<number, string> = {
+  1: "pl-0",
+  2: "pl-4",
+  3: "pl-8",
+  4: "pl-12",
+  5: "pl-16",
+  6: "pl-20",
 };
 
 function summarize(
@@ -111,6 +122,13 @@ function summarize(
         text: t("recall.summaryPastEnd", { total: parsed.total }),
         tone: "muted",
         icon: <Inbox className="h-3.5 w-3.5" />,
+      };
+    case "outline":
+      // The caller replaces the text with the ref — icon only here.
+      return {
+        text: "",
+        tone: "hit",
+        icon: <ListTree className="h-3.5 w-3.5" />,
       };
     case "content":
     case "unknown":
@@ -210,9 +228,11 @@ export function RecallToolRenderer({
   const summaryText =
     toolName === "recallRead" && parsed?.kind === "content" && ref
       ? t("recall.summaryRead", { reference: ref })
-      : toolName === "recallRead" && parsed?.kind === "content"
-        ? parsed.text.split("\n", 1)[0]?.slice(0, 60) ?? ""
-        : spec.text;
+      : toolName === "recallRead" && parsed?.kind === "outline" && ref
+        ? t("recall.summaryOutline", { reference: ref })
+        : toolName === "recallRead" && parsed?.kind === "content"
+          ? parsed.text.split("\n", 1)[0]?.slice(0, 60) ?? ""
+          : spec.text;
 
   const expandedContent = parsed == null ? undefined : buildExpanded(parsed, t);
 
@@ -305,6 +325,31 @@ function buildExpanded(
             {parsed.note ? ` (${parsed.note})` : ""}
           </span>
         </p>
+      );
+    case "outline":
+      if (parsed.headings.length === 0) {
+        return (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("recall.outlineEmpty")}
+          </p>
+        );
+      }
+      return (
+        <ul className="space-y-1">
+          {parsed.headings.map((h) => (
+            <li
+              key={`${h.from}-${h.title}`}
+              className={`flex min-w-0 items-baseline gap-2 ${OUTLINE_INDENT[h.level] ?? "pl-20"}`}
+            >
+              <span className="shrink-0 font-mono text-[10px] leading-tight text-muted-foreground">
+                L{h.from}-{h.to}
+              </span>
+              <span className="min-w-0 truncate text-xs leading-tight text-foreground/90">
+                {h.title}
+              </span>
+            </li>
+          ))}
+        </ul>
       );
     case "content": {
       // The document body is the server-rendered text — shown verbatim,

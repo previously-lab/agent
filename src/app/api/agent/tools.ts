@@ -307,7 +307,10 @@ export const chatTools = {
       "'turns' by 0-based index, 'date' turns after an ISO timestamp, " +
       "'search' keywords (matched turns + one turn of context; a miss " +
       "returns the full slice with a note), 'lines' a 1-indexed line range " +
-      "like a code file. FIXED result wording: an approximate match " +
+      "like a code file. For a LONG document, first call with `outline: true` " +
+      "to get its heading skeleton (levels + line spans), then read only the " +
+      "spans you need with `range: { type: \"lines\", start, end }`. FIXED " +
+      "result wording: an approximate match " +
       "opens `(matched the near-name \"{stored ref}\" — read it under " +
       "that stored name)`; an unresolvable ref returns `Nothing named " +
       "\"{ref}\" exists in memory. Closest matches: …` (or `…and nothing " +
@@ -373,6 +376,15 @@ export const chatTools = {
         .describe(
           "records core only: an optional range filter. When omitted, " +
           "returns the full slice content.",
+        ),
+      outline: z
+        .boolean()
+        .optional()
+        .describe(
+          "true = return the document's heading skeleton instead of its " +
+          "body (levels + line spans, no prose). Use FIRST on a long " +
+          "document, then fetch the spans you need with " +
+          'range: { type: "lines", start, end }.',
         ),
     }),
     contextSchema: toolContextSchema,

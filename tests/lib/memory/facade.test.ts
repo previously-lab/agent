@@ -812,3 +812,86 @@ describe("approximate name matching (recallRead)", () => {
     expect(text).toContain("Closest matches:");
   });
 });
+
+// ─── Verb ④ recallRead — outline mode ──────────────────────────────────────
+
+describe("recallRead outline", () => {
+  /** 12 lines, three headings across levels (1-based numbering below). */
+  const OUTLINE_DOC = [
+    "# 调研笔记", // 1
+    "", // 2
+    "开篇。", // 3
+    "", // 4
+    "## 报价", // 5
+    "三家报价。", // 6
+    "", // 7
+    "### 明细", // 8
+    "- 明细一", // 9
+    "", // 10
+    "## 结论", // 11
+    "定论。", // 12
+  ].join("\n");
+
+  const FENCE_DOC = [
+    "# 真标题", // 1
+    "", // 2
+    "```md", // 3
+    "# 围栏里的井号", // 4 — not a heading
+    "```", // 5
+    "", // 6
+    "## 第二个", // 7
+    "body", // 8
+  ].join("\n");
+
+  const NO_HEADING_DOC = ["没有标题的第一行。", "", "第二段。"].join("\n");
+
+  const outlineBackend = () =>
+    makeBackend({
+      "memory/research/大纲测试/index.md": OUTLINE_DOC,
+      "memory/research/围栏测试/index.md": FENCE_DOC,
+      "memory/things/平文档/index.md": NO_HEADING_DOC,
+    });
+
+  it("returns the heading skeleton with exact 1-based spans", async () => {
+    const r = await recallRead(outlineBackend(), { ref: "research/大纲测试", outline: true });
+    if (r.kind !== "outline") throw new Error(`expected outline, got ${r.kind}`);
+    expect(r.ref).toBe("research/大纲测试");
+    expect(r.totalLines).toBe(12);
+    expect(r.headings).toEqual([
+      { level: 1, title: "调研笔记", from: 1, to: 4 },
+      { level: 2, title: "报价", from: 5, to: 7 },
+      { level: 3, title: "明细", from: 8, to: 10 },
+      { level: 2, title: "结论", from: 11, to: 12 },
+    ]);
+    const text = renderRecallReadResult(r, "research/大纲测试");
+    expect(text).toContain("range: \"lines:a-b\"");
+    expect(text).toContain("L5-7  报价");
+  });
+
+  it("does not treat fenced `#` lines as headings", async () => {
+    const r = await recallRead(outlineBackend(), { ref: "research/围栏测试", outline: true });
+    if (r.kind !== "outline") throw new Error(`expected outline, got ${r.kind}`);
+    expect(r.headings).toEqual([
+      { level: 1, title: "真标题", from: 1, to: 6 },
+      { level: 2, title: "第二个", from: 7, to: 8 },
+    ]);
+  });
+
+  it("a document with no headings returns an empty skeleton and the fixed note", async () => {
+    const r = await recallRead(outlineBackend(), { ref: "things/平文档", outline: true });
+    if (r.kind !== "outline") throw new Error(`expected outline, got ${r.kind}`);
+    expect(r.headings).toEqual([]);
+    const text = renderRecallReadResult(r, "things/平文档");
+    expect(text).toContain("no heading skeleton");
+    expect(text).toContain("range: \"lines:a-b\"");
+  });
+
+  it("outline omitted reads the body exactly as before", async () => {
+    const withOutline = await recallRead(outlineBackend(), { ref: "research/大纲测试", outline: false });
+    const without = await recallRead(outlineBackend(), { ref: "research/大纲测试" });
+    for (const r of [withOutline, without]) {
+      if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
+      expect(r.content).toBe(OUTLINE_DOC);
+    }
+  });
+});
