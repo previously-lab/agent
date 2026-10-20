@@ -734,6 +734,15 @@ export interface EntryReckoning {
   sealed: SealedSliceRecord | null;
   /** The slice born THIS beat — first persisted by the summary run. */
   birth: SliceBirthRecord | null;
+  /** Evidence attachments (names + base64 bytes) the user sent THIS
+   *  beat — the entry beat commits nothing, so the summary stream
+   *  persists them through the same fuse semantics (v0.42 review
+   *  blocker 1). null when the turn carried none. */
+  evidenceAttachments: Array<{ name: string; dataBase64: string }> | null;
+  /** The people/user mid-life snapshot update for an EXISTING slice
+   *  (a birth carries its own) — written to previously.md by the
+   *  summary stream (v0.42 review should-fix 1). null = no change. */
+  previouslyUpdate: string | null;
 }
 
 /**
@@ -901,6 +910,11 @@ export async function housekeeping(
   /** The v0.42 seal record — captured when the close executes, ridden to
    *  the summary run on this turn's structured result. */
   let sealed: SealedSliceRecord | null = null;
+  /** v0.42 — the evidence bytes + the mid-life previously snapshot ride
+   *  the result to the summary stream (the entry beat commits nothing). */
+  let evidenceAttachments: Array<{ name: string; dataBase64: string }> | null =
+    null;
+  let previouslyUpdate: string | null = null;
   /** The slice we came from — set from the just-closed page (AFTER its
    *  marking, so the continuity brief carries the fresh focus), or resolved
    *  from disk when today has none. Drives the continuity brief. */
@@ -1194,28 +1208,23 @@ export async function housekeeping(
       console.warn(`[Attachments] remote-URL part not fetched — skipped: ${name}`);
     }
     if (files.length > 0) {
-      try {
-        const result = await persistEvidenceAttachments({
-          sliceId: slice.slice_id,
-          turnId: input.turnId,
-          files,
-          batch,
-        });
-        for (const s of result.skipped) {
-          console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
-        }
-        if (result.saved.length > 0) {
-          const marker =
-            `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
-          const last = slice.turns.at(-1);
-          if (last?.role === "user") last.content += marker;
-        }
-      } catch (e) {
-        console.warn(
-          "[Attachments] persist failed:",
-          e instanceof Error ? e.message : e,
-        );
-      }
+      // v0.42 — the entry beat commits NOTHING, so the evidence cannot
+      // land here (the old code queued it into the never-flushed batch
+      // — the files died with it, and the persisted turn never got the
+      // marker). The bytes ride THIS turn's structured result to the
+      // summary stream, which persists them through the SAME
+      // persistEvidenceAttachments fuse semantics with the round's live
+      // batch and annotates the persisted user turn with the LANDED
+      // names. The in-memory marker below still feeds THIS turn's
+      // model context.
+      evidenceAttachments = files.map((f) => ({
+        name: f.name,
+        dataBase64: f.data.toString("base64"),
+      }));
+      const marker =
+        `\n\n[attachments: ${files.map((f) => f.name).join(", ")}]`;
+      const last = slice.turns.at(-1);
+      if (last?.role === "user") last.content += marker;
     }
   }
   await emitPhase(stream, "slice", false, [slice.slice_id]);
@@ -1244,8 +1253,16 @@ export async function housekeeping(
   if (modelSnapshot.trim()) {
     const existingSnap = await readPreviously(slice.slice_id).catch(() => "");
     if (existingSnap !== modelSnapshot) {
-      await writePreviously(slice.slice_id, modelSnapshot, batch);
-      console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id}`);
+      // v0.42 — a NEW slice's snapshot rides its birth record (the
+      // return-site carries it); an EXISTING slice's mid-life update
+      // rides the result — the batch here never flushes, so the old
+      // queued write died with it (stale window = the slice's life).
+      if (sliceBornThisCall) {
+        console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (birth)`);
+      } else {
+        previouslyUpdate = modelSnapshot;
+        console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (rides the summary)`);
+      }
     }
   }
 
@@ -1413,6 +1430,8 @@ export async function housekeeping(
     bridgeReport,
     sealed,
     birth,
+    evidenceAttachments,
+    previouslyUpdate,
     ...(closedSliceId ? { closedSliceId } : {}),
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
@@ -2525,6 +2544,12 @@ async function persistTurnSummaryAttempt(
       return { kind: "deduped" };
     }
 
+    // The mid-life previously snapshot for an EXISTING slice (a birth slice
+    // carries its own in the record) — lands in THIS batch.
+    if (payload.own.previously?.trim()) {
+      await writePreviously(payload.sliceId, payload.own.previously, batch);
+    }
+
     // ── Members: own record + the same-slice turn runs whose turn is not
     //    yet persisted; failed/cancelled ones recorded honestly (v0.42 §5).
     //    Own's test is the REPLY's presence, not the user turn's — a slice
@@ -2617,10 +2642,31 @@ async function persistTurnSummaryAttempt(
     for (const m of members) {
       const burst = m.burstId ?? payload.burstId;
       if (m.userText && !turnOnDisk(m.turnId)) {
+        let content = m.userText;
+        if (m.attachments && m.attachments.length > 0) {
+          // The evidence rides the result (the entry beat commits nothing):
+          // the SAME fuse semantics persist it into THIS batch, and the
+          // persisted turn carries the LANDED names. Skips stay visible.
+          const result = await persistEvidenceAttachments({
+            sliceId: payload.sliceId,
+            turnId: m.turnId,
+            files: m.attachments.map((a) => ({
+              name: a.name,
+              data: Buffer.from(a.dataBase64, "base64"),
+            })),
+            batch,
+          });
+          for (const s of result.skipped) {
+            console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
+          }
+          if (result.saved.length > 0) {
+            content += `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
+          }
+        }
         appendTurn(slice, {
           timestamp: m.at,
           role: "user",
-          content: m.userText,
+          content,
           turnId: m.turnId,
           ...(burst ? { burst } : {}),
         });
@@ -2812,14 +2858,37 @@ async function persistMinimalSummary(
     /** What actually exists — 没产出的就是没有, even in the fallback. */
     const bodyLines: string[] = [];
     const burst = payload.own.burstId;
+    // The mid-life previously snapshot rides the result — land it in THIS
+    // batch (a birth slice's own copy lives in the record, handled above).
+    if (payload.own.previously?.trim()) {
+      await writePreviously(payload.sliceId, payload.own.previously, batch);
+    }
     if (
       payload.own.userText &&
       !slice.turns.some((t) => t.role === "user" && t.turnId === payload.own.turnId)
     ) {
+      let content = payload.own.userText;
+      if (payload.own.attachments && payload.own.attachments.length > 0) {
+        const result = await persistEvidenceAttachments({
+          sliceId: payload.sliceId,
+          turnId: payload.own.turnId,
+          files: payload.own.attachments.map((a) => ({
+            name: a.name,
+            data: Buffer.from(a.dataBase64, "base64"),
+          })),
+          batch,
+        });
+        for (const s of result.skipped) {
+          console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
+        }
+        if (result.saved.length > 0) {
+          content += `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
+        }
+      }
       appendTurn(slice, {
         timestamp: payload.own.at,
         role: "user",
-        content: payload.own.userText,
+        content,
         turnId: payload.own.turnId,
         ...(burst ? { burst } : {}),
       });

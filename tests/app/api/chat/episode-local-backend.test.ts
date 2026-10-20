@@ -176,6 +176,8 @@ function hkFor(slice: TimeSlice) {
     bridgeReport: null,
     sealed: null,
     birth: null,
+    evidenceAttachments: null,
+    previouslyUpdate: null,
   };
 }
 

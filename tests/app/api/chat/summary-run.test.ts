@@ -33,6 +33,7 @@ vi.mock("@/lib/tools/local-fs", () => ({
     return { path, created: true };
   }),
   deleteFileLocal: vi.fn(async () => {}),
+  MAX_BINARY_FILE_SIZE_BYTES: 10 * 1024 * 1024,
 }));
 vi.mock("@/lib/tools/readFile", () => ({
   readFile: vi.fn(async () => {
@@ -257,6 +258,110 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       sliceId: SLICE_ID,
       turnIds: ["a1b2c3"],
     });
+  });
+
+  it("review-1. evidence attachments ride the result → the summary commit lands the file AND the user turn carries [attachments: …]", async () => {
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const outcome = await persistTurnSummary(
+      payload({
+        own: ownRecord({
+          attachments: [{ name: "屏幕截图.png", dataBase64: Buffer.from("PNG-BYTES").toString("base64") }],
+        }),
+      }),
+    );
+
+    expect(outcome.kind).toBe("committed");
+    // the binary rode the SAME batch — one flush, the file among the paths
+    expect(io.flushes).toHaveLength(1);
+    const attachPath = io.flushes[0]!.paths.find((p) =>
+      p.startsWith("memory/records/2026/10/20/1836/attachments/"),
+    );
+    expect(attachPath).toBeDefined();
+    expect(attachPath).toContain("a1b2c3-");
+    expect(io.files.get(attachPath!)).toBe(Buffer.from("PNG-BYTES").toString("base64"));
+    // …and the persisted user turn names its evidence
+    const core = io.files.get(CORE_PATH)!;
+    expect(core).toContain("[attachments:");
+    expect(core).toContain("a1b2c3-");
+  });
+
+  it("review-1b. an over-fuse attachment is SKIPPED at the summary with a visible reason (the moved fuse verdict) — the turn still lands", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+      const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+      const outcome = await persistTurnSummary(
+        payload({
+          own: ownRecord({
+            attachments: [{ name: "big.pdf", dataBase64: big.toString("base64") }],
+          }),
+        }),
+      );
+
+      expect(outcome.kind).toBe("committed");
+      expect(
+        io.flushes[0]!.paths.some((p) => p.includes("attachments/")),
+      ).toBe(false);
+      expect(
+        warn.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0].includes("[Attachments] skipped big.pdf"),
+        ),
+      ).toBe(true);
+      // the user turn itself still landed — only the file was refused
+      expect(io.files.get(CORE_PATH)!).toContain("我想换手机");
+      expect(io.files.get(CORE_PATH)!).not.toContain("[attachments:");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("review-2. a mid-life previously snapshot for an EXISTING slice rides the result → lands in the summary commit", async () => {
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const outcome = await persistTurnSummary(
+      payload({ own: ownRecord({ previously: "---\ncard: 更新后的用户模型\n---\n" }) }),
+    );
+
+    expect(outcome.kind).toBe("committed");
+    expect(io.flushes[0]!.paths).toContain(
+      "memory/records/2026/10/20/1836/previously.md",
+    );
+    expect(io.files.get("memory/records/2026/10/20/1836/previously.md")).toContain(
+      "更新后的用户模型",
+    );
+  });
+
+  it("review-1+2. the MINIMAL (degraded) commit carries the riders too — the user evidence is never the thing that gets dropped", async () => {
+    const { flushBatch } = await import("@/lib/episodic");
+    vi.mocked(flushBatch)
+      .mockRejectedValueOnce(new Error("blip one"))
+      .mockRejectedValueOnce(new Error("blip two"));
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const outcome = await persistTurnSummary(
+        payload({
+          own: ownRecord({
+            previously: "快照内容",
+            attachments: [{ name: "照片.png", dataBase64: Buffer.from("BYTES").toString("base64") }],
+          }),
+        }),
+      );
+      expect(outcome.kind).toBe("committed");
+      // 3 flushBatch CALLS (2 rejected attempts + the minimal commit), but
+      // only the minimal commit RECORDS a flush.
+      expect(vi.mocked(flushBatch).mock.calls.length).toBe(3);
+      expect(
+        vi.mocked(flushBatch).mock.calls[2]![1] as string,
+      ).toContain("degraded commit");
+      expect(io.flushes).toHaveLength(1);
+      expect(
+        io.flushes[0]!.paths.some((p) => p.includes("attachments/a1b2c3-")),
+      ).toBe(true);
+      expect(io.files.get("memory/records/2026/10/20/1836/previously.md")).toContain("快照内容");
+      expect(io.files.get(CORE_PATH)!).toContain("[attachments:");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a live summary for the slice + MY turn already on disk → deduped, no flush, no bell", async () => {

@@ -656,6 +656,9 @@ function Inner({
             locale,
             loadedSliceIds: timelineSlices.map((s) => s.slice_id),
             ...(view ? { view } : {}),
+            // v0.42 §3 [7283] — the burst identity (see handleSubmit): every
+            // message of a parallel batch carries the SAME id.
+            ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
             // The regenerate action re-runs the previous user message — the
             // server must NOT re-append it to the slice (and records an
             // interaction_regenerate fitness signal). See TurnInput.regenerate.
@@ -768,6 +771,14 @@ function Inner({
    * so firing on the value would re-fetch on every token.
    */
   const wasLoadingRef = useRef(false);
+  /**
+   * v0.42 §3 [7283] — the burst id: ONE id per parallel batch. Minted the
+   * moment a send lands while another answer is still in flight; every
+   * message sent during that window carries it, so the server enumerates
+   * the batch's members exactly (attributes equality) instead of the legacy
+   * time-window heuristic. Cleared once the air is quiet again.
+   */
+  const burstIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (wasLoadingRef.current && !isLoading) {
       onTurnSettled?.();
@@ -1090,6 +1101,21 @@ function Inner({
     setTransition(null);
     setLastUserMessageAt(new Date().toISOString());
 
+    // ── The burst identity (v0.42 §3 [7283]): EVERY send carries one — the
+    // first message mints it, a send landing while an answer is still in
+    // flight (the main stream OR an unsettled bypass lane) reuses it, and a
+    // send after the air went quiet mints a new one. The first message must
+    // carry the id too: the last finisher enumerates its batch members by
+    // exact id, so a first send without one is invisible to that enumeration
+    // and its record would never land (a solo batch is simply a batch of one
+    // — the server's lastness predicate returns true for it).
+    const inFlight =
+      isLoading || parallelLanes.some((lane) => !lane.settled);
+    if (!inFlight || !burstIdRef.current) {
+      burstIdRef.current = crypto.randomUUID();
+    }
+    const burstId = burstIdRef.current;
+
     // ── Parallel sends (v0.33 §6): a send while a turn streams starts
     // ANOTHER standard run on a bypass lane — one useChat instance cannot
     // carry two concurrent streams (ai@7's makeRequest replaces
@@ -1141,6 +1167,7 @@ function Inner({
             locale,
             loadedSliceIds: timelineSlices.map((s) => s.slice_id),
             ...(view ? { view } : {}),
+            ...(burstId ? { burstId } : {}),
           }),
         });
         const runId = res.headers.get("x-workflow-run-id");

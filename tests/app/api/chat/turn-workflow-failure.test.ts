@@ -161,13 +161,11 @@ describe("turnWorkflow — the v0.42 §5 failure floor", () => {
   it("a. a mid-answer transient failure → the run still produces its record, reaches the last-one judgment, wakes the summary, THEN fails honestly", async () => {
     await expect(turnWorkflow(input())).rejects.toThrow("ECONNRESET");
 
-    // the tail ran: finalize, the last-one judgment, the summary start —
-    // the failed turn's USER MESSAGE owes the record (§5 [11279]).
+    // the tail ran: finalize, then the summary start (the last-one check is
+    // BYPASSED for a failed run — see the sibling test below), carrying the
+    // honest record.
     expect(h.finalizeTurn).toHaveBeenCalledTimes(1);
-    expect(h.shouldStartSummary).toHaveBeenCalledWith({
-      sliceId: SLICE_ID,
-      turnId: TURN_ID,
-    });
+    expect(h.shouldStartSummary).not.toHaveBeenCalled(); // failed runs bypass it
     expect(h.startSummaryRun).toHaveBeenCalledTimes(1);
     const payload = h.startSummaryRun.mock.calls[0]![0] as unknown as {
       sliceId: string;
@@ -180,10 +178,21 @@ describe("turnWorkflow — the v0.42 §5 failure floor", () => {
     expect(h.closeTurnStream).toHaveBeenCalledTimes(1);
   });
 
-  it("a healthy turn does NOT consult the summary gate with an empty reply unless it actually answered (gate sanity)", async () => {
-    // The stream error is transient — this complements (a): the only reason
-    // the gate opened here is outcome.error, not the empty text.
+  it("a failed turn that is NOT the last still wakes its own summary — the user message has no other way to land (§5 [11279])", async () => {
+    // The burst's real last survivor would say NO (a sibling is still
+    // answering) — but a FAILED run has no returnValue, so waiting for the
+    // survivor would lose this turn's user message forever.
+    h.shouldStartSummary.mockResolvedValue(false);
+
     await expect(turnWorkflow(input())).rejects.toThrow("ECONNRESET");
+
+    expect(h.shouldStartSummary).not.toHaveBeenCalled(); // the bypass
     expect(h.startSummaryRun).toHaveBeenCalledTimes(1);
+    const payload = h.startSummaryRun.mock.calls[0]![0] as unknown as {
+      own: { userText: string; replyText: string };
+    };
+    expect(payload.own.userText).toBe(USER_TEXT);
+    expect(payload.own.replyText).toBe("");
   });
+
 });

@@ -205,7 +205,13 @@ export function isLastBurstTurn(
     return false; // a sibling is still answering — not the last yet
   }
   if (!runs.some((r) => isBurstSibling(r, sliceId, burstId, ownRunId))) {
-    return false; // solo burst (or registry hiccup) — nobody to merge with
+    // A burst id with NO visible siblings — a burst of one, or a registry
+    // window that missed the others: this turn is trivially the last of its
+    // burst, and 最后一个必须落盘. (Returning false here left a
+    // solo+burstId turn forever uncollected the moment the client started
+    // sending burst ids — v0.42 review should-fix 4. The merge decision
+    // upstream degrades gracefully: no siblings → no replies → no line.)
+    return true;
   }
   return true;
 }

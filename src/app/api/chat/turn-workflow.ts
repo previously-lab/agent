@@ -1966,19 +1966,26 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(input.burstId ? { burstId: input.burstId } : {}),
     ...(hk.sealed ? { sealed: hk.sealed } : {}),
     ...(hk.birth ? { birth: hk.birth } : {}),
+    ...(hk.evidenceAttachments ? { attachments: hk.evidenceAttachments } : {}),
+    ...(hk.previouslyUpdate ? { previously: hk.previouslyUpdate } : {}),
   };
   // v0.42 §5 [11279] — the failure floor: even a turn whose answer died
   // OWES its user message to the record, so a failed turn still wakes the
-  // summary run when it is the last (the summary lands the user turn and
-  // honestly records the missing reply). Graceful partial/error paths
-  // already pass this gate via outcome.text; the `|| outcome.error` arm is
-  // for the empty-reply failure.
+  // summary run. A FAILED RUN (streamError set — no returnValue exists for
+  // the burst's real last survivor) wakes it even when it is NOT the last;
+  // the summary side's dedupe (only when MY reply already landed — f2f4f80)
+  // and turnId idempotence absorb the overlap. Graceful partial/error paths
+  // pass this gate via outcome.text; `|| outcome.error` is the empty-reply
+  // failure.
   if (outcome.text.trim() || mergeLine || outcome.error) {
-    const last = await shouldStartSummary({
-      sliceId: hk.slice.slice_id,
-      turnId: input.turnId,
-      ...(input.burstId ? { burstId: input.burstId } : {}),
-    });
+    const last =
+      streamError !== null
+        ? true
+        : await shouldStartSummary({
+            sliceId: hk.slice.slice_id,
+            turnId: input.turnId,
+            ...(input.burstId ? { burstId: input.burstId } : {}),
+          });
     if (last) {
       await startSummaryRun({
         sliceId: hk.slice.slice_id,

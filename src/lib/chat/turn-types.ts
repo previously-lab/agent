@@ -488,6 +488,18 @@ export interface TurnRunResult {
   sealed?: SealedSliceRecord;
   /** The slice born THIS beat — first persisted by the summary run. */
   birth?: SliceBirthRecord;
+  /**
+   * Evidence attachments the user sent THIS turn (names + base64 bytes —
+   * v0.42 review blocker 1). The entry beat commits nothing, so the summary
+   * stream persists them through the same fuse semantics and annotates the
+   * persisted user turn with the landed names.
+   */
+  attachments?: Array<{ name: string; dataBase64: string }>;
+  /**
+   * The people/user mid-life snapshot update for an EXISTING slice (a birth
+   * carries its own) — written to previously.md by the summary stream.
+   */
+  previously?: string;
 }
 
 /**

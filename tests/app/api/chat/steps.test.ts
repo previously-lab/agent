@@ -451,6 +451,8 @@ function hkFor(slice: TimeSlice): HousekeepingResult & EntryReckoning {
     bridgeReport: null,
     sealed: null,
     birth: null,
+    evidenceAttachments: null,
+    previouslyUpdate: null,
   };
 }
 
@@ -494,7 +496,7 @@ beforeEach(() => {
 });
 
 describe("housekeeping step (进场那一拍 — the entry beat)", () => {
-  it("persists the turn's evidence attachments into the records case and records the names on the user turn (v0.19 §C.1)", async () => {
+  it("collects the turn's evidence attachments onto the result (the bytes ride to the summary stream) and records the names on the user turn (v0.19 §C.1, v0.42 review blocker 1)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const pngDataUrl = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
     try {
@@ -512,19 +514,23 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
         }),
       );
 
-      // The bytes landed under the slice's attachments dir, turnId-prefixed.
-      const saved = [...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"));
-      expect(saved).toEqual(["memory/records/2026/07/14/0900/attachments/test-id-shot.png"]);
-      // core.md's turn points at its own evidence.
+      // v0.42 — the entry beat commits NOTHING: the bytes ride the result to
+      // the summary stream, which persists them through the same fuses. The
+      // beat only COLLECTS (and annotates the in-memory turn for the model).
+      expect([...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"))).toEqual([]);
+      expect(hk.evidenceAttachments).toEqual([
+        { name: "shot.png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+      ]);
+      // the in-memory turn still points at its own evidence (model context).
       const userTurn = hk.slice.turns.find((t) => t.role === "user");
-      expect(userTurn?.content).toContain("[attachments: test-id-shot.png]");
+      expect(userTurn?.content).toContain("[attachments: shot.png]");
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
   });
 
-  it("a redelivery does NOT re-persist attachments (userTurnRecorded skips the whole block)", async () => {
+  it("a redelivery does NOT re-collect attachments (userTurnRecorded skips the whole block)", async () => {
     const pngDataUrl = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
     const input = makeInput("look at this", {
       modelMessages: [
@@ -536,23 +542,23 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
         },
       ] as unknown as TurnInput["modelMessages"],
     });
-    await housekeeping(input);
-    const savedOnce = [...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"));
-    expect(savedOnce).toHaveLength(1);
+    const hk = await housekeeping(input);
+    expect(hk.evidenceAttachments).toHaveLength(1);
 
-    // Second delivery of the SAME turn: the user turn is already recorded.
+    // Second delivery of the SAME turn: the user turn is already recorded —
+    // nothing is collected again (the summary's turnId dedupe converges too).
     const hk2 = await housekeeping(input);
-    expect([...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"))).toEqual(savedOnce);
+    expect(hk2.evidenceAttachments).toBeNull();
     const userTurn = hk2.slice.turns.find((t) => t.role === "user");
     expect(userTurn?.content.match(/\[attachments:/g)).toHaveLength(1);
   });
 
-  it("an over-fuse attachment is skipped with a visible reason, never thrown", async () => {
+  it("an over-fuse attachment still RIDES the result (the fuse verdict moves to the summary stream, visible, never thrown)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
     const bigDataUrl = `data:application/pdf;base64,${big.toString("base64")}`;
     try {
-      await housekeeping(
+      const hk = await housekeeping(
         makeInput("big file", {
           modelMessages: [
             {
@@ -564,12 +570,12 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
           ] as unknown as TurnInput["modelMessages"],
         }),
       );
+      // the beat does not judge fuses — it carries; the summary stream's
+      // persistEvidenceAttachments applies the 5MB fuse and warns (pinned in
+      // summary-run.test.ts).
+      expect(hk.evidenceAttachments?.map((a) => a.name)).toEqual(["big.pdf"]);
       expect([...fakeDisk.files.keys()].some((k) => k.includes("/attachments/"))).toBe(false);
-      expect(
-        warnSpy.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0].includes("[Attachments] skipped big.pdf"),
-        ),
-      ).toBe(true);
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
     }
