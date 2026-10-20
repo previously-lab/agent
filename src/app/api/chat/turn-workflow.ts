@@ -1967,7 +1967,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(hk.sealed ? { sealed: hk.sealed } : {}),
     ...(hk.birth ? { birth: hk.birth } : {}),
   };
-  if (outcome.text.trim() || mergeLine) {
+  // v0.42 §5 [11279] — the failure floor: even a turn whose answer died
+  // OWES its user message to the record, so a failed turn still wakes the
+  // summary run when it is the last (the summary lands the user turn and
+  // honestly records the missing reply). Graceful partial/error paths
+  // already pass this gate via outcome.text; the `|| outcome.error` arm is
+  // for the empty-reply failure.
+  if (outcome.text.trim() || mergeLine || outcome.error) {
     const last = await shouldStartSummary({
       sliceId: hk.slice.slice_id,
       turnId: input.turnId,

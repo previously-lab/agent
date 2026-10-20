@@ -880,6 +880,33 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(sopTool.description).not.toContain("Write-window discipline");
   });
 
+  it("v0.42 §5 d. an UNEXPECTED throw after tools queued → the queued writes land as a DEGRADED commit, the cursor holds (NO seen line)", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      // The unit produced a write, then the platform blew up mid-round —
+      // before any hqReport, before the settle.
+      await callTool(opts, "writeCase", {
+        action: "open",
+        category: "research",
+        caseName: "降级落盘",
+        body: "出错前已产出的写。",
+      });
+      throw new Error("platform step exploded");
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toContain("platform step exploded");
+    // the landed write rides as actions (memory/-stripped, report style)
+    expect(outcome.actions).toEqual(["research/降级落盘/index.md"]);
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    expect(vi.mocked(commitReflectionRound)).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(commitReflectionRound).mock.calls[0][1] as string;
+    expect(message).toContain("Reflection round — 2026-08-09"); // the SAME prefix
+    expect(message).toContain("degraded commit"); // the degradation named in the body
+    expect(message).not.toContain("seen:"); // 游标不动 — the absence of the line
+    expect(io.files.get("memory/research/降级落盘/index.md")).toContain("出错前已产出的写。");
+  });
+
   it("a TIMED-OUT round still reports the writes it landed — the flush survives the failure", async () => {
     // The observed production shape (2026-10-14): the sub-agent hits the
     // step-timeout AFTER its tools queued writes; the flush lands them, and

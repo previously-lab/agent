@@ -2442,7 +2442,7 @@ export async function startSummaryRun(
  * the outcome reports `failed` honestly — the log shows the gap and the
  * next unit re-covers the range (§3.5). Never throws.
  */
-export async function persistTurnSummary(
+async function persistTurnSummaryAttempt(
   payload: SummaryRunPayload,
 ): Promise<SummaryRunOutcome> {
   "use step";
@@ -2681,6 +2681,159 @@ export async function persistTurnSummary(
     });
     console.log(
       `[Summary] ${payload.sliceId} committed: ${bodyLines.join(", ") || "failure notes only"}`,
+    );
+    return { kind: "committed", segments: bodyLines };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+/**
+ * The summary run's ENTRY (v0.42 §5 [11279] — 兜底: a failure is recovered
+ * by LANDING what was produced, not by retrying forever):
+ *
+ *   1. the full pass (persistTurnSummaryAttempt);
+ *   2. ONE bounded retry — the whole assembly re-runs off a fresh read
+ *      (transient backend hiccups heal; ref conflicts already self-heal
+ *      inside flushTurnBatch, so this retry is for everything else);
+ *   3. a MINIMAL commit — THIS turn's user message + whatever reply it
+ *      produced, through the SAME flush path, the commit body naming the
+ *      degradation (能提交的都提交上去).
+ *
+ * Never throws.
+ */
+export async function persistTurnSummary(
+  payload: SummaryRunPayload,
+): Promise<SummaryRunOutcome> {
+  "use step";
+  const first = await persistTurnSummaryAttempt(payload);
+  if (first.kind !== "failed") return first;
+  console.warn(
+    `[Summary] ${payload.sliceId}: full summary failed (${first.error ?? "unknown"}) — one bounded retry`,
+  );
+  const second = await persistTurnSummaryAttempt(payload);
+  if (second.kind !== "failed") return second;
+  console.warn(
+    `[Summary] ${payload.sliceId}: retry failed too (${second.error ?? "unknown"}) — landing the minimal commit (user turn + produced reply)`,
+  );
+  return await persistMinimalSummary(payload);
+}
+
+/**
+ * §5's minimal commit — the floor of "把能提交的都提交上去": THIS turn's
+ * user message (it exists by definition — the turn started from it) plus
+ * whatever reply text it produced, NOTHING else (siblings, cognitions,
+ * seals are the full pass's riders; 没产出的就是没有). The SAME batch +
+ * flushTurnBatch discipline — no second write channel — and the commit
+ * body names the degradation so the log's next reader knows what happened.
+ * The bell still rings with the landed turn: the reflection unit reads the
+ * log and finds what it must (§3.5). Never throws.
+ */
+async function persistMinimalSummary(
+  payload: SummaryRunPayload,
+): Promise<SummaryRunOutcome> {
+  "use step";
+  const fail = (err: unknown): SummaryRunOutcome => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Summary] ${payload.sliceId} minimal commit failed: ${msg}`);
+    return { kind: "failed", error: msg };
+  };
+  const readCore = async (sliceId: string): Promise<string> => {
+    const path = sliceIdToFilePath(sliceId);
+    if (payload.useDemo) return await readFileDemo(path);
+    if (payload.useGithub) return await readFileFresh(path, payload.repo, payload.owner);
+    return await readFileLocal(path);
+  };
+  try {
+    const ownId = getWorkflowMetadata().workflowRunId;
+    const runs = await listRegistryRuns();
+    if (runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))) {
+      return { kind: "deduped" };
+    }
+    const batch = createBatch();
+    let slice: TimeSlice;
+    try {
+      slice = parseSlice(await readCore(payload.sliceId));
+    } catch {
+      const birth = payload.own.birth;
+      if (!birth) {
+        return fail(
+          new Error(`slice ${payload.sliceId} unreadable and no birth record carried`),
+        );
+      }
+      slice = {
+        slice_id: birth.sliceId,
+        focus: "",
+        status: "active",
+        start: birth.start,
+        timezone: birth.timezone,
+        summary: "",
+        open_loops: [],
+        decisions: [],
+        tags: [],
+        related_slices: [],
+        loops: [],
+        turns: [
+          {
+            timestamp: birth.turn.timestamp,
+            role: "user",
+            content: birth.turn.content,
+            turnId: birth.turn.turnId,
+          },
+        ],
+        estimatedTokens: Math.ceil(birth.turn.content.length / 4) + 8,
+        ...(birth.continuesFrom ? { continuesFrom: birth.continuesFrom } : {}),
+      };
+      if (birth.previously?.trim()) {
+        await writePreviously(birth.sliceId, birth.previously, batch);
+      }
+    }
+    /** What actually exists — 没产出的就是没有, even in the fallback. */
+    const bodyLines: string[] = [];
+    const burst = payload.own.burstId;
+    if (
+      payload.own.userText &&
+      !slice.turns.some((t) => t.role === "user" && t.turnId === payload.own.turnId)
+    ) {
+      appendTurn(slice, {
+        timestamp: payload.own.at,
+        role: "user",
+        content: payload.own.userText,
+        turnId: payload.own.turnId,
+        ...(burst ? { burst } : {}),
+      });
+      bodyLines.push(`user turn ${payload.own.turnId}`);
+    }
+    if (
+      payload.own.replyText.trim() &&
+      !slice.turns.some((t) => t.role === "agent" && t.turnId === payload.own.turnId)
+    ) {
+      appendTurn(slice, {
+        timestamp: payload.own.at,
+        role: "agent",
+        content: payload.own.replyText,
+        turnId: payload.own.turnId,
+        ...(burst ? { burst } : {}),
+      });
+      bodyLines.push(`reply ${payload.own.turnId}`);
+    }
+    if (bodyLines.length === 0) {
+      return { kind: "nothing" };
+    }
+    await saveSliceSnapshot(slice, batch);
+    bodyLines.push("snapshot");
+    const message =
+      COMMIT_PREFIX.summary(payload.sliceId) +
+      `\n\n- degraded commit — the full summary failed twice; ` +
+      `landed the user turn + produced reply only (v0.42 §5)\n` +
+      bodyLines.map((s) => `- ${s}`).join("\n");
+    await flushTurnBatch(batch, message, slice);
+    await ringReflection(payload.sliceId, {
+      sliceId: payload.sliceId,
+      turnIds: [payload.own.turnId],
+    });
+    console.log(
+      `[Summary] ${payload.sliceId} minimal commit landed: ${bodyLines.join(", ")}`,
     );
     return { kind: "committed", segments: bodyLines };
   } catch (err) {

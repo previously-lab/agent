@@ -36,7 +36,7 @@ import {
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { isRefConflictError } from "@/lib/tools/batch-write";
-import { buildReflectionRoundMessage } from "@/lib/chat/commit-contract";
+import { buildReflectionRoundMessage, COMMIT_PREFIX } from "@/lib/chat/commit-contract";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -634,6 +634,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   const batch = createBatch();
   const flags = { evolutionRan: false };
 
+  try {
   const result = await runSubAgent<HqReport>({
     model,
     system: buildSubAgentSystem(HQ_ROLE),
@@ -745,4 +746,37 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     // §4.2: the evolution beat stamps whenever the pass truly ran.
     ...(flags.evolutionRan ? { evolved: true } : {}),
   };
+  } catch (err) {
+    // v0.42 §5 [11279] — the floor: an UNEXPECTED throw before the settle
+    // (a platform step-retry exhaustion, a bug past the unit's own guards)
+    // must not silently drop what the tools already queued. Land whatever
+    // the batch holds as a DEGRADED commit — the SAME `Reflection round —`
+    // prefix with a degradation line in the body and NO trailer section:
+    // the water level does not move (失败轮不推游标), and the log's readers
+    // already treat a trailer-less round as failed — which is the truth.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[HQ] round failed unexpectedly — landing queued writes degraded (cursor holds): ${msg}`,
+    );
+    const queuedPaths = [...batch.entries.keys()]
+      .filter((p) => batch.entries.get(p) !== null)
+      .sort();
+    let landed: string[] = [];
+    if (queuedPaths.length > 0) {
+      const degradedMessage =
+        COMMIT_PREFIX.reflectionRound(date) +
+        `\n\n- degraded commit — the round failed before settlement (${msg}); ` +
+        `queued writes landed as-is, the cursor unchanged (v0.42 §5)`;
+      try {
+        await commitReflectionRound(batch, degradedMessage);
+        landed = queuedPaths.map((p) => p.replace(/^memory\//, ""));
+      } catch (flushErr) {
+        console.warn(
+          "[HQ] degraded flush failed too (queued writes lost):",
+          flushErr instanceof Error ? flushErr.message : flushErr,
+        );
+      }
+    }
+    return { actions: landed, note: "", error: msg };
+  }
 }

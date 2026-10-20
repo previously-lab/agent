@@ -332,9 +332,52 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
     expect(io.flushes[0].message).toContain("- sealed 2026-10-20-1200 (idle_gap)");
   });
 
-  it("a flush failure reports failed honestly — and NEVER rings the bell", async () => {
+  it("b. the full summary's first attempt fails transiently → ONE bounded retry succeeds", async () => {
     const { flushBatch } = await import("@/lib/episodic");
-    vi.mocked(flushBatch).mockRejectedValueOnce(new Error("disk full"));
+    vi.mocked(flushBatch).mockRejectedValueOnce(new Error("provider blip"));
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+
+    const outcome = await persistTurnSummary(payload());
+
+    expect(outcome.kind).toBe("committed");
+    // one flush per attempt — the retry re-ran the whole assembly
+    expect(vi.mocked(flushBatch).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(wake.deliverReflectionWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("c. two consecutive failures → the MINIMAL commit lands (user turn + produced reply) through the SAME flush path, degraded-note in the body", async () => {
+    const { flushBatch } = await import("@/lib/episodic");
+    vi.mocked(flushBatch)
+      .mockRejectedValueOnce(new Error("blip one"))
+      .mockRejectedValueOnce(new Error("blip two"));
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const outcome = await persistTurnSummary(payload());
+
+      expect(outcome.kind).toBe("committed");
+      // 2 full-pass attempts + the minimal commit's own flush — one channel.
+      expect(vi.mocked(flushBatch).mock.calls.length).toBe(3);
+      const minimalMessage = vi.mocked(flushBatch).mock.calls[2]![1] as string;
+      expect(minimalMessage).toContain("Summary — 2026-10-20-1836");
+      expect(minimalMessage).toContain("degraded commit");
+      const core = io.files.get(CORE_PATH)!;
+      expect(core).toContain("我想换手机，预算 5000。"); // 用户那句话 — the floor
+      expect(core).toContain("推荐看看小屏旗舰。"); // the produced reply
+      expect(io.files.has(AGENT_PATH)).toBe(false); // no cognition rider in the minimal commit
+      expect(wake.deliverReflectionWake).toHaveBeenCalledTimes(1); // the minimal commit still rings
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("THREE consecutive flush failures (both attempts + the minimal commit) → { kind: \"failed\" }, honestly — and NEVER rings the bell", async () => {
+    const { flushBatch } = await import("@/lib/episodic");
+    // one rejection per flush: attempt 1, attempt 2, the minimal commit.
+    vi.mocked(flushBatch)
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockRejectedValueOnce(new Error("disk full"));
     io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -342,6 +385,8 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       expect(outcome.kind).toBe("failed");
       expect(outcome.error).toContain("disk full");
       expect(wake.deliverReflectionWake).not.toHaveBeenCalled();
+      // the minimal commit could not land either — nothing is on the disk
+      expect(io.files.get(CORE_PATH)).toBe(BASE_CORE);
     } finally {
       warn.mockRestore();
     }
