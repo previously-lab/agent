@@ -72,6 +72,7 @@ import {
   cancelPanelRun,
   fetchHQStatus,
   type HQStatusResponse,
+  type PanelRunRow,
 } from "@/lib/chat/hq-status";
 import {
   layerDegradationNote,
@@ -198,38 +199,27 @@ function capNote(note: string): string {
 }
 
 /**
- * One activity frame as a localized third-person line — the beat's KIND is
- * chrome (localized), its payloads (slice id, paths, HQ's note, the error)
- * stay raw. Never speech: HQ has no mouth, these are activity descriptions.
+ * One frame's localized kind label — shared by the beat line and (v0.43) the
+ * reflection zone's live subtitle. The beat's KIND is chrome (localized),
+ * its payloads (slice id, paths, HQ's note, the error) stay raw. Never
+ * speech: HQ has no mouth, these are activity descriptions.
  */
-function HQActivityLine({
-  frame,
-  t,
-}: {
-  frame: HQActivityFrame;
-  t: CompanionT;
-}) {
-  let label: string;
+function hqActivityLabel(frame: HQActivityFrame, t: CompanionT): string {
   switch (frame.kind) {
     case "started":
-      label = t("hqActStarted");
-      break;
+      return t("hqActStarted");
     case "reading":
-      label = frame.sliceId
+      return frame.sliceId
         ? t("hqActReadingSlice", { sliceId: frame.sliceId })
         : t("hqActReading");
-      break;
     case "wrote":
-      label = t("hqActWrote", { count: frame.paths?.length ?? 0 });
-      break;
+      return t("hqActWrote", { count: frame.paths?.length ?? 0 });
     case "idle":
-      label = t("hqActIdle");
-      break;
+      return t("hqActIdle");
     case "failed":
-      label = t("hqActFailed");
-      break;
+      return t("hqActFailed");
     case "finished":
-      label = t("hqActFinished", {
+      return t("hqActFinished", {
         status:
           frame.status === "completed"
             ? t("hqCompleted")
@@ -239,8 +229,18 @@ function HQActivityLine({
                 ? t("hqRetired")
                 : t("hqIdle"),
       });
-      break;
   }
+}
+
+/** One activity frame as a localized third-person line in the beat log. */
+function HQActivityLine({
+  frame,
+  t,
+}: {
+  frame: HQActivityFrame;
+  t: CompanionT;
+}) {
+  const label = hqActivityLabel(frame, t);
   return (
     <li className="space-y-0.5">
       <div className="flex gap-2">
@@ -337,13 +337,124 @@ function StopMenu({
   );
 }
 
-function HQStatusSection({
+/**
+ * v0.43 — the workflow panel (doc/design/v0.43-workflow-panel.md). Two tabs
+ * under one segmented control:
+ *   状态   — four zones: 正在对话 / 正在总结 / 正在反思 / 历史与水位. Each zone
+ *          owns its EMPTY state (事实空) and its DEGRADED state (读取失败) —
+ *          the two never mix (看不到 ≠ 没有).
+ *   工作流 — the control-panel table: EVERY live run (role/slice/turn/burst +
+ *          a per-second age), one 停 menu per row.
+ * Live ages extrapolate from the poll's ageMs + asOf on the 1s local clock;
+ * a row that just appeared slides in once (key-stable rows never re-animate).
+ */
+
+/** The 1s local clock — the engine behind live durations (panel open only). */
+function useNowTick(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+/** One duration, human scale — "<1m" / "Nm" / "NhMm". */
+function fmtDuration(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return "—";
+  const min = Math.floor(ms / 60_000);
+  return min < 1 ? "<1m" : min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${min % 60}m`;
+}
+
+/** The registry's role → a localized label (an unattributed run reads 后台). */
+function roleLabel(role: string | null, t: CompanionT): string {
+  if (role === "turn") return t("wfRoleTurn");
+  if (role === "summary") return t("wfRoleSummary");
+  if (role === "reflection") return t("wfRoleReflection");
+  return t("wfRoleOther");
+}
+
+/**
+ * One live run as a control-panel row: the breathing live dot, the role +
+ * slice/turn identity, a per-second age, and the 停 tier menu (absent for
+ * rows that offer no tier — the menu renders nothing then).
+ */
+function RunRow({
+  row,
+  tickMs,
+  t,
+  onTier,
+}: {
+  row: PanelRunRow;
+  /** ms elapsed since the poll that stamped ageMs — the local-clock push. */
+  tickMs: number;
+  t: CompanionT;
+  onTier: (tier: StopTier, row: PanelRunRow) => void;
+}) {
+  const ageMs = row.ageMs === null ? null : row.ageMs + tickMs;
+  return (
+    <li className="pod-slide-in flex items-center gap-2 bg-paper-plate px-2.5 py-2">
+      <span
+        aria-hidden
+        className="chrome-live-dot size-2 shrink-0 animate-pulse rounded-sm"
+      />
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <div className="flex items-baseline gap-1.5">
+          <span className="shrink-0 text-[11px] font-medium text-foreground/90">
+            {roleLabel(row.role, t)}
+          </span>
+          <span className="truncate font-mono text-[10px] text-muted-foreground">
+            {row.slice ?? "—"}
+            {row.turn ? ` · ${row.turn}` : ""}
+          </span>
+        </div>
+        {(row.status !== "running" || row.burst) && (
+          <div className="font-mono text-[10px] text-muted-foreground/70">
+            {row.status}
+            {row.burst ? ` · ${row.burst.slice(0, 8)}` : ""}
+          </div>
+        )}
+      </div>
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+        {fmtDuration(ageMs)}
+      </span>
+      <StopMenu
+        tiers={stopTiersFor(row)}
+        t={t}
+        onTier={(tier) => onTier(tier, row)}
+      />
+    </li>
+  );
+}
+
+/** A zone's degraded line — the layer's 人话 + the 看不到 ≠ 没有 note.
+ *  The raw server reason never renders in the panel (it is English); it
+ *  rides the title tooltip so a curious reader can still see it. */
+function DegradedLine({ text, noteKey, detail, t }: { text: string; noteKey: string | null; detail?: string | null; t: CompanionT }) {
+  return (
+    <p className="break-words text-muted-foreground/80" title={detail ?? undefined}>
+      {text}
+      {noteKey && (
+        <span className="block text-[10px] text-muted-foreground/60">{t(noteKey)}</span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * The tabbed workflow panel's body. Owns the tab state, the 1s clock, and
+ * the tier→cancel binding; the zones read straight off the aggregate.
+ */
+function WorklogTabs({
   data,
   failed,
   t,
   locale,
   activity,
   live,
+  open,
   requestCancel,
 }: {
   /** The three-layer aggregate (v0.39 §4.1) — null while loading. */
@@ -353,43 +464,12 @@ function HQStatusSection({
   locale: string;
   activity: HQActivityFrame[];
   live: boolean;
+  open: boolean;
   /** Executes a tier's cancels through the existing endpoint, then re-reads. */
   requestCancel: (targets: string[]) => void;
 }) {
-  const beats = activity.length > 0 && (
-    <div className="space-y-1">
-      <div className="flex items-center gap-1.5">
-        {live && (
-          <span aria-hidden className="chrome-live-dot size-1.5 shrink-0 animate-pulse rounded-[1px]" />
-        )}
-        <span className="text-muted-foreground/70">
-          {live ? t("hqLive") : t("hqActLog")}
-        </span>
-      </div>
-      <ul className="space-y-1">
-        {activity.map((frame, i) => (
-          <HQActivityLine key={i} frame={frame} t={t} />
-        ))}
-      </ul>
-    </div>
-  );
-
-  if (!data && !failed) {
-    return (
-      <div className="space-y-1.5">
-        {beats}
-        <p className="text-muted-foreground/80">{t("hqLoading")}</p>
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="space-y-1.5">
-        {beats}
-        <p className="text-muted-foreground/80">{t("hqFailedToLoad")}</p>
-      </div>
-    );
-  }
+  const [tab, setTab] = useState<"status" | "workflows">("status");
+  const nowMs = useNowTick(open);
 
   const timeFmt = new Intl.DateTimeFormat(locale, {
     month: "numeric",
@@ -402,148 +482,271 @@ function HQStatusSection({
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? "—" : timeFmt.format(d);
   };
-  const fmtAge = (ms: number | null): string => {
-    if (ms === null) return "—";
-    const min = Math.floor(ms / 60_000);
-    return min < 1 ? "<1m" : min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${min % 60}m`;
-  };
 
+  if (!data && !failed) {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-muted-foreground/80">{t("hqLoading")}</p>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-muted-foreground/80">{t("hqFailedToLoad")}</p>
+      </div>
+    );
+  }
+
+  const asOfMs = Date.parse(data.asOf);
+  const tickMs = Number.isNaN(asOfMs) ? 0 : Math.max(0, nowMs - asOfMs);
   const { reflection, runs, log } = data;
-  const newestRound = log.state === "live" ? log.recentRounds[0] : undefined;
   // §6 旁注: one 人话 line per layer whose READ failed — 事实空 earns none.
   const reflectionNoteKey = layerDegradationNote("reflection", data);
   const runsNoteKey = layerDegradationNote("runs", data);
   const logNoteKey = layerDegradationNote("log", data);
 
+  const allRows = runs.state === "live" ? runs.live : [];
+  const reflectionRunId = reflection.state === "live" ? reflection.runId : null;
+
+  /** §2.3 — only interrupting an ANSWER confirms; the cost rides the tooltip. */
+  const handleTier = (tier: StopTier, row: PanelRunRow) => {
+    if (
+      tier.confirm &&
+      typeof window !== "undefined" &&
+      !window.confirm(t(tier.consequenceKey))
+    ) {
+      return;
+    }
+    requestCancel(resolveStopTargets(tier.tier, row, allRows, reflectionRunId));
+  };
+
+  const runList = (rows: PanelRunRow[]) => (
+    <ul className="space-y-1">
+      {rows.map((r) => (
+        <RunRow key={r.runId} row={r} tickMs={tickMs} t={t} onTier={handleTier} />
+      ))}
+    </ul>
+  );
+
+  const turnRows = allRows.filter((r) => r.role === "turn");
+  const summaryRows = allRows.filter((r) => r.role === "summary");
+  const latestBeat = activity.at(-1) ?? null;
+  const recentBeats = activity.slice(-4).reverse();
+  const newestRound = log.state === "live" ? log.recentRounds[0] : undefined;
+
   return (
-    <div className="space-y-1.5">
-      {beats}
-      {/* ── 公开层: the reflection unit through the hook channel ── */}
-      {reflection.state === "live" ? (
-        <>
-          <DebugRow
-            label={t("hqStatus")}
-            value={`${reflection.status} · ${t("hqSince", { time: fmtTime(reflection.startedAt) })} · ${fmtAge(reflection.ageMs)}`}
-          />
-          {reflection.attributes.rounds !== undefined && (
-            <DebugRow label={t("hqBriefs")} value={reflection.attributes.rounds} />
-          )}
-          {reflection.attributes.lastError && (
-            <p className="break-words text-foreground/70">{reflection.attributes.lastError}</p>
-          )}
-          {reflection.attributes.tookOver && (
-            <DebugRow label="⚠" value={t("hqTookOver")} />
-          )}
-          <StopMenu
-            tiers={[reflectionStopTier()]}
-            t={t}
-            onTier={(tier) => {
-              // §2.3 — 停反思不确认: no live consequence; the tooltip said it.
-              const targets = resolveStopTargets(
-                tier.tier,
-                { runId: reflection.runId, status: reflection.status, role: "reflection", slice: null, turn: null, burst: null, ageMs: reflection.ageMs },
-                [],
-                reflection.runId,
-              );
-              requestCancel(targets);
-            }}
-          />
-        </>
-      ) : reflection.state === "none" ? (
-        <p className="text-muted-foreground/80">{t("hqNobodyHome")}</p>
-      ) : (
-        <p className="break-words text-muted-foreground/80">
-          {t("hqUnreachable", { reason: reflection.reason })}
-          {/* §6 — 看不到 ≠ 没有: name the failed READ, never the empty fact */}
-          {reflectionNoteKey && (
-            <span className="block text-[10px] text-muted-foreground/60">
-              {t(reflectionNoteKey)}
-            </span>
-          )}
-        </p>
-      )}
-      {/* ── 日志层: the water level + the newest round's note (降级显式) ── */}
-      {log.state === "live" ? (
-        <>
-          <DebugRow
-            label={t("hqCursor")}
-            value={log.cursor?.sliceId ?? t("hqCursorNone")}
-            mono
-          />
-          {log.behind !== null && (
-            <DebugRow label="…" value={t("hqBehind", { count: log.behind })} />
-          )}
-          {newestRound?.note && (
-            <div className="space-y-0.5">
-              <DebugRow label={t("hqNote")} value={fmtTime(newestRound.at)} mono />
-              <p className="break-words text-foreground/70">{newestRound.note}</p>
-            </div>
-          )}
-          {newestRound?.evolved && (
-            <DebugRow label={t("hqEvolutionBeat")} value={newestRound.evolved} />
-          )}
-        </>
-      ) : (
-        <p className="break-words text-muted-foreground/80">
-          {t("hqLogUnavailable", { reason: log.reason })}
-          {logNoteKey && (
-            <span className="block text-[10px] text-muted-foreground/60">
-              {t(logNoteKey)}
-            </span>
-          )}
-        </p>
-      )}
-      {/* ── 运行时层: the live-runs table (增强层 — 缺席显式降级) ── */}
-      <div className="space-y-0.5">
-        <span className="text-muted-foreground/70">{t("hqRuns")}</span>
-        {runs.state === "live" ? (
-          <ul className="space-y-0.5">
-            {runs.live.map((r) => (
-              <li key={r.runId} className="flex items-center justify-between gap-2">
-                <span className="min-w-0 break-all font-mono text-[10px]">
-                  {t("hqRunRow", {
-                    role: r.role ?? "?",
-                    page: r.slice ?? "—",
-                    turn: r.turn ? ` · turn ${r.turn}` : "",
-                    burst: r.burst ? ` · burst ${r.burst.slice(0, 8)}` : "",
-                    age: fmtAge(r.ageMs),
+    <div className="space-y-3">
+      {/* The segmented control — square, ink block on the active segment,
+          a 150ms colour settle (no layout shift). Sticky: it never scrolls
+          away, whatever the zone below grows into. */}
+      <div
+        role="tablist"
+        aria-label={t("wfTabsLabel")}
+        className="sticky top-0 z-10 flex gap-0.5 border border-paper-line bg-paper p-0.5"
+      >
+        {(["status", "workflows"] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={`flex-1 px-2 py-1 text-[11px] transition-colors duration-150 ${
+              tab === id
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t(id === "status" ? "wfTabStatus" : "wfTabWorkflows")}
+          </button>
+        ))}
+      </div>
+
+      <div key={tab} className="pod-fade space-y-4">
+        {tab === "status" ? (
+          <>
+            {/* ── 正在对话 ── */}
+            <DebugSection id="talking" title={t("wfTalking")}>
+              {runs.state === "live" ? (
+                turnRows.length > 0 ? (
+                  runList(turnRows)
+                ) : (
+                  <p className="text-muted-foreground/80">{t("wfTalkingEmpty")}</p>
+                )
+              ) : (
+                <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
+              )}
+            </DebugSection>
+
+            {/* ── 正在总结 ── */}
+            <DebugSection id="summarizing" title={t("wfSummarizing")}>
+              {runs.state === "live" ? (
+                summaryRows.length > 0 ? (
+                  runList(summaryRows)
+                ) : (
+                  <p className="text-muted-foreground/80">{t("wfSummarizingEmpty")}</p>
+                )
+              ) : (
+                <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
+              )}
+              {log.state === "live" && log.recentSummaries[0] && (
+                <p className="font-mono text-[10px] text-muted-foreground/70">
+                  {t("wfLastArchive", {
+                    page: log.recentSummaries[0].slice,
+                    time: fmtTime(log.recentSummaries[0].at),
                   })}
-                </span>
-                <StopMenu
-                  tiers={stopTiersFor(r)}
+                </p>
+              )}
+            </DebugSection>
+
+            {/* ── 正在反思: the reflection unit + its live activity stream ── */}
+            <DebugSection id="reflection" title={t("wfReflecting")}>
+              {reflection.state === "live" ? (
+                <div className="space-y-1.5">
+                  <DebugRow
+                    label={t("hqStatus")}
+                    value={`${reflection.status} · ${t("hqSince", { time: fmtTime(reflection.startedAt) })} · ${fmtDuration(reflection.ageMs === null ? null : reflection.ageMs + tickMs)}`}
+                  />
+                  {/* The live beat rides the subtitle seat — the newest frame
+                      crossfades in (keyed), the run's own words over the poll. */}
+                  {latestBeat && (
+                    <p key={`${latestBeat.kind}-${latestBeat.at}`} className="pod-fade text-[11px] text-foreground/80">
+                      {hqActivityLabel(latestBeat, t)}
+                    </p>
+                  )}
+                  {reflection.attributes.rounds !== undefined && (
+                    <p className="text-[11px] text-foreground/80">
+                      {t("wfRoundsDone", { count: reflection.attributes.rounds })}
+                    </p>
+                  )}
+                  {reflection.attributes.lastError && (
+                    <p className="break-words text-foreground/70">{reflection.attributes.lastError}</p>
+                  )}
+                  {reflection.attributes.tookOver && (
+                    <DebugRow label="⚠" value={t("hqTookOver")} />
+                  )}
+                  {recentBeats.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-muted-foreground/70">{t("wfRecentBeats")}</span>
+                      <ul className="space-y-1">
+                        {recentBeats.map((frame, i) => (
+                          <HQActivityLine key={`${frame.at}-${i}`} frame={frame} t={t} />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <StopMenu
+                    tiers={[reflectionStopTier()]}
+                    t={t}
+                    onTier={(tier) => {
+                      // §2.3 — 停反思不确认: no live consequence.
+                      handleTier(
+                        tier,
+                        { runId: reflection.runId, status: reflection.status, role: "reflection", slice: null, turn: null, burst: null, ageMs: reflection.ageMs },
+                      );
+                    }}
+                  />
+                </div>
+              ) : reflection.state === "none" ? (
+                <p className="text-muted-foreground/80">{t("hqNobodyHome")}</p>
+              ) : (
+                <DegradedLine
+                  text={t("hqUnreachable")}
+                  noteKey={reflectionNoteKey}
+                  detail={reflection.reason}
                   t={t}
-                  onTier={(tier) => {
-                    // §2.3 — only interrupting an ANSWER confirms; the cost
-                    // rides the consequence sentence.
-                    if (
-                      tier.confirm &&
-                      typeof window !== "undefined" &&
-                      !window.confirm(t(tier.consequenceKey))
-                    ) {
-                      return;
-                    }
-                    requestCancel(
-                      resolveStopTargets(
-                        tier.tier,
-                        r,
-                        runs.live,
-                        reflection.state === "live" ? reflection.runId : null,
-                      ),
-                    );
-                  }}
                 />
-              </li>
-            ))}
-          </ul>
+              )}
+            </DebugSection>
+
+            {/* ── 历史与水位: the water level + recent archives ── */}
+            <DebugSection id="history" title={t("wfHistory")}>
+              {log.state === "live" ? (
+                <div className="space-y-1.5">
+                  <DebugRow
+                    label={t("hqCursor")}
+                    value={log.cursor?.sliceId ?? t("hqCursorNone")}
+                    mono
+                  />
+                  {log.behind !== null && (
+                    <DebugRow label="…" value={t("hqBehind", { count: log.behind })} />
+                  )}
+                  {newestRound?.note && (
+                    <div className="space-y-0.5">
+                      <DebugRow label={t("hqNote")} value={fmtTime(newestRound.at)} mono />
+                      <p className="break-words text-foreground/70">{newestRound.note}</p>
+                    </div>
+                  )}
+                  {newestRound?.evolved && (
+                    <DebugRow label={t("hqEvolutionBeat")} value={newestRound.evolved} />
+                  )}
+                  {!log.summariesAvailable ? (
+                    <DegradedLine text={t("wfSummariesDown")} noteKey={null} t={t} />
+                  ) : (
+                    log.recentSummaries.length > 0 && (
+                      <ul className="space-y-1">
+                        {log.recentSummaries.slice(0, 3).map((s) => (
+                          <li
+                            key={`${s.slice}-${s.at ?? ""}`}
+                            className="pod-slide-in space-y-0.5 bg-paper-plate px-2.5 py-2"
+                          >
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="truncate font-mono text-[10px]">{s.slice}</span>
+                              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                                {fmtTime(s.at)}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-foreground/80">
+                              {t("wfSummaryLanded", {
+                                turns: s.userTurns,
+                                replies: s.replies,
+                                merges: s.merges,
+                              })}
+                            </p>
+                            {s.failed.length > 0 && (
+                              <div className="space-y-0.5">
+                                {s.failed.map((f) => (
+                                  <p key={f.turn} className="text-[10px] text-muted-foreground/80">
+                                    {t("wfFailedNote", { turn: f.turn, status: f.status })}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  )}
+                </div>
+              ) : (
+                <DegradedLine
+                  text={t("hqLogUnavailable")}
+                  noteKey={logNoteKey}
+                  detail={log.reason}
+                  t={t}
+                />
+              )}
+            </DebugSection>
+          </>
         ) : (
-          <p className="break-words text-muted-foreground/70">
-            {t("hqRunsUnavailable")}
-            {runsNoteKey && (
-              <span className="block text-[10px] text-muted-foreground/60">
-                {t(runsNoteKey)}
-              </span>
+          /* ── 工作流: the control panel — EVERY live run in one table ── */
+          <DebugSection id="workflows" title={t("wfTabWorkflows")}>
+            {runs.state === "live" ? (
+              allRows.length > 0 ? (
+                <>
+                  <p className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                    {t("wfRunCount", { count: allRows.length })}
+                  </p>
+                  {runList(allRows)}
+                </>
+              ) : (
+                <p className="text-muted-foreground/80">{t("wfEmptyRuns")}</p>
+              )
+            ) : (
+              <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
             )}
-          </p>
+          </DebugSection>
         )}
       </div>
     </div>
@@ -954,7 +1157,7 @@ function CompanionPodBody({
             // The panel is PAPER — it keeps the grain (the no-texture ruling
             // covers chrome; the sheet's own texture stays) — and square
             // (v0.29 §4.5), one contact shadow.
-            className="chrome-panel-paper pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(30rem,calc(100dvh-18rem))] w-[min(23rem,calc(100vw-2rem))] flex-col text-card-foreground"
+            className="chrome-panel-paper pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(34rem,calc(100dvh-16rem))] w-[min(26rem,calc(100vw-2rem))] flex-col text-card-foreground"
           >
             {/* Chrome — sans, and it never scrolls away: the flex column caps
                 the panel's height and the prose below takes the overflow. The
@@ -1067,47 +1270,47 @@ function CompanionPodBody({
                 </div>
               ) : null}
 
-              {/* v0.42 — the work log IS the panel's face, not a disclosure:
-                  the reflection state, the live runs and the water level are
-                  what the user opened this panel to see. Nothing here folds;
+              {/* v0.43 — the workflow panel IS the panel's face: two tabs
+                  (状态 / 工作流) over the four status zones; nothing folds,
                   the data attributes stay for the probes. */}
               <div className="chrome-worklog">
                 <div
                   data-companion-pod-debug
                   className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
                 >
-                  <DebugSection
-                    id="hq"
-                    title={t("hqTitle")}
-                    action={
-                      <button
-                        type="button"
-                        onClick={() => void loadHQ()}
-                        aria-label={t("debugRefresh")}
-                        title={t("debugRefresh")}
-                        className={`${ISLAND_CONTROL} size-5`}
-                      >
-                        <RefreshCw className="size-3" />
-                      </button>
-                    }
-                  >
-                    <HQStatusSection
-                      data={hq}
-                      failed={hqFailed}
-                      t={t}
-                      locale={locale}
-                      activity={hqActivity}
-                      live={hqLive}
-                      requestCancel={(targets) => {
-                        // §4.3/§2.3 — the panel's ONLY write, through the
-                        // existing cancel endpoint; then re-read.
-                        for (const runId of targets) {
-                          void cancelPanelRun(runId);
-                        }
-                        void loadHQ();
-                      }}
-                    />
-                  </DebugSection>
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void loadHQ()}
+                      aria-label={t("debugRefresh")}
+                      title={t("debugRefresh")}
+                      className={`${ISLAND_CONTROL} size-5`}
+                    >
+                      <RefreshCw className="size-3" />
+                    </button>
+                  </div>
+                  <WorklogTabs
+                    data={hq}
+                    failed={hqFailed}
+                    t={t}
+                    locale={locale}
+                    activity={hqActivity}
+                    live={hqLive}
+                    open={open}
+                    requestCancel={(targets) => {
+                      // §4.3/§2.3 — the panel's ONLY write, through the
+                      // existing cancel endpoint; then re-read.
+                      for (const runId of targets) {
+                        void cancelPanelRun(runId);
+                      }
+                      void loadHQ();
+                    }}
+                  />
+                </div>
+                <div
+                  data-companion-pod-debug
+                  className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
+                >
                   <DebugSection
                     id="memory"
                     title={t("debugMemoryTitle")}

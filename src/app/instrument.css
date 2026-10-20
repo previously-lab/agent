@@ -544,6 +544,40 @@
   background: var(--ink-accent-paper);
 }
 
+/* ── v0.43: the workflow panel's motion vocabulary ─────────────────────
+   Two ONE-SHOT entrances (they run once and hold, never loop): the slide-in
+   marks a run/archive row that just appeared; the fade is the tab switch
+   and the reflection beat's subtitle crossfade. prefers-reduced-motion
+   degrades both to an instant, static settle. */
+
+@keyframes pod-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pod-slide-in {
+  animation: pod-slide-in 220ms ease-out both;
+}
+
+@keyframes pod-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pod-fade {
+  animation: pod-fade 180ms ease-out both;
+}
+
 /* ── Reduced motion ───────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
@@ -558,5 +592,10 @@
   .composer-bar,
   .composer-cell {
     transition: none;
+  }
+
+  .pod-slide-in,
+  .pod-fade {
+    animation: none;
   }
 }

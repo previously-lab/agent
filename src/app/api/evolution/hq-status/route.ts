@@ -25,7 +25,8 @@ import { HookNotFoundError } from "workflow/errors";
 import { getWorld } from "workflow/runtime";
 import { REFLECTION_TOKEN } from "@/app/api/evolution/reflection-run";
 import { isLiveRunStatus, type ParallelRunEntry } from "@/lib/chat/parallel-runs";
-import { readReflectionCursor, readReflectionLog } from "@/lib/chat/hq-log";
+import { readReflectionCursor, readReflectionLog, readRecentSummaries } from "@/lib/chat/hq-log";
+import type { RecentSummaryEntry } from "@/lib/chat/hq-log";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 
 export const dynamic = "force-dynamic";
@@ -74,6 +75,11 @@ export interface HQStatusResponse {
           evolved: string | null;
           superseded: boolean;
         }>;
+        /** v0.43 §5 — the newest few `Summary —` bodies, parsed for the panel. */
+        recentSummaries: RecentSummaryEntry[];
+        /** False when the summary log's own read degraded (panel shows a note). */
+        summariesAvailable: boolean;
+        summariesReason?: string;
       }
     | { state: "unavailable"; reason: string };
 }
@@ -170,8 +176,13 @@ export async function GET(): Promise<Response> {
 
   // ── 日志层: the water level + recent rounds (降级显式, never "没有") ──
   let log: HQStatusResponse["log"];
-  const cursorRead = await readReflectionCursor();
-  const logRead = await readReflectionLog();
+  const [cursorRead, logRead, summariesRead] = await Promise.all([
+    readReflectionCursor(),
+    readReflectionLog(),
+    // v0.43 §5 — the summary stream's own read face; degrades on its own
+    // flag so a summary-scan hiccup never sinks the reflection planes.
+    readRecentSummaries(),
+  ]);
   if (!logRead.available) {
     log = { state: "unavailable", reason: logRead.reason ?? "log unavailable" };
   } else {
@@ -201,6 +212,9 @@ export async function GET(): Promise<Response> {
         evolved: e.parsed.trailer?.evolved?.date ?? null,
         superseded: e.parsed.trailer?.superseded === true,
       })),
+      recentSummaries: summariesRead.entries,
+      summariesAvailable: summariesRead.available,
+      ...(summariesRead.reason ? { summariesReason: summariesRead.reason } : {}),
     };
   }
 

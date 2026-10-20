@@ -193,6 +193,8 @@ export interface SummaryLogEntry {
   turnIds: string[];
   /** Commit timestamp (ISO), null when the backend doesn't say. */
   committedAt: string | null;
+  /** The raw commit message — the panel's parser (v0.43 §5) reads the body. */
+  message: string;
 }
 
 export interface SummaryLogRead {
@@ -202,6 +204,94 @@ export interface SummaryLogRead {
   available: boolean;
   /** The degradation reason — the caller turns it into an honest docket. */
   reason?: string;
+}
+
+// ─── The panel's recentSummaries (v0.43 §5 — the summary stream's read face) ──
+
+/** One parsed `Summary — {slice}` body, the shape the workflow panel renders. */
+export interface RecentSummaryEntry {
+  /** The slice the summary persisted into (the prefix's argument). */
+  slice: string;
+  /** Commit timestamp (ISO), null when the backend doesn't say. */
+  at: string | null;
+  /** `- user turn X` lines — how many user turns landed. */
+  userTurns: number;
+  /** `- reply X` lines — how many replies landed. */
+  replies: number;
+  /** `- merge X` lines — how many merge lines landed. */
+  merges: number;
+  /** The batch's terminal non-completed turns (`第 X 条没答成`). */
+  failed: Array<{ turn: string; status: string }>;
+}
+
+const SUMMARY_LINE = /^- (.+)$/;
+/** `- 第 X 条没答成（status）` — the zh no-answer note the writer stamps. */
+const FAILED_ZH = /^第 (\S+) 条没答成（(.+)）$/;
+/** `- turn X produced no answer (status)` — the en no-answer note. */
+const FAILED_EN = /^turn (\S+) produced no answer \((.+)\)$/;
+
+/**
+ * Parse a summary commit message's body lines into the panel's counts. Pure
+ * and tolerant: unknown lines (`snapshot`, `sealed …`, future markers) are
+ * skipped, never fatal — the body is the writer's honest ledger (v0.42 §7-1)
+ * and the reader keeps up with whatever it says.
+ */
+export function parseSummaryBody(message: string): Omit<RecentSummaryEntry, "slice" | "at"> {
+  let userTurns = 0;
+  let replies = 0;
+  let merges = 0;
+  const failed: RecentSummaryEntry["failed"] = [];
+  for (const rawLine of message.split("\n")) {
+    const m = SUMMARY_LINE.exec(rawLine.trim());
+    if (!m) continue;
+    const line = m[1];
+    if (/^user turn \S+/.test(line)) {
+      userTurns += 1;
+    } else if (/^reply \S+/.test(line)) {
+      replies += 1;
+    } else if (/^merge \S+/.test(line)) {
+      merges += 1;
+    } else {
+      const zh = FAILED_ZH.exec(line);
+      const en = FAILED_EN.exec(line);
+      const f = zh ?? en;
+      if (f) failed.push({ turn: f[1], status: f[2] });
+    }
+  }
+  return { userTurns, replies, merges, failed };
+}
+
+export interface RecentSummariesRead {
+  entries: RecentSummaryEntry[];
+  /** False when the log plane is unavailable (non-git local root, API down). */
+  available: boolean;
+  /** The degradation reason — the caller turns it into an honest docket. */
+  reason?: string;
+}
+
+const MAX_RECENT_SUMMARIES = 5;
+
+/**
+ * The newest few summary commits parsed for the workflow panel (v0.43 §5) —
+ * a SIBLING read of readSummaryLog (same bounded scan discipline, same
+ * failure semantics), only the projection differs: counts + failed entries
+ * per commit instead of the scope-source turn ids. Read-only, never writes.
+ */
+export async function readRecentSummaries(
+  limit = MAX_RECENT_SUMMARIES,
+): Promise<RecentSummariesRead> {
+  const log = await readSummaryLog();
+  if (!log.available) {
+    return { entries: [], available: false, reason: log.reason };
+  }
+  return {
+    entries: log.entries.slice(0, limit).map((e) => ({
+      slice: e.sliceId,
+      at: e.committedAt,
+      ...parseSummaryBody(e.message),
+    })),
+    available: true,
+  };
 }
 
 /** Parse one summary commit message into its slice + member turn ids. */
@@ -217,7 +307,7 @@ function parseSummaryCommit(
     const m = /^- (?:user turn|reply) (\S+)/.exec(line.trim());
     if (m && !turnIds.includes(m[1])) turnIds.push(m[1]);
   }
-  return { sha, sliceId, turnIds, committedAt };
+  return { sha, sliceId, turnIds, committedAt, message };
 }
 
 /**

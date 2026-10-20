@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   runsList: vi.fn(),
   cursor: { sliceId: null as string | null, sha: null as string | null, at: null as string | null, degraded: false },
   log: { available: true as boolean, reason: undefined as string | undefined, entries: [] as unknown[] },
+  summaries: { available: true as boolean, reason: undefined as string | undefined, entries: [] as unknown[] },
   enumerate: vi.fn(async () => ["2026/10/01/0900", "2026/10/02/1000"]),
 }));
 
@@ -29,6 +30,7 @@ vi.mock("workflow/runtime", () => ({
 vi.mock("@/lib/chat/hq-log", () => ({
   readReflectionCursor: async () => h.cursor,
   readReflectionLog: async () => h.log,
+  readRecentSummaries: async () => h.summaries,
 }));
 
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
@@ -42,6 +44,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.cursor = { sliceId: null, sha: null, at: null, degraded: false };
   h.log = { available: true, reason: undefined, entries: [] };
+  h.summaries = { available: true, reason: undefined, entries: [] };
   h.runsList.mockResolvedValue({
     data: [
       {
@@ -107,6 +110,47 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
       evolved: "2026-10-02",
     });
     expect(typeof body.asOf).toBe("string");
+  });
+
+  it("recentSummaries rides the log layer (v0.43 §5) — parsed counts + failed entries, degraded on its own flag", async () => {
+    h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
+    h.summaries.entries = [
+      {
+        slice: "2026-10-02-1000",
+        at: "2026-10-02T10:05:00.000Z",
+        userTurns: 2,
+        replies: 2,
+        merges: 1,
+        failed: [{ turn: "a1b2c3", status: "interrupted" }],
+      },
+    ];
+
+    const res = await GET();
+    const body = await res.json();
+
+    expect(body.log.state).toBe("live");
+    expect(body.log.summariesAvailable).toBe(true);
+    expect(body.log.recentSummaries[0]).toEqual({
+      slice: "2026-10-02-1000",
+      at: "2026-10-02T10:05:00.000Z",
+      userTurns: 2,
+      replies: 2,
+      merges: 1,
+      failed: [{ turn: "a1b2c3", status: "interrupted" }],
+    });
+  });
+
+  it("the summaries read degrades on its OWN flag — the log layer still answers (recentSummaries empty, never fabricated)", async () => {
+    h.getHookByToken.mockRejectedValue(new HookNotFoundError("reflection:main"));
+    h.summaries = { available: false, reason: "summary log read failed: boom", entries: [] };
+
+    const res = await GET();
+    const body = await res.json();
+
+    expect(body.log.state).toBe("live");
+    expect(body.log.summariesAvailable).toBe(false);
+    expect(body.log.summariesReason).toContain("boom");
+    expect(body.log.recentSummaries).toEqual([]);
   });
 
   it("no live reflection run → 公开层 says NONE (无人在家 is a verdict) and the log layer still answers", async () => {

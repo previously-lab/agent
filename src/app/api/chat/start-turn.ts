@@ -357,7 +357,15 @@ export async function startTurn(
     // creation, the spike-verified shape): batch membership is enumerable
     // from the registry while the burst lives, and from the record (the
     // writer's [burst {id}] turn header) ever after.
-    ...(input.burstId ? { attributes: { burst: input.burstId } } : {}),
+    // v0.43 — `role`/`turn` ride the SAME start call: the workflow panel
+    // groups live runs by role, and attributes stamped inside a step arrive
+    // too late to be seen (observed: a 15s turn was already finishing when
+    // its role first appeared).
+    attributes: {
+      role: "turn",
+      turn: input.turnId,
+      ...(input.burstId ? { burst: input.burstId } : {}),
+    },
   });
 
   return run;

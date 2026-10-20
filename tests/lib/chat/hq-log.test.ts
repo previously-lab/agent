@@ -32,6 +32,7 @@ import {
   readLatestReflectionNote,
   readReflectionCoverage,
   readReflectionLog,
+  readRecentSummaries,
 } from "@/lib/chat/hq-log";
 
 const ROUND = (over: { message?: string; oid?: string; ts?: number }) => ({
@@ -277,5 +278,100 @@ describe("readLatestReflectionNote — the 暂存's log shape (待裁决 3)", ()
       ROUND({ message: "Reflection round — 2026-10-19\n\n—\nseen: 2026-10-19-1721" }),
     ]);
     expect(await readLatestReflectionNote()).toBeNull();
+  });
+});
+
+describe("readRecentSummaries — the panel's summary read face (v0.43 §5)", () => {
+  const SUMMARY = (over: { message?: string; oid?: string; ts?: number }) => ({
+    oid: over.oid ?? "sum-1",
+    message: over.message ?? "Summary — 2026-10-20-0831",
+    committedAtMs: over.ts ?? Date.parse("2026-10-20T09:00:00.000Z"),
+  });
+
+  it("parses the body counts + the zh 没答成 entries (unknown lines skipped)", async () => {
+    h.logCommits.mockResolvedValue([
+      SUMMARY({
+        message:
+          "Summary — 2026-10-20-0900\n\n- user turn t3\n- reply t3",
+        oid: "s2",
+        ts: Date.parse("2026-10-20T10:00:00.000Z"),
+      }),
+      SUMMARY({
+        message:
+          "Summary — 2026-10-20-0831\n\n" +
+          "- user turn t1\n- reply t1\n- merge t1\n- cognition t1\n- snapshot\n" +
+          "- sealed 2026-10-19-1721 (time_cap)\n- 第 t2 条没答成（interrupted）",
+        oid: "s1",
+        ts: Date.parse("2026-10-20T09:05:00.000Z"),
+      }),
+    ]);
+
+    const read = await readRecentSummaries();
+
+    expect(read.available).toBe(true);
+    // newest-first preserved
+    expect(read.entries).toEqual([
+      {
+        slice: "2026-10-20-0900",
+        at: "2026-10-20T10:00:00.000Z",
+        userTurns: 1,
+        replies: 1,
+        merges: 0,
+        failed: [],
+      },
+      {
+        slice: "2026-10-20-0831",
+        at: "2026-10-20T09:05:00.000Z",
+        userTurns: 1,
+        replies: 1,
+        merges: 1,
+        failed: [{ turn: "t2", status: "interrupted" }],
+      },
+    ]);
+  });
+
+  it("parses the en no-answer format too", async () => {
+    h.logCommits.mockResolvedValue([
+      SUMMARY({
+        message: "Summary — 2026-10-20-0831\n\n- user turn t1\n- turn t1 produced no answer (cancelled)",
+      }),
+    ]);
+
+    const read = await readRecentSummaries();
+
+    expect(read.entries[0].failed).toEqual([{ turn: "t1", status: "cancelled" }]);
+    expect(read.entries[0].userTurns).toBe(1);
+    expect(read.entries[0].replies).toBe(0);
+  });
+
+  it("an empty summary history is a TRUE empty (available, []) — never a failure", async () => {
+    h.logCommits.mockResolvedValue([
+      { oid: "t1", message: "Turn a1b2c3 — reply", committedAtMs: 1 },
+    ]);
+    const read = await readRecentSummaries();
+    expect(read.available).toBe(true);
+    expect(read.entries).toEqual([]);
+  });
+
+  it("the log plane down degrades the whole read (no fabricated entries)", async () => {
+    h.isGitRepo.mockReturnValue(false);
+    const read = await readRecentSummaries();
+    expect(read.available).toBe(false);
+    expect(read.entries).toEqual([]);
+    expect(read.reason).toContain("git init");
+  });
+
+  it("caps at five entries (a glance, not an archive)", async () => {
+    h.logCommits.mockResolvedValue(
+      Array.from({ length: 8 }, (_, i) =>
+        SUMMARY({
+          message: `Summary — 2026-10-1${i}-0831\n\n- user turn t${i}`,
+          oid: `s${i}`,
+          ts: Date.parse("2026-10-20T09:00:00.000Z") + i,
+        }),
+      ),
+    );
+    const read = await readRecentSummaries();
+    expect(read.entries).toHaveLength(5);
   });
 });
