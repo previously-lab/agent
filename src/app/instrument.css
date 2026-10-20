@@ -51,7 +51,7 @@
   background: var(--tool);
   border: 1px solid var(--tool-line);
   box-shadow: var(--paper-contact);
-  border-radius: 0;
+  border-radius: var(--radius-md, 6px);
   transition:
     border-color 150ms ease,
     color 150ms ease;
@@ -74,7 +74,7 @@
   background: var(--tool);
   border: 1px solid var(--tool-line);
   box-shadow: var(--paper-contact);
-  border-radius: 0;
+  border-radius: var(--radius-md, 6px);
 }
 
 /* ISLAND_CONTROL — a control ON a bar (or bare): quiet at rest, ink on
@@ -85,7 +85,7 @@
   align-items: center;
   justify-content: center;
   color: var(--muted-foreground);
-  border-radius: 0;
+  border-radius: var(--radius-sm, 4px);
   transition: color 150ms ease;
 }
 
@@ -146,7 +146,7 @@
   background: var(--tool);
   border: 1px solid var(--tool-line);
   box-shadow: var(--paper-contact);
-  border-radius: 0;
+  border-radius: var(--radius-lg, 10px);
 }
 
 .chrome-panel-head {
@@ -200,7 +200,7 @@
    the pointer touched. */
 
 .chrome-menu-item {
-  border-radius: 0;
+  border-radius: var(--radius-sm, 4px);
   transition:
     background-color 120ms ease,
     color 120ms ease;
@@ -339,7 +339,7 @@
   background: var(--paper);
   border: 1px solid var(--paper-line);
   box-shadow: var(--paper-contact);
-  border-radius: 0;
+  border-radius: var(--radius-lg, 10px);
   transition: border-color 150ms ease;
 }
 
@@ -487,7 +487,7 @@
   background-color: var(--paper);
   background-image: var(--paper-grain-map);
   box-shadow: var(--paper-contact);
-  border-radius: 0;
+  border-radius: var(--radius-lg, 10px);
 }
 
 /* The work-log disclosure — the debug blocks folded behind a hairline,
