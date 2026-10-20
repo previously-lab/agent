@@ -99,7 +99,55 @@
         "recallRecent": "Recalling recent memory…",
         "recallFind": "Locating in memory…",
         "recallSearch": "Searching memory…",
-        "recallRead": "Reading from memory…"
+        "recallRead": "Reading from memory…",
+        "name": {
+          "recallRecent": "Recalled recent",
+          "recallFind": "Located",
+          "recallSearch": "Searched memory"
+        },
+        "nameRead": "Read",
+        "scope": {
+          "memory": "all memory",
+          "events": "events",
+          "people": "people",
+          "things": "things",
+          "tasks": "tasks",
+          "research": "research",
+          "places": "places",
+          "orgs": "orgs",
+          "self": "self",
+          "timeline": "timeline",
+          "records": "records",
+          "hypotheses": "hypotheses"
+        },
+        "summaryRecent": "{scope} · {count} entries · {first}",
+        "summarySearch": "\"{query}\" · {count} matches",
+        "summaryFallback": "\"{query}\" · no matches, showing {count} recent",
+        "summaryMiss": "\"{name}\" · not found",
+        "summaryMissNear": "\"{name}\" · not found · {count} close matches",
+        "summaryEmpty": "{scope} · nothing here yet",
+        "summaryPastEnd": "No more entries ({total} total)",
+        "summaryReadFailure": "Unreadable right now · read failure",
+        "summaryRead": "{reference}",
+        "fallbackNote": "No matches for \"{query}\" — here are the most recent entries in scope (a fallback, not search results):",
+        "emptyBody": "There is nothing in {scope} yet — an empty scope, not a miss.",
+        "missBody": "Nothing named \"{name}\" was found — a miss is not proof of absence; check these close matches first.",
+        "pastEndBody": "No more entries — offset {offset} is past the end; {total} exist in this scope, newest first. An empty page is not absence.",
+        "readFailureBody": "This could not be read right now — a read failure, not absence; it may still exist.",
+        "pageOffset": "Older entries exist (continue from offset {offset}).",
+        "pageCapped": "Showing the newest {shown} of {scanned} scanned — narrow by date or add keywords for older ones."
+      },
+      "writeCase": {
+        "verb": "Write case",
+        "queuedVerb": "Writing",
+        "queued": "{target} · lands when this turn does…",
+        "committed": "Written {target}",
+        "refused": "Not written",
+        "piece": "Piece: {title}",
+        "action": {
+          "open": "Opened case",
+          "addPiece": "Added piece"
+        }
       },
       "currentTime": "Checked the time",
       "listRunning": "Browsing…",

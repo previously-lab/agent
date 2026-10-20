@@ -2,6 +2,7 @@
 
 import { extractRenderState } from "@/lib/chat/tool-state";
 import { RecallToolRenderer } from "./tool-renderers/recall";
+import { WriteCaseRenderer } from "./tool-renderers/write-case";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { WebFetchRenderer } from "./tool-renderers/web-fetch";
 import { ViewImageRenderer } from "./tool-renderers/view-image";
@@ -39,6 +40,14 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
       return (
         <RecallToolRenderer
           toolName={toolName}
+          input={input}
+          output={output}
+          state={renderState}
+        />
+      );
+    case "writeCase":
+      return (
+        <WriteCaseRenderer
           input={input}
           output={output}
           state={renderState}

@@ -99,7 +99,55 @@
         "recallRecent": "正在回忆最近的事…",
         "recallFind": "正在记忆里定位…",
         "recallSearch": "正在搜索记忆…",
-        "recallRead": "正在读取记忆…"
+        "recallRead": "正在读取记忆…",
+        "name": {
+          "recallRecent": "回忆最近",
+          "recallFind": "定位",
+          "recallSearch": "搜索记忆"
+        },
+        "nameRead": "读取",
+        "scope": {
+          "memory": "全部记忆",
+          "events": "事件",
+          "people": "人物",
+          "things": "物件",
+          "tasks": "任务",
+          "research": "调研",
+          "places": "地点",
+          "orgs": "组织",
+          "self": "自我",
+          "timeline": "时间线",
+          "records": "对话记录",
+          "hypotheses": "假设"
+        },
+        "summaryRecent": "{scope} · {count} 条 · {first}",
+        "summarySearch": "「{query}」· 命中 {count} 条",
+        "summaryFallback": "「{query}」· 没有命中，附最近 {count} 条",
+        "summaryMiss": "「{name}」· 没有找到",
+        "summaryMissNear": "「{name}」· 没有找到 · {count} 个近似项",
+        "summaryEmpty": "{scope} · 这里还没有内容",
+        "summaryPastEnd": "没有更多条目了（共 {total} 条）",
+        "summaryReadFailure": "现在读不到 · 这是读取失败",
+        "summaryRead": "{reference}",
+        "fallbackNote": "关键词「{query}」没有命中 — 以下是该范围最近的条目（回退，不是搜索结果）：",
+        "emptyBody": "{scope} 里还没有任何内容 — 这是空范围，不是未命中。",
+        "missBody": "没有找到「{name}」— 未命中不等于不存在，先看看这些近似项。",
+        "pastEndBody": "没有更多条目了 — offset {offset} 已越过末尾，此范围共 {total} 条，最新在前。空页不等于没有。",
+        "readFailureBody": "现在读不到这条内容 — 这是读取失败，不是不存在，它可能还在。",
+        "pageOffset": "还有更旧的条目（从 offset {offset} 继续）。",
+        "pageCapped": "仅显示最新 {shown} 条（共扫描 {scanned} 条）— 缩小日期范围或增加关键词可以看到更早的。"
+      },
+      "writeCase": {
+        "verb": "写入档案",
+        "queuedVerb": "正在写入",
+        "queued": "{target} · 随本轮落盘…",
+        "committed": "已写入 {target}",
+        "refused": "未写入",
+        "piece": "篇目：{title}",
+        "action": {
+          "open": "建立档案",
+          "addPiece": "追加一篇"
+        }
       },
       "currentTime": "看了看表",
       "webSearchRunning": "正在搜索「{query}」…",
