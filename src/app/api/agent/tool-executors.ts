@@ -57,8 +57,11 @@ import {
   recallFind,
   recallSearch,
   recallRead,
+  recallSince,
+  readChangesSince,
   renderRecallResult,
   renderRecallReadResult,
+  renderRecallSinceResult,
   isRecallCategory,
   type RecallBackend,
   type RecallCategory,
@@ -416,6 +419,72 @@ export async function recallReadExecute(
     }
   }
   return renderRecallReadResult(result, ref);
+}
+
+// ─── recallSince — the differential view (v0.11) ──────────────────────────
+//
+// "自某天以来变了什么" — the commit history IS the diff: the read comes from
+// the ledger (facade.readChangesSince), never from a new store. This executor
+// validates, picks the default window (neither `since` nor `cursor` → the
+// last 1 day, user calendar), and renders with the FIXED template.
+
+/** User-local day one day before today — the default "最近 1 天" window. */
+function defaultChangesSince(timezone: string | undefined): string {
+  const day = userLocalDate(timezone);
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export async function recallSinceExecute(
+  input: { since?: string; cursor?: string; category?: string; limit?: number },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const rawCategory = input.category?.trim();
+  if (rawCategory && !isRecallCategory(rawCategory)) {
+    return renderRecallSinceResult({
+      kind: "unavailable",
+      note: `unknown category ${JSON.stringify(input.category)}`,
+    });
+  }
+  const category: RecallCategory | undefined = rawCategory
+    ? (rawCategory as RecallCategory)
+    : undefined;
+  const since = input.since?.trim();
+  if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
+    return renderRecallSinceResult({
+      kind: "unavailable",
+      note: `since must be YYYY-MM-DD, got ${JSON.stringify(input.since)}`,
+    });
+  }
+  const cursor = input.cursor?.trim();
+  if (cursor && !/^[0-9a-f]{7,40}$/i.test(cursor)) {
+    return renderRecallSinceResult({
+      kind: "unavailable",
+      note: `cursor must be a commit sha, got ${JSON.stringify(input.cursor)}`,
+    });
+  }
+  if (ctx.useDemo) {
+    return renderRecallSinceResult({
+      kind: "unavailable",
+      note: "Demo mode runs on read-only benchmark data — there is no commit log to diff",
+    });
+  }
+  const read = await readChangesSince({
+    since: since ?? defaultChangesSince(ctx.timezone),
+    ...(cursor ? { cursor } : {}),
+  });
+  if (read.unavailable) {
+    return renderRecallSinceResult({ kind: "unavailable", note: read.unavailable });
+  }
+  const result = recallSince(read, {
+    ...(category ? { category } : {}),
+    ...(since ? { since } : {}),
+    ...(cursor ? { cursor } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  });
+  return renderRecallSinceResult(result);
 }
 
 

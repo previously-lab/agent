@@ -1,8 +1,8 @@
 /**
  * The memory-read facade (v0.36) — the field agent's read vocabulary over the
- * memory tree: four verbs (recallRecent / recallFind / recallSearch /
- * recallRead), one entry shape, one discriminated result envelope, and fixed
- * rendering per result kind.
+ * memory tree: five verbs (recallRecent / recallFind / recallSearch /
+ * recallRead / recallSince), one entry shape, one discriminated result
+ * envelope, and fixed rendering per result kind.
  *
  * EVERYTHING here is read-time parsed and pure-facade: dates come from paths
  * and slice ids for free, content scans run newest-first over the existing
@@ -25,11 +25,18 @@
  */
 
 import matter from "gray-matter";
+import git from "isomorphic-git";
+import fs from "fs";
 import {
   isRecallCategory,
   RECALL_CATEGORIES,
   type RecallCategory,
 } from "@/lib/memory/categories";
+import { getOctokit } from "@/lib/github/client";
+import { getRepoConfig } from "@/lib/capabilities";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getMemoryRoot } from "@/lib/whitelist";
+import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
 import { CASE_CATEGORIES, MEMORY_ROOT_DIR } from "@/lib/docs/paths";
 import type { CaseCategory } from "@/lib/docs/paths";
 import { parseCaseDoc } from "@/lib/docs/case-doc";
@@ -1465,6 +1472,420 @@ async function readBareFile(backend: RecallBackend, path: string): Promise<Recal
   }
 }
 
+// ─── Verb ⑤ recallSince — the differential view (v0.11) ───────────────────
+//
+// "自某天以来变了什么" answered from the commit history itself — the ledger
+// IS the diff; no new storage, index, or projection. The read plane follows
+// hq-log's discipline exactly: bounded scan, both backends, truncation
+// reported as INCOMPLETE (never as "no changes"), unborn-branch and non-git
+// roots degraded with the `git init` advice.
+//
+// Cost discipline: LOCAL diffs each in-window commit's tree against its
+// parent (one isomorphic-git walk per commit, capped); GITHUB makes THREE
+// constant calls — repos.get (default branch), listCommits(until=since)
+// (the base), compare(base…head) (the file list) — NEVER one getCommit per
+// commit. The compare's per-commit file attribution is not available at
+// that price: GitHub entries carry the RANGE-END date as `at`, the local
+// backend attributes per commit.
+
+export type RecallChange = "added" | "modified" | "removed";
+
+export interface RecallSinceInput {
+  /** Inclusive day bound, YYYY-MM-DD (user calendar). */
+  since?: string;
+  /** A commit sha from a previous result's paging note — changes AFTER it. */
+  cursor?: string;
+  category?: RecallCategory;
+  /** Cap on ENTRIES (not commits) — default 20, hard cap 50. */
+  limit?: number;
+}
+
+export const CHANGES_DEFAULT_LIMIT = 20;
+export const CHANGES_MAX_LIMIT = 50;
+
+/** One commit's name-status leg as a source hands it over (newest-first). */
+export interface RecallChangesCommit {
+  sha: string;
+  /** Commit timestamp (ISO), null when the backend doesn't say. */
+  at: string | null;
+  /** Repo-relative paths with their name-status. */
+  files: Array<{ path: string; change: RecallChange }>;
+}
+
+/** A source's raw read: the covered bounds + honest truncation accounting. */
+export interface RecallChangesRead {
+  commits: RecallChangesCommit[];
+  /** YYYY-MM-DD — the window the read actually covers. */
+  since: string;
+  /** YYYY-MM-DD — the range end (the newest commit's day, else today). */
+  until: string;
+  /** Range commit count when the source knows it (GitHub compare's total). */
+  commitCount?: number;
+  /** True when the source TRUNCATED the scan — never reported as "no changes". */
+  incomplete: boolean;
+  incompleteReason?: string;
+  /** Degradation (log plane down) — the caller renders `unavailable`. */
+  unavailable?: string;
+}
+
+/** One changed entry — `ref` feeds recallRead directly. */
+export interface RecallChangeEntry {
+  ref: string;
+  change: RecallChange;
+  /** The newest touch's commit timestamp (ISO), null when unknown. */
+  at: string | null;
+}
+
+export type RecallSinceResult =
+  | {
+      kind: "changes";
+      since: string;
+      until: string;
+      /** Commits in the covered range (may exceed the entry page). */
+      commits: number;
+      /** The page, newest first; `total` is the pre-limit count. */
+      entries: RecallChangeEntry[];
+      total: number;
+      /** True when the source truncated the scan (fixed INCOMPLETE note). */
+      incomplete: boolean;
+      /** Oldest covered commit — the cursor for continuing past the page. */
+      cursor: string | null;
+    }
+  | { kind: "empty"; since: string; until: string }
+  | { kind: "unavailable"; note: string };
+
+/** Local ledger scan/diff caps (the hq-log bounded-scan discipline). */
+const CHANGES_SCAN_CAP = 300;
+const CHANGES_DIFF_CAP = 50;
+/** GitHub compare caps its file list at 300 — at the cap, assume truncation. */
+const GITHUB_COMPARE_FILE_CAP = 300;
+/** …and its commit list at 250 — fewer commits than total means truncation. */
+const GITHUB_COMPARE_COMMIT_CAP = 250;
+/** The well-known empty-tree sha — a compare base for repos with no earlier commit. */
+const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+// ── Path classification (repo-relative path → recallRead-able ref) ────────
+
+/**
+ * Normalize a source path to repo-relative `memory/…` form: the local
+ * ledger's repo root IS the memory root, so its paths lack the `memory/`
+ * prefix the GitHub tree carries. Pure.
+ */
+function normalizeChangedPath(path: string): string {
+  const p = path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+  return p.startsWith("memory/") ? p : `memory/${p}`;
+}
+
+const CHANGED_RECORDS_RE = /^memory\/records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\//;
+const CHANGED_LEGACY_RE = /^memory\/episodic\/slices\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\//;
+const CHANGED_CASE_INDEX_RE =
+  /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/index\.md$/;
+const CHANGED_PIECE_RE =
+  /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/(\d{4}-\d{2}-\d{2}-[^/]+)\.md$/;
+
+/**
+ * Map one changed path to (ref, category) — or null when the path is
+ * filtered (config/, attachments, user config) or has no recallRead-able
+ * shape (unknown subtrees never become refs: every emitted ref MUST feed
+ * recallRead). The slice dirs collapse: core/agent/previously of one slice
+ * all read as the single `records/<sliceId>` ref.
+ */
+function classifyChangedPath(
+  rawPath: string,
+  change: RecallChange,
+): { ref: string; category: RecallCategory } | null {
+  const path = normalizeChangedPath(rawPath);
+  if (path.startsWith("memory/config/") || path === "memory/user/config.json") return null;
+  if (path.includes("/attachments/")) return null;
+
+  const records =
+    CHANGED_RECORDS_RE.exec(path) ?? CHANGED_LEGACY_RE.exec(path);
+  if (records) {
+    return {
+      ref: `records/${records[1]}-${records[2]}-${records[3]}-${records[4]}`,
+      category: "records",
+    };
+  }
+  if (path === "memory/self/agenda.md") return { ref: "self/agenda", category: "self" };
+  if (path === "memory/people/user/profile.md") {
+    return { ref: "people/user/profile", category: "people" };
+  }
+  const index = CHANGED_CASE_INDEX_RE.exec(path);
+  if (index) {
+    const category = facadeCategoryForTreeDir(index[1]!);
+    return { ref: `${category}/${index[2]}`, category };
+  }
+  const piece = CHANGED_PIECE_RE.exec(path);
+  if (piece) {
+    const category = facadeCategoryForTreeDir(piece[1]!);
+    return { ref: `${category}/${piece[2]}/${piece[3]}`, category };
+  }
+  return null;
+}
+
+/**
+ * The pure core of recallSince: classify + filter + collapse + cap. Commits
+ * arrive newest-first; the first occurrence of a ref wins (its newest touch),
+ * so slice multi-file commits and repeat touches collapse naturally.
+ */
+export function recallSince(read: RecallChangesRead, input: RecallSinceInput): RecallSinceResult {
+  const limit = Math.min(
+    Math.max(1, Math.floor(input.limit ?? CHANGES_DEFAULT_LIMIT)),
+    CHANGES_MAX_LIMIT,
+  );
+  const seen = new Map<string, RecallChangeEntry>();
+  for (const commit of read.commits) {
+    for (const file of commit.files) {
+      const classified = classifyChangedPath(file.path, file.change);
+      if (!classified) continue;
+      if (input.category) {
+        // timeline reads the same slice refs as records (recallFind's rule).
+        const want = input.category === "timeline" ? "records" : input.category;
+        if (classified.category !== want) continue;
+      }
+      if (!seen.has(classified.ref)) {
+        seen.set(classified.ref, {
+          ref: classified.ref,
+          change: file.change,
+          at: commit.at,
+        });
+      }
+    }
+  }
+  const entries = [...seen.values()];
+  const total = entries.length;
+  if (total === 0 && !read.incomplete) {
+    return { kind: "empty", since: read.since, until: read.until };
+  }
+  const page = entries.slice(0, limit);
+  const oldest = read.commits.length > 0 ? read.commits[read.commits.length - 1]! : null;
+  return {
+    kind: "changes",
+    since: read.since,
+    until: read.until,
+    commits: read.commitCount ?? read.commits.length,
+    entries: page,
+    total,
+    incomplete: read.incomplete,
+    cursor: total > limit && oldest ? oldest.sha : null,
+  };
+}
+
+// ── The commit-plane readers (hq-log's bounded-scan / degradation范式) ────
+
+/** One commit's name-status diff against its first parent (local ledger). */
+async function diffCommitFiles(
+  root: string,
+  oid: string,
+): Promise<Array<{ path: string; change: RecallChange }>> {
+  const { commit } = await git.readCommit({ fs, dir: root, oid });
+  const parent = commit.parent[0] ?? null;
+  if (!parent) {
+    // Root commit — everything is an addition.
+    const walked = await git.walk({
+      fs,
+      dir: root,
+      trees: [git.TREE({ ref: oid })],
+      map: async (filepath, [entry]) => {
+        if (filepath === "." || !entry) return undefined;
+        return (await entry.type()) === "blob"
+          ? { path: filepath, change: "added" as const }
+          : undefined;
+      },
+    });
+    return (walked as Array<{ path: string; change: RecallChange } | undefined>).filter(
+      (f): f is { path: string; change: RecallChange } => Boolean(f),
+    );
+  }
+  const walked = await git.walk({
+    fs,
+    dir: root,
+    trees: [git.TREE({ ref: oid }), git.TREE({ ref: parent })],
+    map: async (filepath, [now, was]) => {
+      if (filepath === ".") return undefined;
+      const nowBlob = now ? (await now.type()) === "blob" : false;
+      const wasBlob = was ? (await was.type()) === "blob" : false;
+      if (nowBlob && !wasBlob) return { path: filepath, change: "added" as const };
+      if (!nowBlob && wasBlob) return { path: filepath, change: "removed" as const };
+      if (nowBlob && wasBlob) {
+        const [a, b] = await Promise.all([now!.oid(), was!.oid()]);
+        if (a !== b) return { path: filepath, change: "modified" as const };
+      }
+      return undefined;
+    },
+  });
+  return (walked as Array<{ path: string; change: RecallChange } | undefined>).filter(
+    (f): f is { path: string; change: RecallChange } => Boolean(f),
+  );
+}
+
+async function readChangesLocal(input: {
+  since: string;
+  cursor?: string;
+}): Promise<RecallChangesRead> {
+  const root = getMemoryRoot();
+  if (!isGitRepo(root)) {
+    return {
+      commits: [],
+      since: input.since,
+      until: new Date().toISOString().slice(0, 10),
+      incomplete: false,
+      unavailable:
+        "the memory root is not a git repository — there is no commit history to read changes from; run `git init` in the memory root to enable it",
+    };
+  }
+  const all = await logCommits(root, CHANGES_SCAN_CAP);
+  const commits: RecallChangesCommit[] = [];
+  let incomplete = all.length >= CHANGES_SCAN_CAP;
+  let cursorFound = input.cursor === undefined;
+  let diffs = 0;
+  for (const c of all) {
+    if (!cursorFound) {
+      if (c.oid === input.cursor) cursorFound = true;
+      continue; // at-or-before the cursor — out of range
+    }
+    if (input.cursor === undefined) {
+      // since-window: the ledger is newest-first, so the first commit older
+      // than the window closes the scan (nothing older can be in range).
+      if (c.committedAtMs !== null) {
+        const day = new Date(c.committedAtMs).toISOString().slice(0, 10);
+        if (day < input.since) break;
+      }
+    }
+    if (diffs >= CHANGES_DIFF_CAP) {
+      incomplete = true;
+      break;
+    }
+    diffs += 1;
+    let files: Array<{ path: string; change: RecallChange }>;
+    try {
+      files = await diffCommitFiles(root, c.oid);
+    } catch {
+      files = []; // a single unreadable diff degrades, never fails the read
+    }
+    commits.push({
+      sha: c.oid,
+      at: c.committedAtMs !== null ? new Date(c.committedAtMs).toISOString() : null,
+      files,
+    });
+  }
+  if (input.cursor !== undefined && !cursorFound) incomplete = true;
+  return {
+    commits,
+    since: input.since,
+    until: commits[0]?.at?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+    incomplete,
+    incompleteReason: incomplete
+      ? "the local commit scan reached its cap; older changes may be missing"
+      : undefined,
+  };
+}
+
+async function readChangesGitHub(input: {
+  since: string;
+  cursor?: string;
+}): Promise<RecallChangesRead> {
+  const { owner, repo } = getRepoConfig();
+  const octokit = getOctokit();
+  // THREE constant calls — never one getCommit per commit. `until` is the
+  // since-day's UTC midnight: a user-calendar approximation, stated openly.
+  const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
+  let base: string;
+  if (input.cursor) {
+    base = input.cursor;
+  } else {
+    const { data: before } = await octokit.rest.repos.listCommits({
+      owner,
+      repo,
+      until: `${input.since}T00:00:00Z`,
+      per_page: 1,
+    });
+    // No commit before the window (young repo): compare against the empty tree.
+    base = before[0]?.sha ?? EMPTY_TREE_SHA;
+  }
+  const { data } = await octokit.rest.repos.compareCommits({
+    owner,
+    repo,
+    base,
+    head: repoData.default_branch,
+  });
+  const newest = data.commits.at(-1)?.commit?.committer?.date ?? null;
+  const files: Array<{ path: string; change: RecallChange }> = (data.files ?? [])
+    .map((f) => ({
+      path: f.filename ?? "",
+      change:
+        f.status === "added" || f.status === "copied"
+          ? ("added" as const)
+          : f.status === "removed"
+            ? ("removed" as const)
+            : ("modified" as const),
+    }))
+    .filter((f) => f.path.length > 0);
+  const incomplete =
+    (data.files?.length ?? 0) >= GITHUB_COMPARE_FILE_CAP ||
+    data.commits.length < Math.min(data.total_commits, GITHUB_COMPARE_COMMIT_CAP) ||
+    data.total_commits > GITHUB_COMPARE_COMMIT_CAP;
+  return {
+    // One pseudo-commit: compare does not attribute files to commits at this
+    // call budget — every entry carries the range-end date as `at`.
+    commits:
+      files.length > 0
+        ? [{ sha: data.merge_base_commit?.sha ?? "", at: newest, files }]
+        : [],
+    since: input.since,
+    until: newest?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+    commitCount: data.total_commits,
+    incomplete,
+    incompleteReason: incomplete
+      ? "the GitHub compare backend truncated the file or commit list"
+      : undefined,
+  };
+}
+
+/**
+ * Read the commit history on the active backend (hq-log's dispatch shape) —
+ * the recallSince verb's data plane. Failure semantics: a non-git local root
+ * yields the `git init` advice; an unborn branch says "no commits yet";
+ * anything else degrades to `unavailable` with the reason. Truncation on
+ * either backend is flagged `incomplete` — a partial truth, NEVER "no changes".
+ */
+export async function readChangesSince(input: {
+  since: string;
+  cursor?: string;
+}): Promise<RecallChangesRead> {
+  const source = resolveDataSource();
+  try {
+    if (source === "github") return await readChangesGitHub(input);
+    if (source === "local") return await readChangesLocal(input);
+    return {
+      commits: [],
+      since: input.since,
+      until: new Date().toISOString().slice(0, 10),
+      incomplete: false,
+      unavailable: "demo mode has no commit log",
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/Could not find refs\/heads|Could not find HEAD/i.test(message)) {
+      return {
+        commits: [],
+        since: input.since,
+        until: input.since,
+        incomplete: false,
+        unavailable:
+          "the memory repository has no commits yet (unborn branch) — there is nothing to diff against",
+      };
+    }
+    return {
+      commits: [],
+      since: input.since,
+      until: input.since,
+      incomplete: false,
+      unavailable: `change log read failed: ${message}`,
+    };
+  }
+}
+
 // ─── Fixed rendering (v0.36 §3.2 — pinned text per kind) ────────────────
 
 export interface RenderMeta {
@@ -1571,4 +1992,46 @@ export function renderOutlineResult(
     `Outline of ${result.ref} (${result.totalLines} lines) — pick a span, ` +
     `then read it with range: "lines:a-b":\n${lines.join("\n")}`
   );
+}
+
+// ─── Fixed rendering — the recallSince changes kind ───────────────────────
+
+/** The pinned per-change glyphs (the UI keys its colors on the same letters). */
+export const CHANGE_SYMBOL: Record<RecallChange, string> = {
+  added: "+",
+  modified: "~",
+  removed: "−",
+};
+
+/**
+ * Render a recallSince outcome with the FIXED template — the model and the
+ * UI parser read these exact sentences. The INCOMPLETE line is the honest-
+ * degradation contract: a truncated backend says so, NEVER reports absence.
+ */
+export function renderRecallSinceResult(result: RecallSinceResult): string {
+  switch (result.kind) {
+    case "unavailable":
+      return `This could not be read right now (${result.note}). That is a read failure, not absence — it may still exist.`;
+    case "empty":
+      return `No changes since ${result.since} through ${result.until} — the commit history shows nothing in this window.`;
+    case "changes": {
+      const head = `Changes since ${result.since} through ${result.until} (${result.commits} commits):`;
+      const lines = result.entries.map(
+        (e) =>
+          `- [${e.at?.slice(0, 10) ?? "undated"}] ${CHANGE_SYMBOL[e.change]} ${e.ref} — ${e.change}`,
+      );
+      const notes: string[] = [];
+      if (result.total > result.entries.length) {
+        notes.push(
+          `Showing the newest ${result.entries.length} of ${result.total} changed entries — pass cursor=${result.cursor} for older ones.`,
+        );
+      }
+      if (result.incomplete) {
+        notes.push(
+          `This result is INCOMPLETE — the commit history scan was truncated; more changes may exist beyond those shown.`,
+        );
+      }
+      return [head, ...lines, ...notes].join("\n");
+    }
+  }
 }

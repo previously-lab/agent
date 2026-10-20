@@ -43,6 +43,8 @@ export type ParsedRecallOutput =
       scope?: string;
       entries: ParsedEntry[];
       note?: RecallPageNote;
+      /** Present when a near-name matched — the stored name differs. */
+      matchedName?: string;
     }
   | {
       /** Keyword miss on a non-empty scope — the entries are a FALLBACK, not hits. */
@@ -77,6 +79,8 @@ export type ParsedRecallOutput =
       /** Raw recallRead content (the document body). */
       kind: "content";
       text: string;
+      /** Present when a near-name matched — the banner names the stored ref. */
+      nearName?: string;
     }
   | {
       /** recallRead outline: the heading skeleton, never the body. */
@@ -86,10 +90,30 @@ export type ParsedRecallOutput =
       headings: { level: number; title: string; from: number; to: number }[];
     }
   | {
+      /** recallSince diff: refs with their change letter, newest first. */
+      kind: "changes";
+      since: string;
+      until: string;
+      commits: number;
+      entries: ParsedChangeEntry[];
+      /** True when the backend truncated the scan — a partial truth. */
+      incomplete: boolean;
+      /** Present when the entry page was capped — the sha to continue from. */
+      cursorNote?: string;
+    }
+  | {
       /** Unrecognized wording — render verbatim. */
       kind: "unknown";
       text: string;
     };
+
+/** One changed entry line of a recallSince result. */
+export interface ParsedChangeEntry {
+  change: "added" | "modified" | "removed";
+  ref: string;
+  /** YYYY-MM-DD of the newest touch, undefined when undated. */
+  at?: string;
+}
 
 const RE_UNAVAILABLE =
   /^This could not be read right now \(([\s\S]*?)\)\. That is a read failure, not absence — it may still exist\.$/;
@@ -103,7 +127,7 @@ const RE_READ_MISS = /^Nothing named "(.+?)" exists in memory — and nothing si
 const RE_PAST_END =
   /^No more entries — offset (\d+) is past the end; only (\d+) exist in this scope, newest first\.$/;
 const RE_FALLBACK_HEAD =
-  /^Nothing matches "(.*)"\. Here are (\d+) most recent entries instead:$/;
+  /^Nothing matches "(.*)"\. Here are the (\d+) most recent entries instead:$/;
 const RE_RECENT_HEAD = /^The (\d+) most recent (.+) entries:$/;
 const RE_SEARCH_HEAD = /^(\d+) match\(es\) for "(.*)":$/;
 const RE_ENTRY_LINE = /^- \[([^\]]*)\] ([\s\S]*?) \(ref: (.+)\)$/;
@@ -116,6 +140,21 @@ const RE_OUTLINE_HEAD =
 const RE_OUTLINE_HEADING = /^(\s*)L(\d+)-(\d+)  (\S[\s\S]*)$/;
 const RE_OUTLINE_EMPTY =
   /^Outline of (.+?): no heading skeleton — this document has no headings\. Read it directly with range: "lines:a-b" \(it has (\d+) lines\)\.$/;
+const RE_READ_MISS_NEAR =
+  /^Nothing named "(.+?)" exists in memory\. Closest matches: ([\s\S]+)\.$/;
+const RE_MATCHED_NAME_NOTE =
+  /^\(matched the near-name "(.+?)" — that is the stored name\)$/;
+const RE_CONTENT_NEAR_NAME =
+  /^\(matched the near-name "(.+?)" — read it under that stored name\)\n\n/;
+const RE_CHANGES_HEAD =
+  /^Changes since (\d{4}-\d{2}-\d{2}) through (\d{4}-\d{2}-\d{2}) \((\d+) commits\):$/;
+const RE_CHANGES_LINE = /^- \[([^\]]*)\] ([+~−]) (\S[\s\S]*?) — (added|modified|removed)$/;
+const RE_CHANGES_EMPTY =
+  /^No changes since (\d{4}-\d{2}-\d{2}) through (\d{4}-\d{2}-\d{2}) — the commit history shows nothing in this window\.$/;
+const RE_CHANGES_CURSOR =
+  /^Showing the newest (\d+) of (\d+) changed entries — pass cursor=(\S+) for older ones\.$/;
+const RE_CHANGES_INCOMPLETE =
+  /^This result is INCOMPLETE — the commit history scan was truncated; more changes may exist beyond those shown\.$/;
 
 function parseEntryLine(line: string): ParsedEntry | null {
   const m = RE_ENTRY_LINE.exec(line);
@@ -137,15 +176,22 @@ function parseEntryLine(line: string): ParsedEntry | null {
 function parseEntryBody(lines: string[]): {
   entries: ParsedEntry[];
   note?: RecallPageNote;
+  matchedName?: string;
 } {
   const entries: ParsedEntry[] = [];
   let note: RecallPageNote | undefined;
+  let matchedName: string | undefined;
   for (const line of lines) {
     const trimmed = line.trimEnd();
     if (!trimmed) continue;
     const entry = parseEntryLine(trimmed);
     if (entry) {
       entries.push(entry);
+      continue;
+    }
+    const matched = RE_MATCHED_NAME_NOTE.exec(trimmed);
+    if (matched) {
+      matchedName = matched[1];
       continue;
     }
     const offset = RE_NOTE_OFFSET.exec(trimmed);
@@ -163,7 +209,7 @@ function parseEntryBody(lines: string[]): {
       note = { kind: "capped", shown: Number(capped[1]), scanned: Number(capped[2]) };
     }
   }
-  return { entries, note };
+  return { entries, note, matchedName };
 }
 
 /**
@@ -181,9 +227,68 @@ export function parseRecallOutput(
   const unavailable = RE_UNAVAILABLE.exec(text);
   if (unavailable) return { kind: "readFailure", note: unavailable[1] };
 
+  // recallSince — the changes plane (its head/empty/incomplete wording is its
+  // own fixed template; parse before the generic list-verb fallthrough).
+  if (toolName === "recallSince") {
+    const emptyChanges = RE_CHANGES_EMPTY.exec(text);
+    if (emptyChanges) {
+      return {
+        kind: "changes",
+        since: emptyChanges[1]!,
+        until: emptyChanges[2]!,
+        commits: 0,
+        entries: [],
+        incomplete: false,
+      };
+    }
+    const lines = text.split("\n");
+    const head = RE_CHANGES_HEAD.exec(lines[0] ?? "");
+    if (head) {
+      const entries: ParsedChangeEntry[] = [];
+      let incomplete = false;
+      let cursorNote: string | undefined;
+      for (const raw of lines.slice(1)) {
+        const line = raw.trimEnd();
+        if (!line) continue;
+        const entry = RE_CHANGES_LINE.exec(line);
+        if (entry) {
+          entries.push({
+            at: entry[1] !== "undated" ? entry[1] : undefined,
+            change: entry[4] as ParsedChangeEntry["change"],
+            ref: entry[3]!,
+          });
+          continue;
+        }
+        if (RE_CHANGES_INCOMPLETE.test(line)) {
+          incomplete = true;
+          continue;
+        }
+        const cursor = RE_CHANGES_CURSOR.exec(line);
+        if (cursor) cursorNote = cursor[3];
+      }
+      return {
+        kind: "changes",
+        since: head[1]!,
+        until: head[2]!,
+        commits: Number(head[3]),
+        entries,
+        incomplete,
+        ...(cursorNote ? { cursorNote } : {}),
+      };
+    }
+  }
+
   const readMiss = RE_READ_MISS.exec(text);
   if (readMiss && toolName === "recallRead") {
     return { kind: "notFound", name: readMiss[1], nearMisses: [] };
+  }
+  const readMissNear = RE_READ_MISS_NEAR.exec(text);
+  if (readMissNear && toolName === "recallRead") {
+    return {
+      kind: "notFound",
+      name: readMissNear[1],
+      nearMisses: readMissNear[2].split(",").map((s) => s.trim()).filter(Boolean),
+    };
   }
 
   // recallRead outline — the heading skeleton (fixed template, parse before
@@ -220,7 +325,13 @@ export function parseRecallOutput(
     }
   }
 
-  if (toolName === "recallRead") return { kind: "content", text };
+  if (toolName === "recallRead") {
+    const near = RE_CONTENT_NEAR_NAME.exec(text);
+    if (near) {
+      return { kind: "content", text: text.slice(near[0].length), nearName: near[1] };
+    }
+    return { kind: "content", text };
+  }
 
   const empty = RE_EMPTY.exec(text);
   if (empty) return { kind: "empty", scope: empty[1] };
@@ -251,14 +362,26 @@ export function parseRecallOutput(
 
   const recentHead = RE_RECENT_HEAD.exec(lines[0] ?? "");
   if (recentHead) {
-    const { entries, note } = parseEntryBody(lines.slice(1));
-    return { kind: "entries", scope: recentHead[2], entries, ...(note ? { note } : {}) };
+    const { entries, note, matchedName } = parseEntryBody(lines.slice(1));
+    return {
+      kind: "entries",
+      scope: recentHead[2],
+      entries,
+      ...(note ? { note } : {}),
+      ...(matchedName ? { matchedName } : {}),
+    };
   }
 
   const searchHead = RE_SEARCH_HEAD.exec(lines[0] ?? "");
   if (searchHead) {
-    const { entries, note } = parseEntryBody(lines.slice(1));
-    return { kind: "entries", query: searchHead[2], entries, ...(note ? { note } : {}) };
+    const { entries, note, matchedName } = parseEntryBody(lines.slice(1));
+    return {
+      kind: "entries",
+      query: searchHead[2],
+      entries,
+      ...(note ? { note } : {}),
+      ...(matchedName ? { matchedName } : {}),
+    };
   }
 
   return { kind: "unknown", text };

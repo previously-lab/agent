@@ -29,6 +29,7 @@ import {
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
+  recallSinceExecute,
   webSearchExecute,
   webFetchExecute,
   thinkDeepExecute,
@@ -389,6 +390,64 @@ export const chatTools = {
     }),
     contextSchema: toolContextSchema,
     execute: recallReadExecute,
+  }),
+
+  // ⑤ The differential view — "自某天以来变了什么" from the commit history
+  // itself (the ledger IS the diff; no new storage). Use when the user asks
+  // what CHANGED since a day or since a previous recallSince result.
+  recallSince: tool({
+    description:
+      "See what CHANGED in memory over a window — the differential view the " +
+      "commit history already carries, no new storage behind it. Use this " +
+      "when the user asks '自某天以来变了什么' / 'what has changed since …' " +
+      "instead of pulling a recent list and diffing snapshots yourself. " +
+      "Give `since` (YYYY-MM-DD, user calendar, that day included) OR " +
+      "`cursor` (a commit sha from a previous result's paging note — the " +
+      "changes AFTER that commit); neither defaults to the last 1 day. " +
+      "Every returned entry is a recallRead-ready ref carrying its change " +
+      "(added / modified / removed) and date — continue with recallRead(ref). " +
+      "`limit` caps ENTRIES (default 20, hard cap 50), not commits; " +
+      "`category` narrows to one world (records / events / …). The refs of " +
+      "one conversation slice collapse into ONE records/<sliceId> entry no " +
+      "matter how many of its files changed. FIXED result wording (recognize " +
+      "it, do not paraphrase): a window opens `Changes since {since} " +
+      "through {until} ({n} commits):` with lines `- [date] +|~|− ref — " +
+      "added|modified|removed`; a genuinely empty window opens `No changes " +
+      "since {since} through {until} — the commit history shows nothing in " +
+      "this window.`; a capped page appends `Showing the newest {n} of " +
+      "{total} changed entries — pass cursor={sha} for older ones.`; and a " +
+      "TRUNCATED backend appends `This result is INCOMPLETE — the commit " +
+      "history scan was truncated; more changes may exist beyond those " +
+      "shown.` — an INCOMPLETE result is a PARTIAL truth, NEVER report it " +
+      "as 'nothing changed'.",
+    inputSchema: z.object({
+      since: z
+        .string()
+        .optional()
+        .describe(
+          "Inclusive day bound, YYYY-MM-DD (user calendar) — changes from " +
+          "that day onward. Omit when passing `cursor`.",
+        ),
+      cursor: z
+        .string()
+        .optional()
+        .describe(
+          "A commit sha from a previous result's paging note — the changes " +
+          "AFTER that commit. Omit when passing `since`.",
+        ),
+      category: z
+        .enum(RECALL_CATEGORIES)
+        .optional()
+        .describe("Narrow the diff to one world (same categories as recallRecent)."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Max changed entries (default 20, hard cap 50) — entries, not commits."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recallSinceExecute,
   }),
 
   // The field agent's case write (v0.21 §2): open a case mid-reply so the
@@ -854,6 +913,7 @@ export function buildChatToolsContext(
     recallFind: ctx,
     recallSearch: ctx,
     recallRead: ctx,
+    recallSince: ctx,
     writeCase: ctx,
     startLongTask: ctx,
     noteForSediment: ctx,

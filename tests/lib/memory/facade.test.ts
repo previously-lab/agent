@@ -10,20 +10,66 @@
  *   category/includeRecords scans them
  * - recent ordering by ACTIVITY (max(updated, latest piece date)), not birth
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import git from "isomorphic-git";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
 import {
   recallRecent,
   recallFind,
   recallSearch,
   recallRead,
+  recallSince,
+  readChangesSince,
   renderRecallResult,
   renderRecallReadResult,
+  renderRecallSinceResult,
   buildTreeIndex,
   sliceHeadText,
   firstProseLine,
   type RecallBackend,
+  type RecallChangesRead,
   type RecallResult,
 } from "@/lib/memory/facade";
+
+// ─── recallSince (v0.11) — mocks over the storage-boundary modules ─────────
+//
+// Same discipline as tests/lib/chat/hq-log.test.ts: resolveDataSource /
+// whitelist / github client / capabilities are mocked at the module boundary;
+// local-git is the REAL module (the local fixture below is a genuine git
+// repo, so the tree-diff walk runs for real).
+
+const h = vi.hoisted(() => {
+  const repos = {
+    get: vi.fn(),
+    listCommits: vi.fn(),
+    compareCommits: vi.fn(),
+  };
+  return {
+    source: "local" as string,
+    memoryRoot: "/nonexistent-memory-root",
+    octokit: { rest: { repos } },
+    repos,
+  };
+});
+
+vi.mock("@/lib/data-source/resolve", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/data-source/resolve")>();
+  return { ...actual, resolveDataSource: () => h.source };
+});
+vi.mock("@/lib/whitelist", () => ({
+  getMemoryRoot: () => h.memoryRoot,
+}));
+vi.mock("@/lib/github/client", () => ({
+  getOctokit: () => h.octokit,
+}));
+vi.mock("@/lib/capabilities", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/capabilities")>();
+  return { ...actual, getRepoConfig: () => ({ owner: "o", repo: "r" }) };
+});
 
 // ─── Fake backend ──────────────────────────────────────────────────────────
 
@@ -893,5 +939,266 @@ describe("recallRead outline", () => {
       if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
       expect(r.content).toBe(OUTLINE_DOC);
     }
+  });
+});
+
+// ─── Verb ⑤ recallSince — the differential view (v0.11) ────────────────────
+
+/** One commit in a REAL local git fixture (timestamps pinned via author). */
+async function fixtureCommit(
+  root: string,
+  files: Record<string, string>,
+  message: string,
+  iso: string,
+): Promise<string> {
+  const fs = await import("fs");
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = join(root, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    await git.add({ fs, dir: root, filepath: rel });
+  }
+  return git.commit({
+    fs,
+    dir: root,
+    message,
+    author: {
+      name: "Fixture",
+      email: "fixture@example.com",
+      timestamp: Math.floor(Date.parse(iso) / 1000),
+    },
+  });
+}
+
+describe("recallSince — local git fixture (real tree diffs)", () => {
+  const fixtureRoots: string[] = [];
+
+  async function makeFixture(): Promise<{
+    root: string;
+    shas: { c1: string; c2: string; c3: string };
+  }> {
+    const root = mkdtempSync(join(tmpdir(), "recall-since-"));
+    fixtureRoots.push(root);
+    await git.init({ fs: await import("fs"), dir: root });
+    // c1 (2026-10-10): a slice (core + agent) + a config file (filtered later)
+    const c1 = await fixtureCommit(
+      root,
+      {
+        "records/2026/10/10/0900/core.md": "core",
+        "records/2026/10/10/0900/agent.md": "agent",
+        "config/settings.json": "{}",
+      },
+      "slice + config",
+      "2026-10-10T10:00:00.000Z",
+    );
+    // c2 (2026-10-12): a case opens
+    const c2 = await fixtureCommit(
+      root,
+      { "events/手机/index.md": "# 手机\n" },
+      "open case",
+      "2026-10-12T09:00:00.000Z",
+    );
+    // c3 (2026-10-14): the case updates + a research case opens
+    const c3 = await fixtureCommit(
+      root,
+      {
+        "events/手机/index.md": "# 手机\n\nupdated\n",
+        "research/调研/index.md": "# 调研\n",
+      },
+      "update + open research",
+      "2026-10-14T08:00:00.000Z",
+    );
+    h.memoryRoot = root;
+    h.source = "local";
+    return { root, shas: { c1, c2, c3 } };
+  }
+
+  afterAll(() => {
+    for (const root of fixtureRoots) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    h.memoryRoot = "/nonexistent-memory-root";
+  });
+
+  it("since-filtering + newest-first ordering: the window closes at the first older commit", async () => {
+    const { shas } = await makeFixture();
+    const read = await readChangesSince({ since: "2026-10-12" });
+    expect(read.unavailable).toBeUndefined();
+    expect(read.commits.map((c) => c.sha)).toEqual([shas.c3, shas.c2]);
+
+    const result = recallSince(read, {});
+    if (result.kind !== "changes") throw new Error(`expected changes, got ${result.kind}`);
+    // c3's files come first; the c2 "added" of events/手机 collapses under
+    // c3's newer "modified" (first occurrence — the newest touch — wins).
+    expect(result.entries).toEqual([
+      { ref: "events/手机", change: "modified", at: "2026-10-14T08:00:00.000Z" },
+      { ref: "research/调研", change: "added", at: "2026-10-14T08:00:00.000Z" },
+    ]);
+    // c1's slice and config are outside the window entirely.
+    expect(result.entries.some((e) => e.ref.startsWith("records/"))).toBe(false);
+  });
+
+  it("slice files collapse into ONE records ref, config/ is filtered, category + limit cap ENTRIES", async () => {
+    await makeFixture();
+    const read = await readChangesSince({ since: "2026-10-10" });
+    const result = recallSince(read, {});
+    if (result.kind !== "changes") throw new Error(`expected changes, got ${result.kind}`);
+    const refs = result.entries.map((e) => e.ref);
+    // core.md + agent.md of one slice → exactly one records ref…
+    expect(refs.filter((r) => r === "records/2026-10-10-0900")).toHaveLength(1);
+    // …config/settings.json never becomes an entry…
+    expect(refs.some((r) => r.includes("config"))).toBe(false);
+    expect(result.total).toBe(3);
+
+    const recordsOnly = recallSince(read, { category: "records" });
+    if (recordsOnly.kind !== "changes") throw new Error(`expected changes, got ${recordsOnly.kind}`);
+    expect(recordsOnly.entries.map((e) => e.ref)).toEqual(["records/2026-10-10-0900"]);
+
+    const capped = recallSince(read, { limit: 1 });
+    if (capped.kind !== "changes") throw new Error(`expected changes, got ${capped.kind}`);
+    expect(capped.entries).toHaveLength(1);
+    expect(capped.total).toBe(3);
+    expect(capped.cursor).toBe(read.commits[read.commits.length - 1]!.sha);
+    const text = renderRecallSinceResult(capped);
+    expect(text).toContain("pass cursor=");
+    expect(text).toContain("Showing the newest 1 of 3 changed entries");
+  });
+});
+
+describe("recallSince — GitHub backend (compare-once discipline)", () => {
+  beforeEach(() => {
+    h.source = "github";
+    vi.clearAllMocks();
+  });
+
+  const COMPARE = {
+    total_commits: 2,
+    commits: [
+      { sha: "a1", commit: { committer: { date: "2026-10-13T10:00:00Z" } } },
+      { sha: "b2", commit: { committer: { date: "2026-10-15T10:00:00Z" } } },
+    ],
+    files: [
+      { filename: "memory/events/手机/index.md", status: "modified" },
+      { filename: "memory/records/2026/10/14/1836/core.md", status: "added" },
+      { filename: "memory/config/settings.json", status: "modified" },
+    ],
+    merge_base_commit: { sha: "base-sha" },
+  };
+
+  it("ONE compareCommits call (plus base lookup), entries shaped, config filtered", async () => {
+    h.repos.get.mockResolvedValue({ data: { default_branch: "main" } });
+    h.repos.listCommits.mockResolvedValue({ data: [{ sha: "base-sha" }] });
+    h.repos.compareCommits.mockResolvedValue({ data: COMPARE });
+
+    const read = await readChangesSince({ since: "2026-10-12" });
+    expect(h.repos.compareCommits).toHaveBeenCalledTimes(1);
+    expect(h.repos.compareCommits).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+      base: "base-sha",
+      head: "main",
+    });
+    expect(h.repos.listCommits).toHaveBeenCalledTimes(1);
+    expect(h.repos.listCommits.mock.calls[0]![0]).toMatchObject({
+      until: "2026-10-12T00:00:00Z",
+      per_page: 1,
+    });
+
+    const result = recallSince(read, {});
+    if (result.kind !== "changes") throw new Error(`expected changes, got ${result.kind}`);
+    expect(result.commits).toBe(2); // the range total, not the pseudo-commit count
+    expect(result.incomplete).toBe(false);
+    expect(result.entries).toEqual([
+      { ref: "events/手机", change: "modified", at: "2026-10-15T10:00:00Z" },
+      { ref: "records/2026-10-14-1836", change: "added", at: "2026-10-15T10:00:00Z" },
+    ]);
+  });
+
+  it("a truncated compare is INCOMPLETE (never 'no changes'); an empty range renders the empty window", async () => {
+    h.repos.get.mockResolvedValue({ data: { default_branch: "main" } });
+    h.repos.listCommits.mockResolvedValue({ data: [] }); // young repo → empty-tree base
+    const truncatedFiles = Array.from({ length: 300 }, (_, i) => ({
+      filename: `memory/events/case-${i}/index.md`,
+      status: "added",
+    }));
+    h.repos.compareCommits.mockResolvedValue({
+      data: {
+        total_commits: 400,
+        commits: Array.from({ length: 250 }, (_, i) => ({
+          sha: `c${i}`,
+          commit: { committer: { date: "2026-10-15T10:00:00Z" } },
+        })),
+        files: truncatedFiles,
+        merge_base_commit: { sha: "empty-base" },
+      },
+    });
+
+    const read = await readChangesSince({ since: "2026-10-12" });
+    expect(read.incomplete).toBe(true);
+    const result = recallSince(read, { limit: 50 });
+    if (result.kind !== "changes") throw new Error(`expected changes, got ${result.kind}`);
+    expect(result.incomplete).toBe(true);
+    const text = renderRecallSinceResult(result);
+    expect(text).toContain("This result is INCOMPLETE");
+    expect(h.repos.compareCommits).toHaveBeenCalledTimes(1);
+
+    // …and the genuinely-empty window is a different, honest sentence.
+    h.repos.compareCommits.mockResolvedValue({
+      data: { total_commits: 0, commits: [], files: [], merge_base_commit: { sha: "x" } },
+    });
+    const emptyRead = await readChangesSince({ since: "2026-10-12" });
+    const empty = recallSince(emptyRead, {});
+    expect(empty.kind).toBe("empty");
+    // `until` falls back to the range-end day (today when the backend says
+    // nothing) — assert the fixed sentence, not the rolling date.
+    const emptyText = renderRecallSinceResult(empty);
+    expect(emptyText).toContain("No changes since 2026-10-12 through ");
+    expect(emptyText).toContain(
+      "— the commit history shows nothing in this window.",
+    );
+  });
+});
+
+describe("recallSince — pure shaping over a synthetic read", () => {
+  const read: RecallChangesRead = {
+    since: "2026-10-12",
+    until: "2026-10-15",
+    incomplete: false,
+    commits: [
+      {
+        sha: "new",
+        at: "2026-10-15T09:00:00.000Z",
+        files: [
+          { path: "records/2026/10/15/0831/core.md", change: "added" },
+          { path: "records/2026/10/15/0831/previously.md", change: "added" },
+          { path: "self/agenda.md", change: "modified" },
+          { path: "docs/notes.md", change: "added" }, // no recallRead shape → dropped
+        ],
+      },
+      {
+        sha: "old",
+        at: "2026-10-13T09:00:00.000Z",
+        files: [{ path: "people/user/profile.md", change: "modified" }],
+      },
+    ],
+  };
+
+  it("collapses the slice parts to one ref, drops unshaped paths, timeline reads records", () => {
+    const all = recallSince(read, {});
+    if (all.kind !== "changes") throw new Error(`expected changes, got ${all.kind}`);
+    expect(all.entries.map((e) => e.ref)).toEqual([
+      "records/2026-10-15-0831",
+      "self/agenda",
+      "people/user/profile",
+    ]);
+    expect(all.commits).toBe(2);
+
+    const timeline = recallSince(read, { category: "timeline" });
+    if (timeline.kind !== "changes") throw new Error(`expected changes, got ${timeline.kind}`);
+    expect(timeline.entries.map((e) => e.ref)).toEqual(["records/2026-10-15-0831"]);
   });
 });

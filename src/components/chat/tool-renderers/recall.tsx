@@ -3,6 +3,7 @@
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import {
   parseRecallOutput,
+  type ParsedChangeEntry,
   type ParsedEntry,
   type ParsedRecallOutput,
 } from "@/lib/chat/recall-output";
@@ -53,6 +54,13 @@ const OUTLINE_INDENT: Record<number, string> = {
   4: "pl-12",
   5: "pl-16",
   6: "pl-20",
+};
+
+/** The recallSince change glyphs — colored by kind, keyed semantic state. */
+const CHANGE_GLYPH: Record<ParsedChangeEntry["change"], { symbol: string; className: string }> = {
+  added: { symbol: "+", className: "text-emerald-600 dark:text-emerald-400" },
+  modified: { symbol: "~", className: "text-amber-600 dark:text-amber-400" },
+  removed: { symbol: "−", className: "text-red-500 dark:text-red-400" },
 };
 
 function summarize(
@@ -122,6 +130,15 @@ function summarize(
         text: t("recall.summaryPastEnd", { total: parsed.total }),
         tone: "muted",
         icon: <Inbox className="h-3.5 w-3.5" />,
+      };
+    case "changes":
+      return {
+        text: t("recall.summaryChanges", {
+          since: parsed.since,
+          count: parsed.entries.length,
+        }),
+        tone: parsed.incomplete ? "miss" : "hit",
+        icon: <ListTree className="h-3.5 w-3.5" />,
       };
     case "outline":
       // The caller replaces the text with the ref — icon only here.
@@ -276,6 +293,11 @@ function buildExpanded(
               })}
             </p>
           )}
+          {parsed.kind === "entries" && parsed.matchedName && (
+            <p className="border-t border-border/50 pt-1.5 text-[11px] leading-snug text-muted-foreground">
+              {t("recall.matchedName", { name: parsed.matchedName })}
+            </p>
+          )}
         </div>
       );
     case "empty":
@@ -326,6 +348,50 @@ function buildExpanded(
           </span>
         </p>
       );
+    case "changes": {
+      if (parsed.entries.length === 0) {
+        return (
+          <p className="flex items-center gap-1.5 text-xs leading-relaxed text-muted-foreground">
+            <Inbox className="h-3.5 w-3.5 shrink-0" />
+            {t("recall.changesEmpty", { since: parsed.since, until: parsed.until })}
+          </p>
+        );
+      }
+      return (
+        <div className="space-y-2">
+          <ul className="space-y-1">
+            {parsed.entries.map((e) => (
+              <li key={`${e.change}:${e.ref}`} className="flex min-w-0 items-baseline gap-2">
+                <span
+                  className={`shrink-0 font-mono text-[11px] leading-tight ${CHANGE_GLYPH[e.change].className}`}
+                >
+                  {CHANGE_GLYPH[e.change].symbol}
+                </span>
+                <code className="min-w-0 truncate font-mono text-[11px] leading-tight text-foreground/90">
+                  {e.ref}
+                </code>
+                {e.at && (
+                  <span className="ml-auto shrink-0 pl-2 font-mono text-[10px] leading-tight text-muted-foreground">
+                    {e.at}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {parsed.incomplete && (
+            <p className="flex items-start gap-1.5 border-t border-border/50 pt-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+              <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
+              {t("recall.changesIncomplete")}
+            </p>
+          )}
+          {parsed.cursorNote && (
+            <p className="border-t border-border/50 pt-1.5 text-[11px] leading-snug text-muted-foreground">
+              {t("recall.changesCursor", { cursor: parsed.cursorNote })}
+            </p>
+          )}
+        </div>
+      );
+    }
     case "outline":
       if (parsed.headings.length === 0) {
         return (
@@ -353,10 +419,18 @@ function buildExpanded(
       );
     case "content": {
       // The document body is the server-rendered text — shown verbatim,
-      // typeset as reading prose, scrollable inside the card.
+      // typeset as reading prose, scrollable inside the card. A near-name
+      // banner names the stored ref the body actually came from.
       return (
-        <div className="font-serif text-[13px] leading-relaxed whitespace-pre-wrap text-foreground/90">
-          {parsed.text}
+        <div className="space-y-1.5">
+          {parsed.nearName && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              {t("recall.nearNameBanner", { name: parsed.nearName })}
+            </p>
+          )}
+          <div className="font-serif text-[13px] leading-relaxed whitespace-pre-wrap text-foreground/90">
+            {parsed.text}
+          </div>
         </div>
       );
     }
