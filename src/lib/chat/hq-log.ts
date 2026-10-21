@@ -19,6 +19,7 @@ import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getMemoryRoot } from "@/lib/whitelist";
+import { CACHE_TTLS, cachedFetch, treeCacheTag } from "@/lib/cache/data-cache";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
 import {
   parseReflectionRoundMessage,
@@ -62,31 +63,60 @@ const LOCAL_SCAN_CAP = MAX_PAGES * GITHUB_PAGE;
  */
 const SUMMARY_COMMIT_PREFIX = "Summary — ";
 
+/**
+ * The bounded `memory` commit-log scan (three 100-entry pages), through the
+ * Data Cache. All three GitHub readers run the IDENTICAL paged scan —
+ * readGitHubLog, readSummaryLog's GitHub leg and readHQLogScan — so one
+ * cached helper serves them all: within a TTL window the second and third
+ * reader pay no GitHub calls at all, and every reader sees the SAME scan
+ * (the panel's cursor and rounds can no longer disagree). The paging
+ * arguments are fixed by the constants above, so `page` belongs INSIDE the
+ * cached computation, not in the identity.
+ *
+ * Tag: `tree:owner/repo` — the tag every GitHub writer already revalidates
+ * per commit (invalidateTreeCache, called from batch-write.ts), and a
+ * commit that touches `memory/` is exactly what changes this listing. An
+ * in-app commit therefore expires the scan immediately; the TTL only
+ * bounds pushes that bypass our write path (same argument as the tree
+ * listing it parallels — see CACHE_TTLS.COMMITS_SCAN_SECONDS).
+ */
+async function readGitHubCommitScan(
+  octokit: ReturnType<typeof getOctokit>,
+  owner: string,
+  repo: string,
+): Promise<HQLogScanCommit[]> {
+  return cachedFetch(
+    ["github", "commits", owner, repo, "memory"],
+    CACHE_TTLS.COMMITS_SCAN_SECONDS,
+    [treeCacheTag(owner, repo)],
+    async () => {
+      const collected: HQLogScanCommit[] = [];
+      for (let page = 1; page <= MAX_PAGES; page += 1) {
+        const { data } = await octokit.rest.repos.listCommits({
+          owner,
+          repo,
+          path: "memory",
+          per_page: GITHUB_PAGE,
+          page,
+        });
+        collected.push(
+          ...data.map((c) => ({
+            sha: c.sha,
+            message: c.commit?.message ?? "",
+            committedAt: c.commit?.committer?.date ?? null,
+          })),
+        );
+        if (data.length < GITHUB_PAGE) break; // history exhausted
+      }
+      return collected;
+    },
+  );
+}
+
 async function readGitHubLog(): Promise<ReflectionLogRead> {
   const { owner, repo } = getRepoConfig();
   const octokit = getOctokit();
-  const collected: Array<{
-    sha: string;
-    message: string;
-    committedAt: string | null;
-  }> = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const { data } = await octokit.rest.repos.listCommits({
-      owner,
-      repo,
-      path: "memory",
-      per_page: GITHUB_PAGE,
-      page,
-    });
-    collected.push(
-      ...data.map((c) => ({
-        sha: c.sha,
-        message: c.commit?.message ?? "",
-        committedAt: c.commit?.committer?.date ?? null,
-      })),
-    );
-    if (data.length < GITHUB_PAGE) break; // history exhausted
-  }
+  const collected = await readGitHubCommitScan(octokit, owner, repo);
   return shapeEntries(
     collected,
     async (sha) => {
@@ -323,28 +353,10 @@ export async function readSummaryLog(): Promise<SummaryLogRead> {
   try {
     if (source === "github") {
       const { owner, repo } = getRepoConfig();
-      const octokit = getOctokit();
       const entries: SummaryLogEntry[] = [];
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
-        const { data } = await octokit.rest.repos.listCommits({
-          owner,
-          repo,
-          path: "memory",
-          per_page: GITHUB_PAGE,
-          page,
-        });
-        for (const c of data) {
-          const message = c.commit?.message ?? "";
-          if (!message.startsWith(SUMMARY_COMMIT_PREFIX)) continue;
-          entries.push(
-            parseSummaryCommit(
-              c.sha,
-              message,
-              c.commit?.committer?.date ?? null,
-            ),
-          );
-        }
-        if (data.length < GITHUB_PAGE) break; // history exhausted
+      for (const c of await readGitHubCommitScan(getOctokit(), owner, repo)) {
+        if (!c.message.startsWith(SUMMARY_COMMIT_PREFIX)) continue;
+        entries.push(parseSummaryCommit(c.sha, c.message, c.committedAt));
       }
       return { entries, available: true };
     }
@@ -537,24 +549,7 @@ export async function readHQLogScan(): Promise<HQLogScan> {
     if (source === "github") {
       const { owner, repo } = getRepoConfig();
       const octokit = getOctokit();
-      const commits: HQLogScanCommit[] = [];
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
-        const { data } = await octokit.rest.repos.listCommits({
-          owner,
-          repo,
-          path: "memory",
-          per_page: GITHUB_PAGE,
-          page,
-        });
-        commits.push(
-          ...data.map((c) => ({
-            sha: c.sha,
-            message: c.commit?.message ?? "",
-            committedAt: c.commit?.committer?.date ?? null,
-          })),
-        );
-        if (data.length < GITHUB_PAGE) break; // history exhausted
-      }
+      const commits = await readGitHubCommitScan(octokit, owner, repo);
       return { commits, available: true };
     }
     if (source === "local") {

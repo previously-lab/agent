@@ -12,6 +12,14 @@ const h = vi.hoisted(() => ({
   source: "local" as string,
   logCommits: vi.fn(),
   isGitRepo: vi.fn(() => true),
+  /** The GitHub leg's network boundary — real return shapes, never called. */
+  gh: {
+    listCommits: vi.fn(),
+    getCommit: vi.fn(),
+  },
+  /** The Data Cache stand-in: a real memo keyed by the identity. */
+  cacheStore: new Map<string, unknown>(),
+  cacheCalls: [] as Array<{ identity: string[]; ttl: number; tags: string[] }>,
 }));
 
 vi.mock("@/lib/data-source/resolve", () => ({
@@ -27,12 +35,60 @@ vi.mock("@/lib/whitelist", () => ({
   getMemoryRoot: () => "/fake/memory",
 }));
 
+vi.mock("@/lib/github/client", () => ({
+  getOctokit: () => ({
+    rest: {
+      repos: {
+        listCommits: h.gh.listCommits,
+        getCommit: h.gh.getCommit,
+      },
+    },
+  }),
+}));
+
+vi.mock("@/lib/capabilities", () => ({
+  getRepoConfig: () => ({ owner: "octo", repo: "mem" }),
+}));
+
+// The cache SEAM is mocked (a real memo over the identity), not the network:
+// what is under test is that every GitHub-leg reader reaches the log through
+// ONE cachedFetch identity, so a second reader inside the TTL window costs
+// zero listCommits calls. The rest of data-cache (CACHE_TTLS, treeCacheTag,
+// invalidate) is the real module.
+vi.mock("@/lib/cache/data-cache", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/cache/data-cache")>();
+  return {
+    ...actual,
+    cachedFetch: <T>(
+      identity: string[],
+      ttlSeconds: number,
+      tags: string[],
+      fn: () => Promise<T>,
+    ): Promise<T> => {
+      h.cacheCalls.push({ identity, ttl: ttlSeconds, tags });
+      const key = JSON.stringify(identity);
+      const cached = h.cacheStore.get(key) as Promise<T> | undefined;
+      if (cached) return cached;
+      // Errors are never cached (unstable_cache stores results only): store
+      // on success, so a rejected scan leaves no entry behind.
+      const value = fn().then((v) => {
+        h.cacheStore.set(key, Promise.resolve(v));
+        return v;
+      });
+      return value;
+    },
+  };
+});
+
+import { CACHE_TTLS } from "@/lib/cache/data-cache";
 import {
   readReflectionCursor,
   readLatestReflectionNote,
   readReflectionCoverage,
   readReflectionLog,
   readRecentSummaries,
+  readSummaryLog,
   readHQLogBundle,
 } from "@/lib/chat/hq-log";
 
@@ -46,6 +102,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.source = "local";
   h.isGitRepo.mockReturnValue(true);
+  h.cacheStore.clear();
+  h.cacheCalls.length = 0;
 });
 
 describe("readReflectionCursor — the water level (v0.39 §2.4)", () => {
@@ -425,5 +483,110 @@ describe("readHQLogBundle — ONE scan, three derivations (v0.11 streams)", () =
     expect(bundle.available).toBe(false);
     expect(bundle.reason).toContain("git init");
     expect(h.logCommits).not.toHaveBeenCalled();
+  });
+});
+
+// ─── the GitHub leg — one cached scan behind every reader ────────────────
+
+describe("the GitHub leg — the bounded scan goes through the Data Cache", () => {
+  const GH_COMMIT = (over: { sha?: string; message?: string; date?: string }) => ({
+    sha: over.sha ?? "sha-1",
+    commit: {
+      message: over.message ?? "Reflection round — 2026-10-19",
+      committer: { date: over.date ?? "2026-10-19T17:00:00.000Z" },
+    },
+  });
+
+  beforeEach(() => {
+    h.source = "github";
+    h.gh.listCommits.mockResolvedValue({
+      // One short page — the scan stops at a partial page, as before.
+      data: [
+        GH_COMMIT({ sha: "sha-sum", message: "Summary — 2026-10-19-1751\n\n- user turn a1" }),
+        GH_COMMIT({
+          sha: "sha-clean",
+          message: "Reflection round — 2026-10-19\n\n处理了周末。\n\n—\nseen: 2026-10-19-1721",
+        }),
+      ],
+    });
+    h.gh.getCommit.mockResolvedValue({
+      data: { files: [{ filename: "memory/records/2026/10/19/1721/core.md" }] },
+    });
+  });
+
+  it("every reader derives from ONE cachedFetch identity riding the tree tag", async () => {
+    const log = await readReflectionLog();
+    const bundle = await readHQLogBundle();
+    const summaries = await readRecentSummaries();
+
+    expect(log.available).toBe(true);
+    expect(bundle.available).toBe(true);
+    expect(summaries.available).toBe(true);
+    // All three went through the cache; only the FIRST ran listCommits.
+    expect(h.cacheCalls).toHaveLength(3);
+    for (const call of h.cacheCalls) {
+      expect(call.identity).toEqual(["github", "commits", "octo", "mem", "memory"]);
+      expect(call.ttl).toBe(CACHE_TTLS.COMMITS_SCAN_SECONDS);
+      expect(call.tags).toEqual(["tree:octo/mem"]);
+    }
+    // THE read-amplification pin: three readers, one scan (one short page).
+    expect(h.gh.listCommits).toHaveBeenCalledTimes(1);
+    // Same scan, same derivations as the local leg.
+    expect(bundle.derivation.cursor).toEqual({
+      sliceId: "2026-10-19-1721",
+      sha: "sha-clean",
+      at: "2026-10-19T17:00:00.000Z",
+    });
+    expect(summaries.entries.map((e) => e.slice)).toEqual(["2026-10-19-1751"]);
+    // The reflection reader's file glance still rides getCommit per round.
+    expect(log.entries[0].files).toEqual(["records/2026/10/19/1721/core.md"]);
+  });
+
+  it("readSummaryLog paginates through the same cached scan and filters the prefix", async () => {
+    h.gh.listCommits
+      .mockResolvedValueOnce({
+        // First page full → the scan asks for page 2, which ends the history.
+        data: Array.from({ length: 100 }, (_, i) =>
+          GH_COMMIT({ sha: `fill-${i}`, message: `Turn ${i} — user turn` }),
+        ),
+      })
+      .mockResolvedValueOnce({
+        data: [
+          GH_COMMIT({ sha: "sha-old", message: "Summary — 2026-10-18-0900" }),
+        ],
+      });
+
+    const log = await readSummaryLog();
+
+    expect(h.gh.listCommits).toHaveBeenCalledTimes(2);
+    expect(log.entries.map((e) => e.sliceId)).toEqual(["2026-10-18-0900"]);
+    // A second reader within the window pays nothing — even though it ran
+    // a two-page scan, the cached copy already holds both pages.
+    const summaries = await readRecentSummaries();
+    expect(summaries.entries).toHaveLength(1);
+    expect(h.gh.listCommits).toHaveBeenCalledTimes(2);
+  });
+
+  it("an expired entry (a writer's revalidation) is a fresh scan, exactly like a cache miss", async () => {
+    await readHQLogBundle();
+    expect(h.gh.listCommits).toHaveBeenCalledTimes(1);
+
+    // invalidate(tree:…) — what batch-write.ts fires per commit — expires
+    // the scan; the stand-in memo flushes with it (tag → key mapping lives
+    // in the real Data Cache, so here we simulate the post-revalidate
+    // state directly).
+    h.cacheStore.clear();
+    await readHQLogBundle();
+
+    expect(h.gh.listCommits).toHaveBeenCalledTimes(2);
+  });
+
+  it("the degradation contract is unchanged: an API failure reads available=false, not a throw", async () => {
+    h.gh.listCommits.mockRejectedValue(new Error("API rate limit exceeded"));
+    const log = await readReflectionLog();
+    expect(log.available).toBe(false);
+    expect(log.reason).toContain("rate limit");
+    const cursor = await readReflectionCursor();
+    expect(cursor.degraded).toBe(true);
   });
 });

@@ -6,10 +6,11 @@
  * `fetch(..., { next: { revalidate } })` spelling of the same cache), and no
  * other module keeps a hand-rolled `Map` of cached payloads. The base read
  * utilities — `@/lib/tools/readFile`, `@/lib/tools/listFiles`, and their
- * local/demo siblings in `local-fs.ts` / `demo/demo-fs.ts` — are the ONLY
- * callers. Everything above them (episodic io-helpers and manager, agent tool
- * executors, server actions) reaches the cache by calling a base read; it
- * never caches its own copy of the result.
+ * local/demo siblings in `local-fs.ts` / `demo/demo-fs.ts` — are the only
+ * FILE callers, plus `chat/hq-log.ts`'s bounded commit-log scan (a GitHub
+ * read that is not a repo path). Everything above them (episodic io-helpers
+ * and manager, agent tool executors, server actions) reaches the cache by
+ * calling a base read; it never caches its own copy of the result.
  *
  * WHY one module (this is not tidiness — it is a correctness rule): the Data
  * Cache is shared across instances and invalidated by TAG, while a module-
@@ -78,6 +79,20 @@ export const CACHE_TTLS = {
    * corrupt bytes, and the next revalidation self-heals.
    */
   TREE_SECONDS: 300,
+  /**
+   * GitHub: the bounded `memory` commit-log scan (the paged `listCommits`
+   * reads in chat/hq-log.ts — reflection rounds, summary commits and turn
+   * commits read back as the cursor/note/panel plane). The scan rides the
+   * `tree:owner/repo` tag (see treeCacheTag): every GitHub writer
+   * revalidates that tag per commit, and a commit that touches `memory/`
+   * is exactly what changes this listing, so in-app commits expire the
+   * scan immediately. The TTL is therefore the same staleness class as
+   * TREE_SECONDS — it only bounds pushes that bypass our write path (a
+   * directly pushed commit stays invisible for 5 minutes, the same bound
+   * the tree listing carries); the number matches for that reason, not by
+   * convention.
+   */
+  COMMITS_SCAN_SECONDS: 300,
   /**
    * GitHub: a blob read by its content sha (`readBlobBase64` in readFile.ts).
    * The sha IS the content hash — an entry can only ever hold the one true
@@ -319,37 +334,84 @@ export async function cachedFetch<T>(
   fn: () => Promise<T>,
   opts?: { fresh?: boolean },
 ): Promise<T> {
-  if (opts?.fresh || ttlSeconds === CACHE_TTLS.UNCACHED) {
+  const startedAt = performance.now();
+  // `unstable_cache` runs the callback ONLY on a miss (the `cacheEntry` branch
+  // returns the stored copy without executing it), so the producer having run
+  // IS the miss signal — never infer it from timing.
+  let produced = false;
+  const tracked = async (): Promise<T> => {
+    produced = true;
     return fn();
-  }
-
-  // A fresh wrapper per call is deliberate, and free: the cache key is
-  // derived from `runCached.toString()` + the key parts, both of which are
-  // fixed by the identity, so two wrappers built for one identity address the
-  // same entry. Memoizing the wrapper (as readFile.ts used to) buys nothing
-  // and introduces a trap — the memoized wrapper would keep calling whichever
-  // callback was bound to that identity first.
-  const cached = unstable_cache(
-    runCached,
-    [CACHE_KEY_PREFIX, JSON.stringify(identity)],
-    { revalidate: ttlSeconds, tags },
-  );
+  };
+  const bypass = Boolean(opts?.fresh) || ttlSeconds === CACHE_TTLS.UNCACHED;
 
   try {
-    return await cached(fn);
-  } catch (error) {
-    // No Data Cache in this context — read directly instead of failing. The
-    // store check happens BEFORE the callback runs, so `fn` has not been
-    // called yet and this is not a second attempt at a real failure: an error
-    // raised by `fn` itself (a 404, an oversized file) never carries this
-    // message and is rethrown (readFile.ts's errors-are-never-cached rule —
-    // `unstable_cache` stores the callback's result, so a thrown read leaves
-    // no entry behind and a later success still fetches).
-    if (error instanceof Error && NO_DATA_CACHE_STORE.test(error.message)) {
-      return fn();
+    if (bypass) {
+      return await tracked();
     }
-    throw error;
+
+    // A fresh wrapper per call is deliberate, and free: the cache key is
+    // derived from `runCached.toString()` + the key parts, both of which are
+    // fixed by the identity, so two wrappers built for one identity address
+    // the same entry. Memoizing the wrapper (as readFile.ts used to) buys
+    // nothing and introduces a trap — the memoized wrapper would keep calling
+    // whichever callback was bound to that identity first.
+    const cached = unstable_cache(
+      runCached,
+      [CACHE_KEY_PREFIX, JSON.stringify(identity)],
+      { revalidate: ttlSeconds, tags },
+    );
+
+    try {
+      return await cached(tracked);
+    } catch (error) {
+      // No Data Cache in this context — read directly instead of failing. The
+      // store check happens BEFORE the callback runs, so `fn` has not been
+      // called yet and this is not a second attempt at a real failure: an
+      // error raised by `fn` itself (a 404, an oversized file) never carries
+      // this message and is rethrown (readFile.ts's errors-are-never-cached
+      // rule — `unstable_cache` stores the callback's result, so a thrown read
+      // leaves no entry behind and a later success still fetches).
+      if (error instanceof Error && NO_DATA_CACHE_STORE.test(error.message)) {
+        return await tracked();
+      }
+      throw error;
+    }
+  } finally {
+    logGhRead(
+      identity,
+      bypass ? "BYPASS" : produced ? "MISS" : "HIT",
+      performance.now() - startedAt,
+    );
   }
+}
+
+/**
+ * One compact line per read (`[gh] MISS 240ms tree owner/repo`), emitted from
+ * `cachedFetch`'s `finally` so every lookup — hit, miss, bypass, failure —
+ * leaves exactly one trace. This is the ONLY observability on individual
+ * GitHub reads; it exists so an hourly-quota incident can be attributed
+ * afterwards. Pure JS (`console.log` + arithmetic) — safe inside the workflow
+ * sandbox. The target is the identity's kind plus its last segment(s): two
+ * segments after the kind print as `owner/repo` (the tree read), more print
+ * as the last one alone (a file path, a blob sha); a long single token (a
+ * sha) is cut to 8 chars. Caching behaviour is untouched.
+ */
+function logGhRead(
+  identity: string[],
+  status: "HIT" | "MISS" | "BYPASS",
+  elapsedMs: number,
+): void {
+  const kind = identity[1] ?? identity[0] ?? "?";
+  const rest = identity.slice(2);
+  let target =
+    rest.length > 0 && rest.length <= 2
+      ? rest.join("/")
+      : (rest[rest.length - 1] ?? "?");
+  if (!target.includes("/") && target.length > 12) {
+    target = `${target.slice(0, 8)}…`;
+  }
+  console.log(`[gh] ${status} ${Math.round(elapsedMs)}ms ${kind} ${target}`);
 }
 
 // ─── Invalidation ────────────────────────────────────────────────────────
