@@ -283,12 +283,38 @@ describe("runSubAgent", () => {
     });
   });
 
-  it("defaults temperature to 0.1 and honors overrides", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts());
+  it("omits temperature on thinking calls (provider rejects it) and sends it on the thinking-off retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const prose = {
+      text: Promise.resolve("prose answer, no tool call"),
+      toolCalls: Promise.resolve([]),
+      reasoningText: Promise.resolve(undefined),
+      sources: Promise.resolve([]),
+      warnings: Promise.resolve([]),
+    };
+    const reported = () => ({
+      text: Promise.resolve(""),
+      toolCalls: Promise.resolve([
+        { toolName: "report", input: { verdict: "retried", count: 2 } },
+      ]),
+      reasoningText: Promise.resolve(undefined),
+      sources: Promise.resolve([]),
+      warnings: Promise.resolve([]),
+    });
+    ai.streamText
+      .mockImplementationOnce(async () => prose)
+      .mockImplementationOnce(async () => reported())
+      .mockImplementationOnce(async () => prose)
+      .mockImplementationOnce(async () => reported());
+    // Default: the thinking-on attempt omits temperature, the retry sends 0.1.
+    await runSubAgent(baseOpts({ toolChoice: "required" }));
+    expect(ai.streamText.mock.calls[0]?.[0]).not.toHaveProperty("temperature");
     expect(lastCall().temperature).toBe(0.1);
-    await runSubAgent(baseOpts({ temperature: 0 }));
+    // Override: the retry honors an explicit 0.
+    await runSubAgent(baseOpts({ toolChoice: "required", temperature: 0 }));
+    expect(ai.streamText.mock.calls[2]?.[0]).not.toHaveProperty("temperature");
     expect(lastCall().temperature).toBe(0);
+    warn.mockRestore();
   });
 
   it("emits a start line onto data-tool-progress when a toolCallId is present", async () => {

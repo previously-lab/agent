@@ -467,7 +467,12 @@ export async function runSubAgent<Report = unknown>(
       prompt,
       tools,
       toolChoice: callToolChoice,
-      temperature,
+      // A thinking call rejects sampling params: the provider answers with
+      // "temperature is not supported when thinking is enabled" and ignores
+      // it, so the value would be a lie in the request. The thinking-off
+      // retry (the DeepSeek forced-report path) keeps the deterministic
+      // temperature.
+      ...(callThinking ? {} : { temperature }),
       providerOptions,
       ...(maxSteps !== undefined ? { stopWhen: isStepCount(maxSteps) } : {}),
       ...(prepareStep ? { prepareStep } : {}),
