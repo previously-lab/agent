@@ -721,9 +721,7 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
       ],
     }));
 
-    // Client history matches the slice (its user turns are the aligned tail)
-    // — no rebuild, plain restore. Like production, the history ENDS with
-    // the current user message.
+    // Like production, the history ENDS with the current user message.
     const input = makeInput("follow up", {
       modelMessages: [
         { role: "user", content: "earlier" },
@@ -731,78 +729,16 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
         { role: "user", content: "follow up" },
       ] as unknown as TurnInput["modelMessages"],
     });
-    const { slice, rebuiltHistory } = await housekeeping(input);
+    const { slice } = await housekeeping(input);
 
     expect(episodic.createSlice).not.toHaveBeenCalled();
     expect(slice.slice_id).toBe("2026-07-14-0900");
     expect(slice.turns).toHaveLength(3);
     expect(slice.turns[2].content).toBe("follow up");
-    expect(rebuiltHistory).toBeUndefined();
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice, expect.anything());
   });
 
-  it("refresh within the idle gap keeps the slice open and rebuilds the window from the slice's turns", async () => {
-    fakeDisk.persistSlice(makeSlice({
-      turns: [
-        { timestamp: "t0", role: "user", content: "earlier" },
-        { timestamp: "t1", role: "agent", content: "reply" },
-        { timestamp: "t2", role: "user", content: "another" },
-        { timestamp: "t3", role: "agent", content: "reply2" },
-      ],
-    }));
-
-    // Page refresh: the client sends ONLY the new user message (no assistant
-    // history) — the slice must NOT close; the window is rebuilt from the
-    // slice's own turns instead.
-    const input = makeInput("new after refresh");
-    const { slice, rebuiltHistory } = await housekeeping(input);
-
-    expect(episodic.createSlice).not.toHaveBeenCalled();
-    expect(slice.slice_id).toBe("2026-07-14-0900");
-    // The user turn append proceeds normally; the rebuilt window carries the
-    // whole slice (current message included, appended once).
-    expect(slice.turns).toHaveLength(5);
-    expect(rebuiltHistory).toEqual([
-      { role: "user", content: "earlier" },
-      { role: "assistant", content: "reply" },
-      { role: "user", content: "another" },
-      { role: "assistant", content: "reply2" },
-      { role: "user", content: "new after refresh" },
-    ]);
-  });
-
-  it("stale writes (client has turns the slice never recorded) still trust the slice", async () => {
-    fakeDisk.persistSlice(makeSlice({
-      turns: [
-        { timestamp: "t0", role: "user", content: "q1" },
-        { timestamp: "t1", role: "agent", content: "a1" },
-      ],
-    }));
-
-    // The client's recent tail diverges from the slice (a write that never
-    // landed) — the slice is authoritative, not closed, and the unsaved
-    // turns do NOT leak into the rebuilt window. The history ends with the
-    // current message, as production sends it.
-    const input = makeInput("current", {
-      modelMessages: [
-        { role: "user", content: "q1" },
-        { role: "assistant", content: "a1" },
-        { role: "user", content: "unsaved question" },
-        { role: "assistant", content: "unsaved reply" },
-        { role: "user", content: "current" },
-      ] as unknown as TurnInput["modelMessages"],
-    });
-    const { slice, rebuiltHistory } = await housekeeping(input);
-
-    expect(slice.slice_id).toBe("2026-07-14-0900");
-    expect(rebuiltHistory).toEqual([
-      { role: "user", content: "q1" },
-      { role: "assistant", content: "a1" },
-      { role: "user", content: "current" },
-    ]);
-  });
-
-  it("regenerate: no duplicate user turn and no window rebuild", async () => {
+  it("regenerate: no duplicate user turn", async () => {
     fakeDisk.persistSlice(makeSlice({
       turns: [
         { timestamp: "t0", role: "user", content: "same question" },
@@ -810,17 +746,14 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
       ],
     }));
 
-    // The SDK truncated the rejected assistant message locally, so the
-    // history legitimately mismatches the slice — detection is skipped for
-    // the regenerate turn shape.
-    const { slice, rebuiltHistory } = await housekeeping(
+    // The SDK truncated the rejected assistant message locally.
+    const { slice } = await housekeeping(
       makeInput("same question", { regenerate: true }),
     );
 
     // The slice survives and the question is NOT re-appended.
     expect(slice.slice_id).toBe("2026-07-14-0900");
     expect(slice.turns).toHaveLength(2);
-    expect(rebuiltHistory).toBeUndefined();
     expect(episodic.appendTurn).not.toHaveBeenCalled();
   });
 
@@ -895,32 +828,6 @@ describe("slicing policy: the edge slice is READ-ONLY context (v0.42 §1 — 落
 
     expect(episodic.closeSlice).not.toHaveBeenCalled();
     expect(hk.slice.slice_id).toBe("2026-07-14-0900");
-  });
-
-  it("a client-history mismatch gets NO close — the slice stays open with a rebuilt window (no continuation link, no carry-over)", async () => {
-    fakeDisk.persistSlice(makeSlice({
-      turns: [
-        { timestamp: "t0", role: "user", content: "earlier" },
-        { timestamp: "t1", role: "agent", content: "reply" },
-        { timestamp: "t2", role: "user", content: "another" },
-        { timestamp: "t3", role: "agent", content: "reply2" },
-      ],
-    }));
-    mockCreateSlice("2026-07-14-1200");
-
-    const { slice, contextPrefix, rebuiltHistory } = await housekeeping(makeInput("new from different device"));
-
-    expect(episodic.createSlice).not.toHaveBeenCalled();
-    expect(slice.slice_id).toBe("2026-07-14-0900");
-    expect(slice.continuesFrom).toBeUndefined();
-    expect(contextPrefix).toBeUndefined();
-    expect(rebuiltHistory).toEqual([
-      { role: "user", content: "earlier" },
-      { role: "assistant", content: "reply" },
-      { role: "user", content: "another" },
-      { role: "assistant", content: "reply2" },
-      { role: "user", content: "new from different device" },
-    ]);
   });
 
   it("later turns of a checkpointed slice re-read the frozen predecessor via loadSlice", async () => {

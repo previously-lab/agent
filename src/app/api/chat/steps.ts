@@ -404,48 +404,6 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
   };
 }
 
-/**
- * Detect when the client-sent history no longer matches the active slice
- * (page refresh, device switch, stale local writes). DETECTION ONLY — a
- * mismatch never closes the slice: the server slice is authoritative and
- * housekeeping rebuilds the model history window from the slice's own turns
- * instead (see rebuiltHistory in the HousekeepingResult).
- *
- * The client history may carry turns from OLDER slices before the current
- * one, so the check compares the slice-aligned TAIL: the client's user
- * messages (the current one excluded — it is not in the slice yet at
- * decision time) must end with the slice's user turns, turn for turn. A
- * short tail means the client lost turns (refresh); a non-matching tail
- * means stale writes the slice never recorded. Either way → rebuild.
- */
-function checkClientHistoryMismatch(
-  modelMessages: ModelMessage[],
-  slice: TimeSlice,
-): boolean {
-  const sliceUserContents = slice.turns
-    .filter((t) => t.role === "user")
-    .map((t) => t.content);
-  if (sliceUserContents.length === 0) return false;
-  const clientUserContents = modelMessages
-    .filter((m) => m.role === "user")
-    .map((m) => messageText(m.content));
-  const aligned = clientUserContents.slice(0, -1).slice(-sliceUserContents.length);
-  if (aligned.length < sliceUserContents.length) return true; // client lost turns
-  return aligned.some((c, i) => c !== sliceUserContents[i]);
-}
-
-/** Plain-text extraction for comparing a user message against a slice turn
- *  (slice turns store plain text; the client may send content parts). */
-function messageText(content: ModelMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((p) => (p.type === "text" ? p.text : ""))
-      .join("");
-  }
-  return "";
-}
-
 // ─── Evidence attachments (v0.19 §C.1 — the records-case wiring) ──────────
 
 const ATTACHMENT_EXT_BY_MEDIA: Record<string, string> = {
@@ -797,7 +755,7 @@ export async function housekeeping(
   // ── Phase: slice — manage the time slice (recover/create; decide) ────
   await emitPhase(stream, "slice", true);
 
-  const { config, clientTimezone, lastUserMessage, modelMessages } = input;
+  const { config, clientTimezone, lastUserMessage } = input;
 
   // Peek at today's slice ONLY to derive the per-slice lock key (it may be
   // stale by the time the lock is acquired — the disk slice is re-loaded
@@ -815,25 +773,6 @@ export async function housekeeping(
   const batch = createBatch();
 
   const diskSlice = await tryLoadTodaySlice(batch);
-
-  // ── 1. Context-only judgments (v0.42 §1 — 对话流不建片不封片; the
-  // landing judgment — 续写还是开新片 — moved to the summary stream,
-  // applied once the WHOLE burst has answered). The only entry-side
-  // judgment left: a client-history mismatch rebuilds the model window
-  // from the slice (a context concern, never a write).
-  let rebuildFromSlice = false;
-  if (diskSlice && diskSlice.status === "active") {
-    // A regenerate turn legitimately carries a truncated client history (the
-    // SDK dropped the rejected reply) — detection is skipped for this turn
-    // shape, and demo mode never persists a slice so nothing to rebuild from.
-    if (
-      !input.regenerate &&
-      !input.useDemo &&
-      checkClientHistoryMismatch(modelMessages, diskSlice)
-    ) {
-      rebuildFromSlice = true;
-    }
-  }
 
   // ── 2. The current edge slice — READ-ONLY answering context ─────────
   // v0.42 §1 (the user's words): the conversation flow ANSWERS inside the
@@ -1104,22 +1043,6 @@ export async function housekeeping(
     }
   }
 
-  // ── Rebuilt history window (client-history mismatch) ─────────────────
-  // The client-sent history mismatched the active slice (page refresh,
-  // device switch, stale local writes) — the slice stays OPEN and the model
-  // history window is rebuilt from the SLICE's own turns (authoritative),
-  // so the conversation continues seamlessly instead of forking a new slice.
-  // Built AFTER the user-turn append: the current message is in the slice
-  // by now, so it is part of the rebuilt window exactly once.
-  let rebuiltHistory: ModelMessage[] | undefined;
-  if (rebuildFromSlice) {
-    rebuiltHistory = sliceTurnsToMessages(slice.turns);
-    console.warn(
-      `[Episodic] Client history mismatch — rebuilt window from slice ${slice.slice_id} ` +
-        `(${rebuiltHistory.length} turns), slice stays open`,
-    );
-  }
-
   // The frozen L3 block — see buildSliceHeadBlock (src/lib/turn-priming.ts).
   // The evolution summary rides the slice frontmatter, so a restored slice
   // replays the exact line written at its birth.
@@ -1210,7 +1133,6 @@ export async function housekeeping(
     ...(reflectionNote ? { reflectionNote } : {}),
     ...(parallelSiblings ? { parallelSiblings } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
-    ...(rebuiltHistory ? { rebuiltHistory } : {}),
   };
   });
   } finally {
@@ -2030,12 +1952,22 @@ export async function decideBurstMergeLine(
       }
     }
     if (replies.length === 0) {
-      console.log(
-        `[Parallel] merge skipped (turn ${params.turnId}): no completed sibling replies ` +
-        `(siblings: ${siblingRunIds
-          .map((id) => `${id}:${runs.find((r) => r.runId === id)?.status ?? "?"}`)
-          .join(", ") || "none"})`,
-      );
+      // A burst of one has no siblings by construction — there is nothing to
+      // reconcile, and one line per turn is pure noise. Only a real multi-turn
+      // burst whose siblings produced no reply is worth saying out loud.
+      if (siblingRunIds.length > 0) {
+        console.log(
+          `[Parallel] merge skipped (turn ${params.turnId}): no completed sibling replies ` +
+            `(siblings: ${
+              siblingRunIds
+                .map(
+                  (id) =>
+                    `${id}:${runs.find((r) => r.runId === id)?.status ?? "?"}`,
+                )
+                .join(", ") || "none"
+            })`,
+        );
+      }
       return undefined;
     }
     // The burst's USER messages: they ride the siblings' returnValues

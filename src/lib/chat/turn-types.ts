@@ -246,16 +246,6 @@ export interface HousekeepingResult {
    */
   contextPrefix?: ModelMessage[];
   /**
-   * Window rebuild (client-history mismatch): when the client-sent history
-   * no longer matched the active slice (page refresh, device switch, stale
-   * local writes), housekeeping kept the slice OPEN and derived the history
-   * window from the SLICE's own turns instead — the server slice is
-   * authoritative. The workflow uses these messages verbatim (plus the
-   * checkpoint prefix, when present) in place of the client history. Absent
-   * on turns where the client history matched.
-   */
-  rebuiltHistory?: ModelMessage[];
-  /**
    * A close the reply segment DECIDED but did not execute (v0.19 A1 three
    * stages): housekeeping keeps the lifecycle decision pure — it mints the
    * successor slice and persists the user turn, while the close itself

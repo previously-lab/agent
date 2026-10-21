@@ -175,7 +175,6 @@ vi.mock("@/app/api/chat/steps", () => ({
     userProfileBlock: "",
     dueTasksBlock: "",
     contextPrefix: "",
-    rebuiltHistory: undefined,
     reflectionNote: null,
     analysis: null,
     bridgeReport: null,

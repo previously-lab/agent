@@ -567,10 +567,7 @@ function messageKey(m: ModelMessage): string {
  * `maxMessages` is a pure safety valve (maxTurnsPerSlice × 2) — the slice's
  * capacity signal normally closes it long before the cap matters. When the
  * client's tail is too short to cover the slice's turns, degrade to ALL
- * given messages; the mismatch detection in housekeeping (steps.ts
- * checkClientHistoryMismatch) normally rebuilds the window from the slice's
- * own turns in that case, so the degradation only matters when it slipped
- * through.
+ * given messages.
  */
 export function sliceAlignedWindow(
   modelMessages: ModelMessage[],
@@ -610,9 +607,6 @@ export function sliceAlignedWindow(
  * a read-only preview whose only conversation truth is the client history, so
  * slice alignment is skipped there (and nothing is persisted either way).
  *
- * `rebuiltHistory` (client-history mismatch: page refresh / device switch /
- * stale writes) overrides the slice-aligned cut entirely — the server slice
- * is authoritative and its turns are used verbatim.
  * Pure — extracted for unit tests.
  */
 export function buildHistoryWindow(opts: {
@@ -621,15 +615,13 @@ export function buildHistoryWindow(opts: {
   maxMessages: number;
   contextPrefix?: ModelMessage[];
   useDemo?: boolean;
-  /** Server-authoritative window (slice turns) when the client history
-   *  mismatched the active slice — used verbatim instead of slicing the
-   *  client history. */
-  rebuiltHistory?: ModelMessage[];
 }): ModelMessage[] {
   if (opts.useDemo) return opts.modelMessages;
-  const base =
-    opts.rebuiltHistory ??
-    sliceAlignedWindow(opts.modelMessages, opts.userTurnsInSlice, opts.maxMessages);
+  const base = sliceAlignedWindow(
+    opts.modelMessages,
+    opts.userTurnsInSlice,
+    opts.maxMessages,
+  );
   return withCheckpointPrefix(base, opts.contextPrefix);
 }
 
@@ -1043,7 +1035,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     directionBlock,
     userProfileBlock,
     contextPrefix,
-    rebuiltHistory,
   } = hk;
 
   // ── Assemble system prompt ──────────────────────────────────────────────
@@ -1111,11 +1102,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // close): then the previous slice's frozen tail (contextPrefix, read
   // server-side by housekeeping) is prepended, so the same conversation
   // continues seamlessly. Within a slice the prefix grows append-only,
-  // keeping the provider cache warm. When the client history mismatched the
-  // active slice (page refresh / device switch / stale writes), housekeeping
-  // kept the slice open and shipped the slice's own turns as rebuiltHistory —
-  // the server slice is authoritative and they are used verbatim instead of
-  // the client messages.
+  // keeping the provider cache warm.
   const userTurnsInSlice = slice.turns.filter((t) => t.role === "user").length;
   const historyWindow = buildHistoryWindow({
     modelMessages: input.modelMessages,
@@ -1126,11 +1113,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // between turns — aligning to the always-fresh slice would send only the
     // current user message. Demo sends the full client history instead.
     useDemo: input.useDemo,
-    rebuiltHistory,
   });
-  if (historyWindow.length !== input.modelMessages.length || rebuiltHistory) {
+  if (historyWindow.length !== input.modelMessages.length) {
     console.log(
-      `[Turn:${input.turnId}] history window: ${historyWindow.length}/${input.modelMessages.length} messages (slice ${slice.slice_id}, ${userTurnsInSlice} user turns${contextPrefix ? `, +${contextPrefix.length} carried` : ""}${rebuiltHistory ? ", rebuilt from slice" : ""})`,
+      `[Turn:${input.turnId}] history window: ${historyWindow.length}/${input.modelMessages.length} messages (slice ${slice.slice_id}, ${userTurnsInSlice} user turns${contextPrefix ? `, +${contextPrefix.length} carried` : ""})`,
     );
   }
 
