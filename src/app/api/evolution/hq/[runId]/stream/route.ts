@@ -26,6 +26,10 @@ import { getRun } from "workflow/api";
 import { createHQStreamFilter } from "@/lib/chat/hq-stream";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
+// The platform default (300 s) truncates any attachment to a live run mid-stream;
+// the workflow endpoint gets 800, and the stream ends on its own when the run ends.
+export const maxDuration = 800;
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ runId: string }> }

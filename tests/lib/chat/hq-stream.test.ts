@@ -171,6 +171,38 @@ describe("streamHQActivity", () => {
     ]);
   });
 
+  it("skip drops the first N replayed frames and still resolves on EOF", async () => {
+    const res = sseResponse([
+      sseEvent({ type: HQ_ACTIVITY_CHUNK, id: "a", data: STARTED }),
+      sseEvent({ type: HQ_ACTIVITY_CHUNK, id: "b", data: { kind: "reading", at: "t" } }),
+      sseEvent({ type: HQ_ACTIVITY_CHUNK, id: "c", data: { kind: "idle", at: "t" } }),
+      sseEvent({
+        type: HQ_ACTIVITY_CHUNK,
+        id: "d",
+        data: { kind: "finished", at: "t", status: "completed" },
+      }),
+    ]);
+    const frames: HQActivityFrame[] = [];
+    await streamHQActivity(
+      { runId: "run-1", skip: 2, fetchImpl: vi.fn(async () => res) },
+      (f) => frames.push(f),
+    );
+    expect(frames).toEqual([
+      { kind: "idle", at: "t" },
+      { kind: "finished", at: "t", status: "completed" },
+    ]);
+  });
+
+  it("skip 0 (and no skip) delivers everything", async () => {
+    const res = sseResponse([sseEvent({ type: HQ_ACTIVITY_CHUNK, id: "a", data: STARTED })]);
+    const frames: HQActivityFrame[] = [];
+    await streamHQActivity(
+      { runId: "run-1", skip: 0, fetchImpl: vi.fn(async () => res) },
+      (f) => frames.push(f),
+    );
+    expect(frames).toEqual([STARTED]);
+  });
+
   it("asks the right URL and surfaces 404 as not_found", async () => {
     const fetchImpl = vi.fn(
       async (_input: string | URL | Request) => new Response("nope", { status: 404 }),

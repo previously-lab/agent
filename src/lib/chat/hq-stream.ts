@@ -158,6 +158,10 @@ export interface StreamHQActivityOptions {
   runId: string;
   /** Abort the attachment (panel closed, a newer run superseded). */
   signal?: AbortSignal;
+  /** Frames already applied for this run — the durable feed replays from 0
+   *  on every attach, so a re-attaching client drops this many replayed
+   *  frames instead of re-applying its own history. */
+  skip?: number;
   /** Test seam — defaults to the global fetch. */
   fetchImpl?: HQStreamFetch;
 }
@@ -180,17 +184,20 @@ export class HQStreamError extends Error {
 /**
  * Attach to an HQ run's activity stream. Frames arrive in run order — the
  * durable stream REPLAYS from the start, so a reconnecting client re-sees
- * the run's whole beat log (the pod treats replayed frames as history, not
- * news). Resolves when the stream ends (run finished, or a replay of a
- * finished run drained); throws HQStreamError on transport failures — a 404
- * means the run is gone (retention expired / never existed), so the caller
- * drops its stored run id and falls back to the hq.json pointer.
+ * the run's whole beat log; `skip` drops the frames it already applied (the
+ * caller tracks the count per run id). Resolves when the stream ends (run
+ * finished, or a replay of a finished run drained); throws HQStreamError on
+ * transport failures — a 404 means the run is gone (retention expired /
+ * never existed), so the caller drops its stored run id and falls back to
+ * the hq.json pointer.
  */
 export async function streamHQActivity(
   opts: StreamHQActivityOptions,
   onFrame: (frame: HQActivityFrame) => void,
 ): Promise<void> {
   const fetchFn = opts.fetchImpl ?? fetch;
+  const skip = Math.max(0, Math.floor(opts.skip ?? 0));
+  let seen = 0;
   let res: Response;
   try {
     res = await fetchFn(
@@ -245,7 +252,13 @@ export async function streamHQActivity(
           const c = chunk as Record<string, unknown> | null;
           if (!c || c.type !== HQ_ACTIVITY_CHUNK) continue;
           const frame = normalizeHQActivity(c.data);
-          if (frame) onFrame(frame);
+          if (!frame) continue;
+          if (seen < skip) {
+            seen++; // replayed history the caller already applied
+            continue;
+          }
+          seen++;
+          onFrame(frame);
         }
       }
     }

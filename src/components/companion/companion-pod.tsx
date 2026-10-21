@@ -969,6 +969,10 @@ function CompanionPodBody({
   const [hqActivity, setHqActivity] = useState<HQActivityFrame[]>([]);
   const [hqLive, setHqLive] = useState(false);
   const hqAttachRef = useRef<{ runId: string; controller: AbortController } | null>(null);
+  // Frames already applied for the current run id. A re-attach replays the
+  // durable feed from index 0; the reader skips this many replayed frames
+  // so history is not applied twice. Cleared when the run ends or is gone.
+  const hqAppliedRef = useRef<{ runId: string; count: number } | null>(null);
 
   const detachHQ = useCallback(() => {
     hqAttachRef.current?.controller.abort();
@@ -979,21 +983,32 @@ function CompanionPodBody({
   const attachHQ = useCallback(
     (runId: string) => {
       if (hqAttachRef.current?.runId === runId) return; // already on it
+      let applied = hqAppliedRef.current;
+      if (applied?.runId !== runId) {
+        // A different run — its history starts from an empty beat log.
+        applied = { runId, count: 0 };
+        hqAppliedRef.current = applied;
+        setHqActivity([]);
+      }
       detachHQ();
       const controller = new AbortController();
       hqAttachRef.current = { runId, controller };
       writeStoredHQRunId(runId);
-      setHqActivity([]);
       setHqLive(true);
-      streamHQActivity({ runId, signal: controller.signal }, (frame) => {
-        if (hqAttachRef.current?.runId !== runId) return;
-        setHqActivity((prev) => [...prev.slice(-(HQ_ACTIVITY_CAP - 1)), frame]);
-      })
+      streamHQActivity(
+        { runId, signal: controller.signal, skip: applied.count },
+        (frame) => {
+          if (hqAttachRef.current?.runId !== runId) return;
+          applied.count += 1;
+          setHqActivity((prev) => [...prev.slice(-(HQ_ACTIVITY_CAP - 1)), frame]);
+        },
+      )
         .then(() => {
           if (hqAttachRef.current?.runId !== runId) return;
           // EOF — the run ended and its whole feed drained. The beats stay
           // on screen as the run's account of itself.
           hqAttachRef.current = null;
+          hqAppliedRef.current = null;
           setHqLive(false);
           clearStoredHQRunId();
           void loadStatus(); // settle the run table (runStatus just flipped)
@@ -1007,6 +1022,7 @@ function CompanionPodBody({
           // keeps it — the discovery poll below re-attaches.
           if (e instanceof HQStreamError && e.code === "not_found") {
             clearStoredHQRunId();
+            hqAppliedRef.current = null;
           }
         });
     },
@@ -1049,8 +1065,14 @@ function CompanionPodBody({
   // breathes for HQ even when nobody is looking at the internals. v0.11
   // streams: the read is the REGISTRY-ONLY status (zero GitHub calls), and
   // only the REFLECTION run gets an attachment while closed.
+  // A hidden tab idles completely: the interval is cleared and any HQ
+  // attachment is cut (visibilitychange), so no polling or stream-holding
+  // runs while nobody is looking; becoming visible again re-discovers once,
+  // immediately. Re-attach after hidden replays the feed, but the reader
+  // skips the frames the pod already applied (hqAppliedRef).
   useEffect(() => {
     let stopped = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
     const discover = async () => {
       if (stopped || hqAttachRef.current) return; // attached — frames drive
       const status = await loadStatus();
@@ -1064,13 +1086,38 @@ function CompanionPodBody({
         attachHQ(status.reflection.runId);
       }
     };
-    void discover();
-    const id = setInterval(() => void discover(), HQ_DISCOVERY_POLL_MS);
+    const startInterval = () => {
+      if (intervalId !== null) return;
+      intervalId = setInterval(() => void discover(), HQ_DISCOVERY_POLL_MS);
+    };
+    const stopInterval = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        stopInterval();
+        detachHQ(); // a panel nobody is looking at is idle
+      } else {
+        void discover(); // back — check now, not after the next tick
+        startInterval();
+      }
+    };
+    // Effects run on the client only, but a mount inside a hidden tab must
+    // not touch the network either — discovery waits for visibility.
+    if (document.visibilityState !== "hidden") {
+      void discover();
+      startInterval();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       stopped = true;
-      clearInterval(id);
+      stopInterval();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [loadStatus, attachHQ]);
+  }, [loadStatus, attachHQ, detachHQ]);
 
   // Unmount: cut every attachment so a navigated-away pod leaves no reader.
   useEffect(() => {
