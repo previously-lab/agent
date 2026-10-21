@@ -2,8 +2,9 @@
  * Reflection contract — what the wake channel's two sides share
  * (v0.30 §2; v0.34 常驻形态 R1; v0.38 §5 — the short-lived unit).
  *
- * Pure by construction: one token constant, the takeover threshold, the
- * outcome type, and the retired-payload type. `reflection-run.ts` is a
+ * Pure by construction: the token constant, the timing thresholds (takeover,
+ * round ceiling, run budget), the outcome type, and the retired-payload
+ * type. `reflection-run.ts` is a
  * WORKFLOW file, and the Workflow SDK bundles a workflow file's static
  * import graph into the sandbox — which has no Node modules
  * (docs/errors/node-js-module-in-workflow). So this module must stay free of
@@ -28,9 +29,44 @@ export const REFLECTION_TOKEN = "reflection:main";
  * LIVE slow round below this age is never touched (撞车即退 holds for
  * healthy holders); a terminal/dead holder is never cancelled (the platform
  * disposes the token at run terminal state — treated as unowned instead).
- * Configurable constant.
+ * The value stays 15 minutes, but it is now a REAL zombie threshold: a
+ * healthy run retires on its own after at most REFLECTION_MAX_ROUNDS_PER_RUN
+ * rounds and yields early after any lap longer than REFLECTION_LAP_YIELD_MS,
+ * so a live holder below this age is a round still in flight, not a stuck
+ * unit. Configurable constant.
  */
 export const REFLECTION_TAKEOVER_MS = 15 * 60 * 1000;
+
+/**
+ * The per-round wall-clock ceiling, passed to the round's sub-agent as
+ * `timeoutMs`. The platform kills a single function invocation at 800 s and
+ * the SDK then re-executes the step bodies that were in flight on redelivery
+ * — the platform wall is a crash, not a bound. A round must end by itself,
+ * well inside that ceiling: on expiry the sub-agent returns a failure and
+ * the round lands whatever its tools already queued. 5 minutes — a sane
+ * round measures ~300 s in production, so this catches a straggler one
+ * platform-wall away.
+ */
+export const REFLECTION_ROUND_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * A run retires on its own after at most this many settled rounds. The
+ * platform wall (800 s per invocation) is not a bound — reaching it crashes
+ * the delivery and the SDK re-executes the in-flight step bodies — so one
+ * invocation must do bounded work and hand the remaining backlog to the next
+ * bell. With the lap yield below, worst case ≈ 2 × 5 min + overhead, well
+ * inside the wall. The exit is at a lap boundary, never inside a round.
+ */
+export const REFLECTION_MAX_ROUNDS_PER_RUN = 2;
+
+/**
+ * The lap-yield threshold: a lap (clock read → world read → round → settle)
+ * that took longer than this retires the run even below the round cap — a
+ * slow lap is the signal that the next round would not fit inside the
+ * platform wall either. Measured with real clock steps so a replayed run
+ * sees the recorded durations, not the replay's.
+ */
+export const REFLECTION_LAP_YIELD_MS = 3.5 * 60 * 1000;
 
 /**
  * The bounded re-claim attempts after a takeover cancel (the Supersede

@@ -63,6 +63,7 @@ import { detectDirectionMode } from "@/lib/evolution/direction-agent";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { EvolutionReason, ScopedSlice } from "./reflection-plan";
+import { REFLECTION_ROUND_TIMEOUT_MS } from "./reflection-contract";
 import {
   backgroundModel,
   buildRunCardReaders,
@@ -789,9 +790,12 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
     maxSteps: 50,
-    // No wall-clock budget (v0.34 修订 A — execution budgets are deleted
-    // repo-wide): the round's bounds are the step cap above and the
-    // platform wall.
+    // The platform wall (800 s per invocation) is NOT a budget: reaching it
+    // kills the delivery and the SDK re-executes the in-flight step bodies
+    // on redelivery — a crash, not a bound. So the round carries an explicit
+    // ceiling; on expiry the runner returns a failure and the flush below
+    // lands whatever the round's tools already queued.
+    timeoutMs: REFLECTION_ROUND_TIMEOUT_MS,
   });
 
   // Flush whatever the round queued — even a failed round keeps whatever
@@ -841,6 +845,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   });
   let flushed = false;
   let flushAttempts = 0;
+  let flushFailure: unknown = null;
   for (;;) {
     try {
       await commitReflectionRound(batch, message);
@@ -848,10 +853,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       break;
     } catch (err) {
       if (!isRefConflictError(err) || flushAttempts >= 2) {
-        console.warn(
-          "[HQ] round flush failed (queued writes lost):",
-          err instanceof Error ? err.message : err,
-        );
+        flushFailure = err;
         break;
       }
       flushAttempts += 1;
@@ -860,6 +862,32 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
         err instanceof Error ? err.message : err,
       );
     }
+  }
+
+  // A flush failure that is NOT a ref conflict (rate limit, circuit breaker,
+  // network) must FAIL the round — retrying inside the step is pointless
+  // (the breaker stays open ~60 s and GitHub asks for ~340 s). Nothing
+  // persisted, so the honest outcome is a failure: the commit never landed,
+  // the water level does not move (no `seen:` trailer), and the owed
+  // material is redone on a later lap. Reporting the sub-agent's success
+  // here would be a lie — its writes died with the flush.
+  if (flushFailure !== null) {
+    const detail =
+      flushFailure instanceof Error ? flushFailure.message : String(flushFailure);
+    const lost =
+      queuedPaths.length > 0 ? queuedPaths.join(", ") : "(none queued)";
+    console.warn(
+      `[HQ] round flush failed — round FAILED, the cursor did not move, the work will be redone: ${detail} (queued writes not persisted: ${lost})`,
+    );
+    const flushError =
+      `round flush failed (${detail}) — queued writes did not persist: ${lost}. ` +
+      `The round is failed: the cursor does not move and this material is redone on a later lap.`;
+    const error = roundFailed
+      ? `${result.error ?? "HQ ended without a report"}; ${flushError}`
+      : flushError;
+    // No `evolved` stamp either: the pass ran, but its product died with
+    // the same flush — nothing this round produced survives.
+    return { actions: [], note: "", error };
   }
 
   if (roundFailed || !rep) {
@@ -916,10 +944,22 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
         await commitReflectionRound(batch, degradedMessage);
         landed = queuedPaths.map((p) => p.replace(/^memory\//, ""));
       } catch (flushErr) {
+        // The degraded commit died too (same non-retryable classes — rate
+        // limit, breaker, network): nothing persisted either way, so the
+        // round comes back failed with the lost paths named — the cursor
+        // holds and the material is redone on a later lap.
+        const flushDetail =
+          flushErr instanceof Error ? flushErr.message : String(flushErr);
         console.warn(
-          "[HQ] degraded flush failed too (queued writes lost):",
-          flushErr instanceof Error ? flushErr.message : flushErr,
+          `[HQ] degraded flush failed too — round FAILED, the cursor did not move, the work will be redone: ${flushDetail} (queued writes not persisted: ${queuedPaths.join(", ")})`,
         );
+        return {
+          actions: [],
+          note: "",
+          error:
+            `${msg}; degraded flush also failed (${flushDetail}) — queued writes did not persist: ${queuedPaths.join(", ")}. ` +
+            `The round is failed: the cursor does not move and this material is redone on a later lap.`,
+        };
       }
     }
     return { actions: landed, note: "", error: msg };

@@ -200,6 +200,7 @@ vi.mock("@/lib/evolution/store", () => ({
 }));
 
 import { handleBrief } from "@/app/api/evolution/hq-agent";
+import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 
@@ -273,14 +274,14 @@ describe("handleBrief (v0.21 §5)", () => {
     const message = vi.mocked(commitReflectionRound).mock.calls[0][1];
     expect(message).toContain("Reflection round — 2026-08-09");
     expect(message).toContain("seen: 2026-08-09-1300#a1b2c3"); // turn-level water level (v0.42)
-    // Runner wiring: forced report through hqReport; NO wall-clock budget
-    // (v0.34 修订 A — execution budgets are deleted repo-wide; the round's
-    // bounds are the step cap and the platform wall).
+    // Runner wiring: forced report through hqReport; the round carries an
+    // explicit wall-clock ceiling — the platform wall is a crash, not a
+    // bound, so the round must end by itself and land what it queued.
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.toolChoice).toBe("required");
     expect(opts.reportToolName).toBe("hqReport");
     expect(opts.maxSteps).toBe(50);
-    expect("timeoutMs" in opts).toBe(false);
+    expect(opts.timeoutMs).toBe(REFLECTION_ROUND_TIMEOUT_MS);
   });
 
   it("a substantive write lands through the real case machinery", async () => {
@@ -954,9 +955,53 @@ describe("handleBrief (v0.21 §5)", () => {
 
     const outcome = await handleBrief(DOCKET);
 
-    expect(outcome.error).toBe("boom");
+    // the round's own error leads; the flush failure and the lost paths follow
+    expect(outcome.error).toContain("boom");
+    expect(outcome.error).toContain("round flush failed (disk full)");
+    expect(outcome.error).toContain("memory/research/手机购买调研/index.md");
+    expect(outcome.error).toContain("did not persist");
     expect(outcome.actions).toEqual([]);
+    expect("evolved" in outcome).toBe(false); // nothing survived the flush
     expect(io.files.size).toBe(0);
+  });
+
+  it("a rate-limit flush failure on a SUCCESSFUL round fails the round — the lost paths are named (2026-10-22 production shape)", async () => {
+    // Production: GitHub's hourly rate limit hit the round-end commit; the
+    // circuit breaker stays open ~60 s and GitHub asks for ~340 s, so the
+    // step cannot retry — the round must come back FAILED, not settled.
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(commitReflectionRound).mockRejectedValueOnce(
+      new Error("GitHub circuit breaker open — failing fast for 36s more"),
+    );
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "writeCase", {
+        action: "open",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "本已产出、随提交一起丢掉的写。",
+      });
+      return {
+        ok: true,
+        report: { actions: ["research/手机购买调研/index.md"], note: "Opened the research case." },
+        text: "",
+      };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    // The sub-agent SUCCEEDED, but nothing persisted — the round lies only
+    // if it reports success. The error names the cause and the lost paths.
+    expect(outcome.error).toBeDefined();
+    expect(outcome.error).toContain("circuit breaker");
+    expect(outcome.error).toContain("memory/research/手机购买调研/index.md");
+    expect(outcome.error).toContain("did not persist");
+    expect(outcome.error).toContain("redone");
+    expect(outcome.actions).toEqual([]); // nothing landed, nothing claimed
+    expect(outcome.note).toBe(""); // lastNote is the unit's own account (R1)
+    expect("evolved" in outcome).toBe(false);
+    expect(io.files.size).toBe(0); // the queued write died with the flush
+    // no retry inside the step — one attempt, then the honest failure
+    expect(vi.mocked(commitReflectionRound)).toHaveBeenCalledTimes(1);
   });
 });
 

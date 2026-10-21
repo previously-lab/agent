@@ -524,12 +524,27 @@ export async function markHQRunStarted(): Promise<void> {
 }
 
 /**
- * Idle-exit mark ("use step"): the visit's terminal beat — the mailbox has
- * been quiet for the whole visit grace (60 minutes) at a lap boundary,
- * never mid-round. The pointer settles `runStatus: "idle"` and the
+ * Clock read ("use step"): the shell's wall-clock source. A workflow body
+ * cannot read `Date.now()` itself — replay must be deterministic — so the
+ * shell takes its lap timings from here. Each call is its own step, which is
+ * what makes the timing replay-safe: a redelivered run re-executes against
+ * the recorded values for the laps that already ran, not the replay's clock.
+ */
+export async function readReflectionClock(): Promise<number> {
+  "use step";
+  return Date.now();
+}
+
+/**
+ * Idle-exit mark ("use step"): the visit's terminal beat — fired at a lap
+ * boundary when the run has NOTHING LEFT TO DO (the world read came back
+ * empty) or when THIS RUN'S BUDGET IS SPENT (the round cap or the lap-yield
+ * threshold — the run retires on its own terms, well inside the platform
+ * wall). The pointer settles `runStatus: "idle"` and the
  * "finished" frame closes the activity feed with the same verdict — pointer
- * first, frame second, so a lost frame never costs the settlement. NO
- * successor follows (用户裁决：寿命 = 一次访问): the pointer honestly reads
+ * first, frame second, so a lost frame never costs the settlement. The exit
+ * is always at a lap boundary, never inside a round. NO successor follows
+ * (用户裁决：寿命 = 一次访问): the pointer honestly reads
  * "idle" until the next visit's first bell starts a fresh generation via
  * the delivery fallback and its started mark overwrites — the on-disk
  * cursor (lastSeen) carries the continuity, so the seam is invisible.

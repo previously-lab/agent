@@ -18,12 +18,20 @@
  *                 paradigm — the retry covers the cleanup-propagation window).
  *   stamp the claim (startedAt — the age base for the NEXT challenger).
  *   loop:
+ *     t0 ← readReflectionClock()
  *     docket ← loadReflectionWorld()      // 全读、永不抛 (v0.34 R2 形状)
  *     无活 → settle 指针 (idle) → dispose token → return   // 无活即退, no clock
  *     有活 → round ← handleReflectionRound(docket)         // HQ never throws
  *          → settleReflectionRound(round, docket)          // 失败轮游标不动
- *          → 立即再 loop（积压由循环本身消化 — 工作驱动, not a timer）
+ *          → 预算到 (rounds ≥ cap 或 lap ≥ yield) → idle exit → return
+ *          → 否则立即再 loop（积压由循环本身消化 — 工作驱动, not a timer）
  *
+ * 预算是必须的: the platform kills one invocation at 800 s and the SDK
+ * re-executes the in-flight step bodies on redelivery — the wall is a crash,
+ * not a bound. So one invocation does bounded work (the round cap and the
+ * lap yield above) and retires on its own terms; the backlog it did not
+ * reach stays on disk past the water level for the NEXT bell's run, whose
+ * delivery fallback starts a fresh unit off the on-disk cursor.
  * 活性由事件链供给（消息 → turn → 总结流 → 铃), the agenda degrades to
  * 机会式补查 (each lap's docket carries due items), and a lost bell is made
  * up by the next turn's bell — the work sits on disk past the water level
@@ -42,6 +50,8 @@
  */
 import { createHook } from "workflow";
 import {
+  REFLECTION_LAP_YIELD_MS,
+  REFLECTION_MAX_ROUNDS_PER_RUN,
   REFLECTION_TOKEN,
   REFLECTION_TAKEOVER_MAX_ATTEMPTS,
   REFLECTION_TAKEOVER_MS,
@@ -55,6 +65,7 @@ import {
   loadReflectionWorld,
   markHQRunStarted,
   markReflectionRunIdleExit,
+  readReflectionClock,
   readRunClaim,
   settleReflectionRound,
   stampReflectionClaim,
@@ -135,15 +146,21 @@ export async function reflectionRun(
     await stampReflectionClaim();
     await markHQRunStarted();
 
-    // ── The work loop (§5): no clocks — the loop IS the event chain. Each
-    //    lap re-reads the world; a lap with work runs ONE round and settles
-    //    it immediately (失败轮不推游标 — §4.2); an empty docket retires the
-    //    unit on the spot. The bell's range opens the FIRST lap only (a
-    //    hint, consumed on read — v0.42 §4/§3.5); every later lap reads the
-    //    commit log, which the settle's trailer has advanced past the hint.
+    // ── The work loop (§5): the loop IS the event chain, bounded by the run
+    //    budget (round cap + lap yield) so the invocation retires well inside
+    //    the platform wall. Each lap re-reads the world; a lap with work runs
+    //    ONE round and settles it immediately (失败轮不推游标 — §4.2); an empty
+    //    docket retires the unit on the spot. The bell's range opens the
+    //    FIRST lap only (a hint, consumed on read — v0.42 §4/§3.5); every
+    //    later lap reads the commit log, which the settle's trailer has
+    //    advanced past the hint.
     let rounds = 0;
     let openingRange = range ?? undefined;
     for (;;) {
+      // The lap's wall-clock bookends — real clock steps, so a replayed run
+      // measures the recorded laps, not the replay's clock. The budget below
+      // is what keeps the whole invocation inside the platform wall.
+      const lapStartedAt = await readReflectionClock();
       const docket = await loadReflectionWorld(undefined, openingRange);
       openingRange = undefined;
       if (!lapHasWork(docket)) {
@@ -154,7 +171,18 @@ export async function reflectionRun(
       const round = await handleReflectionRound(docket);
       rounds += 1;
       await settleReflectionRound(round, docket, rounds);
-      // 立即再 loop — the backlog drains lap by lap, work-driven (§7).
+      // Budget check at the lap boundary (never inside a round): the round
+      // cap or a slow lap both retire the run on its own terms — the wall
+      // would only crash it — and the next bell continues the backlog.
+      const lapMs = (await readReflectionClock()) - lapStartedAt;
+      if (
+        rounds >= REFLECTION_MAX_ROUNDS_PER_RUN ||
+        lapMs >= REFLECTION_LAP_YIELD_MS
+      ) {
+        await markReflectionRunIdleExit({ rounds });
+        dispose();
+        return { kind: "retired", rounds };
+      }
     }
   } finally {
     dispose();
