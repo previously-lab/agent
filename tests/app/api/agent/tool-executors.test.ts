@@ -109,7 +109,7 @@ const searchFlashDeps = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/search/flash-search", () => ({
   searchViaFlash: searchFlashDeps.searchViaFlash,
-  SEARCH_TIMEOUT_MS: 240_000,
+  SEARCH_TIMEOUT_MS: 600_000,
 }));
 
 const visionDeps = vi.hoisted(() => ({

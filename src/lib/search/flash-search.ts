@@ -84,13 +84,14 @@ export interface WebSearchResult {
   suggestedReads: Array<{ url: string; title: string; reason: string }>;
 }
 
-/** Server-side search rounds Flash may use per query. 5 (was 3): a real run
- *  died on `max_uses_exceeded` at 3 — legitimate multi-angle research
- *  (reformulate after each read) hit the ceiling, and the provider's error
- *  variant then took the whole stream down (see normalizingFetch). 5 matches
- *  Anthropic's own default max_uses and pairs with the 6-page read quota; the
- *  50-step cap and 240s budget still bound the run. */
-const MAX_SEARCHES_PER_QUERY = 5;
+/** Server-side search rounds Flash may use per query. 50: the search cap is
+ *  the budget that BINDS — production evidence (nine `max_uses_exceeded`
+ *  failures in 8 hours, each degrading the whole research run to its final
+ *  text) showed legitimate multi-angle research (reformulate after each read)
+ *  dying at 5, and the provider's error variant then takes the whole stream
+ *  down (see normalizingFetch). 50 pairs with the 6-page read quota; the
+ *  200-step cap and the 600s wall clock still bound the run. */
+const MAX_SEARCHES_PER_QUERY = 50;
 
 /** Pages the researcher may read in full per run. Reading pages is the
  *  expensive leg (fetch + context); a model that keeps "just one more page"
@@ -339,8 +340,10 @@ const searchReportSchema = tool({
 });
 
 /** Total model steps for the research loop: search rounds + page reads + the
- *  final report. */
-const MAX_SEARCH_STEPS = 50;
+ *  final report. Deliberately loose (200): with 50 search rounds permitted,
+ *  the search cap must bind BEFORE this step count — the step wall exists to
+ *  catch the "never filed the report" case, not to ration research. */
+const MAX_SEARCH_STEPS = 200;
 
 /**
  * prepareStep factory: the step wall is the classic "never filed the report"
@@ -396,9 +399,12 @@ Distinguish what the sources SAY from what YOU know — never blend the two sile
 
 /** The OUTER webSearch tool wall: tool-executors wraps the whole search call
  *  in withStepTimeout (the run itself carries no budget since v0.34 修订 A —
- *  execution budgets are deleted repo-wide). Sized for the page quota: 6
- *  reads (MAX_PAGE_READS) at the 30s fetch cap alone can burn 180s. */
-export const SEARCH_TIMEOUT_MS = 240_000;
+ *  execution budgets are deleted repo-wide). 600s, raised out of the way but
+ *  NOT deleted: this is a backstop against the platform's 800s invocation wall
+ *  (which kills the turn and re-executes the step), not a work budget — a
+ *  stuck step must time out well before the platform wall, and 600s leaves the
+ *  search/step caps as the budgets that actually bind. */
+export const SEARCH_TIMEOUT_MS = 600_000;
 
 /**
  * Adapter #1: DeepSeek V4 Flash native search. Flash decides what to search
@@ -445,7 +451,7 @@ export async function searchViaFlash(
   const scout = opts?.scout ?? false;
   // Effective caps: scout is a lean fan-out leg with half the page-read quota
   // and fewer search rounds; standard mode keeps the exported constants.
-  const effectiveMaxSearchRounds = scout ? 3 : MAX_SEARCHES_PER_QUERY;
+  const effectiveMaxSearchRounds = scout ? 20 : MAX_SEARCHES_PER_QUERY;
   const effectiveMaxPageReads = scout ? 3 : MAX_PAGE_READS;
 
   const today = new Date().toISOString().slice(0, 10);

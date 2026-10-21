@@ -13,7 +13,7 @@
  * committing write.
  *
  * Used by the long-running tool executors (thinkDeep ~298s cap,
- * webSearch 240s) as a soft safety net on top of the per-provider token budget.
+ * webSearch 600s) as a soft safety net on top of the per-provider token budget.
  */
 export class StepTimeoutError extends Error {
   constructor() {

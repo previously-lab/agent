@@ -48,7 +48,7 @@ describe("searchViaFlash", () => {
     expect(opts.languageModel).toBeDefined();
     expect(opts.model).toBeUndefined();
     expect(opts.effortSdk).toBe("anthropic");
-    expect(opts.maxSteps).toBe(50);
+    expect(opts.maxSteps).toBe(200);
     // v0.34 修订 A: no execution budget on the run itself — the outer
     // webSearch tool wall (SEARCH_TIMEOUT_MS) lives in tool-executors.
     expect("timeoutMs" in opts).toBe(false);
@@ -174,7 +174,7 @@ describe("searchViaFlash", () => {
     expect(out).toContain("Page-read quota exhausted");
   });
 
-  it("uses standard-mode effective caps (6 pages / 5 search rounds) by default", async () => {
+  it("uses standard-mode effective caps (6 pages / 50 search rounds) by default", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
@@ -184,8 +184,8 @@ describe("searchViaFlash", () => {
     const opts = runner.runSubAgent.mock.calls[0]![0];
 
     expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 5 });
-    expect(opts.system).toContain("up to 5 search rounds");
+    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 50 });
+    expect(opts.system).toContain("up to 50 search rounds");
     expect(opts.system).toContain("read at most 6 pages per run");
     expect(opts.tools.webFetch.description).toContain(
       "one of your 6 page-read slots",
@@ -195,7 +195,7 @@ describe("searchViaFlash", () => {
     );
   });
 
-  it("uses scout-mode effective caps (3 pages / 3 search rounds) when opts.scout is true", async () => {
+  it("uses scout-mode effective caps (3 pages / 20 search rounds) when opts.scout is true", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
@@ -205,8 +205,8 @@ describe("searchViaFlash", () => {
     const opts = runner.runSubAgent.mock.calls[0]![0];
 
     expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 3 });
-    expect(opts.system).toContain("up to 3 search rounds");
+    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 20 });
+    expect(opts.system).toContain("up to 20 search rounds");
     expect(opts.system).toContain("read at most 3 pages per run");
     expect(opts.tools.webFetch.description).toContain(
       "one of your 3 page-read slots",
@@ -315,9 +315,9 @@ describe("searchViaFlash", () => {
     };
     // Mid-run steps get no override.
     expect(prep({ stepNumber: 0 })).toEqual({});
-    expect(prep({ stepNumber: 48 })).toEqual({});
-    // The last step of the 50-step budget: instructions become report-now.
-    const last = prep({ stepNumber: 49 });
+    expect(prep({ stepNumber: 198 })).toEqual({});
+    // The last step of the 200-step budget: instructions become report-now.
+    const last = prep({ stepNumber: 199 });
     expect(last.instructions).toContain("FINAL STEP — REPORT NOW");
     expect(last.instructions).toContain("MUST call searchReport");
     // The base role is preserved ahead of the directive.
