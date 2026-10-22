@@ -18,6 +18,7 @@ export const SYNC_CODE_DIRS = [
   "public/",
   "messages/",
   "scripts/",
+  "patches/",
   "config/",
   "tests/",
   "identity/",
@@ -42,6 +43,7 @@ export const SYNC_ROOT_FILES = [
   "AGENTS.md",
   "CLAUDE.md",
   ".gitignore",
+  ".gitattributes",
 ] as const;
 
 // Paths that must NEVER be synced, even if they appear in the upstream tree.

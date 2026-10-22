@@ -24,6 +24,10 @@ describe("shouldSyncPath", () => {
     expect(shouldSyncPath("scripts/seed-demo.ts")).toBe(true);
   });
 
+  it("returns true for dependency patches", () => {
+    expect(shouldSyncPath("patches/@ai-sdk__workflow@2.0.30.patch")).toBe(true);
+  });
+
   it("returns true for config/ files", () => {
     expect(shouldSyncPath("config/speed-index.json")).toBe(true);
   });
@@ -64,6 +68,10 @@ describe("shouldSyncPath", () => {
 
   it("returns true for .gitignore", () => {
     expect(shouldSyncPath(".gitignore")).toBe(true);
+  });
+
+  it("returns true for patch line-ending attributes", () => {
+    expect(shouldSyncPath(".gitattributes")).toBe(true);
   });
 
   it("returns true for README.md", () => {
