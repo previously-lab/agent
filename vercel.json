@@ -3,6 +3,9 @@
   "functions": {
     "src/app/api/chat/**/*": {
       "supportsCancellation": true
+    },
+    "src/app/api/evolution/hq/**/stream/*": {
+      "supportsCancellation": true
     }
   },
   "ignoreCommand": "node scripts/vercel-ignore.mjs"

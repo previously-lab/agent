@@ -15,6 +15,7 @@
 import { toUIMessageChunk } from "@ai-sdk/workflow";
 import type { UIMessageChunk } from "ai";
 import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
+import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
 
 /**
  * Chunks OUR code writes into the run stream — the only chunks allowed to
@@ -46,6 +47,7 @@ const OUR_CHUNK_TYPES = new Set([
   "data-nested-bubble",
   // v0.33 §3 — the batch summary's runId on the last finisher's stream.
   PARALLEL_SUMMARY_CHUNK,
+  PERSISTENCE_HANDOFF_CHUNK,
 ]);
 
 function isOurs(c: Record<string, unknown>, chunkType: string): boolean {

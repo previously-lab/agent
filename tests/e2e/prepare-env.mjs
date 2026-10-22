@@ -14,17 +14,18 @@ import path from "node:path";
 
 const home = process.env.PREVIOUSLY_HOME;
 const memoryRoot = process.env.MEMORY_ROOT;
+const workflowRoot = process.env.WORKFLOW_LOCAL_DATA_DIR;
 if (!home || !memoryRoot) {
   throw new Error("prepare-env: PREVIOUSLY_HOME and MEMORY_ROOT must be set");
 }
 // Paranoia guard: only ever wipe directories under the previously-e2e temp root.
-for (const dir of [home, memoryRoot]) {
+for (const dir of [home, memoryRoot, ...(workflowRoot ? [workflowRoot] : [])]) {
   if (!dir.includes("previously-e2e")) {
     throw new Error(`prepare-env: refusing to wipe unexpected path: ${dir}`);
   }
 }
 
-for (const dir of [home, memoryRoot]) {
+for (const dir of [home, memoryRoot, ...(workflowRoot ? [workflowRoot] : [])]) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 }

@@ -12,6 +12,7 @@ import {
   normalizeHQActivity,
   readStoredHQRunId,
   streamHQActivity,
+  watchChatRunEnd,
   writeStoredHQRunId,
   type HQActivityFrame,
 } from "@/lib/chat/hq-stream";
@@ -119,6 +120,22 @@ function sseEvent(chunk: unknown): string {
 }
 
 describe("streamHQActivity", () => {
+  it("finishes and cancels a reader on the finished frame even without upstream EOF", async () => {
+    const cancel = vi.fn();
+    const res = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent({
+          type: HQ_ACTIVITY_CHUNK,
+          data: { kind: "finished", at: "t", status: "idle" },
+        })));
+      },
+      cancel,
+    }));
+    const frames: HQActivityFrame[] = [];
+    await streamHQActivity({ runId: "done", fetchImpl: async () => res }, (frame) => frames.push(frame));
+    expect(frames).toHaveLength(1);
+    expect(cancel).toHaveBeenCalledOnce();
+  }, 300);
   it("parses frames in order, skipping other chunk types, corrupt JSON and [DONE]", async () => {
     const res = sseResponse([
       sseEvent({ type: HQ_ACTIVITY_CHUNK, id: "a", data: STARTED }),
@@ -250,6 +267,27 @@ describe("streamHQActivity", () => {
       () => {},
     ).catch((e: unknown) => e);
     expect((errAbort as HQStreamError).code).toBe("aborted");
+  });
+});
+
+describe("watchChatRunEnd transport outcomes", () => {
+  it("does not turn HTTP errors or abort into a run terminal", async () => {
+    expect(await watchChatRunEnd({ runId: "live", fetchImpl: async () => new Response("down", { status: 503 }) }))
+      .toEqual({ kind: "retry" });
+    const controller = new AbortController();
+    controller.abort();
+    expect(await watchChatRunEnd({ runId: "live", signal: controller.signal, fetchImpl: async () => { throw new Error("aborted"); } }))
+      .toEqual({ kind: "aborted" });
+  });
+
+  it("requires a terminal frame and releases the reader when one arrives", async () => {
+    expect(await watchChatRunEnd({ runId: "live", fetchImpl: async () => sseResponse([]) })).toEqual({ kind: "retry" });
+    const cancel = vi.fn();
+    const res = new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(sseEvent({ type: "finish" })));
+    }, cancel }));
+    expect(await watchChatRunEnd({ runId: "live", fetchImpl: async () => res })).toEqual({ kind: "terminal" });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 

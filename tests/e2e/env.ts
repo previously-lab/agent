@@ -20,3 +20,4 @@ export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
  */
 export const E2E_HOME = path.join(os.tmpdir(), "previously-e2e", "home");
 export const E2E_MEMORY_ROOT = path.join(os.tmpdir(), "previously-e2e", "memory");
+export const E2E_WORKFLOW_ROOT = path.join(os.tmpdir(), "previously-e2e", "workflow");

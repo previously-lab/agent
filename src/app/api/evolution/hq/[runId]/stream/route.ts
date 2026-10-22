@@ -23,7 +23,7 @@
  */
 import { createUIMessageStreamResponse } from "ai";
 import { getRun } from "workflow/api";
-import { createHQStreamFilter } from "@/lib/chat/hq-stream";
+import { createHQStreamFilter, HQ_ACTIVITY_CHUNK } from "@/lib/chat/hq-stream";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
 // The platform default (300 s) truncates any attachment to a live run mid-stream;
@@ -42,11 +42,53 @@ export async function GET(
 
   try {
     const run = getRun(runId);
+    const status = await run.status;
     const readable = run.getReadable({ startIndex });
     const tailIndex = await readable.getTailIndex();
+    const terminal = status === "completed" || status === "failed" || status === "cancelled";
+    // Old runs may have finished without closing their shared writable. A
+    // terminal run has a finite tail: replay exactly that snapshot, then end.
+    const reader = readable.getReader();
+    const firstIndex = startIndex < 0 ? Math.max(0, tailIndex + startIndex + 1) : startIndex;
+    let remaining = Math.max(0, tailIndex - firstIndex + 1);
+    const finished = () => ({
+      type: HQ_ACTIVITY_CHUNK,
+      data: { kind: "finished", at: new Date().toISOString(), status: status === "completed" ? "completed" : "failed" },
+    });
+    const abort = () => { void reader.cancel().catch(() => {}); };
+    request.signal.addEventListener("abort", abort, { once: true });
+    const source = new ReadableStream({
+      async pull(controller) {
+        if (request.signal.aborted || (terminal && remaining === 0)) {
+          if (!request.signal.aborted) controller.enqueue(finished());
+          controller.close();
+          request.signal.removeEventListener("abort", abort);
+          await reader.cancel().catch(() => {});
+          return;
+        }
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            if (terminal && !request.signal.aborted) controller.enqueue(finished());
+            controller.close();
+            request.signal.removeEventListener("abort", abort);
+          } else {
+            remaining -= 1;
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          request.signal.removeEventListener("abort", abort);
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        request.signal.removeEventListener("abort", abort);
+        await reader.cancel(reason).catch(() => {});
+      },
+    });
 
     return createUIMessageStreamResponse({
-      stream: readable.pipeThrough(createHQStreamFilter()),
+      stream: source.pipeThrough(createHQStreamFilter()),
       headers: { "x-workflow-stream-tail-index": String(tailIndex) },
     });
   } catch (err) {

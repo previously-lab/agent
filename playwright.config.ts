@@ -4,6 +4,7 @@ import {
   E2E_HOME,
   E2E_MEMORY_ROOT,
   E2E_PORT,
+  E2E_WORKFLOW_ROOT,
 } from "./tests/e2e/env";
 
 /**
@@ -59,6 +60,10 @@ export default defineConfig({
             PREVIOUSLY_BRAIN: "bridge",
             PREVIOUSLY_HOME: E2E_HOME,
             MEMORY_ROOT: E2E_MEMORY_ROOT,
+            WORKFLOW_LOCAL_DATA_DIR: E2E_WORKFLOW_ROOT,
+            // withWorkflow otherwise overwrites the data dir with .next/workflow-data.
+            WORKFLOW_TARGET_WORLD: "local",
+            WORKFLOW_LOCAL_RECOVER_ACTIVE_RUNS: "0",
             // The e2e dev server compiles into its own dist dir so a `pnpm
             // build` (or a probe build) never clobbers a running suite — and
             // vice versa. Covered by the `.next*/` gitignore rule.

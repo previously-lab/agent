@@ -96,6 +96,13 @@ async function waitSettled(page: Page, ref: string): Promise<void> {
 }
 
 test.describe("Archive field", () => {
+  test("hydrates a case's opened date after the light index has painted", async ({ page }) => {
+    await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
+    await seedCases([{ category: "people", name: "hydrated-date", opened: localIso(0), pieces: [] }]);
+    await page.goto("/en/app");
+    await expect(pile(page, "people/hydrated-date")).toContainText(`opened ${localIso(0)}`);
+  });
+
   test.afterEach(async () => {
     await clearCases();
     await clearEpisodic();

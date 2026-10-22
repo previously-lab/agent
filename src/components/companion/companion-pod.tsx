@@ -70,6 +70,7 @@ import { CircleAlert, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
+import { createRunWatchers } from "@/lib/chat/run-watchers";
 import {
   cancelPanelRun,
   fetchHQLog,
@@ -843,6 +844,13 @@ function CompanionPodBody({
   const t = useTranslations("companion");
   const locale = useLocale();
   const [open, setOpen] = useState(false);
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== "hidden");
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
   const [status, setStatus] = useState<NarrationStatus>("connecting");
   const [text, setText] = useState("");
   const [error, setError] = useState<NarrateErrorCode | null>(null);
@@ -917,32 +925,37 @@ function CompanionPodBody({
   const [hq, setHq] = useState<HQStatusResponse | null>(null);
   const [hqFailed, setHqFailed] = useState(false);
   const hqSeqRef = useRef(0);
-  const loadStatus = useCallback(async (): Promise<HQStatusResponse | null> => {
+  const loadStatus = useCallback(async (signal?: AbortSignal): Promise<HQStatusResponse | null> => {
     const seq = ++hqSeqRef.current;
     try {
-      const res = await fetchHQStatus();
-      if (seq !== hqSeqRef.current) return null;
+      const res = await fetchHQStatus(signal);
+      if (signal?.aborted || document.visibilityState === "hidden" || seq !== hqSeqRef.current) return null;
       setHq(res);
       setHqFailed(false);
       return res;
     } catch {
-      if (seq === hqSeqRef.current) setHqFailed(true);
+      if (!signal?.aborted && seq === hqSeqRef.current) setHqFailed(true);
       return null;
     }
   }, []);
   const [hqLog, setHqLog] = useState<HQLogLayer | null>(null);
   const [hqLogFailed, setHqLogFailed] = useState(false);
   const hqLogSeqRef = useRef(0);
+  const logAbortRef = useRef<AbortController | null>(null);
   const loadLog = useCallback(async (): Promise<HQLogLayer | null> => {
+    if (document.visibilityState === "hidden") return null;
+    logAbortRef.current?.abort();
+    const controller = new AbortController();
+    logAbortRef.current = controller;
     const seq = ++hqLogSeqRef.current;
     try {
-      const res = await fetchHQLog();
-      if (seq !== hqLogSeqRef.current) return null;
+      const res = await fetchHQLog(controller.signal);
+      if (controller.signal.aborted || seq !== hqLogSeqRef.current) return null;
       setHqLog(res.log);
       setHqLogFailed(false);
       return res.log;
     } catch {
-      if (seq === hqLogSeqRef.current) setHqLogFailed(true);
+      if (!controller.signal.aborted && seq === hqLogSeqRef.current) setHqLogFailed(true);
       return null;
     }
   }, []);
@@ -952,12 +965,14 @@ function CompanionPodBody({
     [loadLog],
   );
   useEffect(() => {
-    if (!open) return;
-    void loadStatus();
+    if (!open || !visible) return;
     void loadLog();
-    const id = setInterval(() => void loadStatus(), 3000);
-    return () => clearInterval(id);
-  }, [open, loadStatus, loadLog]);
+  }, [open, visible, loadLog]);
+  useEffect(() => {
+    if (visible) return;
+    scheduleLogRefresh.cancel();
+    logAbortRef.current?.abort();
+  }, [visible, scheduleLogRefresh]);
 
   // ── HQ live: attach to the run's activity stream ──────────────────────────
   // The pointer names the running run (runId, written by the claiming run
@@ -973,6 +988,8 @@ function CompanionPodBody({
   // durable feed from index 0; the reader skips this many replayed frames
   // so history is not applied twice. Cleared when the run ends or is gone.
   const hqAppliedRef = useRef<{ runId: string; count: number } | null>(null);
+  const hqFinishedRef = useRef(new Set<string>());
+  const hqRetryRef = useRef(new Map<string, { attempts: number; after: number }>());
 
   const detachHQ = useCallback(() => {
     hqAttachRef.current?.controller.abort();
@@ -983,6 +1000,7 @@ function CompanionPodBody({
   const attachHQ = useCallback(
     (runId: string) => {
       if (hqAttachRef.current?.runId === runId) return; // already on it
+      if (hqFinishedRef.current.has(runId) || (hqRetryRef.current.get(runId)?.after ?? 0) > Date.now()) return;
       let applied = hqAppliedRef.current;
       if (applied?.runId !== runId) {
         // A different run — its history starts from an empty beat log.
@@ -998,26 +1016,38 @@ function CompanionPodBody({
       streamHQActivity(
         { runId, signal: controller.signal, skip: applied.count },
         (frame) => {
-          if (hqAttachRef.current?.runId !== runId) return;
+          if (hqAttachRef.current?.controller !== controller) return;
+          hqRetryRef.current.delete(runId);
           applied.count += 1;
           setHqActivity((prev) => [...prev.slice(-(HQ_ACTIVITY_CAP - 1)), frame]);
         },
       )
-        .then(() => {
-          if (hqAttachRef.current?.runId !== runId) return;
+        .then((result) => {
+          if (hqAttachRef.current?.controller !== controller) return;
           // EOF — the run ended and its whole feed drained. The beats stay
           // on screen as the run's account of itself.
           hqAttachRef.current = null;
-          hqAppliedRef.current = null;
           setHqLive(false);
+          if (result.kind !== "terminal") {
+            const attempts = (hqRetryRef.current.get(runId)?.attempts ?? 0) + 1;
+            hqRetryRef.current.set(runId, { attempts, after: Date.now() + Math.min(30_000, 1000 * 2 ** Math.min(attempts - 1, 5)) });
+            return;
+          }
+          hqAppliedRef.current = null;
+          hqFinishedRef.current.add(runId);
+          if (hqFinishedRef.current.size > 100) hqFinishedRef.current.delete(hqFinishedRef.current.values().next().value!);
           clearStoredHQRunId();
           void loadStatus(); // settle the run table (runStatus just flipped)
           scheduleLogRefresh(); // the run wrote its files — ONE log refresh
         })
         .catch((e: unknown) => {
-          if (hqAttachRef.current?.runId !== runId) return;
+          if (hqAttachRef.current?.controller !== controller) return;
           hqAttachRef.current = null;
           setHqLive(false);
+          if (!controller.signal.aborted) {
+            const attempts = (hqRetryRef.current.get(runId)?.attempts ?? 0) + 1;
+            hqRetryRef.current.set(runId, { attempts, after: Date.now() + Math.min(30_000, 1000 * 2 ** Math.min(attempts - 1, 5)) });
+          }
           // A gone run (404) invalidates the stash; a transport failure
           // keeps it — the discovery poll below re-attaches.
           if (e instanceof HQStreamError && e.code === "not_found") {
@@ -1034,100 +1064,56 @@ function CompanionPodBody({
   // moment the run's durable stream reaches a terminal frame (or closes) the
   // watcher schedules ONE debounced log refresh — that is the whole GitHub
   // read rhythm: open / terminal / manual, never the clock.
-  const runWatchRef = useRef(new Map<string, AbortController>());
-  const attachRunWatch = useCallback(
-    (runId: string) => {
-      if (runWatchRef.current.has(runId)) return; // already watching
-      const controller = new AbortController();
-      runWatchRef.current.set(runId, controller);
-      void watchChatRunEnd({ runId, signal: controller.signal }).finally(() => {
-        runWatchRef.current.delete(runId);
-        void loadStatus();
-        scheduleLogRefresh();
-      });
+  const runWatchers = useMemo(() => createRunWatchers({
+    watch: watchChatRunEnd,
+    onTerminal: () => {
+      void loadStatus();
+      scheduleLogRefresh();
     },
-    [loadStatus, scheduleLogRefresh],
-  );
+  }), [loadStatus, scheduleLogRefresh]);
   useEffect(() => {
-    if (!open || !hq || hq.runs.state !== "live") return;
-    const reflectionRunId =
-      hq.reflection.state === "live" ? hq.reflection.runId : null;
-    for (const row of hq.runs.live) {
-      if (row.runId === reflectionRunId) continue; // the HQ attach owns it
-      attachRunWatch(row.runId);
-    }
-  }, [open, hq, attachRunWatch]);
+    const reflectionRunId = hq?.reflection.state === "live" ? hq.reflection.runId : null;
+    const runIds = hq?.runs.state === "live"
+      ? hq.runs.live.filter((row) => row.runId !== reflectionRunId).map((row) => row.runId)
+      : [];
+    runWatchers.sync(runIds, open && visible);
+  }, [open, visible, hq, runWatchers]);
 
-  // Discovery: the mount-time check IS the local reconnect (the stash only
-  // hints; the pointer's runStatus + runId is the verdict — a stashed id the
-  // pointer no longer names as running is simply not attached). Afterwards a
-  // slow clock watches for NEW runs while the panel is closed — the pod
-  // breathes for HQ even when nobody is looking at the internals. v0.11
-  // streams: the read is the REGISTRY-ONLY status (zero GitHub calls), and
-  // only the REFLECTION run gets an attachment while closed.
-  // A hidden tab idles completely: the interval is cleared and any HQ
-  // attachment is cut (visibilitychange), so no polling or stream-holding
-  // runs while nobody is looking; becoming visible again re-discovers once,
-  // immediately. Re-attach after hidden replays the feed, but the reader
-  // skips the frames the pod already applied (hqAppliedRef).
+  // One visibility-owned clock: the open panel reads status every 3s;
+  // closed discovery reads every 15s until an HQ stream owns the feed.
   useEffect(() => {
+    if (!visible || document.visibilityState === "hidden") {
+      detachHQ();
+      return;
+    }
     let stopped = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let discovering = false;
+    const controller = new AbortController();
     const discover = async () => {
-      if (stopped || hqAttachRef.current) return; // attached — frames drive
-      const status = await loadStatus();
-      if (stopped || !status) return;
-      // v0.39 §4.1 — the PUBLIC layer (hook channel) is the verdict: a live
-      // reflection run's id attaches; "none" is 无人在家, not an error.
-      if (
-        status.reflection.state === "live" &&
-        (status.reflection.status === "running" || status.reflection.status === "pending")
-      ) {
+      if (stopped || discovering || (!open && hqAttachRef.current)) return;
+      discovering = true;
+      const status = await loadStatus(controller.signal).finally(() => { discovering = false; });
+      if (stopped || controller.signal.aborted || document.visibilityState === "hidden" || !status) return;
+      if (status.reflection.state === "live" &&
+        (status.reflection.status === "running" || status.reflection.status === "pending")) {
         attachHQ(status.reflection.runId);
       }
     };
-    const startInterval = () => {
-      if (intervalId !== null) return;
-      intervalId = setInterval(() => void discover(), HQ_DISCOVERY_POLL_MS);
-    };
-    const stopInterval = () => {
-      if (intervalId !== null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        stopInterval();
-        detachHQ(); // a panel nobody is looking at is idle
-      } else {
-        void discover(); // back — check now, not after the next tick
-        startInterval();
-      }
-    };
-    // Effects run on the client only, but a mount inside a hidden tab must
-    // not touch the network either — discovery waits for visibility.
-    if (document.visibilityState !== "hidden") {
-      void discover();
-      startInterval();
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    void discover();
+    const timer = setInterval(() => void discover(), open ? 3000 : HQ_DISCOVERY_POLL_MS);
     return () => {
       stopped = true;
-      stopInterval();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      controller.abort();
+      clearInterval(timer);
     };
-  }, [loadStatus, attachHQ, detachHQ]);
+  }, [open, visible, loadStatus, attachHQ, detachHQ]);
 
-  // Unmount: cut every attachment so a navigated-away pod leaves no reader.
-  useEffect(() => {
-    const watches = runWatchRef.current;
-    return () => {
-      detachHQ();
-      for (const controller of watches.values()) controller.abort();
-      watches.clear();
-    };
-  }, [detachHQ]);
+  useEffect(() => () => {
+    detachHQ();
+    runWatchers.dispose();
+    scheduleLogRefresh.cancel();
+    logAbortRef.current?.abort();
+  }, [detachHQ, runWatchers, scheduleLogRefresh]);
 
   // The composer's evolution-stream button is this panel's SECOND entry —
   // a request only ever opens; closing stays the panel's own gesture.
@@ -1144,13 +1130,15 @@ function CompanionPodBody({
   const [memoryMapFailed, setMemoryMapFailed] = useState(false);
   const memoryMapSeqRef = useRef(0);
   const loadMemoryMap = useCallback(async () => {
+    const hidden = () => document.visibilityState === "hidden";
+    if (hidden()) return;
     const seq = ++memoryMapSeqRef.current;
     const [episodic, skeleton] = await Promise.all([
       getEpisodicState().catch(() => null),
       getTimelineSkeleton().catch(() => null),
     ]);
     // A close/reopen superseded this read — its snapshot would be stale.
-    if (seq !== memoryMapSeqRef.current) return;
+    if (hidden() || seq !== memoryMapSeqRef.current) return;
     setMemoryMapFailed(!episodic && !skeleton);
     setMemoryMap(
       episodic || skeleton
@@ -1164,8 +1152,8 @@ function CompanionPodBody({
     );
   }, []);
   useEffect(() => {
-    if (open) void loadMemoryMap();
-  }, [open, loadMemoryMap]);
+    if (open && visible) void loadMemoryMap();
+  }, [open, visible, loadMemoryMap]);
 
   const speaking =
     target !== null && (status === "connecting" || status === "streaming");

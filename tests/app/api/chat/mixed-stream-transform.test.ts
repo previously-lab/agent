@@ -25,6 +25,10 @@ async function through(chunks: unknown[]): Promise<unknown[]> {
 }
 
 describe("createMixedStreamTransform", () => {
+  it("preserves the durable persistence handoff on POST and reconnect", async () => {
+    const chunk = { type: "data-persistence-handoff", id: "persistence-turn", data: { summaryRunId: "summary", turnId: "turn" } };
+    expect(await through([chunk])).toEqual([chunk]);
+  });
   it("converts raw reasoning-delta parts (text → delta)", async () => {
     const out = await through([
       { type: "reasoning-delta", id: "reasoning-0", text: "The" },

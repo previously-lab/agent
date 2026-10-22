@@ -30,6 +30,10 @@ import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
   raceArrivalVerdict,
+  recoveryMessages,
+  recoveredTurnIds,
+  mergeRecoveredMessages,
+  mergeSavedTurns,
   type ArrivalDecision,
 } from "@/lib/chat/reconnect";
 import {
@@ -49,7 +53,10 @@ import {
   useParallelLaneReaders,
   type ParallelLane,
 } from "./parallel-lane";
-import { isChatRunActive } from "@/lib/chat/actions";
+import { getChatRecovery } from "@/lib/chat/actions";
+import { usePersistenceObserver } from "@/hooks/use-persistence-observer";
+import { acceptPersistenceRecovery, readPendingPersistence, rememberSummaryRun, rememberTurnRun } from "@/lib/chat/persistence";
+import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
 import { useTranslations, useLocale } from "next-intl";
@@ -76,8 +83,7 @@ interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
    *  chat starts on the real value instead of flashing defaults. */
   initialConfig?: UserConfig;
-  /** A turn finished and its slice is on disk. The shell refreshes the
-   *  catalog and the hotel's doors; see the effect in `Inner`. */
+  /** A summary receipt proves saved turns; refresh the catalog and archives. */
   onTurnSettled?: () => void;
   /** The shared band feed, owned by the layout-level shell provider — see
    *  `field-feed.ts`. */
@@ -140,6 +146,13 @@ export function ChatPage({
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
   const [arrivalFailed, setArrivalFailed] = useState(false);
   const [arrivalAttempt, setArrivalAttempt] = useState(0);
+  usePersistenceObserver(() => {
+    onTurnSettled?.();
+    if (!verdict || arrivalFailed) {
+      setArrivalFailed(false);
+      setArrivalAttempt((attempt) => attempt + 1);
+    }
+  }, (error) => toast.error(error));
   useEffect(() => {
     // Persona comes from the URL — server actions can't read searchParams.
     const persona =
@@ -200,40 +213,43 @@ export function ChatPage({
  * - The persisted run is still pending/running → genuine reconnect: keep the
  *   working conversation from the stash (the replay rebuilds its trailing
  *   partial turn). The stash's ONLY job is this in-flight reconnection.
- * - Anything else (no run, terminal run) → drop the stash: continuity is now
- *   restored from the SLICE — getArrivalState says whether the newest slice
- *   is still inside the idle gap, and if so its turns re-enter the message
- *   stream directly (cross-device, no localStorage involved). A dead slice
- *   leaves the arrival briefing to carry the continuity.
+ * - A completed answer awaiting its summary restores from the durable run.
+ *   A receipt acknowledges only the turn ids actually saved. Saved bypasses
+ *   come from the current slice even when the main answer is still running.
+ * - With no remaining dependency, continuity comes from getArrivalState and
+ *   the paged slice history.
  *
- * A failed status check (offline / server down) fails neutral: open blank but
- * DON'T clear the stash, so the next visit can retry the verdict.
+ * An unavailable pending run preserves its pointer and shows the retry card.
  */
 async function resolveArrival(
   persona: string,
 ): Promise<ArrivalDecision & { arrival: ArrivalState }> {
-  const runId = readStoredRunId();
-  let active = false;
-  let statusCheckFailed = false;
-  if (runId) {
-    try {
-      active = await isChatRunActive(runId);
-    } catch {
-      statusCheckFailed = true;
-    }
+  let runId = readStoredRunId();
+  const pending = readPendingPersistence();
+  const recovery = await getChatRecovery([...new Set([...pending.runIds, ...(runId ? [runId] : [])])], pending.summaryRunIds);
+  acceptPersistenceRecovery(recovery);
+  if (!runId && recovery.activeRunIds.length === 1) {
+    runId = recovery.activeRunIds[0];
+    writeStoredRunId(runId);
   }
+  const active = Boolean(runId && recovery.activeRunIds.includes(runId));
   // The arrival gate is independent of the run verdict — fetched in parallel
   // spirit (after the run check so a hanging status call doesn't delay it is
   // NOT a goal; correctness of the neutral-fail path is).
   const arrival = await getArrivalState(persona).catch(
     (): ArrivalState => ({ mode: "briefing" }),
   );
-  if (statusCheckFailed) {
-    return { shouldResume: false, initialMessages: [], arrival };
-  }
+  const persisted = new Set(arrival.mode === "resume" ? arrival.turns.map((turn) => turn.turnId).filter((id): id is string => Boolean(id)) : []);
+  const persistedUsers = new Set(arrival.mode === "resume" ? arrival.turns.filter((turn) => turn.role === "user").map((turn) => turn.clientMessageId).filter((id): id is string => Boolean(id)) : []);
   if (active) {
-    return { ...decideArrival(true, readStoredMessages()), arrival };
+    const decision = decideArrival(true, readStoredMessages());
+    const saved = mergeSavedTurns(decision.initialMessages, arrival.mode === "resume" ? arrival.turns : []);
+    return { ...decision, initialMessages: mergeRecoveredMessages(saved, recovery.records.map(({ record }) => record), persisted, persistedUsers), arrival };
   }
+  if (recovery.records.length > 0) {
+    return { shouldResume: false, initialMessages: recoveryMessages(recovery.records.map(({ record }) => record), persisted, persistedUsers), arrival };
+  }
+  if (recovery.unavailableRunIds.some((id) => pending.runIds.includes(id))) throw new Error("Pending conversation recovery is unavailable");
   clearStoredRunId();
   clearStoredChatId();
   clearStoredMessages();
@@ -271,6 +287,7 @@ function readStoredRunId(): string | null {
 }
 
 function writeStoredRunId(runId: string): void {
+  rememberTurnRun(runId);
   try {
     localStorage.setItem(RUN_ID_KEY, runId);
   } catch {
@@ -582,6 +599,11 @@ function Inner({
     // a reconnect replay re-delivers every frame in order, so the map rebuilds
     // deterministically (later frames for one instance overwrite earlier ones).
     onData: (chunk) => {
+      if (chunk.type === PERSISTENCE_HANDOFF_CHUNK) {
+        const data = (chunk as { data?: { summaryRunId?: unknown } }).data;
+        if (typeof data?.summaryRunId === "string") rememberSummaryRun(data.summaryRunId);
+        return;
+      }
       // v0.40 §2.1 — the merge line's TEXT, emitted by the last finisher's
       // tail when THAT finisher is this useChat lane (a bypass lane's reader
       // forwards the same chunk instead). 可空: no chunk → no closing bubble.
@@ -759,17 +781,8 @@ function Inner({
     setParallelLanes([]);
   }, [parallelLanes, status, setMessages]);
 
-  /**
-   * A turn just SETTLED — the stream is done and the slice is now persisted.
-   *
-   * This is the moment the shell needs to know about: the catalog is fetched
-   * once, so a slice written by the turn that just finished is invisible to
-   * the band's range and the hotel's doors until something asks again.
-   * Nothing else in the app re-fetches it.
-   *
-   * Keyed on the falling edge only. `isLoading` is true for the whole stream,
-   * so firing on the value would re-fetch on every token.
-   */
+  // Stream completion settles transient bubbles. Catalog invalidation follows
+  // the summary's commit receipt through usePersistenceObserver above.
   const wasLoadingRef = useRef(false);
   /**
    * v0.42 §3 [7283] — the burst id: ONE id per parallel batch. Minted the
@@ -781,7 +794,6 @@ function Inner({
   const burstIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (wasLoadingRef.current && !isLoading) {
-      onTurnSettled?.();
       // v0.31 — settle stranded bubbles on the episode stream's falling edge
       // (stop / error / transport death): the orchestrator is dead then, no
       // terminal frame will ever arrive, and a queued/running chip would spin
@@ -802,7 +814,7 @@ function Inner({
       });
     }
     wasLoadingRef.current = isLoading;
-  }, [isLoading, onTurnSettled]);
+  }, [isLoading]);
 
   // Publish the in-flight state so the header can disable the settings entry
   // mid-turn (engine/model changes must not land while a call is running).
@@ -1055,15 +1067,23 @@ function Inner({
   // resume block, and the live `useChat` messages.
   const [briefingTimeIso] = useState(() => new Date().toISOString());
   const items = useMemo<ChatStreamItem[]>(() => {
+    const restored = recoveredTurnIds(messages);
+    const restoredUsers = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
+    const history = buildHistoryItems(briefingSlices ?? [], resumeBlock).filter(
+      (item) => item.kind !== "history-turn" || (
+        (!item.turn.turnId || !restored.has(item.turn.turnId)) &&
+        (item.turn.role !== "user" || !item.turn.clientMessageId || !restoredUsers.has(item.turn.clientMessageId))
+      ),
+    );
     const card: ChatStreamItem[] = showBriefingCard
       ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
       : [];
     return [
-      ...buildHistoryItems(briefingSlices ?? [], resumeBlock),
+      ...history,
       ...card,
       ...liveItems,
     ];
-  }, [briefingSlices, resumeBlock, liveItems, showBriefingCard, briefingTimeIso]);
+  }, [briefingSlices, resumeBlock, liveItems, messages, showBriefingCard, briefingTimeIso]);
 
   /**
    * Run `fn` against the list's handle as soon as it exists.
@@ -1174,6 +1194,7 @@ function Inner({
         if (!res.ok || !runId) {
           throw new Error(`parallel send HTTP ${res.status}`);
         }
+        rememberTurnRun(runId);
         // The lane reads via the reconnect route — this response's body is
         // only the first attachment onto the same durable stream.
         await res.body?.cancel().catch(() => {});

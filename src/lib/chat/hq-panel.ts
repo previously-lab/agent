@@ -145,13 +145,18 @@ export function layerDegradationNote(
 export function createTerminalDebounce(
   trigger: () => void,
   waitMs: number,
-): () => void {
+): (() => void) & { cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  return () => {
+  const schedule = () => {
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
       trigger();
     }, waitMs);
   };
+  schedule.cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+  return schedule;
 }

@@ -58,6 +58,35 @@ beforeEach(() => {
 });
 
 describe("GET /api/evolution/hq/[runId]/stream", () => {
+  it("drains a completed run's finite history and ends even when its old stream never closed", async () => {
+    const cancel = vi.fn();
+    const readable = Object.assign(new ReadableStream({ start(controller) {
+      controller.enqueue(FRAMES[0]);
+    }, cancel }), { getTailIndex: async () => 0 });
+    h.getRun.mockReturnValue({ status: Promise.resolve("completed"), getReadable: () => readable });
+    const res = await GET(requestFor("old-completed"), paramsFor("old-completed"));
+    const body = await res.text();
+    expect(body).toContain('"kind":"started"');
+    expect(body).toContain('"kind":"finished"');
+    expect(body).toContain('"status":"completed"');
+    expect(cancel).toHaveBeenCalledOnce();
+  }, 300);
+
+  it("ends a terminal tail-only attach even when the old writable was left open", async () => {
+    const cancel = vi.fn();
+    const readable = Object.assign(new ReadableStream({ start(controller) { controller.enqueue(FRAMES[0]); }, cancel }), { getTailIndex: async () => 4 });
+    h.getRun.mockReturnValue({ status: Promise.resolve("completed"), getReadable: () => readable });
+    const res = await GET(requestFor("old-tail", "?startIndex=-1"), paramsFor("old-tail"));
+    expect(await res.text()).toContain('"kind":"finished"');
+    expect(cancel).toHaveBeenCalledOnce();
+  }, 300);
+
+  it("marks an already closed terminal stream as finished without requiring a legacy finished frame", async () => {
+    h.getRun.mockReturnValue({ status: Promise.resolve("completed"), getReadable: () => fakeReadable([]) });
+    const res = await GET(requestFor("old-closed"), paramsFor("old-closed"));
+    expect(await res.text()).toContain('"kind":"finished"');
+  });
+
   it("streams ONLY the data-hq-activity chunks as SSE, with the tail index header", async () => {
     h.getRun.mockReturnValue({ getReadable: () => fakeReadable(FRAMES) });
     const res = await GET(requestFor("run-1"), paramsFor("run-1"));

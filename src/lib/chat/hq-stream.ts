@@ -143,6 +143,9 @@ export function createHQStreamFilter(): TransformStream<
       const c = chunk as Record<string, unknown> | null;
       if (c && typeof c === "object" && c.type === HQ_ACTIVITY_CHUNK) {
         controller.enqueue(chunk as UIMessageChunk);
+        if ((c.data as HQActivityFrame | undefined)?.kind === "finished") {
+          controller.terminate();
+        }
       }
     },
   });
@@ -185,16 +188,14 @@ export class HQStreamError extends Error {
  * Attach to an HQ run's activity stream. Frames arrive in run order — the
  * durable stream REPLAYS from the start, so a reconnecting client re-sees
  * the run's whole beat log; `skip` drops the frames it already applied (the
- * caller tracks the count per run id). Resolves when the stream ends (run
- * finished, or a replay of a finished run drained); throws HQStreamError on
- * transport failures — a 404 means the run is gone (retention expired /
- * never existed), so the caller drops its stored run id and falls back to
- * the hq.json pointer.
+ * caller tracks the count per run id). Only a finished frame proves terminal;
+ * an EOF without that frame asks the caller to retry with backoff. Transport
+ * failures throw HQStreamError, and an external abort stays silent.
  */
 export async function streamHQActivity(
   opts: StreamHQActivityOptions,
   onFrame: (frame: HQActivityFrame) => void,
-): Promise<void> {
+): Promise<RunWatchResult> {
   const fetchFn = opts.fetchImpl ?? fetch;
   const skip = Math.max(0, Math.floor(opts.skip ?? 0));
   let seen = 0;
@@ -255,10 +256,12 @@ export async function streamHQActivity(
           if (!frame) continue;
           if (seen < skip) {
             seen++; // replayed history the caller already applied
+            if (frame.kind === "finished") return { kind: "terminal" };
             continue;
           }
           seen++;
           onFrame(frame);
+          if (frame.kind === "finished") return { kind: "terminal" };
         }
       }
     }
@@ -269,30 +272,32 @@ export async function streamHQActivity(
       e instanceof Error ? e.message : String(e),
     );
   } finally {
+    await reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {
       /* already released */
     }
   }
+  return { kind: "retry" };
 }
 
 // ─── The turn/summary run's terminal watcher (v0.11 streams) ────────────────
 
 /**
  * Attach to a turn/summary run's durable stream (`/api/chat/[runId]/stream`)
- * and RESOLVE when the run reaches its terminal: a `finish` UIMessageChunk,
- * an `error` chunk, or the stream closing (replays of finished runs drain
- * straight to close). The chunks themselves are consumed, not interpreted —
- * the panel only needs the MOMENT, then it refreshes the log layer once.
- * Never rejects on transport failure: a dead run is still a terminal (the
- * caller refreshes and moves on); only an external abort stays silent.
+ * and report terminal only for a `finish` or `error` UIMessageChunk. EOF,
+ * HTTP failures and transport failures ask the caller to retry with backoff;
+ * an external abort stays silent. This feed signals lifecycle completion,
+ * while persistence success is proven separately by the summary receipt.
  */
+export type RunWatchResult = { kind: "terminal" | "retry" | "aborted" };
+
 export async function watchChatRunEnd(opts: {
   runId: string;
   signal?: AbortSignal;
   fetchImpl?: HQStreamFetch;
-}): Promise<void> {
+}): Promise<RunWatchResult> {
   const fetchFn = opts.fetchImpl ?? fetch;
   let res: Response;
   try {
@@ -301,9 +306,9 @@ export async function watchChatRunEnd(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch {
-    return; // aborted or transport dead — either way, nothing more to watch
+    return { kind: opts.signal?.aborted ? "aborted" : "retry" };
   }
-  if (!res.ok || !res.body) return; // gone run — terminal by definition
+  if (!res.ok || !res.body) return { kind: opts.signal?.aborted ? "aborted" : "retry" };
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -327,19 +332,21 @@ export async function watchChatRunEnd(opts: {
             continue;
           }
           const type = (chunk as Record<string, unknown> | null)?.type;
-          if (type === "finish" || type === "error") return; // terminal frame
+          if (type === "finish" || type === "error") return { kind: "terminal" };
         }
       }
     }
   } catch {
     // aborted mid-read — the caller is tearing down; stay silent
   } finally {
+    await reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {
       /* already released */
     }
   }
+  return { kind: opts.signal?.aborted ? "aborted" : "retry" };
 }
 
 // ─── Reconnect persistence (localStorage) ─────────────────────────────────

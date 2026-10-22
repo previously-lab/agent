@@ -226,11 +226,14 @@ export function ArchiveField({
   // A warm mount skips the entrance beat — a return from the desk or the
   // hotel is not a fresh deal.
   const instantRef = useRef(state !== null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   useEffect(() => {
-    if (state?.key === personaKey && state.gen === dataGen) return;
     let live = true;
-    getArchiveIndex()
-      .then(async (index) => {
+    const cached = stateRef.current?.key === personaKey && stateRef.current.gen === dataGen
+      ? stateRef.current.data : null;
+    const load = cached ? Promise.resolve(cached) : getArchiveIndex()
+      .then((index) => {
         // The light paint: names, categories, piece-derived dates, sheet
         // counts and the slice ids — all from ONE tree enumeration, zero
         // file reads.
@@ -250,13 +253,17 @@ export function ArchiveField({
             turns: 1,
           })),
         };
+        return data;
+      });
+    load.then(async (data) => {
+        if (!live) return;
         let current = data;
         fieldCache = { key: personaKey, data: current };
         if (live) setState({ key: personaKey, gen: dataGen, data: current });
         // Progressive header hydration — AFTER the light paint, never
         // blocking it: `opened` lives only in each index.md, so it arrives
         // in bounded chunks and the tiles fill in as it lands.
-        const refs = index.cases.map((c) => `${c.category}/${c.name}`);
+        const refs = data.piles.filter((pile) => !pile.opened).map((pile) => pile.ref);
         for (let i = 0; i < refs.length; i += 16) {
           if (!live) break;
           const heads = await getCaseHeaders(refs.slice(i, i + 16)).catch(
@@ -290,7 +297,7 @@ export function ArchiveField({
     return () => {
       live = false;
     };
-  }, [personaKey, dataGen, state]);
+  }, [personaKey, dataGen]);
 
   // ── The model: filter → buckets → columns → units → the offset table ──
   const piles = useMemo(

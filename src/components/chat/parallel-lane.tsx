@@ -29,6 +29,8 @@ import { ChevronDown, ChevronRight, Split, WrapText } from "lucide-react";
 import { Message, MessageContent } from "@/components/ui/message";
 import { MarkdownRenderer } from "./markdown";
 import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
+import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
+import { rememberSummaryRun } from "@/lib/chat/persistence";
 import type { ParallelLaneSeat } from "@/lib/chat/stream-items";
 
 /** One lane as the page's side store holds it. The seat the list renders
@@ -106,6 +108,11 @@ export async function readLaneStream(
             delta?: unknown;
             data?: unknown;
           };
+          if (c.type === PERSISTENCE_HANDOFF_CHUNK) {
+            const data = c.data as { summaryRunId?: unknown } | undefined;
+            if (typeof data?.summaryRunId === "string") rememberSummaryRun(data.summaryRunId);
+            continue;
+          }
           // The merge-line frame can ride ANY lane's stream (the last
           // finisher may be a bypass lane) — forward the TEXT to the page.
           // No chunk = 可空: the batch needed no closing, no bubble appears.
