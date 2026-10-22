@@ -1,0 +1,232 @@
+diff --git a/dist/index.js b/dist/index.js
+index 10472ca8c325af2556307c929030c1c0a1cd8cf7..6e8a682ebceaf56e828380bebf573b52d0351007 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -400,7 +400,7 @@ async function doStreamStep(conversationPrompt, modelInit, writable, serializedT
+   let finish;
+   const content = [];
+   const textPartIndexes = /* @__PURE__ */ new Map();
+-  const reasoningParts = [];
++  const reasoningPartIndexes = /* @__PURE__ */ new Map();
+   let responseMetadata;
+   let warnings;
+   let terminalError;
+@@ -450,8 +450,18 @@ async function doStreamStep(conversationPrompt, modelInit, writable, serializedT
+           });
+           textPartIndexes.delete(part.id);
+           break;
++        case "reasoning-start":
+         case "reasoning-delta":
+-          reasoningParts.push({ text: part.text });
++        case "reasoning-end":
++          upsertTextContentPart({
++            content,
++            textPartIndexes: reasoningPartIndexes,
++            id: part.id,
++            type: "reasoning",
++            textDelta: part.type === "reasoning-delta" ? part.text : void 0,
++            providerMetadata: part.providerMetadata
++          });
++          if (part.type === "reasoning-end") reasoningPartIndexes.delete(part.id);
+           break;
+         case "file":
+           content.push({
+@@ -575,7 +585,7 @@ async function doStreamStep(conversationPrompt, modelInit, writable, serializedT
+     finish,
+     raw: {
+       content,
+-      reasoning: reasoningParts,
++      reasoning: content.filter((part) => part.type === "reasoning"),
+       responseMetadata,
+       warnings
+     },
+@@ -590,19 +600,20 @@ function upsertTextContentPart({
+   textPartIndexes,
+   id,
+   textDelta,
+-  providerMetadata
++  providerMetadata,
++  type = "text"
+ }) {
+   let partIndex = textPartIndexes.get(id);
+   if (partIndex == null) {
+     partIndex = content.push({
+-      type: "text",
++      type,
+       text: "",
+       ...providerMetadata != null ? { providerMetadata } : {}
+     }) - 1;
+     textPartIndexes.set(id, partIndex);
+   }
+   const part = content[partIndex];
+-  if (part.type !== "text") {
++  if (part.type !== type) {
+     throw new Error(`Expected text content at index ${partIndex}.`);
+   }
+   if (textDelta != null) {
+@@ -1098,6 +1109,9 @@ function buildStepResult(raw, toolCalls, finish, providerExecutedToolResults, op
+   let text = "";
+   for (const part of rawContent) {
+     switch (part.type) {
++      case "reasoning":
++        content.push({ ...part });
++        break;
+       case "text":
+         text += part.text;
+         content.push({
+@@ -1181,7 +1195,8 @@ function buildStepResult(raw, toolCalls, finish, providerExecutedToolResults, op
+     text,
+     reasoning: reasoningParts.map((r) => ({
+       type: "reasoning",
+-      text: r.text
++      text: r.text,
++      ...r.providerMetadata != null ? { providerMetadata: r.providerMetadata } : {}
+     })),
+     reasoningText,
+     files,
+@@ -1239,6 +1254,14 @@ function getAssistantMessageContent(step) {
+   let contentIndex = 0;
+   for (const part of step.content) {
+     switch (part.type) {
++      case "reasoning":
++        content.push({
++          type: "reasoning",
++          text: part.text,
++          ...part.providerMetadata != null ? { providerOptions: part.providerMetadata } : {}
++        });
++        contentIndex++;
++        break;
+       case "text":
+         if (part.text.length > 0) {
+           content.push({ type: "text", text: part.text });
+diff --git a/src/do-stream-step.ts b/src/do-stream-step.ts
+index 9b804fd80fd22b8ed518f7f4feccbf2529e69e35..ce010a2c2a900dd2c63ef6ca6b18a84dee4f6ec1 100644
+--- a/src/do-stream-step.ts
++++ b/src/do-stream-step.ts
+@@ -103,7 +103,7 @@ export interface StreamFinish {
+ 
+ export type DoStreamStepRawContentPart =
+   | {
+-      type: 'text';
++      type: 'text' | 'reasoning';
+       text: string;
+       providerMetadata?: SharedV4ProviderMetadata;
+     }
+@@ -145,7 +145,7 @@ export type ToolInputLifecycleEvent =
+  */
+ export interface DoStreamStepRawResult {
+   content: DoStreamStepRawContentPart[];
+-  reasoning: Array<{ text: string }>;
++  reasoning: Array<{ text: string; providerMetadata?: SharedV4ProviderMetadata }>;
+   responseMetadata?: { id?: string; timestamp?: Date; modelId?: string };
+   warnings?: unknown[];
+ }
+@@ -291,7 +291,7 @@ export async function doStreamStep(
+   // Minimal aggregation — only what buildStepResult needs outside the step.
+   const content: DoStreamStepRawContentPart[] = [];
+   const textPartIndexes = new Map<string, number>();
+-  const reasoningParts: Array<{ text: string }> = [];
++  const reasoningPartIndexes = new Map<string, number>();
+   let responseMetadata:
+     | { id?: string; timestamp?: Date; modelId?: string }
+     | undefined;
+@@ -357,8 +357,18 @@ export async function doStreamStep(
+           });
+           textPartIndexes.delete(part.id);
+           break;
++        case 'reasoning-start':
+         case 'reasoning-delta':
+-          reasoningParts.push({ text: part.text });
++        case 'reasoning-end':
++          upsertTextContentPart({
++            content,
++            textPartIndexes: reasoningPartIndexes,
++            id: part.id,
++            type: 'reasoning',
++            textDelta: part.type === 'reasoning-delta' ? part.text : undefined,
++            providerMetadata: part.providerMetadata,
++          });
++          if (part.type === 'reasoning-end') reasoningPartIndexes.delete(part.id);
+           break;
+         case 'file':
+           content.push({
+@@ -505,7 +515,7 @@ export async function doStreamStep(
+     finish,
+     raw: {
+       content,
+-      reasoning: reasoningParts,
++      reasoning: content.filter(part => part.type === 'reasoning'),
+       responseMetadata,
+       warnings,
+     },
+@@ -525,19 +535,21 @@ function upsertTextContentPart({
+   id,
+   textDelta,
+   providerMetadata,
++  type = 'text',
+ }: {
+   content: DoStreamStepRawContentPart[];
+   textPartIndexes: Map<string, number>;
+   id: string;
+   textDelta?: string;
+   providerMetadata?: SharedV4ProviderMetadata;
++  type?: 'text' | 'reasoning';
+ }) {
+   let partIndex = textPartIndexes.get(id);
+ 
+   if (partIndex == null) {
+     partIndex =
+       content.push({
+-        type: 'text',
++        type,
+         text: '',
+         ...(providerMetadata != null ? { providerMetadata } : {}),
+       }) - 1;
+@@ -546,7 +558,7 @@ function upsertTextContentPart({
+ 
+   const part = content[partIndex];
+ 
+-  if (part.type !== 'text') {
++  if (part.type !== type) {
+     throw new Error(`Expected text content at index ${partIndex}.`);
+   }
+ 
+diff --git a/src/stream-text-iterator.ts b/src/stream-text-iterator.ts
+index 181a05f8505d29b2aff7091568d42efb0c1b195c..593d31c6cf55d2dda6718328d1c8dfef49532754 100644
+--- a/src/stream-text-iterator.ts
++++ b/src/stream-text-iterator.ts
+@@ -762,6 +762,9 @@ function buildStepResult(
+ 
+   for (const part of rawContent) {
+     switch (part.type) {
++      case 'reasoning':
++        content.push({ ...part });
++        break;
+       case 'text':
+         text += part.text;
+         content.push({
+@@ -862,6 +865,7 @@ function buildStepResult(
+     reasoning: reasoningParts.map(r => ({
+       type: 'reasoning' as const,
+       text: r.text,
++      ...(r.providerMetadata != null ? { providerMetadata: r.providerMetadata } : {}),
+     })),
+     reasoningText,
+     files,
+@@ -932,6 +936,16 @@ function getAssistantMessageContent(step: StepResult<any, any>): {
+ 
+   for (const part of step.content) {
+     switch (part.type) {
++      case 'reasoning':
++        content.push({
++          type: 'reasoning',
++          text: part.text,
++          ...(part.providerMetadata != null
++            ? { providerOptions: part.providerMetadata as SharedV4ProviderOptions }
++            : {}),
++        });
++        contentIndex++;
++        break;
+       case 'text':
+         if (part.text.length > 0) {
+           content.push({ type: 'text', text: part.text });

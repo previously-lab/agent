@@ -8,3 +8,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@ai-sdk/provider-utils@5.0.10'
   - '@ai-sdk/openai-compatible@3.0.34'
+patchedDependencies:
+  '@ai-sdk/workflow@2.0.30': patches/@ai-sdk__workflow@2.0.30.patch

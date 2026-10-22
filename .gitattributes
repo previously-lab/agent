@@ -1,0 +1,2 @@
+# Patch hashes must survive Windows checkouts; blank context lines are intentional.
+patches/*.patch text eol=lf whitespace=-blank-at-eol
