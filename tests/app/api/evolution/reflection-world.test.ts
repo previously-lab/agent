@@ -35,9 +35,17 @@ const h = vi.hoisted(() => ({
   /** slice heads by REL path ("2026/10/20/1836") for the closed_by point read */
   heads: {} as Record<string, { closed_by?: string }>,
   agenda: "",
+  lastEvolutionDate: null as string | null,
 }));
 
 vi.mock("@/lib/chat/hq-log", () => ({
+  readReflectionWorldLog: vi.fn(async () => ({
+    available: h.reflectionLogAvailable && h.summariesAvailable,
+    cursor: h.cursor,
+    lastEvolutionDate: h.lastEvolutionDate,
+    coverage: { covered: h.coverage, wholeUpTo: h.wholeUpTo, degraded: h.coverageDegraded },
+    summaries: h.summariesAvailable ? h.summaries : [],
+  })),
   readReflectionCursor: vi.fn(async () => ({
     sliceId: h.cursor.sliceId,
     sha: null,
@@ -91,6 +99,7 @@ beforeEach(() => {
   h.summariesAvailable = true;
   h.heads = {};
   h.agenda = "";
+  h.lastEvolutionDate = null;
 });
 
 describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level level + closedBy)", () => {
@@ -107,7 +116,7 @@ describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level le
       { sliceId: "2026-10-20-0900", turnIds: ["t9"] },
       { sliceId: "2026-10-20-1836", turnIds: ["a1b2c3", "t1"] }, // union, deduped
     ]);
-    expect(vi.mocked((await import("@/lib/chat/hq-log")).readSummaryLog)).toHaveBeenCalled();
+    expect(vi.mocked((await import("@/lib/chat/hq-log")).readReflectionWorldLog)).toHaveBeenCalledTimes(1);
     expect(docket.logDegraded).toBe(false);
   });
 
@@ -185,6 +194,7 @@ describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level le
   });
 
   it("d. a scoped slice's on-disk closed_by is point-read onto the scope entry — and the boundary beat's criterion (untouched) now fires on it", async () => {
+    h.lastEvolutionDate = "2026-10-20";
     h.summaries = [{ sliceId: "2026-10-20-1836", turnIds: ["a1b2c3"] }];
     h.heads = { "2026/10/20/1836": { closed_by: "idle_gap" } };
     // Same-day evolution: isolate the boundary reason from the daily one.
@@ -216,6 +226,7 @@ describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level le
   });
 
   it("d2. an OPEN scoped slice (no head mark) simply carries no closedBy — the boundary reason stays silent (daily isolated to today)", async () => {
+    h.lastEvolutionDate = "2026-10-20";
     h.summaries = [{ sliceId: "2026-10-20-1836", turnIds: ["a1b2c3"] }];
     // heads empty — the point read returns null. Same-day evolution stamp so
     // ONLY the boundary reason could fire.

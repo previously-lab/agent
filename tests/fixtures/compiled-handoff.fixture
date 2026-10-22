@@ -1,0 +1,67 @@
+import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { start } from "workflow/api";
+import { getWorld } from "workflow/runtime";
+import { generateText } from "ai";
+
+export async function answer(recordId: string) {
+  "use step";
+  const model = {
+    specificationVersion: "v3" as const,
+    provider: "fixture",
+    modelId: "non-billable",
+    supportedUrls: {},
+    async doGenerate() {
+      await appendFile(join(process.env.FIXTURE_DIR!, "model-calls"), "called\n");
+      return {
+        content: [{ type: "text" as const, text: "fixture answer" }],
+        finishReason: { unified: "stop" as const, raw: "stop" },
+        usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+        warnings: [],
+      };
+    },
+    async doStream() { throw new Error("fixture does not stream"); },
+  };
+  const result = await generateText({ model, prompt: "fixture", maxRetries: 0 });
+  return { recordId, text: result.text };
+}
+
+export async function persist(record: { recordId: string; text: string }) {
+  "use step";
+  await appendFile(join(process.env.FIXTURE_DIR!, "summary-attempts"), "called\n");
+  // Atomic create is the fixture ledger's record-id uniqueness constraint.
+  try {
+    await writeFile(join(process.env.FIXTURE_DIR!, "record-" + record.recordId), record.text, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  return record.recordId;
+}
+
+export async function summary(record: { recordId: string; text: string }) {
+  "use workflow";
+  return await persist(record);
+}
+
+export async function handoff(record: { recordId: string; text: string }) {
+  "use step";
+  const child = await start(summary, [record], { attributes: { role: "fixture-summary" } });
+  // Verify the child run really reached the local world's durable storage.
+  const world = await getWorld();
+  const durable = await world.runs.get(child.runId);
+  await appendFile(join(process.env.FIXTURE_DIR!, "child-starts"), durable.runId + "\n");
+  const lostAck = join(process.env.FIXTURE_DIR!, "lost-ack");
+  try {
+    await writeFile(lostAck, child.runId, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return child.runId;
+    throw error;
+  }
+  throw new Error("fixture: child persisted but handoff acknowledgement lost");
+}
+
+export async function parent(recordId: string) {
+  "use workflow";
+  const record = await answer(recordId);
+  return await handoff(record);
+}

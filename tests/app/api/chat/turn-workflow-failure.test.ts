@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   shouldStartSummary: vi.fn(async () => true),
   startSummaryRun: vi.fn(async (_payload: unknown) => "run-summary-1"),
   streamError: null as Error | null,
+  successful: false,
 }));
 
 vi.mock("workflow", () => ({
@@ -50,6 +51,10 @@ vi.mock("@/app/api/agent/agent", () => ({
     // The answer stream blows up mid-turn with a TRANSIENT error —
     // classifyWorkflowError rethrows those into the workflow's outer catch.
     stream: vi.fn(async () => {
+      if (h.successful) return {
+        messages: [{ role: "system", content: "fixture" }, { role: "user", content: "我的问题" }, { role: "assistant", content: "already produced answer" }],
+        steps: [], finishReason: "stop",
+      };
       throw (h.streamError ?? new Error("ECONNRESET: provider socket dropped"));
     }),
   })),
@@ -156,9 +161,35 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.housekeeping.mockResolvedValue(hkResult());
   h.streamError = null;
+  h.successful = false;
+  h.finalizeTurn.mockResolvedValue(undefined);
+  h.startSummaryRun.mockResolvedValue("run-summary-1");
 });
 
 describe("turnWorkflow — the v0.42 §5 failure floor", () => {
+  it("a final active-write failure still hands off the produced answer and closes its stream", async () => {
+    h.successful = true;
+    h.finalizeTurn.mockRejectedValueOnce(new Error("final write refused"));
+    await expect(turnWorkflow(input())).rejects.toThrow("final write refused");
+    expect(h.startSummaryRun).toHaveBeenCalledOnce();
+    expect(h.startSummaryRun.mock.calls[0]![0]).toMatchObject({ own: { userText: USER_TEXT, replyText: "already produced answer" } });
+    expect(h.closeTurnStream).toHaveBeenCalledWith(expect.anything(), TURN_ID, { summaryRunId: "run-summary-1" });
+  });
+
+  it("a failed persistence handoff closes honestly without invoking the answer a second time", async () => {
+    h.successful = true;
+    h.startSummaryRun.mockRejectedValueOnce(new Error("handoff acknowledgement lost"));
+    await expect(turnWorkflow(input())).rejects.toThrow("handoff acknowledgement lost");
+    expect(h.startSummaryRun).toHaveBeenCalledOnce();
+    expect(h.closeTurnStream).toHaveBeenCalledWith(expect.objectContaining({ text: "already produced answer", error: "handoff acknowledgement lost" }), TURN_ID, undefined);
+  });
+
+  it("regenerate and stable client identity cross the durable handoff", async () => {
+    h.successful = true;
+    const result = await turnWorkflow({ ...input(), regenerate: true, clientMessageId: "original-question" });
+    expect(result).toMatchObject({ regenerate: true, clientMessageId: "original-question", summaryRunId: "run-summary-1" });
+    expect(h.startSummaryRun.mock.calls[0]![0]).toMatchObject({ own: { regenerate: true, clientMessageId: "original-question" } });
+  });
   it("a. a mid-answer transient failure → the run still produces its record, reaches the last-one judgment, wakes the summary, THEN fails honestly", async () => {
     await expect(turnWorkflow(input())).rejects.toThrow("ECONNRESET");
 

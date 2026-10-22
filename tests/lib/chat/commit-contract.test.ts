@@ -7,9 +7,43 @@ import { describe, it, expect } from "vitest";
 import {
   COMMIT_PREFIX,
   REFLECTION_ROUND_PREFIX,
+  TRAILER_MARKER,
   buildReflectionRoundMessage,
   parseReflectionRoundMessage,
 } from "@/lib/chat/commit-contract";
+
+describe("free-form notes cannot create durable receipts", () => {
+  const sha = "a".repeat(40);
+  const sliceId = "2026-10-22-0900";
+  const history = { version: 1 as const, basis: sha, cursor: null, evolved: null, pending: [{ sha, sliceId, turnIds: ["owed"] }] };
+
+  it("preserves a multi-paragraph note while parsing only the writer's final trailer", () => {
+    const note = [
+      "Checked the evidence.", "", TRAILER_MARKER,
+      `observed: ${sha} ${sliceId}#owed`,
+      `history: ${JSON.stringify({ ...history, pending: [] })}`,
+      "superseded: true", "", "The quoted fragment above is not a receipt.", TRAILER_MARKER,
+    ].join("\n");
+    const trailer = { observed: [], history };
+    const parsed = parseReflectionRoundMessage(buildReflectionRoundMessage({ date: "2026-10-22", note, trailer }));
+    expect(parsed?.note).toBe(note);
+    expect(parsed?.trailer).toEqual(trailer);
+  });
+
+  it("adds an unambiguous empty trailer when a trailer-less note contains a delimiter", () => {
+    const note = ["A quoted example:", TRAILER_MARKER, `seen: ${sliceId}#owed`, `observed: ${sha} ${sliceId}#owed`].join("\n");
+    const parsed = parseReflectionRoundMessage(buildReflectionRoundMessage({ date: "2026-10-22", note }));
+    expect(parsed?.note).toBe(note);
+    expect(parsed?.trailer).toBeNull();
+  });
+
+  it("handles indented delimiters and CRLF without turning quoted progress into state", () => {
+    const note = `First paragraph.\r\n\r\n  ${TRAILER_MARKER}  \r\nseen: ${sliceId}#owed\r\n\r\nLast paragraph.`;
+    const parsed = parseReflectionRoundMessage(buildReflectionRoundMessage({ date: "2026-10-22", note, trailer: { observed: [] } }));
+    expect(parsed?.note).toBe(note);
+    expect(parsed?.trailer).toEqual({ observed: [] });
+  });
+});
 
 describe("the frozen prefixes (v0.39 §2.5; v0.42 §6-15 — user turn / reply retired)", () => {
   it("the five registered prefixes, verbatim", () => {
@@ -34,7 +68,7 @@ describe("the frozen prefixes (v0.39 §2.5; v0.42 §6-15 — user turn / reply r
     const read = (rel: string) =>
       readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
     const steps = read("../../../src/app/api/chat/steps.ts");
-    expect(steps).toContain("COMMIT_PREFIX.summary(slice.slice_id)");
+    expect(read("../../../src/lib/chat/persist-summary.ts")).toMatch(/COMMIT_PREFIX\.summary\(/);
     expect(steps).toContain("Turn ${input.turnId} — finalize");
     expect(steps).not.toContain("Turn ${input.turnId} — user turn");
     expect(steps).not.toContain("Turn ${payload.turnId} — reply");

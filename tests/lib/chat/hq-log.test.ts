@@ -49,6 +49,10 @@ vi.mock("@/lib/github/client", () => ({
 vi.mock("@/lib/capabilities", () => ({
   getRepoConfig: () => ({ owner: "octo", repo: "mem" }),
 }));
+vi.mock("@/lib/github/read-view", () => ({
+  getGitHubReadHead: async () => ({ headSha: "head" }),
+  memoizeGitHubRead: (_repo: string, _owner: string, _kind: string, fn: () => unknown) => fn(),
+}));
 
 // The cache SEAM is mocked (a real memo over the identity), not the network:
 // what is under test is that every GitHub-leg reader reaches the log through
@@ -514,7 +518,7 @@ describe("the GitHub leg — the bounded scan goes through the Data Cache", () =
     });
   });
 
-  it("every reader derives from ONE cachedFetch identity riding the tree tag", async () => {
+  it("every reader shares an immutable history page at one head", async () => {
     const log = await readReflectionLog();
     const bundle = await readHQLogBundle();
     const summaries = await readRecentSummaries();
@@ -525,9 +529,9 @@ describe("the GitHub leg — the bounded scan goes through the Data Cache", () =
     // All three went through the cache; only the FIRST ran listCommits.
     expect(h.cacheCalls).toHaveLength(3);
     for (const call of h.cacheCalls) {
-      expect(call.identity).toEqual(["github", "commits", "octo", "mem", "memory"]);
-      expect(call.ttl).toBe(CACHE_TTLS.COMMITS_SCAN_SECONDS);
-      expect(call.tags).toEqual(["tree:octo/mem"]);
+      expect(call.identity).toEqual(["github", "commit-page", "octo", "mem", "head", "1"]);
+      expect(call.ttl).toBe(CACHE_TTLS.BLOB_SECONDS);
+      expect(call.tags).toEqual([]);
     }
     // THE read-amplification pin: three readers, one scan (one short page).
     expect(h.gh.listCommits).toHaveBeenCalledTimes(1);
@@ -538,8 +542,8 @@ describe("the GitHub leg — the bounded scan goes through the Data Cache", () =
       at: "2026-10-19T17:00:00.000Z",
     });
     expect(summaries.entries.map((e) => e.slice)).toEqual(["2026-10-19-1751"]);
-    // The reflection reader's file glance still rides getCommit per round.
-    expect(log.entries[0].files).toEqual(["records/2026/10/19/1721/core.md"]);
+    expect(log.entries[0].files).toEqual([]);
+    expect(h.gh.getCommit).not.toHaveBeenCalled();
   });
 
   it("readSummaryLog paginates through the same cached scan and filters the prefix", async () => {
@@ -567,7 +571,7 @@ describe("the GitHub leg — the bounded scan goes through the Data Cache", () =
     expect(h.gh.listCommits).toHaveBeenCalledTimes(2);
   });
 
-  it("an expired entry (a writer's revalidation) is a fresh scan, exactly like a cache miss", async () => {
+  it("an evicted immutable page can be fetched again", async () => {
     await readHQLogBundle();
     expect(h.gh.listCommits).toHaveBeenCalledTimes(1);
 

@@ -1909,7 +1909,14 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // the user turn never lands in the turn's commits (v0.42 §0); the summary
   // stream owns it. Then the stream tail. A reply-stream error does not
   // silence the tail, and the tail never throws.
-  await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
+  try {
+    await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
+  } catch (err) {
+    // Active-write failure must not discard the already-produced passive
+    // record. Continue to its durable handoff, then report the failure.
+    streamError ??= err;
+    outcome.error ??= errorMessage(err, "The turn's final write failed.");
+  }
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
   // run retired with its collector): the last survivor judges lastness
   // (burst-exact when the client sent a burstId, else the legacy overlap
@@ -1934,15 +1941,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       repo: input.repo,
     });
   }
-  // v0.42 §1/§2 — 被动存盘 belongs to the summary stream: this turn persists
-  // NOTHING; its structured result (user text + reply + cognition + the
-  // beat's seal/birth records) is the run's returnValue, read by the burst's
-  // last survivor. The last conversation flow starts the summary run DURABLY
-  // CARRYING its own record, BEFORE closeTurnStream (the persistence intent
-  // must be durable before the stream closes); 唤起即完成 — the turn does NOT
-  // wait on the summary run. Not the last → nothing (the last one collects).
+  // The incremental summary owns passive persistence. Carry this turn's
+  // complete produced record before closing the stream. Completed sibling
+  // results can enhance the batch, but never replace this durable payload.
   const turnResult: TurnRunResult = {
     turnId: input.turnId,
+    ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
+    ...(input.regenerate ? { regenerate: true } : {}),
     sliceId: hk.slice.slice_id,
     at: input.startedAtIso,
     userText: input.lastUserMessage,
@@ -1961,7 +1966,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // and turnId idempotence absorb the overlap. Graceful partial/error paths
   // pass this gate via outcome.text; `|| outcome.error` is the empty-reply
   // failure.
-  if (outcome.text.trim() || mergeLine || outcome.error) {
+  let summaryRunId: string | null = null;
+  if (outcome.text.trim() || mergeLine || outcome.error || input.lastUserMessage.trim()) {
     const last =
       streamError !== null
         ? true
@@ -1971,31 +1977,38 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             ...(input.burstId ? { burstId: input.burstId } : {}),
           });
     if (last) {
-      await startSummaryRun({
-        sliceId: hk.slice.slice_id,
-        ...(input.burstId ? { burstId: input.burstId } : {}),
-        date: dateAnchor,
-        own: turnResult,
-        slicing: input.config.slicing,
-        clientTimezone: input.clientTimezone,
-        modelConfig: input.modelConfig,
-        useGithub: input.useGithub,
-        useDemo: input.useDemo,
-        owner: input.owner,
-        repo: input.repo,
-        locale: input.locale,
-      });
+      try {
+        summaryRunId = await startSummaryRun({
+          sliceId: hk.slice.slice_id,
+          ...(input.burstId ? { burstId: input.burstId } : {}),
+          date: dateAnchor,
+          own: turnResult,
+          slicing: input.config.slicing,
+          clientTimezone: input.clientTimezone,
+          modelConfig: input.modelConfig,
+          useGithub: input.useGithub,
+          useDemo: input.useDemo,
+          owner: input.owner,
+          repo: input.repo,
+          locale: input.locale,
+        });
+        if (summaryRunId) turnResult.summaryRunId = summaryRunId;
+      } catch (err) {
+        streamError ??= err;
+        outcome.error ??= errorMessage(err, "The conversation could not be handed off for saving.");
+      }
     }
   }
   // Terminal chunks + stream tail.
-  await closeTurnStream(outcome, input.turnId);
+  await closeTurnStream(outcome, input.turnId, summaryRunId ? {
+    summaryRunId,
+    ...(input.burstId ? { burstId: input.burstId } : {}),
+  } : undefined);
 
   if (streamError !== null) {
     throw streamError;
   }
-  // v0.42 §1 — the run's return value IS the turn's persistence record; the
-  // burst's last survivor's summary run reads completed siblings'
-  // returnValues from the registry (legacy runs returned the bare reply
-  // text — readers tolerate both shapes).
+  // The durable result also lets reconnecting clients recover the answer
+  // and its summary dependency without trusting a browser message cache.
   return turnResult;
 }

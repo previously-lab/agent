@@ -203,6 +203,7 @@ import { handleBrief } from "@/app/api/evolution/hq-agent";
 import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
+import { parseReflectionRoundMessage, type ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
 
 const runSubAgentMock = vi.mocked(runSubAgent);
 type RunnerOpts = Parameters<typeof runSubAgent>[0];
@@ -253,6 +254,46 @@ beforeEach(() => {
 });
 
 describe("handleBrief (v0.21 §5)", () => {
+  it("reads at the docket basis and checkpoints only the material it observed, even after a ref conflict", async () => {
+    const basis = "1".repeat(40);
+    const history: ReflectionHistoryCheckpoint = { version: 1, basis, cursor: null, evolved: null, pending: [
+      { sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["a1b2c3", "later"] },
+    ] };
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(commitReflectionRound).mockRejectedValueOnce(Object.assign(new Error("not a fast forward"), { status: 422 }));
+    runSubAgentMock.mockImplementation(async () => {
+      const { owner, repo } = (await import("@/lib/capabilities")).getRepoConfig();
+      const { getGitHubReadHead } = await import("@/lib/github/read-view");
+      expect(await getGitHubReadHead(repo, owner)).toEqual({ headSha: basis });
+      return { ok: true, report: { actions: [], note: "checked the offered material" }, text: "" };
+    });
+    vi.stubEnv("STORAGE", "github");
+    try {
+      expect((await handleBrief({ ...DOCKET, history })).error).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+    expect(vi.mocked(commitReflectionRound)).toHaveBeenCalledTimes(2);
+    for (const [batch, message] of vi.mocked(commitReflectionRound).mock.calls) {
+      expect(batch.baseHeadSha).toBe(basis);
+      const trailer = parseReflectionRoundMessage(message)?.trailer;
+      expect(trailer?.observed).toEqual([{ sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["a1b2c3"] }]);
+      expect(trailer?.history?.basis).toBe(basis);
+      expect(trailer?.history?.pending[0].turnIds).toEqual(["later"]);
+    }
+  });
+
+  it.each(["failed", "superseded"])("a %s round cannot publish a complete-prefix checkpoint", async (mode) => {
+    const history: ReflectionHistoryCheckpoint = { version: 1, basis: "1".repeat(40), cursor: null, evolved: null,
+      pending: [{ sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["a1b2c3"] }] };
+    runSubAgentMock.mockImplementation(async () => mode === "failed"
+      ? { ok: false, error: "interrupted", text: "" }
+      : { ok: true, report: { actions: [], note: "world moved", disposition: "superseded" }, text: "" });
+    await handleBrief({ ...DOCKET, history });
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    const trailer = parseReflectionRoundMessage(vi.mocked(commitReflectionRound).mock.calls[0][1])?.trailer;
+    expect(trailer?.history).toBeUndefined();
+    expect(trailer?.observed).toBeUndefined();
+  });
+
   it("an idle round writes NOTHING — HQ reports actions:[] and no file lands", async () => {
     runSubAgentMock.mockImplementation(async () => ({
       ok: true,

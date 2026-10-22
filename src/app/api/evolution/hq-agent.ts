@@ -36,7 +36,8 @@ import {
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { isRefConflictError } from "@/lib/tools/batch-write";
-import { buildReflectionRoundMessage, COMMIT_PREFIX } from "@/lib/chat/commit-contract";
+import { buildReflectionRoundMessage, COMMIT_PREFIX, type ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
+import { settleHistoryCheckpoint } from "@/lib/chat/reflection-history";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -82,6 +83,7 @@ import {
  * material now; the slice may still be open.
  */
 export interface ReflectionRoundInput {
+  history?: ReflectionHistoryCheckpoint;
   /** User-clock date (YYYY-MM-DD) — every write stamps the user's clock. */
   date: string;
   /** lastSeen.sliceId — the unit's range starts right after this (null = a
@@ -731,6 +733,16 @@ function buildHqTools(
  */
 export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcome> {
   "use step";
+  const { withGitHubReadView, seedGitHubReadHead } = await import("@/lib/github/read-view");
+  return withGitHubReadView(async () => {
+  if (input.history) {
+    const { resolveDataSource } = await import("@/lib/data-source/resolve");
+    if (resolveDataSource() === "github") {
+      const { getRepoConfig } = await import("@/lib/capabilities");
+      const { owner, repo } = getRepoConfig();
+      seedGitHubReadHead(repo, owner, { headSha: input.history.basis });
+    }
+  }
   const { date, cursor, scope, evolutionDue, evolutionReasons, agendaDue } = input;
 
   const model = backgroundModel();
@@ -778,6 +790,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   // the same threading works unchanged on the local backend (flushBatch
   // applies the entries and records one local commit).
   const batch = createBatch();
+  batch.baseHeadSha = input.history?.basis;
   const flags = { evolutionRan: false };
 
   try {
@@ -829,6 +842,10 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       ? scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }))
       : undefined;
   const note = rep && queuedPaths.length > 0 ? rep.note : undefined;
+  const observed = input.history?.pending.flatMap(m => {
+    const turnIds = m.turnIds.filter(t => scope.some(s => s.sliceId === m.sliceId && s.turnIds.includes(t)));
+    return turnIds.length ? [{ ...m, turnIds }] : [];
+  });
   const message = buildReflectionRoundMessage({
     date,
     ...(note?.trim() ? { note } : {}),
@@ -838,6 +855,10 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       : {
           trailer: {
             ...(!superseded && seenMarks ? { seen: seenMarks } : {}),
+            ...(!superseded && input.history ? {
+              observed: observed ?? [],
+              history: settleHistoryCheckpoint(input.history, scope, flags.evolutionRan ? date : undefined),
+            } : {}),
             ...(flags.evolutionRan ? { evolved: { date } } : {}),
             ...(superseded ? { superseded: true as const } : {}),
           },
@@ -852,7 +873,9 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       flushed = true;
       break;
     } catch (err) {
-      if (!isRefConflictError(err) || flushAttempts >= 2) {
+      if (!isRefConflictError(err) || flushAttempts >= 2 || (batch.baseHeadSha && batch.entries.size > 0)) {
+        // A queued whole-file write belongs to its read basis. It cannot be
+        // rebased by merely replacing the parent; the next lap must reread.
         flushFailure = err;
         break;
       }
@@ -964,4 +987,5 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     }
     return { actions: landed, note: "", error: msg };
   }
+  }, { fresh: true });
 }

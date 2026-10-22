@@ -5,22 +5,21 @@
  * module reads the commit history on both backends, filters by the prefix
  * contract, and parses trailers.
  *
- * Failure semantics (§2.5): a bounded scan (three 100-entry pages on
- * GitHub; a capped local log read) that finds no reflection commit yields
- * cursor null (全量重读, fresh-deployment semantics) WITH a warn — never a
- * silent skip. A local non-git memory root yields `available: false` with
- * the `git init` advice (待裁决 2 — fail-safe, the caller degrades to an
- * empty docket, not a busy loop).
+ * Scheduling uses a complete prefix checkpoint plus exact summary versions
+ * (hq-history.ts), with three pages per durable read step. Display readers
+ * may stop early; their eight-row glance never becomes a progress ledger.
+ * A missing local git repository or an API failure is explicitly unavailable.
  *
  * Plain Node module — the route, the turn pipeline (暂存) and
  * reflection-steps (the world read's cursor leg) all read through here.
  */
-import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getMemoryRoot } from "@/lib/whitelist";
-import { CACHE_TTLS, cachedFetch, treeCacheTag } from "@/lib/cache/data-cache";
+import { getGitHubReadHead, memoizeGitHubRead } from "@/lib/github/read-view";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
+import { readGitHubHistoryPage, readReflectionHistoryChunk, type HistoryScanState } from "./hq-history";
+import type { ReflectionHistoryCheckpoint } from "./commit-contract";
 import {
   parseReflectionRoundMessage,
   type ParsedReflectionRound,
@@ -39,7 +38,7 @@ export interface ReflectionRoundLogEntry {
 }
 
 export interface ReflectionLogRead {
-  /** Newest-first reflection round commits (bounded). */
+  /** Complete newest-first reflection round history. */
   entries: ReflectionRoundLogEntry[];
   /** False when the log plane is unavailable (non-git local root, API down). */
   available: boolean;
@@ -47,13 +46,12 @@ export interface ReflectionLogRead {
   reason?: string;
 }
 
-/** GitHub page size and the bounded scan depth (§2.5 的"三页封顶"). */
+/** GitHub's page size; completeness is independent of display limits. */
 const GITHUB_PAGE = 100;
-const MAX_PAGES = 3;
 /** How many reflection rounds the readers keep at most (a glance). */
 const MAX_ROUNDS = 8;
-/** Local single-read scan cap (the local log is one call — bound it anyway). */
-const LOCAL_SCAN_CAP = MAX_PAGES * GITHUB_PAGE;
+/** Explicit full-history reads; workflow scheduling uses chunked checkpoints. */
+const LOCAL_SCAN_CAP = Number.MAX_SAFE_INTEGER;
 
 /**
  * The summary stream's commit prefix (v0.42 §4) — the reader side's copy.
@@ -63,70 +61,33 @@ const LOCAL_SCAN_CAP = MAX_PAGES * GITHUB_PAGE;
  */
 const SUMMARY_COMMIT_PREFIX = "Summary — ";
 
-/**
- * The bounded `memory` commit-log scan (three 100-entry pages), through the
- * Data Cache. All three GitHub readers run the IDENTICAL paged scan —
- * readGitHubLog, readSummaryLog's GitHub leg and readHQLogScan — so one
- * cached helper serves them all: within a TTL window the second and third
- * reader pay no GitHub calls at all, and every reader sees the SAME scan
- * (the panel's cursor and rounds can no longer disagree). The paging
- * arguments are fixed by the constants above, so `page` belongs INSIDE the
- * cached computation, not in the identity.
- *
- * Tag: `tree:owner/repo` — the tag every GitHub writer already revalidates
- * per commit (invalidateTreeCache, called from batch-write.ts), and a
- * commit that touches `memory/` is exactly what changes this listing. An
- * in-app commit therefore expires the scan immediately; the TTL only
- * bounds pushes that bypass our write path (same argument as the tree
- * listing it parallels — see CACHE_TTLS.COMMITS_SCAN_SECONDS).
- */
+/** Pages are immutable at one SHA, untagged, and include empty commits. */
 async function readGitHubCommitScan(
-  octokit: ReturnType<typeof getOctokit>,
   owner: string,
   repo: string,
+  purpose: "complete" | "panel" | "note" = "complete",
 ): Promise<HQLogScanCommit[]> {
-  return cachedFetch(
-    ["github", "commits", owner, repo, "memory"],
-    CACHE_TTLS.COMMITS_SCAN_SECONDS,
-    [treeCacheTag(owner, repo)],
-    async () => {
+  const { headSha } = await getGitHubReadHead(repo, owner);
+  return memoizeGitHubRead(repo, owner, `history:${headSha}:${purpose}`, async () => {
       const collected: HQLogScanCommit[] = [];
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
-        const { data } = await octokit.rest.repos.listCommits({
-          owner,
-          repo,
-          path: "memory",
-          per_page: GITHUB_PAGE,
-          page,
-        });
-        collected.push(
-          ...data.map((c) => ({
-            sha: c.sha,
-            message: c.commit?.message ?? "",
-            committedAt: c.commit?.committer?.date ?? null,
-          })),
-        );
+      for (let page = 1; ; page += 1) {
+        const data = await readGitHubHistoryPage(owner, repo, headSha, page);
+        collected.push(...data);
+        if (purpose === "panel" && page >= 3) break; // display only, never a scheduling water level
+        if (purpose === "note" && collected.some(c => {
+          const round = parseReflectionRoundMessage(c.message);
+          return round?.note || round?.trailer?.history;
+        })) break;
         if (data.length < GITHUB_PAGE) break; // history exhausted
       }
       return collected;
-    },
-  );
+    });
 }
 
 async function readGitHubLog(): Promise<ReflectionLogRead> {
   const { owner, repo } = getRepoConfig();
-  const octokit = getOctokit();
-  const collected = await readGitHubCommitScan(octokit, owner, repo);
-  return shapeEntries(
-    collected,
-    async (sha) => {
-      const { data } = await octokit.rest.repos.getCommit({ owner, repo, ref: sha });
-      return (data.files ?? [])
-        .map((f) => f.filename ?? "")
-        .filter((f) => f.startsWith("memory/"))
-        .map((f) => f.slice("memory/".length));
-    },
-  );
+  const collected = await readGitHubCommitScan(owner, repo);
+  return shapeEntries(collected);
 }
 
 async function readLocalLog(): Promise<ReflectionLogRead> {
@@ -147,17 +108,12 @@ async function readLocalLog(): Promise<ReflectionLogRead> {
       committedAt:
         c.committedAtMs !== null ? new Date(c.committedAtMs).toISOString() : null,
     })),
-    // The local ledger does not track per-commit file lists cheaply; the
-    // recent-writes glance degrades to [] (the run's `wrote` frames are the
-    // hot path anyway — v0.39 §1 recentWrites 行).
-    async () => [],
   );
 }
 
-/** Shared filter + parse + file fetch (files only for the newest few). */
+/** Shared filter and parser. Scheduling never fetches commit file details. */
 async function shapeEntries(
   commits: Array<{ sha: string; message: string; committedAt: string | null }>,
-  fetchFiles: (sha: string) => Promise<string[]>,
 ): Promise<ReflectionLogRead> {
   const rounds: ReflectionRoundLogEntry[] = [];
   for (const c of commits) {
@@ -169,22 +125,13 @@ async function shapeEntries(
       parsed,
       files: [],
     });
-    if (rounds.length >= MAX_ROUNDS) break;
   }
-  // File lists are the expensive leg — fetch only for the newest few.
-  await Promise.all(
-    rounds.slice(0, MAX_ROUNDS).map(async (r) => {
-      try {
-        r.files = await fetchFiles(r.sha);
-      } catch {
-        r.files = []; // the glance degrades, the cursor does not depend on it
-      }
-    }),
-  );
+  // File lists do not participate in scheduling. The activity feed carries
+  // writes; only a detail view should ever fetch a commit's file list.
   return { entries: rounds, available: true };
 }
 
-/** Read the bounded reflection log on the active backend. */
+/** Read complete reflection history on the active backend. */
 export async function readReflectionLog(): Promise<ReflectionLogRead> {
   const source = resolveDataSource();
   try {
@@ -228,7 +175,7 @@ export interface SummaryLogEntry {
 }
 
 export interface SummaryLogRead {
-  /** Newest-first summary commits inside the bounded scan. */
+  /** Complete newest-first summary commits. */
   entries: SummaryLogEntry[];
   /** False when the log plane is unavailable (non-git local root, API down). */
   available: boolean;
@@ -303,7 +250,7 @@ const MAX_RECENT_SUMMARIES = 5;
 
 /**
  * The newest few summary commits parsed for the workflow panel (v0.43 §5) —
- * a SIBLING read of readSummaryLog (same bounded scan discipline, same
+ * a SIBLING read of readSummaryLog (same complete history, same
  * failure semantics), only the projection differs: counts + failed entries
  * per commit instead of the scope-source turn ids. Read-only, never writes.
  */
@@ -329,24 +276,33 @@ function parseSummaryCommit(
   sha: string,
   message: string,
   committedAt: string | null,
-): SummaryLogEntry {
+): SummaryLogEntry[] {
   const sliceId =
     message.slice(SUMMARY_COMMIT_PREFIX.length).split("\n", 1)[0]?.trim() ?? "";
   const turnIds: string[] = [];
   for (const line of message.split("\n")) {
-    const m = /^- (?:user turn|reply) (\S+)/.exec(line.trim());
+    const m = /^- (?:user turn|reply|cognition|merge) (\S+)$/.exec(line.trim());
     if (m && !turnIds.includes(m[1])) turnIds.push(m[1]);
   }
-  return { sha, sliceId, turnIds, committedAt, message };
+  const locations = new Map<string, string>();
+  for (const line of message.split("\n")) {
+    const m = /^- record (\S+) in (\d{4}-\d{2}-\d{2}-\d{4})$/.exec(line.trim());
+    if (m) locations.set(m[1], m[2]);
+  }
+  const bySlice = new Map<string, string[]>();
+  for (const id of turnIds) {
+    const landing = locations.get(id) ?? sliceId;
+    const group = bySlice.get(landing) ?? [];
+    group.push(id);
+    bySlice.set(landing, group);
+  }
+  if (bySlice.size === 0) bySlice.set(sliceId, []);
+  return [...bySlice].map(([sliceId, turnIds]) => ({ sha, sliceId, turnIds, committedAt, message }));
 }
 
 /**
- * Read the bounded summary log on the active backend — the SAME scan
- * discipline as readReflectionLog (three 100-entry pages on GitHub, one
- * capped local read), filtered to the summary stream's prefix. Deliberately
- * a sibling of (not a refactor of) the reflection reader: the failure
- * semantics differ (no file fetches, no round shaping) and the reflection
- * reader's behavior is pinned by its own tests.
+ * Complete summary history for explicit callers. Persistence locates actual
+ * records by immutable core SHA; scheduling uses hq-history's checkpoints.
  */
 export async function readSummaryLog(): Promise<SummaryLogRead> {
   const source = resolveDataSource();
@@ -354,9 +310,9 @@ export async function readSummaryLog(): Promise<SummaryLogRead> {
     if (source === "github") {
       const { owner, repo } = getRepoConfig();
       const entries: SummaryLogEntry[] = [];
-      for (const c of await readGitHubCommitScan(getOctokit(), owner, repo)) {
+      for (const c of await readGitHubCommitScan(owner, repo)) {
         if (!c.message.startsWith(SUMMARY_COMMIT_PREFIX)) continue;
-        entries.push(parseSummaryCommit(c.sha, c.message, c.committedAt));
+        entries.push(...parseSummaryCommit(c.sha, c.message, c.committedAt));
       }
       return { entries, available: true };
     }
@@ -374,7 +330,7 @@ export async function readSummaryLog(): Promise<SummaryLogRead> {
       return {
         entries: commits
           .filter((c) => c.message.startsWith(SUMMARY_COMMIT_PREFIX))
-          .map((c) =>
+          .flatMap((c) =>
             parseSummaryCommit(
               c.oid,
               c.message,
@@ -409,16 +365,22 @@ export async function readReflectionCursor(): Promise<{
   at: string | null;
   degraded: boolean;
 }> {
-  const log = await readReflectionLog();
+  return deriveReflectionCursor(await readReflectionLog());
+}
+
+function deriveReflectionCursor(log: ReflectionLogRead): {
+  sliceId: string | null; sha: string | null; at: string | null; degraded: boolean;
+} {
   if (!log.available) {
     console.warn(`[reflection] cursor fallback — ${log.reason}`);
     return { sliceId: null, sha: null, at: null, degraded: true };
   }
   for (const entry of log.entries) {
+    if (entry.parsed.trailer?.superseded) continue;
     const seen = entry.parsed.trailer?.seen;
     // v0.42 — turn-level marks (one per scoped slice, scope order): the
     // FURTHEST slice id is still the slice-level display cursor.
-    const furthest = seen?.at(-1)?.sliceId;
+    const furthest = entry.parsed.trailer?.history?.cursor ?? seen?.at(-1)?.sliceId;
     if (furthest) {
       return {
         sliceId: furthest,
@@ -429,14 +391,14 @@ export async function readReflectionCursor(): Promise<{
     }
   }
   console.warn(
-    "[reflection] cursor fallback — no reflection round commit in the bounded scan; the cursor resets to the beginning (full re-read, nothing is skipped silently)",
+    "[reflection] cursor fallback — no reflection round commit in history; the cursor resets to the beginning (full re-read, nothing is skipped silently)",
   );
   return { sliceId: null, sha: null, at: null, degraded: true };
 }
 
 /**
  * The TURN-level water level (v0.42 §4 — the work unit is a turn): merge the
- * `seen` marks of every clean round in the bounded scan into a PER-SLICE
+ * `seen` marks of every clean round in history into a PER-SLICE
  * UNION (coverage only grows — newest-wins was the slice-level semantics and
  * is exactly wrong here: one round's single turn would subsume another
  * round's other turn of the same slice and the unit would re-run the slice
@@ -460,7 +422,10 @@ export interface ReflectionCoverage {
 }
 
 export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
-  const log = await readReflectionLog();
+  return deriveReflectionCoverage(await readReflectionLog());
+}
+
+function deriveReflectionCoverage(log: ReflectionLogRead): ReflectionCoverage {
   if (!log.available) {
     return { covered: [], wholeUpTo: null, sha: null, at: null, degraded: true };
   }
@@ -482,6 +447,7 @@ export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
   let sha: string | null = null;
   let at: string | null = null;
   for (const entry of log.entries) {
+    if (entry.parsed.trailer?.superseded) continue;
     const marks = entry.parsed.trailer?.seen;
     if (!marks?.length) continue;
     if (sha === null) {
@@ -522,19 +488,20 @@ export async function readReflectionCoverage(): Promise<ReflectionCoverage> {
  * readReflectionLog, readReflectionLog again for the rounds, readRecent
  * Summaries → readSummaryLog) plus a getCommit per round for file lists the
  * panel never renders. The bundle below is the single-scan replacement the
- * event-driven endpoints use: ONE bounded scan, cursor/rounds/summaries all
+ * display endpoints use: ONE glance scan, cursor/rounds/summaries all
  * derived from it, NO getCommit (the recent-writes glance degrades to []).
  */
 
-/** One commit from the single bounded scan — identity + message + time. */
+/** One immutable commit — identity, message, time and ancestry. */
 export interface HQLogScanCommit {
   sha: string;
   message: string;
   committedAt: string | null;
+  parents?: string[];
 }
 
 export interface HQLogScan {
-  /** Newest-first commits inside the bounded scan. */
+  /** Newest-first commits; only display callers may request a limited scan. */
   commits: HQLogScanCommit[];
   /** False when the log plane is unavailable (non-git local root, API down). */
   available: boolean;
@@ -542,14 +509,13 @@ export interface HQLogScan {
   reason?: string;
 }
 
-/** ONE bounded scan of the memory commit history on the active backend. */
-export async function readHQLogScan(): Promise<HQLogScan> {
+/** One fixed-head history read; purpose explicitly distinguishes display limits. */
+export async function readHQLogScan(purpose: "complete" | "panel" | "note" = "complete"): Promise<HQLogScan> {
   const source = resolveDataSource();
   try {
     if (source === "github") {
       const { owner, repo } = getRepoConfig();
-      const octokit = getOctokit();
-      const commits = await readGitHubCommitScan(octokit, owner, repo);
+      const commits = await readGitHubCommitScan(owner, repo, purpose);
       return { commits, available: true };
     }
     if (source === "local") {
@@ -623,7 +589,7 @@ export function deriveHQLog(scan: HQLogScan): HQLogDerivation {
     // The cursor is the FIRST (newest) clean round's furthest seen mark —
     // same semantics as readReflectionCursor, read off the same scan.
     if (cursor.sliceId === null && parsed) {
-      const furthest = parsed.trailer?.seen?.at(-1)?.sliceId;
+      const furthest = parsed.trailer?.superseded ? undefined : parsed.trailer?.history?.cursor ?? parsed.trailer?.seen?.at(-1)?.sliceId;
       if (furthest) {
         cursor.sliceId = furthest;
         cursor.sha = c.sha;
@@ -640,11 +606,39 @@ export async function readHQLogBundle(): Promise<{
   available: boolean;
   reason?: string;
 }> {
-  const scan = await readHQLogScan();
+  const scan = await readHQLogScan("panel");
   if (!scan.available) {
     return { derivation: deriveHQLog(scan), available: false, reason: scan.reason };
   }
   return { derivation: deriveHQLog(scan), available: true };
+}
+
+/** One immutable history, all scheduling projections; no per-round details. */
+export async function readReflectionWorldLog(continuation?: HistoryScanState): Promise<{
+  available: boolean;
+  reason?: string;
+  complete: boolean;
+  continuation?: HistoryScanState;
+  history?: ReflectionHistoryCheckpoint;
+  cursor: { sliceId: string | null };
+  coverage: ReflectionCoverage;
+  summaries: Array<{ sliceId: string; turnIds: string[] }>;
+  lastEvolutionDate: string | null;
+}> {
+  const read = await readReflectionHistoryChunk(continuation);
+  const history = read.available && read.complete ? read.history : undefined;
+  return {
+    available: read.available,
+    ...(!read.available ? { reason: read.reason } : {}),
+    complete: read.complete,
+    ...(read.available && !read.complete ? { continuation: read.continuation } : {}),
+    ...(history ? { history } : {}),
+    cursor: { sliceId: history?.cursor ?? null },
+    // The pending projection already subtracts exact material receipts.
+    coverage: { covered: [], wholeUpTo: null, sha: null, at: null, degraded: !read.available },
+    summaries: history?.pending ?? [],
+    lastEvolutionDate: history?.evolved ?? null,
+  };
 }
 
 /**
@@ -657,7 +651,9 @@ export async function readLatestReflectionNote(): Promise<{
   note: string;
   at: string;
 } | null> {
-  const log = await readReflectionLog();
+  const scan = await readHQLogScan("note");
+  const log = await shapeEntries(scan.commits);
+  if (!scan.available) return null;
   if (!log.available) return null;
   for (const entry of log.entries) {
     if (entry.parsed.note && entry.committedAt) {
@@ -666,6 +662,7 @@ export async function readLatestReflectionNote(): Promise<{
     if (entry.parsed.note) {
       return { note: entry.parsed.note, at: entry.sha };
     }
+    if (entry.parsed.trailer?.history) return entry.parsed.trailer.history.latestNote ?? null;
   }
   return null;
 }

@@ -451,16 +451,17 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
 
 
 /**
- * What a turn run RETURNS (v0.42 §1/§2) — the burst's persistence record. The
- * turn answers in its stream and returns THIS; it persists NOTHING passively
- * (用户那句话不由 turn 侧同步提交 — v0.42 §0). The burst's last survivor's
- * summary run reads completed siblings' returnValues and lands the whole
- * burst's 被动存盘 in ONE commit. Legacy runs returned the bare reply text —
- * readers tolerate that (replyText = the string, the rest empty).
+ * A completed turn's durable record. Each burst turn carries its own record
+ * into an incremental summary run; completed siblings may enhance that batch.
+ * Legacy runs returned a bare reply string, which readers still tolerate.
  */
 export interface TurnRunResult {
   /** This turn's id (the turn headers + dedupe keys carry it). */
   turnId: string;
+  clientMessageId?: string;
+  regenerate?: boolean;
+  /** Durable persistence dependency, absent on older runs. */
+  summaryRunId?: string;
   /** The slice this turn attached to. */
   sliceId: string;
   /** The user-clock/UTC stamp of this turn's start (the appended turns' time). */
@@ -490,13 +491,9 @@ export interface TurnRunResult {
 }
 
 /**
- * The summary run's durable payload (v0.42 §1 — 总结流由最后一个对话流唤起,
- * 唤起即完成). The burst's LAST turn carries its OWN record here (its
- * returnValue may not be readable yet — the turn run completes after starting
- * the summary); the other members are enumerated from the run registry inside
- * the step. `sliceId` is the BATCH KEY (the edge slice's id the turn runs
- * stamped, or a per-day key when no edge existed) — the LANDING slice is the
- * summary stream's own judgment.
+ * The summary's durable own payload. Its caller can still be running when
+ * persistence begins; registry/returnValue availability is not required to
+ * save this record. sliceId is an entry hint, not the final saved location.
  */
 export interface SummaryRunPayload {
   /** The batch key (registry enumeration + dedupe) — NOT the landing slice. */
@@ -506,7 +503,7 @@ export interface SummaryRunPayload {
   burstId?: string;
   /** User-local date (YYYY-MM-DD), the stamping convention. */
   date: string;
-  /** The last turn's own record. */
+  /** The calling turn's own record. */
   own: TurnRunResult;
   /** The SAME continuity thresholds the entry beat used (idle gap / time
    *  cap / capacity) — the landing judgment applies them. */
@@ -526,9 +523,18 @@ export interface SummaryRunPayload {
 
 /** What the summary run reports back (observability; the turn never waits). */
 export interface SummaryRunOutcome {
-  /** "deduped" = a live summary for this slice already owns the burst. */
+  /** "deduped" = requested material already exists in verified records. */
   kind: "committed" | "deduped" | "nothing" | "failed";
   /** commit segments, for the log. */
   segments?: string[];
   error?: string;
+  receipt?: PersistenceReceipt;
 }
+
+export interface PersistenceReceipt {
+  version: 1;
+  commitSha: string;
+  records: Array<{ sliceId: string; turnIds: string[] }>;
+}
+
+export const PERSISTENCE_HANDOFF_CHUNK = "data-persistence-handoff" as const;

@@ -39,6 +39,8 @@ import {
   type SummaryHead,
 } from "./reflection-plan";
 import type { ReflectionWakeRange } from "./reflection-contract";
+import type { ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
+import type { HistoryScanState } from "@/lib/chat/hq-history";
 import {
   HQ_ACTIVITY_CHUNK,
   type HQActivityFrame,
@@ -105,6 +107,8 @@ export interface ReflectionRound {
  * the workflow body has no clock of its own.
  */
 export interface ReflectionDocket extends LapPlan {
+  history?: ReflectionHistoryCheckpoint;
+  historyScan?: HistoryScanState;
   /** The blocking race's agenda arm; null arms nothing. */
   agendaWakeMs: number | null;
   /**
@@ -237,8 +241,11 @@ export async function stampReflectionTakeover(holderRunId: string): Promise<void
 export async function loadReflectionWorld(
   date?: string,
   range?: ReflectionWakeRange,
+  historyScan?: HistoryScanState,
 ): Promise<ReflectionDocket> {
   "use step";
+  const { withGitHubReadView, seedGitHubReadHead } = await import("@/lib/github/read-view");
+  return withGitHubReadView(async () => {
   const now = new Date();
   const nowIso = now.toISOString();
   const lapDate = date ?? nowIso.slice(0, 10);
@@ -267,28 +274,26 @@ export async function loadReflectionWorld(
     let lastEvolutionDate: string | null = null;
     let scope: LapPlan["scope"] = [];
     let logDegraded = false;
+    let historyCheckpoint: ReflectionHistoryCheckpoint | undefined;
     try {
       const {
-        readReflectionCursor,
-        readReflectionLog,
-        readSummaryLog,
-        readReflectionCoverage,
+        readReflectionWorldLog,
       } = await import("@/lib/chat/hq-log");
-      const level = await readReflectionCursor();
-      cursor = level.sliceId;
-      const log = await readReflectionLog();
-      if (!log.available) {
-        logDegraded = true;
-      } else {
-        for (const entry of log.entries) {
-          const evolved = entry.parsed.trailer?.evolved;
-          if (evolved?.date) {
-            lastEvolutionDate = evolved.date;
-            break;
-          }
+      const history = await readReflectionWorldLog(historyScan);
+      if (history.continuation) return { ...emptyDocket(), logDegraded: false, historyScan: history.continuation };
+      historyCheckpoint = history.history;
+      if (historyCheckpoint) {
+        const { resolveDataSource } = await import("@/lib/data-source/resolve");
+        if (resolveDataSource() === "github") {
+          const { getRepoConfig } = await import("@/lib/capabilities");
+          const { owner, repo } = getRepoConfig();
+          seedGitHubReadHead(repo, owner, { headSha: historyCheckpoint.basis });
         }
       }
-      const coverageRead = await readReflectionCoverage();
+      cursor = history.cursor.sliceId;
+      lastEvolutionDate = history.lastEvolutionDate;
+      if (!history.available) logDegraded = true;
+      const coverageRead = history.coverage;
       if (coverageRead.degraded) logDegraded = true;
       // null coverage = the water level is UNKNOWN: nothing counts as
       // covered (never "all done") — the range then stands alone.
@@ -310,15 +315,10 @@ export async function loadReflectionWorld(
       // ride the union in). Summary log unreadable → the range still stands,
       // and the docket says the log degraded.
       const candidates: SummaryHead[] = [];
-      if (range && range.turnIds.length > 0) {
+      if (!historyCheckpoint && range && range.turnIds.length > 0) {
         candidates.push({ sliceId: range.sliceId, turnIds: range.turnIds });
       }
-      const summaries = await readSummaryLog();
-      if (summaries.available) {
-        candidates.push(...summaries.entries);
-      } else {
-        logDegraded = true;
-      }
+      candidates.push(...history.summaries);
       scope = scopeFromSummaries(coverage, candidates);
     } catch {
       /* log unreadable — degraded semantics, never a throw */
@@ -385,7 +385,7 @@ export async function loadReflectionWorld(
       agendaWakeMs = null;
     }
 
-    return { ...plan, agendaWakeMs, logDegraded };
+    return { ...plan, agendaWakeMs, logDegraded, ...(historyCheckpoint ? { history: historyCheckpoint } : {}) };
   } catch (e) {
     // A world-read failure is an empty-docket lap (空转), never a dead run.
     console.warn(
@@ -394,6 +394,7 @@ export async function loadReflectionWorld(
     );
     return emptyDocket();
   }
+  }, { fresh: true });
 }
 
 /**
@@ -563,5 +564,18 @@ export async function markReflectionRunIdleExit(result: {
     status: "idle",
     handled: Math.max(0, Math.floor(result.rounds)),
   });
+}
+
+/** Close the durable feed on every application exit, including a failed lap. */
+export async function closeReflectionStream(): Promise<void> {
+  "use step";
+  try {
+    await getWritable<UIMessageChunk>().close();
+  } catch (error) {
+    console.warn(
+      "[reflection] activity stream close failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 

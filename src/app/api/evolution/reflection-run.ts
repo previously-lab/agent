@@ -59,8 +59,10 @@ import {
   type ReflectionWakeRange,
 } from "./reflection-contract";
 import { lapHasWork } from "./reflection-plan";
+import type { HistoryScanState } from "@/lib/chat/hq-history";
 import {
   cancelReflectionHolder,
+  closeReflectionStream,
   handleReflectionRound,
   loadReflectionWorld,
   markHQRunStarted,
@@ -105,6 +107,8 @@ export async function reflectionRun(
       const conflict = await hook.getConflict();
       if (!conflict) break; // claimed
       const holder = await readRunClaim(conflict.runId);
+      // Missing registry data is not evidence that the owner is dead.
+      if (holder === null) return { kind: "dedupedTo", runId: conflict.runId };
       const holderAlive =
         holder !== null &&
         holder.status !== "completed" &&
@@ -122,8 +126,7 @@ export async function reflectionRun(
         continue;
       }
       if (
-        holder.ageMs !== null &&
-        holder.ageMs <= REFLECTION_TAKEOVER_MS
+        holder.ageMs === null || holder.ageMs <= REFLECTION_TAKEOVER_MS
       ) {
         // 撞车即退 — a healthy holder owns the round; bells carry no work.
         return { kind: "dedupedTo", runId: conflict.runId };
@@ -156,12 +159,18 @@ export async function reflectionRun(
     //    advanced past the hint.
     let rounds = 0;
     let openingRange = range ?? undefined;
+    let historyScan: HistoryScanState | undefined;
     for (;;) {
       // The lap's wall-clock bookends — real clock steps, so a replayed run
       // measures the recorded laps, not the replay's clock. The budget below
       // is what keeps the whole invocation inside the platform wall.
       const lapStartedAt = await readReflectionClock();
-      const docket = await loadReflectionWorld(undefined, openingRange);
+      const docket = await loadReflectionWorld(undefined, openingRange, historyScan);
+      if (docket.historyScan) {
+        historyScan = docket.historyScan;
+        continue; // another durable read step; incomplete history never calls HQ
+      }
+      historyScan = undefined;
       openingRange = undefined;
       if (!lapHasWork(docket)) {
         await markReflectionRunIdleExit({ rounds });
@@ -186,5 +195,6 @@ export async function reflectionRun(
     }
   } finally {
     dispose();
+    await closeReflectionStream();
   }
 }

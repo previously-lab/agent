@@ -41,6 +41,8 @@ export interface Turn {
    * 6-char base64url, e.g. "a3fk2w". Absent on legacy slices parsed from disk.
    */
   turnId?: string;
+  /** Stable UI message identity; regeneration produces new answers to it. */
+  clientMessageId?: string;
   /**
    * Nested-bubble provenance (v0.30 §3.4, D7): on an AGENT turn produced by an
    * inner episode instance, the turnId of the USER turn it answers. Absent on

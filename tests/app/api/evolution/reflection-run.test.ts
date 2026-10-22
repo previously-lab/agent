@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   }),
   lastClaim: null as null | { runId: string },
   attributes: {} as Record<string, string>,
+  closeStream: vi.fn(async () => {}),
+  scanChunks: [] as Array<{ headSha: string; page: number; mode: "list"; commits: [] }>,
   handleBrief: vi.fn(
     async (_docket: unknown): Promise<{
       actions: string[];
@@ -75,6 +77,7 @@ vi.mock("workflow", () => ({
   },
   getWorkflowMetadata: () => ({ workflowRunId: "run-1" }),
   getWritable: () => ({
+    close: h.closeStream,
     getWriter: () => ({
       write: async (_chunk: unknown) => {},
       releaseLock: () => {},
@@ -120,6 +123,14 @@ vi.mock("@/app/api/evolution/hq-agent", () => ({
 // furthest slice (the trailer rule, §2.3), a failed round holds it. v0.42 §4
 // — the scope is TURNS: the summary log supplies it (a rangeless run).
 vi.mock("@/lib/chat/hq-log", () => ({
+  readReflectionWorldLog: async () => ({
+    ...(h.scanChunks.length ? { continuation: h.scanChunks.shift() } : {}),
+    available: h.world.summariesAvailable,
+    cursor: { sliceId: h.world.cursor, sha: null, at: null, degraded: h.world.cursor === null },
+    coverage: { covered: h.world.marks, wholeUpTo: null, sha: null, at: null, degraded: false },
+    summaries: h.world.summaries,
+    lastEvolutionDate: h.world.lastEvolution,
+  }),
   readReflectionCursor: async () => ({
     sliceId: h.world.cursor,
     sha: null,
@@ -157,6 +168,7 @@ beforeEach(() => {
   h.holder = null;
   h.lastClaim = null;
   h.attributes = {};
+  h.scanChunks = [];
   h.world.cursor = null;
   h.world.lastEvolution = null;
   h.world.summaries = [];
@@ -178,6 +190,32 @@ beforeEach(() => {
 });
 
 describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
+  it("continues incomplete history in read steps without entering the model or retiring early", async () => {
+    h.scanChunks = [
+      { headSha: "basis", page: 4, mode: "list", commits: [] },
+      { headSha: "basis", page: 7, mode: "list", commits: [] },
+    ];
+    const outcome = await reflectionRun();
+    expect(outcome).toEqual({ kind: "retired", rounds: 0 });
+    expect(h.scanChunks).toEqual([]);
+    expect(h.handleBrief).not.toHaveBeenCalled();
+    expect(h.closeStream).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a live holder whose age is unknown, and closes the challenger's stream", async () => {
+    h.conflict = { runId: "holder" };
+    h.holder = { status: "running", ageMs: null };
+    expect(await reflectionRun()).toEqual({ kind: "dedupedTo", runId: "holder" });
+    expect(h.cancel).not.toHaveBeenCalled();
+    expect(h.closeStream).toHaveBeenCalledOnce();
+  });
+
+  it("does not reclaim ownership when the holder lookup is unavailable", async () => {
+    h.conflicts = [{ runId: "holder" }, null];
+    h.holder = null;
+    expect(await reflectionRun()).toEqual({ kind: "dedupedTo", runId: "holder" });
+    expect(h.cancel).not.toHaveBeenCalled();
+  });
   it("free token + empty world → 无活即退: started → idle exit → dispose, 0 rounds", async () => {
     const outcome = await reflectionRun();
 

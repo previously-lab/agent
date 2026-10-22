@@ -26,9 +26,12 @@ const io = vi.hoisted(() => ({
     attributes?: Record<string, string> | null;
   }>,
   returnValues: new Map<string, unknown>(),
+  summaries: [] as Array<{ sha: string; sliceId: string; turnIds: string[]; message: string }>,
+  registryUnavailable: false,
 }));
 
 vi.mock("@/lib/tools/local-fs", () => ({
+  walkPathsLocal: vi.fn(async () => [...io.files.keys()]),
   readFileLocal: vi.fn(async (path: string) => {
     const content = io.files.get(path);
     if (content === undefined) throw new Error(`File not found: "${path}"`);
@@ -124,6 +127,11 @@ vi.mock("@/lib/episodic", async (importOriginal) => {
           else io.files.set(p, c);
         }
         batch.entries.clear();
+        const sha = `summary-${io.flushes.length}`;
+        const sliceId = message.split("\n")[0]!.replace("Summary — ", "");
+        const turnIds = [...message.matchAll(/^- (?:user turn|reply) (\S+)/gm)].map((m) => m[1]!);
+        io.summaries.unshift({ sha, sliceId, turnIds, message });
+        return sha;
       },
     ),
   };
@@ -143,7 +151,10 @@ vi.mock("workflow", () => ({
 vi.mock("workflow/runtime", () => ({
   getWorld: async () => ({
     runs: {
-      list: async () => ({ data: io.registry }),
+      list: async () => {
+        if (io.registryUnavailable) throw new Error("registry unavailable");
+        return { data: io.registry };
+      },
     },
   }),
 }));
@@ -165,6 +176,10 @@ const wake = vi.hoisted(() => ({
   ),
 }));
 vi.mock("@/app/api/evolution/reflection-wake", () => wake);
+vi.mock("@/lib/chat/hq-log", () => ({
+  readSummaryLog: async () => ({ entries: io.summaries, available: true }),
+  readLatestReflectionNote: async () => null,
+}));
 
 vi.mock("@/lib/models/provider", () => ({
   createModel: vi.fn(() => ({ _mock: "model" })),
@@ -262,6 +277,8 @@ beforeEach(() => {
   io.flushes.length = 0;
   io.registry.length = 0;
   io.returnValues.clear();
+  io.summaries.length = 0;
+  io.registryUnavailable = false;
   io.files.set(CORE_PATH, BASE_CORE);
 });
 
@@ -448,7 +465,7 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       burstId: "ead59415",
     } satisfies TurnRunResult);
 
-    const outcome = await persistTurnSummary(payload({ burstId: "ead59415" }));
+    const outcome = await persistTurnSummary(payload({ burstId: "ead59415", own: ownRecord({ cognition: "" }) }));
 
     expect(outcome.kind).toBe("committed");
     expect(io.flushes).toHaveLength(1);
@@ -474,7 +491,7 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       turnRun("summary-own", "a1b2c3", "completed", { burst: "ead59415", slice: "2026-10-20-0838" }),
     );
 
-    const outcome = await persistTurnSummary(payload({ burstId: "ead59415" }));
+    const outcome = await persistTurnSummary(payload({ burstId: "ead59415", own: ownRecord({ cognition: "" }) }));
 
     expect(outcome.kind).toBe("deduped");
     expect(io.flushes).toHaveLength(0);
@@ -536,7 +553,7 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       turnRun("summary-own", "a1b2c3", "completed"),
     );
 
-    const outcome = await persistTurnSummary(payload());
+    const outcome = await persistTurnSummary(payload({ own: ownRecord({ cognition: "" }) }));
 
     expect(outcome.kind).toBe("deduped");
     expect(io.flushes).toHaveLength(0);
@@ -860,5 +877,34 @@ describe("shouldStartSummary — 每一轮都唤起总结流，总结流只做�
     io.registry.push(turnRun("summary-own", "a1b2c3", "running"));
 
     expect(await shouldStartSummary({ sliceId: SLICE_ID, turnId: "a1b2c3" })).toBe(true);
+  });
+});
+
+describe("summary persistence identity regressions", () => {
+  it("does not copy a saved burst member when the next member crosses capacity", async () => {
+    const first = ownRecord({ turnId: "first1", cognition: "", burstId: "b1" });
+    const slicing = { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 3 };
+    await persistTurnSummary(payload({ burstId: "b1", own: first, slicing }));
+    io.registry.push(turnRun("turn-first", "first1", "completed", { burst: "b1" }));
+    io.returnValues.set("turn-first", first);
+    await persistTurnSummary(payload({ burstId: "b1", slicing, own: ownRecord({ turnId: "second2", at: "2026-10-20T18:40:05.000Z", cognition: "", burstId: "b1" }) }));
+    const cores = [...io.files.entries()].filter(([p]) => p.endsWith("/core.md"));
+    expect(cores.reduce((n, [, raw]) => n + (raw.match(/^## Turn first1 .*\(agent\)/gm)?.length ?? 0), 0)).toBe(1);
+  });
+
+  it("regeneration preserves the original question and records the new answer", async () => {
+    io.files.set(CORE_PATH, BASE_CORE + "\n## Turn old123 — 2026-10-20T18:39:00.000Z (user)\n\n我想换手机，预算 5000。\n\n## Turn old123 — 2026-10-20T18:39:00.000Z (agent)\n\n旧答案。\n");
+    await persistTurnSummary(payload({ own: { ...ownRecord({ turnId: "regen1" }), regenerate: true, clientMessageId: "message-1" } }));
+    const raw = io.files.get(CORE_PATH)!;
+    expect(raw.match(/我想换手机，预算 5000。/g)).toHaveLength(1);
+    expect(raw).toContain("[reply-to old123]");
+    expect(raw).toContain("旧答案。");
+  });
+
+  it("the carried own record survives an unavailable registry", async () => {
+    io.registryUnavailable = true;
+    const result = await persistTurnSummary(payload());
+    expect(result.kind).toBe("committed");
+    expect(io.files.get(CORE_PATH)).toContain("推荐看看小屏旗舰。");
   });
 });

@@ -57,6 +57,34 @@ export interface ReflectionRoundTrailer {
   evolved?: { date: string };
   /** Superseded rounds — mutually exclusive with `seen`. */
   superseded?: boolean;
+  /** Exact summary versions this round read, including late material on old turns. */
+  observed?: Array<{ sha: string; sliceId: string; turnIds: string[] }>;
+  /** Complete ancestor prefix plus the material still owed at that prefix. */
+  history?: ReflectionHistoryCheckpoint;
+}
+
+export interface ReflectionHistoryCheckpoint {
+  version: 1;
+  basis: string;
+  cursor: string | null;
+  evolved: string | null;
+  pending: Array<{ sha: string; sliceId: string; turnIds: string[] }>;
+  latestNote?: { note: string; at: string };
+}
+
+/** Unknown or damaged checkpoints never mean 'nothing left to do'. */
+function parseHistoryCheckpoint(value: string): ReflectionHistoryCheckpoint | null {
+  try {
+    const c = JSON.parse(value) as ReflectionHistoryCheckpoint;
+    const slice = (s: unknown) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}-\d{4}$/.test(s);
+    const sha = (s: unknown) => typeof s === "string" && /^[a-f0-9]{40,64}$/.test(s);
+    if (c.version !== 1 || !sha(c.basis) || (c.cursor !== null && !slice(c.cursor)) ||
+      (c.evolved !== null && (typeof c.evolved !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(c.evolved))) ||
+      !Array.isArray(c.pending) || c.pending.some(m => !sha(m.sha) || !slice(m.sliceId) || !Array.isArray(m.turnIds) ||
+        m.turnIds.length === 0 || m.turnIds.some(t => typeof t !== "string" || !/^\S+$/.test(t)))) return null;
+    if (c.latestNote !== undefined && (!c.latestNote || typeof c.latestNote.note !== "string" || typeof c.latestNote.at !== "string")) return null;
+    return c;
+  } catch { return null; }
 }
 
 /**
@@ -84,8 +112,12 @@ export function buildReflectionRoundMessage(input: {
   if (note) {
     lines.push("", note);
   }
-  const t = input.trailer;
-  if (t && (t.seen || t.evolved || t.superseded)) {
+  const t = input.trailer ?? {};
+  // A note may quote complete examples of the log protocol. Always terminate
+  // such a body with our own delimiter, even when the trusted trailer is
+  // empty, so a failed round cannot manufacture progress from quoted prose.
+  const quotedDelimiter = note?.split("\n").some(line => line.trim() === TRAILER_MARKER);
+  if (t.seen || t.evolved || t.superseded || t.history || t.observed || quotedDelimiter) {
     lines.push("", TRAILER_MARKER);
     // v0.42 — the water level is TURN-level: one line per scoped slice, the
     // turn ids after `#` (old readers see a line they cannot split and
@@ -97,6 +129,11 @@ export function buildReflectionRoundMessage(input: {
     }
     if (t.evolved) lines.push(`evolved: ${t.evolved.date}`);
     if (t.superseded) lines.push("superseded: true");
+    if (t.observed !== undefined) {
+      lines.push("observed: v1");
+      for (const m of t.observed) lines.push(`observed: ${m.sha} ${m.sliceId}#${m.turnIds.join(",")}`);
+    }
+    if (t.history) lines.push(`history: ${JSON.stringify(t.history)}`);
   }
   return lines.join("\n");
 }
@@ -127,12 +164,12 @@ export function parseReflectionRoundMessage(
   const body = message.slice(REFLECTION_ROUND_PREFIX.length + date.length).replace(/^\r?\n/, "");
   const lines = body.split("\n");
 
-  // The trailer section starts at the first line that is exactly the marker.
+  // The writer appends the authoritative delimiter AFTER the entire note.
+  // Earlier delimiters (including one at the note's end) belong to the note.
   let markerIdx = -1;
   for (let i = 0; i < lines.length; i += 1) {
     if (lines[i].trim() === TRAILER_MARKER) {
       markerIdx = i;
-      break;
     }
   }
   const noteLines = markerIdx >= 0 ? lines.slice(0, markerIdx) : lines;
@@ -168,6 +205,15 @@ export function parseReflectionRoundMessage(
       }
       if (line.trim() === "superseded: true") {
         trailer = { ...(trailer ?? {}), superseded: true };
+      }
+      if (line.trim() === "observed: v1") trailer = { ...(trailer ?? {}), observed: trailer?.observed ?? [] };
+      const receipt = /^observed: ([a-f0-9]{40,64}) (\d{4}-\d{2}-\d{2}-\d{4})#(\S+)$/.exec(line.trim());
+      if (receipt) {
+        trailer = { ...(trailer ?? {}), observed: [...(trailer?.observed ?? []), { sha: receipt[1], sliceId: receipt[2], turnIds: receipt[3].split(",") }] };
+      }
+      if (line.trim().startsWith("history: ")) {
+        const history = parseHistoryCheckpoint(line.trim().slice("history: ".length));
+        if (history) trailer = { ...(trailer ?? {}), history };
       }
       // unknown trailer lines: tolerated, ignored
     }
