@@ -55,6 +55,7 @@ export async function listFiles(
       owner,
       repo,
       path,
+      ...(opts?.ref ? { ref: opts.ref } : {}),
     });
 
     // Single file (not a directory)

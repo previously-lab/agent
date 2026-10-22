@@ -110,6 +110,7 @@ export interface LocalCommitEntry {
   message: string;
   /** Committer timestamp, ms since epoch (null when unknown). */
   committedAtMs: number | null;
+  parents: string[];
 }
 
 /**
@@ -119,10 +120,11 @@ export interface LocalCommitEntry {
  * caller maps that to the fail-safe (empty docket + `git init` advice).
  */
 export async function logCommits(root: string, max: number): Promise<LocalCommitEntry[]> {
-  const commits = await git.log({ fs, dir: root, ref: "HEAD" });
+  const commits = await git.log({ fs, dir: root, ref: "HEAD", ...(max > 0 && max < Number.MAX_SAFE_INTEGER ? { depth: max } : {}) });
   return commits.slice(0, max).map((c) => ({
     oid: c.oid,
     message: c.commit.message,
+    parents: c.commit.parent,
     committedAtMs:
       typeof c.commit.committer?.timestamp === "number"
         ? c.commit.committer.timestamp * 1000

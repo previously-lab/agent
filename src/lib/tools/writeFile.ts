@@ -1,7 +1,7 @@
 import { getOctokit } from "@/lib/github/client";
 import { assertPortableRepoPath } from "@/lib/portable-path";
 import { isPathAllowed } from "@/lib/whitelist";
-import { invalidateReadCache, invalidateTreeCache } from "@/lib/tools/readFile";
+import { invalidateReadCache } from "@/lib/tools/readFile";
 import { noteRepoHead } from "@/lib/tools/batch-write";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
@@ -77,7 +77,6 @@ export async function writeFile(
     // The commit moved the tree too: revalidate the cached subtree listing
     // (see commitBatchToGitHub for the contract's full statement).
     invalidateReadCache(path, repo, owner);
-    invalidateTreeCache(repo, owner);
 
     return { path, created: !sha };
   } catch (error) {
@@ -140,7 +139,6 @@ export async function deleteFile(
   );
 
   invalidateReadCache(path, repo, owner);
-  invalidateTreeCache(repo, owner);
 }
 
 /**
@@ -196,7 +194,6 @@ export async function writeBinaryFile(
     );
 
     invalidateReadCache(path, repo, owner);
-    invalidateTreeCache(repo, owner);
     return { path, created: !sha };
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Access denied")) {

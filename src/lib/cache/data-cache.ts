@@ -40,6 +40,10 @@
  * mechanism of the second kind joined in Wave A: `readFile.ts`'s in-flight
  * promise over `getRepoTree`, which single-flights concurrent cold reads of
  * the tree identity (and only that identity).
+ * `github/read-view.ts` additionally pins a commit and derived values for one
+ * request/explicit phase. It has no TTL and no cross-request payload cache;
+ * confirmed writes replace that phase's identity. This is what prevents
+ * Next's pending tag invalidations from re-fetching a tree per file.
  */
 
 import { unstable_cache, revalidateTag } from "next/cache";
@@ -68,15 +72,12 @@ export const CACHE_TTLS = {
   /** GitHub: strands, user card, direction doc, evolution store, config. */
   MEMORY_DEFAULT_SECONDS: 300,
   /**
-   * GitHub: the cached `memory/` subtree listing (`getRepoTree` in
-   * readFile.ts) — the metadata spine every enumeration, directory listing
-   * and sha-resolved read is derived from. Writers revalidate the `tree:`
-   * tag on every commit, so in-app changes are exact; 300s is only the bound
-   * for changes that bypass our write path (a direct push) — worst case a
-   * file created or edited out-of-band stays invisible to reads for 5
-   * minutes. Blob bodies are content-addressed by sha, so a stale tree entry
-   * can only ever point a path at the wrong (older) revision, never at
-   * corrupt bytes, and the next revalidation self-heals.
+   * GitHub: the small mutable branch-head pointer used by display reads.
+   * A read phase resolves it once; writers publish their confirmed new head
+   * to active phases and invalidate the pointer for future requests. Reads
+   * that decide work or feed a write use a fresh phase instead of relying on
+   * cross-instance tag propagation. Tree and blob objects are keyed by SHA
+   * and use BLOB_SECONDS: their bytes cannot become stale.
    */
   TREE_SECONDS: 300,
   /**
@@ -94,7 +95,7 @@ export const CACHE_TTLS = {
    */
   COMMITS_SCAN_SECONDS: 300,
   /**
-   * GitHub: a blob read by its content sha (`readBlobBase64` in readFile.ts).
+   * GitHub: immutable blobs and tree projections addressed by git object SHA.
    * The sha IS the content hash — an entry can only ever hold the one true
    * payload, so there is nothing to revalidate and no tag exists. 7d is an
    * eviction horizon, not a staleness bound: a miss simply re-fetches the
@@ -276,6 +277,8 @@ export function treeCacheTag(owner: string, repo: string): string {
  */
 export interface ReadOptions {
   fresh?: boolean;
+  /** Internal snapshot fallback: read this immutable commit, not live HEAD. */
+  ref?: string;
 }
 
 /** Stable first half of every Data Cache key from this module. */

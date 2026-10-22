@@ -9,11 +9,15 @@ import {
   cachedFetch,
   cacheTagFor,
   invalidate,
-  treeCacheTag,
   ttlForPath,
   type ReadOptions,
 } from "@/lib/cache/data-cache";
-import { getDefaultBranch } from "@/lib/tools/batch-write";
+import {
+  getGitHubReadHead,
+  hasGitHubReadView,
+  invalidateGitHubReadHead,
+  memoizeGitHubRead,
+} from "@/lib/github/read-view";
 import { listFiles } from "@/lib/tools/listFiles";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
@@ -76,7 +80,8 @@ export function fileCacheTag(path: string, repo: string, owner: string): string 
 async function fetchFromGitHub(
   path: string,
   repo: string,
-  owner: string
+  owner: string,
+  ref?: string,
 ): Promise<string> {
   const octokit = getOctokit();
 
@@ -85,6 +90,7 @@ async function fetchFromGitHub(
       owner,
       repo,
       path,
+      ...(ref ? { ref } : {}),
     });
 
     // GitHub returns an array for directories, single object for files
@@ -146,11 +152,16 @@ export async function readFile(
     );
   }
 
+  // A direct fallback inside a phase still reads the same immutable commit
+  // as its tree. Fresh write-adjacent reads retain their live escape hatch.
+  const ref = opts?.ref ?? (!opts?.fresh && hasGitHubReadView()
+    ? (await getGitHubReadHead(repo, owner)).headSha
+    : undefined);
   return cachedFetch(
-    ["github", "file", owner, repo, path],
+    ["github", "file", owner, repo, path, ...(ref ? [ref] : [])],
     ttlForPath(path, "github"),
-    [fileCacheTag(path, repo, owner)],
-    () => fetchFromGitHub(path, repo, owner),
+    ref ? [] : [fileCacheTag(path, repo, owner)],
+    () => fetchFromGitHub(path, repo, owner, ref),
     opts,
   );
 }
@@ -189,9 +200,9 @@ export function invalidateReadCache(
 // carries the git `sha` of each entry — a content hash that changes iff the
 // content changes. That splits "what exists" from "what it says":
 //
-//   - THE TREE (`getRepoTree`): one cached listing of the whole `memory/`
-//     subtree, 60s TTL + the `tree:` tag writers revalidate per commit. Two
-//     API calls on a miss (a tiny non-recursive ROOT tree to learn the
+//   - THE TREE (`getRepoTree`): one immutable listing per memory-tree sha,
+//     reached through a phase-frozen head. Its identity has no mutable tag.
+//     Two API calls on an object miss (a non-recursive root tree to learn the
 //     memory/ subtree sha, then one RECURSIVE read of that subtree) instead
 //     of the previous whole-repo recursive tree per enumeration per surface.
 //   - THE BLOBS (`readBlobBase64`): file bodies fetched by sha via
@@ -201,8 +212,8 @@ export function invalidateReadCache(
 //
 // A display read of a path (`readFileViaTree`, `listRepoChildren`,
 // `readBinaryFileViaTree`) resolves path → sha from the tree, then sha →
-// bytes from the blob cache: on a warm instance the ONLY GitHub traffic left
-// is the small tree revalidation, however many files are read.
+// bytes from the blob cache. A phase resolves the small mutable head pointer
+// once; every later path read reuses its tree, even after Next tags expire.
 //
 // THE CACHE ENTRY IS A COMPACT PROJECTION, not the API payload. Each entry
 // stores {path, type, sha, size?} ≈ 110 bytes of JSON; the raw items also
@@ -246,45 +257,56 @@ const MEMORY_TREE_ROOT = "memory";
  * the memory/ subtree itself, recursive. Submodules and symlinks are not
  * memory files and are dropped from the projection.
  */
-async function fetchRepoTree(owner: string, repo: string): Promise<RepoTree> {
+async function fetchRepoTree(
+  owner: string, repo: string, opts?: ReadOptions,
+  knownHead?: { headSha: string; treeSha?: string },
+): Promise<RepoTree> {
   const octokit = getOctokit();
-  const branch = await getDefaultBranch();
-  const { data: ref } = await octokit.rest.git.getRef({
-    owner,
-    repo,
-    ref: `heads/${branch}`,
-  });
-  const { data: rootTree } = await octokit.rest.git.getTree({
-    owner,
-    repo,
-    tree_sha: ref.object.sha,
-  });
-  const memoryDir = (rootTree.tree ?? []).find(
-    (e) => e.path === MEMORY_TREE_ROOT && e.type === "tree",
+  const head = knownHead ?? (opts?.ref ? { headSha: opts.ref } : await getGitHubReadHead(repo, owner, opts));
+  // Both layers are immutable objects. Revalidating a mutable branch pointer
+  // cannot make Next reject these entries for the rest of the HTTP request.
+  const memorySha = await cachedFetch(
+    ["github", "root-tree", owner, repo, head.treeSha ?? head.headSha],
+    CACHE_TTLS.BLOB_SECONDS,
+    [],
+    async () => {
+      const { data: rootTree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: head.treeSha ?? head.headSha,
+      });
+      return (rootTree.tree ?? []).find(
+        (e) => e.path === MEMORY_TREE_ROOT && e.type === "tree",
+      )?.sha ?? "";
+    },
+    opts,
   );
-  if (!memoryDir?.sha) return { treeSha: "", entries: [], truncated: false };
-  const { data: tree } = await octokit.rest.git.getTree({
-    owner,
-    repo,
-    tree_sha: memoryDir.sha,
-    recursive: "1",
-  });
-  const entries: RepoTreeEntry[] = [];
-  for (const item of tree.tree ?? []) {
-    if (item.type !== "blob" && item.type !== "tree") continue;
-    // Symlinks (120000) and submodules (160000) are not memory files.
-    if (item.mode === "120000" || item.mode === "160000") continue;
-    const p = item.path ?? "";
-    if (!p || !item.sha) continue;
-    entries.push({
-      path: `${MEMORY_TREE_ROOT}/${p}`,
-      type: item.type,
-      sha: item.sha,
-      ...(typeof item.size === "number" ? { size: item.size } : {}),
-    });
-  }
-  entries.sort((a, b) => a.path.localeCompare(b.path));
-  return { treeSha: memoryDir.sha, entries, truncated: tree.truncated === true };
+  if (!memorySha) return { treeSha: "", entries: [], truncated: false };
+  return cachedFetch(
+    ["github", "tree", owner, repo, memorySha],
+    CACHE_TTLS.BLOB_SECONDS,
+    [],
+    async () => {
+      const { data: tree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: memorySha, recursive: "1",
+      });
+      const entries: RepoTreeEntry[] = [];
+      for (const item of tree.tree ?? []) {
+        if (item.type !== "blob" && item.type !== "tree") continue;
+        // Symlinks (120000) and submodules (160000) are not memory files.
+        if (item.mode === "120000" || item.mode === "160000") continue;
+        const p = item.path ?? "";
+        if (!p || !item.sha) continue;
+        entries.push({
+          path: `${MEMORY_TREE_ROOT}/${p}`,
+          type: item.type,
+          sha: item.sha,
+          ...(typeof item.size === "number" ? { size: item.size } : {}),
+        });
+      }
+      entries.sort((a, b) => a.path.localeCompare(b.path));
+      return { treeSha: memorySha, entries, truncated: tree.truncated === true };
+    },
+    opts,
+  );
 }
 
 /**
@@ -295,7 +317,7 @@ async function fetchRepoTree(owner: string, repo: string): Promise<RepoTree> {
  * episodic state, archive index); without this each pays its own fetch.
  * Cleared on settle, so a failure never poisons the next caller.
  */
-let treeInflight: Promise<RepoTree> | null = null;
+const treeInflight = new Map<string, Promise<RepoTree>>();
 
 /**
  * The cached `memory/` subtree listing. `fresh` bypasses both caches and
@@ -306,20 +328,28 @@ export async function getRepoTree(
   owner: string,
   opts?: ReadOptions,
 ): Promise<RepoTree> {
-  if (opts?.fresh) return fetchRepoTree(owner, repo);
-  if (treeInflight) return treeInflight;
-  const p = cachedFetch(
-    ["github", "tree", owner, repo],
-    CACHE_TTLS.TREE_SECONDS,
-    [treeCacheTag(owner, repo)],
-    () => fetchRepoTree(owner, repo),
-  );
-  treeInflight = p;
-  const settle = () => {
-    if (treeInflight === p) treeInflight = null;
-  };
-  p.then(settle, settle);
-  return p;
+  if (opts?.fresh || opts?.ref) return fetchRepoTree(owner, repo, opts);
+  return memoizeGitHubRead(repo, owner, "memory-tree", async () => {
+    // Only object-addressed work may be shared across phases. Resolve a phase
+    // head first so a concurrent writer's new phase never joins an old tree.
+    const head = await getGitHubReadHead(repo, owner);
+    const key = `${owner}/${repo}:${head.headSha}`;
+    const existing = treeInflight.get(key);
+    if (existing) return existing;
+    const p = fetchRepoTree(owner, repo, undefined, head);
+    treeInflight.set(key, p);
+    const settle = () => {
+      if (treeInflight.get(key) === p) treeInflight.delete(key);
+    };
+    p.then(settle, settle);
+    return p;
+  });
+}
+
+/** A fresh composite read still has one immutable anchor for its fallback. */
+async function treeReadOptions(repo: string, owner: string, opts?: ReadOptions): Promise<ReadOptions | undefined> {
+  if (!opts?.fresh || opts.ref) return opts;
+  return { ...opts, ref: (await getGitHubReadHead(repo, owner, { fresh: true })).headSha };
 }
 
 /** The uncached fetch behind `readBlobBase64`: one `git.getBlob` call. */
@@ -410,9 +440,11 @@ export async function readFileViaTree(
     );
   }
   const normalized = path.replace(/\\/g, "/");
-  const tree = await getRepoTree(repo, owner, opts);
+  const snapshotOptions = await treeReadOptions(repo, owner, opts);
+  const tree = await getRepoTree(repo, owner, snapshotOptions);
   if (tree.truncated || !normalized.startsWith(`${MEMORY_TREE_ROOT}/`)) {
-    return readFile(path, repo, owner, opts);
+    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
+    return readFile(path, repo, owner, { ...opts, ...(ref ? { ref } : {}) });
   }
   const entry = tree.entries.find((e) => e.path === normalized);
   if (!entry) throw new Error(`File not found: "${path}"`);
@@ -446,9 +478,11 @@ export async function listRepoChildren(
     );
   }
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  const tree = await getRepoTree(repo, owner, opts);
+  const snapshotOptions = await treeReadOptions(repo, owner, opts);
+  const tree = await getRepoTree(repo, owner, snapshotOptions);
   if (tree.truncated || !(normalized === MEMORY_TREE_ROOT || normalized.startsWith(`${MEMORY_TREE_ROOT}/`))) {
-    return listFiles(normalized, repo, owner, opts);
+    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
+    return listFiles(normalized, repo, owner, { ...opts, ...(ref ? { ref } : {}) });
   }
   const self = tree.entries.find((e) => e.path === normalized);
   if (self?.type === "blob") {
@@ -489,9 +523,10 @@ async function fetchBinaryFromGitHub(
   path: string,
   repo: string,
   owner: string,
+  ref?: string,
 ): Promise<Buffer> {
   const octokit = getOctokit();
-  const res = await octokit.rest.repos.getContent({ owner, repo, path });
+  const res = await octokit.rest.repos.getContent({ owner, repo, path, ...(ref ? { ref } : {}) });
   if (
     Array.isArray(res.data) ||
     !("content" in res.data) ||
@@ -519,9 +554,11 @@ export async function readBinaryFileViaTree(
     );
   }
   const normalized = path.replace(/\\/g, "/");
-  const tree = await getRepoTree(repo, owner, opts);
+  const snapshotOptions = await treeReadOptions(repo, owner, opts);
+  const tree = await getRepoTree(repo, owner, snapshotOptions);
   if (tree.truncated || !normalized.startsWith(`${MEMORY_TREE_ROOT}/`)) {
-    return fetchBinaryFromGitHub(path, repo, owner);
+    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
+    return fetchBinaryFromGitHub(path, repo, owner, ref);
   }
   const entry = tree.entries.find((e) => e.path === normalized);
   if (!entry || entry.type !== "blob") throw new Error(`Not a file: "${path}"`);
@@ -532,11 +569,10 @@ export async function readBinaryFileViaTree(
 }
 
 /**
- * Invalidate the cached `memory/` subtree listing after a GitHub write moved
- * the tree — the directory-membership twin of `invalidateReadCache`. Writers
- * call it per commit (a batch commit moves the tree once, whatever its file
- * count). No-ops safely without a Next request store, same as `invalidate`.
+ * Forget the current phase head and expire mutable pointers. Immutable tree
+ * and blob objects remain valid. Confirmed writers use noteRepoHead instead,
+ * publishing the new identity so the next read needs no branch lookup.
  */
 export function invalidateTreeCache(repo: string, owner: string): void {
-  invalidate(treeCacheTag(owner, repo));
+  invalidateGitHubReadHead(repo, owner);
 }

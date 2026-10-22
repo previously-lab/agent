@@ -12,7 +12,12 @@
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { assertPortableRepoPath } from "@/lib/portable-path";
-import { invalidateReadCache, invalidateTreeCache } from "@/lib/tools/readFile";
+import { invalidateReadCache } from "@/lib/tools/readFile";
+import {
+  getGitHubDefaultBranch,
+  publishGitHubHead,
+  resetGitHubDefaultBranches,
+} from "@/lib/github/read-view";
 import { isPathAllowed } from "@/lib/whitelist";
 
 export interface BatchEntry {
@@ -29,8 +34,6 @@ export interface BatchEntry {
 
 // ─── Default branch resolution (cached per process) ─────────────────────
 
-let defaultBranchCache: { key: string; branch: string } | null = null;
-
 /**
  * The repo's default branch (usually "main", but not always — the old code
  * hardcoded `heads/main` and broke on repos whose default branch differs).
@@ -41,17 +44,13 @@ async function resolveDefaultBranch(
   owner: string,
   repo: string,
 ): Promise<string> {
-  const key = `${owner}/${repo}`;
-  if (defaultBranchCache?.key === key) return defaultBranchCache.branch;
-  const { data } = await octokit.rest.repos.get({ owner, repo });
-  const branch = data.default_branch || "main";
-  defaultBranchCache = { key, branch };
-  return branch;
+  void octokit;
+  return getGitHubDefaultBranch(owner, repo);
 }
 
 /** Test-only: drop the cached default branch. */
 export function _resetDefaultBranchCache(): void {
-  defaultBranchCache = null;
+  resetGitHubDefaultBranches();
 }
 
 // ─── HEAD/tree pair (cached per process) ──────────────────────────────────
@@ -81,6 +80,9 @@ export function noteRepoHead(
   headSha: string | null,
   treeSha: string | null,
 ): void {
+  publishGitHubHead(repo, owner, headSha
+    ? { headSha, ...(treeSha ? { treeSha } : {}) }
+    : null);
   if (!headSha || !treeSha) {
     headStateCache = null;
     return;
@@ -91,6 +93,7 @@ export function noteRepoHead(
 /** Drop the cached HEAD/tree pair (conflict, or a HEAD move we can't map). */
 export function invalidateRepoHead(repo: string, owner: string): void {
   if (headStateCache?.key === `${owner}/${repo}`) headStateCache = null;
+  publishGitHubHead(repo, owner, null);
 }
 
 /** Test-only: drop the cached HEAD/tree pair. */
@@ -127,9 +130,9 @@ export async function commitEmptyToGitHub(
   message: string,
   repo: string,
   owner: string,
-): Promise<void> {
+): Promise<string> {
   const octokit = getOctokit();
-  const branch = await getDefaultBranch();
+  const branch = await getGitHubDefaultBranch(owner, repo);
   const headRef = `heads/${branch}`;
   const { data: ref } = await octokit.rest.git.getRef({ owner, repo, ref: headRef });
   const headSha = ref.object.sha;
@@ -157,6 +160,8 @@ export async function commitEmptyToGitHub(
     invalidateRepoHead(repo, owner);
     throw err;
   }
+  noteRepoHead(repo, owner, newCommit.sha, headCommit.tree.sha);
+  return newCommit.sha;
 }
 
 /**
@@ -169,6 +174,8 @@ export async function commitEmptyToGitHub(
 export async function commitBatchToGitHub(
   entries: BatchEntry[],
   message: string,
+  /** The read-modify-write source version; a newer parent must conflict. */
+  expectedHeadSha?: string,
 ): Promise<string> {
   // Whitelist re-check, per path, before anything reaches the GitHub API —
   // the single-write path validates inside writeFile/readFile; the batch path
@@ -194,7 +201,13 @@ export async function commitBatchToGitHub(
   const key = `${owner}/${repo}`;
   let headSha: string;
   let baseTree: string;
-  if (headStateCache?.key === key) {
+  if (expectedHeadSha) {
+    const { data: commit } = await octokit.rest.git.getCommit({
+      owner, repo, commit_sha: expectedHeadSha,
+    });
+    headSha = expectedHeadSha;
+    baseTree = commit.tree.sha;
+  } else if (headStateCache?.key === key) {
     headSha = headStateCache.headSha;
     baseTree = headStateCache.treeSha;
   } else {
@@ -287,7 +300,5 @@ export async function commitBatchToGitHub(
   for (const { path } of entries) {
     invalidateReadCache(path, repo, owner);
   }
-  invalidateTreeCache(repo, owner);
-
   return newCommit.sha;
 }

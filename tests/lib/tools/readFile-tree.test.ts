@@ -52,15 +52,12 @@ vi.mock("@/lib/github/client", async (importOriginal) => ({
         getTree: hoisted.mockGetTree,
         getBlob: hoisted.mockGetBlob,
       },
-      repos: { getContent: hoisted.mockGetContent },
+      repos: {
+        getContent: hoisted.mockGetContent,
+        get: async () => ({ data: { default_branch: "main" } }),
+      },
     },
   }),
-}));
-
-// The default-branch lookup is the only thing readFile.ts takes from
-// batch-write; mocking the module keeps the commit machinery out of the graph.
-vi.mock("@/lib/tools/batch-write", () => ({
-  getDefaultBranch: async () => "main",
 }));
 
 import {
@@ -260,6 +257,18 @@ describe("getRepoTree", () => {
 // ─── readFileViaTree ─────────────────────────────────────────────────────
 
 describe("readFileViaTree", () => {
+  it("pins a fresh truncated-tree fallback to the head it inspected", async () => {
+    primeTreeFetch({ data: { tree: [], truncated: true } });
+    hoisted.mockGetContent.mockResolvedValue({
+      data: { type: "file", size: 3, content: Buffer.from("old").toString("base64") },
+    });
+    expect(await readFileViaTree("memory/f.md", repo, owner, { fresh: true })).toBe("old");
+    expect(hoisted.mockGetRef).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockGetContent).toHaveBeenCalledWith({
+      owner, repo, path: "memory/f.md", ref: "headsha",
+    });
+  });
+
   it("reads a file's text via path → tree sha → blob", async () => {
     primeTreeFetch();
     hoisted.mockGetBlob.mockResolvedValue({
@@ -432,6 +441,7 @@ describe("listRepoChildren", () => {
       owner,
       repo,
       path: "memory/records",
+      ref: "headsha",
     });
   });
 
@@ -450,6 +460,7 @@ describe("listRepoChildren", () => {
       owner,
       repo,
       path: "tasks",
+      ref: "headsha",
     });
   });
 });
@@ -490,7 +501,10 @@ describe("invalidateTreeCache", () => {
   it("revalidates the tree tag with immediate expiry", () => {
     invalidateTreeCache(repo, owner);
 
-    expect(hoisted.mockRevalidateTag).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockRevalidateTag).toHaveBeenCalledTimes(2);
+    expect(hoisted.mockRevalidateTag).toHaveBeenCalledWith("head:test-owner/test-repo", {
+      expire: 0,
+    });
     expect(hoisted.mockRevalidateTag).toHaveBeenCalledWith("tree:test-owner/test-repo", {
       expire: 0,
     });

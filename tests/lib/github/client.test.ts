@@ -9,6 +9,7 @@ import {
   withGitHubReadBudget,
   type GitHubRateLimitError,
   type GitHubReadTimeoutError,
+  type GitHubRequestMetric,
 } from "@/lib/github/client";
 
 describe("getOctokit", () => {
@@ -32,6 +33,44 @@ describe("getOctokit", () => {
     const a = getOctokit();
     const b = getOctokit();
     expect(a).toBe(b);
+  });
+});
+
+describe("GitHub transport accounting", () => {
+  beforeEach(() => {
+    resetOctokit();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("counts actual wire calls and logs only a route template and numeric quota headers", async () => {
+    const metrics: GitHubRequestMetric[] = [];
+    const wire = vi.fn(async () => jsonResponse(200, { type: "file", content: "" }, {
+      "x-ratelimit-remaining": "4900", "x-ratelimit-reset": "1800000000",
+    }));
+    const octokit = createOctokitForTest(wire as unknown as typeof fetch, (metric) => metrics.push(metric));
+    await octokit.rest.repos.getContent({ owner: "private-owner", repo: "private-repo", path: "memory/private-file.md" });
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(metrics).toEqual([expect.objectContaining({
+      method: "GET", endpoint: "/repos/:owner/:repo/contents/:path",
+      status: 200, remaining: 4900, resetAt: 1800000000,
+    })]);
+    const logged = JSON.stringify(vi.mocked(console.log).mock.calls);
+    expect(logged).not.toMatch(/private-owner|private-repo|private-file|test-token/);
+  });
+
+  it("does not count a circuit fast-fail as another HTTP request, and honors GitHub's wait", async () => {
+    const metrics: GitHubRequestMetric[] = [];
+    const wire = vi.fn(async () => jsonResponse(429, { message: "secondary rate limit" }, { "retry-after": "350" }));
+    const octokit = createOctokitForTest(wire as unknown as typeof fetch, (metric) => metrics.push(metric));
+    await expect(octokit.rest.repos.get({ owner: "owner", repo: "repo" })).rejects.toSatisfy(isGitHubRateLimitError);
+    await expect(octokit.rest.repos.get({ owner: "owner", repo: "repo" })).rejects.toSatisfy(
+      (error: GitHubRateLimitError) => error.circuitOpen && (error.retryAfterMs ?? 0) > 300_000,
+    );
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]).toEqual(expect.objectContaining({ status: 429, retryAfterSeconds: 350 }));
   });
 });
 

@@ -23,7 +23,8 @@ export const GITHUB_READ_CALL_TIMEOUT_MS = 15_000;
 export const GITHUB_READ_BUDGET_MS = 20_000;
 
 /**
- * Circuit-breaker window after a rate-limit hit: for this long EVERY GitHub
+ * Minimum circuit-breaker window after a rate-limit hit. GitHub's longer
+ * retry-after/reset hint takes precedence. While open EVERY GitHub
  * call fails fast with GitHubRateLimitError (circuitOpen: true) instead of
  * spending more quota. Per-instance state (a lambda has its own); a fresh hit
  * re-extends the window.
@@ -240,10 +241,11 @@ function installGuardrails(octokit: Octokit): void {
     if (error instanceof GitHubRateLimitError) throw error;
     const rateLimited = asRateLimitError(error);
     if (!rateLimited) throw error;
-    circuitOpenUntil = Date.now() + GITHUB_CIRCUIT_OPEN_MS;
+    const openMs = Math.max(GITHUB_CIRCUIT_OPEN_MS, rateLimited.retryAfterMs ?? 0);
+    circuitOpenUntil = Date.now() + openMs;
     circuitOpenKind = rateLimited.kind;
     console.warn(
-      `[github] ${rateLimited.kind} rate limit hit — circuit open for ${GITHUB_CIRCUIT_OPEN_MS / 1000}s` +
+      `[github] ${rateLimited.kind} rate limit hit — circuit open for ${Math.ceil(openMs / 1000)}s` +
         (rateLimited.retryAfterMs !== undefined
           ? ` (GitHub asks to wait ${Math.ceil(rateLimited.retryAfterMs / 1000)}s)`
           : ""),
@@ -254,12 +256,79 @@ function installGuardrails(octokit: Octokit): void {
 
 // ─── The singleton ────────────────────────────────────────────────────────
 
-function buildOctokit(token: string, fetchImpl?: typeof fetch): Octokit {
+export interface GitHubRequestMetric {
+  method: string;
+  /** Route template only: no owner, repo, file path, query or credentials. */
+  endpoint: string;
+  status: number | "network-error";
+  elapsedMs: number;
+  remaining?: number;
+  resetAt?: number;
+  retryAfterSeconds?: number;
+}
+
+function endpointTemplate(input: string): string {
+  try {
+    const path = new URL(input).pathname;
+    if (/^\/repos\/[^/]+\/[^/]+$/.test(path)) return "/repos/:owner/:repo";
+    const suffix = path.replace(/^\/repos\/[^/]+\/[^/]+/, "/repos/:owner/:repo");
+    return suffix
+      .replace(/\/contents(?:\/.*)?$/, "/contents/:path")
+      .replace(/\/(trees|blobs|commits|refs?|branches)\/.*$/, "/$1/:object");
+  } catch {
+    return "unknown";
+  }
+}
+
+function measuredFetch(
+  fetchImpl: typeof fetch,
+  observe?: (metric: GitHubRequestMetric) => void,
+): typeof fetch {
+  return async (input, init) => {
+    const startedAt = performance.now();
+    let response: Response | undefined;
+    try {
+      response = await fetchImpl(input, init);
+      return response;
+    } finally {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      const metric: GitHubRequestMetric = {
+        method: method.toUpperCase(), endpoint: endpointTemplate(url),
+        status: response?.status ?? "network-error",
+        elapsedMs: Math.round(performance.now() - startedAt),
+      };
+      for (const [header, field] of [
+        ["x-ratelimit-remaining", "remaining"],
+        ["x-ratelimit-reset", "resetAt"],
+        ["retry-after", "retryAfterSeconds"],
+      ] as const) {
+        const value = response?.headers.get(header);
+        if (value !== null && value !== undefined && Number.isFinite(Number(value))) {
+          metric[field] = Number(value);
+        }
+      }
+      // Measure the wire, inside retry/throttle plugins: one record means one
+      // actual HTTP attempt. Cache misses, queueing and circuit fast-fails
+      // never masquerade as requests. Observability must not fail the call.
+      try {
+        observe?.(metric);
+        console.log(`[github-request] ${JSON.stringify(metric)}`);
+      } catch { /* best effort */ }
+    }
+  };
+}
+
+function buildOctokit(
+  token: string,
+  fetchImpl?: typeof fetch,
+  observe?: (metric: GitHubRequestMetric) => void,
+): Octokit {
   const octokit = new Octokit({
     auth: token,
     request: {
       timeout: 30_000, // 30s per-request cap — prevents hanging API calls
-      ...(fetchImpl ? { fetch: fetchImpl } : {}),
+      fetch: measuredFetch(fetchImpl ?? globalThis.fetch, observe),
     },
     // Rate limits (403/429) and ref conflicts (422) fail immediately — the
     // retry plugin's default already skips 403/422; 429 is added so secondary
@@ -299,8 +368,11 @@ export function getOctokit(): Octokit {
  * network. The circuit breaker is module state shared across instances;
  * resetOctokit() clears it.
  */
-export function createOctokitForTest(fetchImpl: typeof fetch): Octokit {
-  return buildOctokit("test-token", fetchImpl);
+export function createOctokitForTest(
+  fetchImpl: typeof fetch,
+  observe?: (metric: GitHubRequestMetric) => void,
+): Octokit {
+  return buildOctokit("test-token", fetchImpl, observe);
 }
 
 /**

@@ -74,6 +74,8 @@ const DEMO_MODE = isDemo(DATA_SOURCE);
  * which replaces a stale slice file with a re-merged one before retrying).
  */
 export interface WriteBatch {
+  /** Read-modify-write basis; a moved branch must reject a stale snapshot. */
+  baseHeadSha?: string;
   readonly entries: Map<string, string | null>;
   /**
    * Side-channel for BINARY queued writes: paths here were queued by
@@ -108,8 +110,8 @@ export function createBatch(): WriteBatch {
 export async function flushBatch(
   batch: WriteBatch,
   message: string,
-): Promise<void> {
-  if (batch.entries.size === 0) return;
+): Promise<string | null> {
+  if (batch.entries.size === 0) return null;
 
   const entries: BatchEntry[] = [];
   for (const [path, content] of batch.entries) {
@@ -122,14 +124,14 @@ export async function flushBatch(
       // demo data is read-only — queued deletes are dropped
     }
     batch.entries.clear();
-    return;
+    return null;
   }
 
   if (USE_GITHUB) {
-    await commitBatchToGitHub(entries, message);
+    const commitSha = await commitBatchToGitHub(entries, message, batch.baseHeadSha);
     batch.entries.clear();
     batch.encodings?.clear();
-    return;
+    return commitSha;
   }
 
   // Local filesystem — apply individually, then record one git commit for
@@ -142,7 +144,7 @@ export async function flushBatch(
   }
   batch.entries.clear();
   batch.encodings?.clear();
-  await commitLocalWrites(
+  return await commitLocalWrites(
     entries.map((e) => e.path),
     message,
   );
@@ -157,9 +159,9 @@ export async function flushBatch(
  * sessions/) live outside the memory repo and are skipped. Never throws —
  * see local-git.ts.
  */
-async function commitLocalWrites(paths: string[], message: string): Promise<void> {
+async function commitLocalWrites(paths: string[], message: string): Promise<string | null> {
   const root = getMemoryRoot();
-  if (!isGitRepo(root)) return;
+  if (!isGitRepo(root)) return null;
   const relPaths: string[] = [];
   for (const p of paths) {
     const normalized = p.replace(/\\/g, "/");
@@ -167,8 +169,10 @@ async function commitLocalWrites(paths: string[], message: string): Promise<void
       relPaths.push(normalized.slice("memory/".length));
     }
   }
-  if (relPaths.length === 0) return;
-  await commitPaths(root, relPaths, message);
+  if (relPaths.length === 0) return null;
+  if (!(await commitPaths(root, relPaths, message))) return null;
+  const { logCommits } = await import("./local-git");
+  return (await logCommits(root, 1))[0]?.oid ?? null;
 }
 
 // ─── Public I/O helpers ─────────────────────────────────────────────────

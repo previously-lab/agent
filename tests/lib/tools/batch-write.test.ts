@@ -45,12 +45,14 @@ vi.mock("@/lib/capabilities", () => ({
 
 import {
   commitBatchToGitHub,
+  commitEmptyToGitHub,
   isRefConflictError,
   noteRepoHead,
   _resetDefaultBranchCache,
   _resetHeadStateCache,
   type BatchEntry,
 } from "@/lib/tools/batch-write";
+import { getGitHubReadHead, withGitHubReadView } from "@/lib/github/read-view";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -316,6 +318,46 @@ describe("HEAD/tree cache", () => {
     await commitBatchToGitHub(entries, "second");
 
     expect(mockOctokit.git.getRef).toHaveBeenCalledTimes(2);
+  });
+
+  it("an empty round publishes its real SHA and keeps the next batch on that head", async () => {
+    setupGitMocks();
+    mockOctokit.git.createCommit
+      .mockResolvedValueOnce({ data: { sha: "batch-one" } })
+      .mockResolvedValueOnce({ data: { sha: "empty-round" } })
+      .mockResolvedValueOnce({ data: { sha: "batch-two" } });
+    mockOctokit.git.getRef
+      .mockResolvedValueOnce({ data: { object: { sha: "head" } } })
+      .mockResolvedValueOnce({ data: { object: { sha: "batch-one" } } });
+    mockOctokit.git.getCommit
+      .mockResolvedValueOnce({ data: { tree: { sha: "tree" } } })
+      .mockResolvedValueOnce({ data: { tree: { sha: "newtree" } } });
+    await withGitHubReadView(async () => {
+      await commitBatchToGitHub(entries, "first");
+      expect(await commitEmptyToGitHub("empty", "test-repo", "test-owner")).toBe("empty-round");
+      expect(await getGitHubReadHead("test-repo", "test-owner")).toEqual({ headSha: "empty-round", treeSha: "newtree" });
+      await commitBatchToGitHub(entries, "second");
+    });
+    expect(mockOctokit.git.getRef).toHaveBeenCalledTimes(2);
+    expect(mockOctokit.git.getCommit).toHaveBeenCalledTimes(2);
+    expect(mockOctokit.git.createCommit).toHaveBeenLastCalledWith(expect.objectContaining({ parents: ["empty-round"] }));
+  });
+
+  it("pins read-modify-write to its source head even when a newer head is cached", async () => {
+    setupGitMocks();
+    noteRepoHead("test-repo", "test-owner", "newer-head", "newer-tree");
+    mockOctokit.git.getCommit.mockResolvedValue({ data: { tree: { sha: "source-tree" } } });
+    mockOctokit.git.updateRef.mockRejectedValue(
+      Object.assign(new Error("Update is not a fast forward"), { status: 422 }),
+    );
+    await expect(commitBatchToGitHub(entries, "append from old snapshot", "source-head")).rejects.toThrow("fast forward");
+    expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+    expect(mockOctokit.git.getCommit).toHaveBeenCalledWith({
+      owner: "test-owner", repo: "test-repo", commit_sha: "source-head",
+    });
+    expect(mockOctokit.git.createTree).toHaveBeenCalledWith(expect.objectContaining({ base_tree: "source-tree" }));
+    expect(mockOctokit.git.createCommit).toHaveBeenCalledWith(expect.objectContaining({ parents: ["source-head"] }));
+    expect(mockOctokit.git.updateRef).toHaveBeenCalledWith(expect.objectContaining({ force: false }));
   });
 });
 
