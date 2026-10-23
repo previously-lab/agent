@@ -1,10 +1,8 @@
 import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import {
   assembleSystemPrompt,
-  BRIDGE_NOTICE,
-  buildBridgeTimeLine,
-  appendBridgeTimeSuffix,
+  appendContextSuffix,
   SPACE_FICTION_BLOCK,
 } from "@/app/api/chat/turn-workflow";
 import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
@@ -137,96 +135,7 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
   });
 });
 
-// ─── Bridge mode: notice + fresh-time injection ────────────────────────────
-
-describe("bridgeNotice (subscription bridge mode)", () => {
-  it("renders as the L5b tail when injected (bridge sdk)", () => {
-    const s = build({ bridgeNotice: BRIDGE_NOTICE });
-    expect(s).toContain("## Subscription bridge mode");
-    expect(s.indexOf(BRIDGE_NOTICE)).toBeGreaterThan(s.indexOf(DEMO));
-  });
-
-  it("is absent for non-bridge turns (no bridgeNotice option)", () => {
-    expect(build()).not.toContain("Subscription bridge mode");
-  });
-
-  it("keeps the slice-freeze intact: byte-identical with the notice, and the notice carries no per-turn data", () => {
-    expect(build({ bridgeNotice: BRIDGE_NOTICE })).toBe(
-      build({ bridgeNotice: BRIDGE_NOTICE }),
-    );
-    // The fresh time NEVER enters the system prompt — it rides the last user
-    // message instead (see buildBridgeTimeLine below).
-    expect(BRIDGE_NOTICE).not.toContain("[Current time:");
-  });
-
-  it("pins the notice contract: no `previously recall`, recall via skills/recall.md sub-agent, verbatim output", () => {
-    // The `previously recall` command no longer exists on the client.
-    expect(BRIDGE_NOTICE).not.toContain("previously recall");
-    // Memory access runs through the workspace reader commands…
-    for (const cmd of ["timeline", "strands", "slicesummary", "readslice", "card", "agentlog"]) {
-      expect(BRIDGE_NOTICE).toContain(`previously ${cmd}`);
-    }
-    // …but strands is flagged as the FROZEN legacy index it is (F3, 2026-10-12),
-    expect(BRIDGE_NOTICE).toContain("FROZEN legacy index");
-    // and the retired kernel `recall` tool is no longer named in the countermand.
-    expect(BRIDGE_NOTICE).not.toContain("(recall,");
-    // Past-looking questions go through the recall skill sub-agent, which reads
-    // the slices ITSELF and answers with evidence (the Phase-A contract — the
-    // old pointer-only description is gone).
-    expect(BRIDGE_NOTICE).toContain("skills/recall.md");
-    expect(BRIDGE_NOTICE).not.toContain("POINTERS");
-    expect(BRIDGE_NOTICE).toContain("verbatim-quote evidence");
-    // The countermand + output contract survive the rewrite.
-    expect(BRIDGE_NOTICE).toContain("thinkDeep guidance elsewhere in this prompt does NOT apply");
-    expect(BRIDGE_NOTICE).toContain("rendered verbatim");
-  });
-});
-
-describe("buildBridgeTimeLine (bridge-mode fresh clock read)", () => {
-  const OPTS = {
-    sliceId: "2026-08-26-1530",
-    maxSliceMinutes: 30,
-    timezone: "Asia/Shanghai",
-    nowIso: "2026-08-26T15:42:00.000Z",
-  };
-
-  it("renders local time / UTC and the slice's remaining minutes (parsed from the slice id)", () => {
-    const line = buildBridgeTimeLine(OPTS);
-    expect(line.startsWith("\n\n[Current time: ")).toBe(true);
-    expect(line.endsWith("]")).toBe(true);
-    expect(line).toContain("26 Aug 2026, 23:42");
-    expect(line).toContain("Asia/Shanghai");
-    expect(line).toContain("/ 2026-08-26T15:42:00.000Z");
-    expect(line).toContain("slice closes in ~18 min");
-  });
-
-  it("sends only the time part when the slice id is unparseable", () => {
-    const line = buildBridgeTimeLine({ ...OPTS, sliceId: "not-a-slice" });
-    expect(line).toContain("[Current time:");
-    expect(line).not.toContain("slice closes");
-  });
-
-  it("omits the slice part once the slice is past its cap", () => {
-    const line = buildBridgeTimeLine({
-      ...OPTS,
-      nowIso: "2026-08-26T16:05:00.000Z",
-    });
-    expect(line).not.toContain("slice closes");
-  });
-
-  it("names the idle-gap close alongside the cap when idleGapMinutes is given (v0.9.1 — the cap alone would promise time the idle gap won't grant)", () => {
-    const line = buildBridgeTimeLine({ ...OPTS, idleGapMinutes: 15 });
-    expect(line).toContain("slice closes in ~18 min at the latest, or after ~15 min of silence");
-  });
-
-  it("keeps the cap-only wording when idleGapMinutes is absent (backwards compatible)", () => {
-    const line = buildBridgeTimeLine(OPTS);
-    expect(line).toContain("slice closes in ~18 min");
-    expect(line).not.toContain("silence");
-  });
-});
-
-describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
+describe("appendContextSuffix (outbound-only tail injection)", () => {
   const LINE = "\n\n[Current time: x]";
 
   it("appends to the LAST user message's string content", () => {
@@ -235,7 +144,7 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
       { role: "assistant", content: "hi" },
       { role: "user", content: "second" },
     ];
-    const out = appendBridgeTimeSuffix(msgs, LINE);
+    const out = appendContextSuffix(msgs, LINE);
     expect(out[2]).toEqual({ role: "user", content: "second" + LINE });
     expect(out[0]).toEqual({ role: "user", content: "first" });
     // Outbound copy only — the input is untouched.
@@ -246,7 +155,7 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
     const msgs: ModelMessage[] = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
     ];
-    const out = appendBridgeTimeSuffix(msgs, LINE);
+    const out = appendContextSuffix(msgs, LINE);
     const content = (out[0] as { content: Array<{ type: string; text?: string }> })
       .content;
     expect(content).toHaveLength(2);
@@ -255,7 +164,7 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
 
   it("is a no-op when the window has no user message", () => {
     const msgs: ModelMessage[] = [{ role: "assistant", content: "hi" }];
-    expect(appendBridgeTimeSuffix(msgs, LINE)).toEqual(msgs);
+    expect(appendContextSuffix(msgs, LINE)).toEqual(msgs);
   });
 });
 

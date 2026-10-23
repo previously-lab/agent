@@ -36,7 +36,7 @@
  * Never throws at the top level: every failure degrades to a skipped item in
  * the result, so the caller is never taken down by a document write.
  */
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -607,10 +607,10 @@ ${manifest.truncated ? "\n(the manifest may be truncated — a missing case show
 Report one decision per case as instructed.`;
 
   const result = await runSubAgent({
+    role: "recall",
     model,
     system: CASE_WRITER_SYSTEM,
     prompt,
-    temperature: 0,
     maxSteps: 50,
     tools: {
       readCase: makeCaseReadTool(batch),
@@ -879,10 +879,10 @@ ${markerBlocks}
 Report one entry per marker as instructed.`;
 
   const result = await runSubAgent({
+    role: "recall",
     model,
     system: SCRIBE_SYSTEM,
     prompt,
-    temperature: 0,
     maxSteps: 50,
     tools: {
       scribeOutput: tool({

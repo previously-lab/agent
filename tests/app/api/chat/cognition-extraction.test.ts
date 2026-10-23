@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractCognition, extractAllAssistantText } from "@/app/api/chat/turn-workflow";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ interface CogStep {
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 function msg(role: "tool", content: Array<Record<string, unknown>>): ModelMessage {
-  return { role, content } as ModelMessage;
+  return { role, content } as unknown as ModelMessage;
 }
 
 function step(opts: {
@@ -231,7 +231,7 @@ describe("extractAllAssistantText", () => {
   function assistant(
     parts: Array<{ type: string; text?: string; [key: string]: unknown }> | string,
   ): ModelMessage {
-    return { role: "assistant", content: parts } as unknown as ModelMessage;
+    return { role: "assistant", content: parts } as unknown as unknown as ModelMessage;
   }
 
   it("returns an empty string when there are no assistant messages", () => {
@@ -266,7 +266,7 @@ describe("extractAllAssistantText", () => {
 
   it("ignores user and tool messages", () => {
     const messages: ModelMessage[] = [
-      { role: "user", content: "what is an apple" } as ModelMessage,
+      { role: "user", content: "what is an apple" } as unknown as ModelMessage,
       assistant("中间话"),
       msg("tool", [
         { type: "tool-result", toolCallId: "tc1", toolName: "recall", output: "x", isError: false },
@@ -283,15 +283,15 @@ describe("extractAllAssistantText", () => {
 
   it("bounded by startIndex — returns only this run's assistant text, never the input history (v0.8 regression)", () => {
     const history: ModelMessage[] = [
-      { role: "user", content: "我们之前聊过公司注册" } as ModelMessage,
+      { role: "user", content: "我们之前聊过公司注册" } as unknown as ModelMessage,
       assistant("之前的整段回复"),
-      { role: "user", content: "继续" } as ModelMessage,
+      { role: "user", content: "继续" } as unknown as ModelMessage,
       assistant("之前回复的尾巴"),
     ];
     // SDK composition of result.messages: [system(0), ...history, ...this run's steps]
-    const system: ModelMessage = { role: "system", content: "SOUL + card" } as ModelMessage;
+    const system: ModelMessage = { role: "system", content: "SOUL + card" } as unknown as ModelMessage;
     const thisRun: ModelMessage[] = [
-      { role: "user", content: "那地址要求呢" } as ModelMessage,
+      { role: "user", content: "那地址要求呢" } as unknown as ModelMessage,
       assistant("中间查证"),
       msg("tool", [
         { type: "tool-result", toolCallId: "tc1", toolName: "recall", output: "x", isError: false },
@@ -309,7 +309,7 @@ describe("extractAllAssistantText", () => {
 
   it("default startIndex (0) still collects all assistant text — existing behavior preserved", () => {
     const messages: ModelMessage[] = [
-      { role: "user", content: "hi" } as ModelMessage,
+      { role: "user", content: "hi" } as unknown as ModelMessage,
       assistant("旧回复"),
       assistant("新回复"),
     ];

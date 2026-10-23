@@ -1,138 +1,31 @@
-/**
- * Sub-agent runner — the shared skeleton every internal sub-agent runs on
- * (v0.9 unified sub-agent architecture, extracted from thinkDeep in
- * src/app/api/agent/tool-executors.ts).
- *
- * One `runSubAgent` call = one bounded model invocation:
- *   - model:      the caller passes a resolved ModelConfig; tool executors can
- *                 resolve the turn's main model via `resolveSubAgentModel(ctx)`
- *                 (`ctx.mainModel ?? resolveMainModelFromConfig()`).
- *   - thinking:   ON by default via `normalizeReasoningEffort(sdk, id, true,
- *                 effort)` (effort defaults to "low"); provider quirks
- *                 (DeepSeek explicit low, Anthropic budgets) are inherited
- *                 from the effort injector. DeepSeek exception: thinking mode
- *                 rejects a forced tool_choice, so a `toolChoice: "required"`
- *                 report goes out as auto + thinking first, and a missing
- *                 report retries once with thinking OFF + required.
- *   - streaming:  `streamText` (not generateText) so `onChunk` captures BOTH
- *                 channels progressively — the reasoning trail (stage
- *                 "thinking") and the answer text (stage "writing") stream LIVE
- *                 as the current line (text after the last newline), and the
- *                 accumulated partial survives a mid-thought timeout abort.
- *                 Lines go to the `data-tool-progress` emitter when a
- *                 `toolCallId` exists, and to the optional `onLine` callback
- *                 for callers outside a tool call (e.g. the Previously Agent
- *                 inside housekeeping) — whichever is wired, both if both are.
- *   - progress:   optional streaming of stage lines onto the shared
- *                 `data-tool-progress` channel (throttled, single reused writer,
- *                 lock released on settle). Degrades to a noop when there is no
- *                 `toolCallId` or no workflow step writable.
- *   - timeout:    NO budget by default (v0.34 修订 A) — a wall-clock budget
- *                 exists only when the caller explicitly passes `timeoutMs`;
- *                 then the SDK's `timeout` option is the PRIMARY hook (it runs
- *                 `AbortSignal.timeout()` in real Node and aborts cleanly) and
- *                 `withStepTimeout` is the backstop so a step NEVER dies
- *                 silently. Timeouts return a structured partial result
- *                 (`timedOut: true`) instead of throwing. The old
- *                 `DEFAULT_TIMEOUT_MS = 30_000` was deleted: a timeout's
- *                 purpose is "end early so a continuation can resume"
- *                 (the turn workflow's timeout continuation), never
- *                 "cut the work off at the wall" — a default that cuts EVERY
- *                 agent at 30s is wrong for every agent.
- *   - steps:      `stopWhen: isStepCount(maxSteps)` when a cap is given.
- *   - output:     the report-tool pattern — the model reports through a
- *                 designated tool whose input is zod-validated into `report`.
- *   - hooks:      optional `prepareStep` passthrough (e.g. flash-search
- *                 swapping in a report-now directive on the final step) and
- *                 `onToolProgress`, which
- *                 turns each sub-agent tool start into a progress line on the
- *                 run's own emitter.
- *
- * Providers that need custom construction (flash-search's DeepSeek
- * Anthropic-compatible endpoint with its response-normalizing fetch) pass a
- * pre-built `languageModel` instead of a ModelConfig; `effortSdk` then picks
- * the SDK family used for the effort mapping.
- *
- * There is deliberately NO `maxOutputTokens` anywhere (project-wide ban): a
- * hard token cap is invisible to the model and silently truncates the
- * report. The one historical exception (flash-search on DeepSeek's
- * Anthropic-compatible endpoint, pinned 16K/4K after a 2026-11 truncation)
- * was removed 2026-10-14 — a probe that day showed the endpoint's absent
- * max_tokens no longer falls back to a small default (a thinking-enabled
- * call with no budgets ran to end_turn after 38K output tokens).
- * The runner never throws — every failure is a structured `{ ok: false }`.
- */
-import {
-  isStepCount,
-  streamText,
-  type LanguageModel,
-  type PrepareStepFunction,
-  type ToolSet,
-} from "ai";
-import type { UIMessageChunk } from "ai";
+/** Shared native DeepSeek sub-agent: fixed role profile, structured reports and partial progress. */
+import { streamText } from "@/lib/deepseek/generate";
+import { isStepCount } from "@/lib/deepseek/tools";
+import type { DeepSeekRole, PrepareStepFunction, ToolSet } from "@/lib/deepseek/types";
+import type { UIMessageChunk } from "@/lib/chat/protocol";
 import { getWritable } from "workflow";
 import type { z } from "zod";
-import { createModel } from "@/lib/models/provider";
-import {
-  normalizeReasoningEffort,
-  type ProviderOptions,
-} from "@/lib/models/effort-injector";
-import { resolveMainModelFromConfig } from "@/lib/models/resolve";
-import type { ModelConfig } from "@/lib/models/registry";
-import type { ProviderSdk } from "@/lib/models/providers";
+import { FIXED_MODEL, type ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { readSelfSop } from "@/lib/evolution/store";
 import type { SelfAgent } from "@/lib/evolution/paths";
-import {
-  shouldEmitProgress,
-  type ProgressLine,
-  type ProgressWriteState,
-  type ToolProgressStage,
-} from "@/lib/chat/progress-throttle";
-
-// ─── Model resolution ──────────────────────────────────────────────────────
-
-/**
- * Resolve the model for a sub-agent from a tool context: the turn's main
- * model when it flowed through the context (shared construction with the main
- * agent — no per-call config resolution), otherwise resolved from user config.
- */
-export async function resolveSubAgentModel(ctx?: {
-  mainModel?: ModelConfig;
-}): Promise<ModelConfig> {
-  return ctx?.mainModel ?? (await resolveMainModelFromConfig());
-}
-
-// ─── Streaming progress ────────────────────────────────────────────────────
-
-/** Where a sub-agent's progress lines go. No `toolCallId` → fully noop. */
+import { shouldEmitProgress, type ProgressLine, type ProgressWriteState, type ToolProgressStage } from "@/lib/chat/progress-throttle";
+export async function resolveSubAgentModel(_ctx?: { mainModel?: ModelConfig }): Promise<ModelConfig> { return FIXED_MODEL; }
 export interface SubAgentProgressRef {
-  /** Present only when the sub-agent runs as a tool inside a workflow step. */
+
   toolCallId?: string;
-  /** Tool name carried in the progress chunk data. */
+
   toolName: string;
 }
 
 export interface ProgressEmitter {
-  /** Emit the current single line (throttled; latest line wins on the client). */
+
   emit(line: string, stage: ToolProgressStage): void;
-  /** Flush the final line and release the writer lock. ALWAYS call on settle. */
+
   close(finalLine?: string, stage?: ToolProgressStage): void;
 }
 
-/**
- * Create a throttled `data-tool-progress` emitter for one sub-agent run.
- * Mirrors thinkDeep's discipline: a single reused `getWritable()` writer (a
- * fresh pipeline per write failed silently on long runs), throttled via
- * `shouldEmitProgress` (the server pump drains ~55-60 chunks/sec — writing
- * every token backs up a queue that drains after the turn renders), and the
- * lock always released so the step's HTTP request can terminate. The client
- * merges chunks by (type, id = `tool-<toolCallId>`) into one part, so the
- * write cadence here is decoupled from delivery.
- *
- * Degrades to a noop when there is no toolCallId (not a tool call) or when
- * `getWritable()` throws (not inside a workflow step — e.g. unit tests).
- */
+
 export function createProgressEmitter(
   ref?: SubAgentProgressRef,
 ): ProgressEmitter {
@@ -191,12 +84,7 @@ export function createProgressEmitter(
 
 // ─── Report extraction ─────────────────────────────────────────────────────
 
-/**
- * Extract a sub-agent's structured report: find the designated report tool
- * call in the stream's final tool calls and zod-validate its input. Returns undefined
- * when the tool was never called or the input fails validation — the caller
- * then applies its own degradation (empty analysis, no merges, …).
- */
+
 export function extractToolReport<S extends z.ZodType>(
   toolCalls: ReadonlyArray<{ toolName: string; input: unknown }> | undefined,
   reportToolName: string,
@@ -210,420 +98,71 @@ export function extractToolReport<S extends z.ZodType>(
 
 // ─── Runner ────────────────────────────────────────────────────────────────
 
-/** Detect the SDK `timeout` abort — `AbortSignal.timeout()` surfaces as "AbortError". */
-function isTimeoutAbort(err: unknown): boolean {
-  return (
-    err !== null &&
-    typeof err === "object" &&
-    "name" in err &&
-    (err as { name?: unknown }).name === "AbortError"
-  );
-}
+
 
 export interface RunSubAgentOptions<Report> {
-  /**
-   * The resolved model to run on (see resolveSubAgentModel). Omit only when
-   * `languageModel` carries a pre-built instance.
-   */
   model?: ModelConfig;
-  /**
-   * Pre-built model instance — bypasses `createModel(model)` when the provider
-   * needs custom construction (e.g. flash-search's DeepSeek Anthropic-
-   * compatible endpoint with its response-normalizing fetch).
-   */
-  languageModel?: LanguageModel;
-  /**
-   * SDK family for the effort mapping when `languageModel` bypasses
-   * `model.sdk` (the provider behind a pre-built model may speak a different
-   * protocol than the model's native SDK family).
-   */
-  effortSdk?: ProviderSdk;
-  /** Static system prompt — build with `buildSubAgentSystem(role)` from
-   * ./prompts so every call shares the same prefix (prompt-cache hits).
-   * Everything per-call (task data, current time, signals) goes in `prompt`.
-   */
-  system?: string;
-  /**
-   * self/ SOP spawn loading (v0.19 §C.2): when set, the engineering layer
-   * reads `memory/self/<name>/index.md` (legacy `agent-playbooks/<name>.md`
-   * fallback) and appends its FULL text to the system prompt — forced loading
-   * is the structure that keeps SOPs from becoming dead paper. No length cap:
-   * the length discipline is the SOP writer's. Absent/blank SOP → no block.
-   */
-  selfSop?: SelfAgent;
-  /** The dynamic user prompt: task data, current time, signals. */
-  prompt: string;
-  /** Tool set — at minimum the report tool the agent reports through. */
-  tools: ToolSet;
-  /** Tool choice — the report-only agents pass "required". Default "auto". */
+  role?: DeepSeekRole;
+  system?: string; selfSop?: SelfAgent; prompt: string; tools: ToolSet;
   toolChoice?: "auto" | "required" | "none";
-  /** Name of the report tool whose input is extracted + validated. */
-  reportToolName?: string;
-  /** Zod schema the report tool's input is validated against. */
-  reportSchema?: z.ZodType<Report>;
-  /** Hard step cap (`stopWhen: isStepCount(maxSteps)`). Uncapped when omitted. */
-  maxSteps?: number;
-  /** Per-step override passthrough (AI SDK native) — e.g. flash-search
-   *  swapping in a report-now directive when the step budget runs out. */
+  reportToolName?: string; reportSchema?: z.ZodType<Report>; maxSteps?: number;
   prepareStep?: PrepareStepFunction<ToolSet>;
-  /**
-   * Map each sub-agent tool start to a progress line, streamed live on the
-   * run's `data-tool-progress` emitter. Return undefined to skip a tool.
-   */
-  onToolProgress?: (toolCall: {
-    toolName: string;
-    input: unknown;
-  }) => ProgressLine | undefined;
-  /**
-   * Wall-clock budget in ms — ONLY installed when explicitly passed (v0.34
-   * 修订 A: there is no default; an omitted budget means NO `timeout` hook
-   * and NO `withStepTimeout` backstop). When set: SDK timeout hook +
-   * withStepTimeout backstop, partial content survives the abort.
-   */
+  onToolProgress?: (toolCall: {toolName: string; input: unknown}) => ProgressLine | undefined;
   timeoutMs?: number;
-  /** Reasoning effort — thinking is ON by default. Default "low". */
-  effort?: "low" | "medium" | "high";
-  /**
-   * Provider-specific options merged OVER the effort mapping (one level deep
-   * per provider namespace: a caller's `anthropic.thinking` replaces the
-   * mapped `anthropic.thinking` wholesale). Applied only on thinking-ON
-   * attempts — the thinking-disabled retry keeps its plain disable shape.
-   */
-  providerOptions?: ProviderOptions;
-  /** Thinking toggle. Default ON. A forced-report call that hit the DeepSeek
-   *  thinking×tool_choice wall is retried with this OFF automatically. */
-  thinking?: boolean;
-  /** Sampling temperature. Default 0.1 (structured metadata, not prose). */
-  temperature?: number;
-  /** Optional progress streaming (noop without a toolCallId). */
-  progress?: SubAgentProgressRef;
-  /** Stage line emitted at run start (when progress is live). */
-  startLine?: string;
-  /**
-   * Direct live-line callback for callers that do NOT run as a tool call (no
-   * `toolCallId` — e.g. the Previously Agent inside housekeeping, which wires
-   * this onto the `data-evolution` channel). Receives the CURRENT line (text
-   * after the last newline) on every delta, UNTHROTTLED — the caller owns
-   * throttling. Coexists with the `progress` emitter: whichever is wired gets
-   * the lines, both if both are.
-   */
+  progress?: SubAgentProgressRef; startLine?: string;
   onLine?: (line: string, stage: "thinking" | "writing") => void;
 }
-
 export interface SubAgentResult<Report> {
-  /** The model call completed (report may still be absent — check `report`). */
-  ok: boolean;
-  /** The validated report-tool input, when the model reported and it parsed. */
-  report?: Report;
-  /** Any generated text (usually empty for report-tool agents). */
-  text: string;
-  /** The thinking trail, when the provider returned one. */
-  reasoning?: string;
-  /** Citation sources gathered across steps (provider-executed search tools). */
-  sources?: Array<{ sourceType: string; url?: string; title?: string }>;
-  /** True when the run hit its wall-clock budget (ok is false). */
-  timedOut?: boolean;
-  /** Human-readable failure reason (ok is false). */
-  error?: string;
+  ok: boolean; report?: Report; text: string; reasoning?: string;
+  sources?: Array<{sourceType: string; url?: string; title?: string}>;
+  timedOut?: boolean; error?: string;
 }
-
-/** Backstop grace after the SDK timeout hook should have fired. */
-const BACKSTOP_GRACE_MS = 3_000;
-
-/** Merge caller provider options OVER the effort mapping — one level deep per
- *  provider namespace (the caller's `anthropic.thinking` replaces the mapped
- *  `anthropic.thinking` wholesale; sibling keys survive). */
-function mergeProviderOptions(
-  base: ProviderOptions | undefined,
-  override: ProviderOptions,
-): ProviderOptions {
-  const out: ProviderOptions = { ...(base ?? {}) };
-  for (const [ns, value] of Object.entries(override)) {
-    out[ns] = { ...(out[ns] ?? {}), ...value };
-  }
-  return out;
-}
-
-/**
- * Run one bounded sub-agent invocation. NEVER throws: timeouts and errors
- * return structured `{ ok: false, timedOut?, error }` results so the caller's
- * degradation path (empty analysis / no merges / skip) stays in control.
- */
-export async function runSubAgent<Report = unknown>(
-  opts: RunSubAgentOptions<Report>,
-): Promise<SubAgentResult<Report>> {
-  const {
-    model,
-    languageModel,
-    effortSdk,
-    system,
-    prompt,
-    tools,
-    toolChoice = "auto",
-    reportToolName,
-    reportSchema,
-    maxSteps,
-    prepareStep,
-    onToolProgress,
-    timeoutMs,
-    effort = "low",
-    thinking = true,
-    temperature = 0.1,
-    providerOptions: providerOptionsOverride,
-    progress,
-    startLine,
-    onLine,
-    selfSop,
-  } = opts;
-
-  if (!model && !languageModel) {
-    return {
-      ok: false,
-      text: "",
-      error: "runSubAgent requires a `model` or a pre-built `languageModel`.",
-    };
-  }
-
-  // self/ SOP spawn loading (§C.2) — FULL text appended to the system prompt,
-  // once per run; a read failure degrades to "no SOP block", never to a
-  // failed spawn.
-  const sop = selfSop ? await readSelfSop(selfSop).catch(() => null) : null;
-  const effectiveSystem =
-    sop?.trim()
-      ? `${system ?? ""}\n\n## Your SOP (self/${selfSop}/index.md — follow it unless it conflicts with the task)\n\n${sop.trim()}`
-      : system;
-
-  const emitter = createProgressEmitter(progress);
-  if (startLine) emitter.emit(startLine, "running");
-
-  // Thinking is requested by default; the injector owns provider-specific
-  // mapping. Computed PER ATTEMPT — the DeepSeek retry below flips it off.
-  //
-  // DeepSeek constraint (probed 2026-08-28): thinking mode rejects a FORCED
-  // tool_choice with a 400 ("Thinking mode does not support this
-  // tool_choice"), which surfaces as the AI SDK's "No output generated" —
-  // thinking-ON + auto works, thinking-OFF + required works. So a required
-  // report on DeepSeek goes out as auto + thinking first, and a missing
-  // report retries once with thinking off + required. A forced-report agent
-  // must never hard-fail on this provider quirk (the direction agent's
-  // bootstrap otherwise locks itself out forever).
-  const sdk = effortSdk ?? model?.sdk;
-  const deepseekDowngrade =
-    thinking && sdk === "deepseek" && toolChoice === "required";
-  const firstChoice = deepseekDowngrade ? "auto" : toolChoice;
-
-  // Accumulated by onChunk — the written answer (text-delta) and the thinking
-  // trail (reasoning-delta). Both are returned on completion AND interruption
-  // (thinkDeep's partial semantics: a timeout keeps whatever was streamed).
-  // Reset per attempt.
-  let text = "";
-  let reasoning = "";
-
-  // Live progress: forward the CURRENT line (text after the last newline) so
-  // the client shows a growing single line that resets at line boundaries.
-  // The emitter throttles internally; `onLine` is the raw per-delta callback
-  // for non-tool callers, which own their own throttling.
+export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Report>): Promise<SubAgentResult<Report>> {
+  const sop = opts.selfSop ? await readSelfSop(opts.selfSop).catch(() => null) : null;
+  const sopSystem = sop?.trim() ? (opts.system ?? "") + `\n\n## Your SOP (self/${opts.selfSop}/index.md — follow it unless it conflicts with the task)\n\n` + sop.trim() : opts.system;
+  const system = opts.reportToolName ? (sopSystem ?? "") + `\n\nFinish by calling ${opts.reportToolName} with the structured report. Do not substitute a prose-only answer for that report.` : sopSystem;
+  const emitter = createProgressEmitter(opts.progress);
+  if (opts.startLine) emitter.emit(opts.startLine, "running");
+  let text = "", reasoning = "";
   const pushLine = () => {
     const source = text || reasoning;
     if (!source) return;
     const line = source.slice(source.lastIndexOf("\n") + 1);
-    const stage: "thinking" | "writing" = text ? "writing" : "thinking";
-    emitter.emit(line, stage);
-    onLine?.(line, stage);
+    const stage = text ? "writing" : "thinking";
+    emitter.emit(line, stage); opts.onLine?.(line, stage);
   };
-
-  /** The final stream promises, unwrapped into one plain result object. */
-  interface StreamFinal {
-    text: string;
-    toolCalls: ReadonlyArray<{ toolName: string; input: unknown }>;
-    reasoningText: string | undefined;
-    sources: Array<{ sourceType: string; url?: string; title?: string }>;
-  }
-
-  const run = async (
-    callToolChoice: "auto" | "required" | "none",
-    callThinking: boolean,
-  ): Promise<StreamFinal> => {
-    text = "";
-    reasoning = "";
-    const effortOptions = normalizeReasoningEffort(
-      sdk,
-      model?.id ?? "prebuilt",
-      callThinking,
-      effort,
-    );
-    // Caller overrides apply only on thinking-ON attempts — a thinking-off
-    // retry keeps its plain disable shape (merging a thinking override there
-    // would resurrect the DeepSeek thinking × forced-choice 400).
-    const providerOptions =
-      callThinking && providerOptionsOverride
-        ? mergeProviderOptions(effortOptions, providerOptionsOverride)
-        : effortOptions;
-    // streamText (not generateText) so onChunk captures BOTH channels
-    // progressively — never lost, even mid-thought.
-    const stream = await streamText({
-      model: languageModel ?? createModel(model!),
-      system: effectiveSystem,
-      prompt,
-      tools,
-      toolChoice: callToolChoice,
-      // A thinking call rejects sampling params: the provider answers with
-      // "temperature is not supported when thinking is enabled" and ignores
-      // it, so the value would be a lie in the request. The thinking-off
-      // retry (the DeepSeek forced-report path) keeps the deterministic
-      // temperature.
-      ...(callThinking ? {} : { temperature }),
-      providerOptions,
-      ...(maxSteps !== undefined ? { stopWhen: isStepCount(maxSteps) } : {}),
-      ...(prepareStep ? { prepareStep } : {}),
-      ...(onToolProgress
-        ? {
-            onToolExecutionStart: ({ toolCall }) => {
-              const line = onToolProgress({
-                toolName: toolCall.toolName,
-                input: toolCall.input,
-              });
-              if (line?.line) emitter.emit(line.line, line.stage);
-            },
-          }
-        : {}),
-      // The SDK timeout hook — installed ONLY for an explicit budget (修订 A):
-      // when set, it is PRIMARY: aborts the stream cleanly at the deadline
-      // (AbortSignal.timeout), surfacing as AbortError.
-      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
-      onChunk({ chunk }) {
-        if (chunk.type === "text-delta") {
-          text += chunk.text;
-          pushLine();
-        } else if (chunk.type === "reasoning-delta") {
-          reasoning += chunk.text;
-          pushLine();
-        }
+  const run = async () => {
+    const stream = await streamText({ role: opts.role ?? "recall", system, prompt: opts.prompt,
+      tools: opts.tools, toolChoice: opts.toolChoice === "none" ? "none" : "auto", thinking: true,
+      ...(opts.maxSteps !== undefined ? {stopWhen: isStepCount(opts.maxSteps)} : {}),
+      ...(opts.timeoutMs !== undefined ? {timeout: opts.timeoutMs} : {}),
+      prepareStep: opts.prepareStep,
+      onToolExecutionStart: ({toolCall}) => {
+        const line = opts.onToolProgress?.(toolCall);
+        if (line?.line) emitter.emit(line.line, line.stage);
+      },
+      onChunk: ({chunk}) => {
+        if (chunk.type === "text-delta") text += chunk.text ?? chunk.delta ?? "";
+        else if (chunk.type === "reasoning-delta") reasoning += chunk.text ?? chunk.delta ?? "";
+        pushLine();
       },
     });
-    // Provider warnings (unsupported settings, silent downgrades) never throw —
-    // log them so a quiet degradation is visible in the server log.
-    void Promise.resolve(stream.warnings)
-      .then((w) => {
-        if (w?.length) {
-          console.warn(
-            `[sub-agent] model=${model?.id ?? "prebuilt"} stream warnings:`,
-            w,
-          );
-        }
-      })
-      .catch(() => {});
-    const [finalText, toolCalls, reasoningText, sources] = await Promise.all([
-      stream.text,
-      stream.toolCalls,
-      stream.reasoningText,
-      stream.sources,
-    ]);
-    return {
-      text: finalText ?? "",
-      toolCalls,
-      reasoningText: reasoningText ?? undefined,
-      sources: (sources ?? []) as StreamFinal["sources"],
+    const [finalText, calls, finalReasoning, sources] = await Promise.all([stream.text, stream.toolCalls, stream.reasoningText, stream.sources]);
+    return { ok: true as const, text: finalText ?? "", reasoning: finalReasoning,
+      report: opts.reportToolName && opts.reportSchema ? extractToolReport(calls, opts.reportToolName, opts.reportSchema) : undefined,
+      ...(sources?.length ? {sources} : {}),
     };
   };
-
   try {
-    // withStepTimeout — BACKSTOP, installed ONLY with an explicit budget
-    // (修订 A): if the SDK abort somehow doesn't surface, the step still
-    // returns a structured result before the platform wall. With no budget
-    // the run goes to its natural end — the step cap and the platform wall
-    // are the bounds.
-    const res =
-      timeoutMs === undefined
-        ? { ok: true as const, result: await run(firstChoice, thinking) }
-        : await withStepTimeout(
-            () => run(firstChoice, thinking),
-            timeoutMs + BACKSTOP_GRACE_MS,
-          );
-    if (!res.ok) {
-      // Backstop fired — return whatever was accumulated before the cutoff.
-      // Reachable only on the wrapped path, where timeoutMs is defined.
-      return {
-        ok: false,
-        timedOut: true,
-        text,
-        ...(reasoning ? { reasoning } : {}),
-        error: `Sub-agent did not finish within ${Math.round(timeoutMs! / 1000)}s.`,
-      };
-    }
-    let result = res.result!;
-    let report =
-      reportToolName && reportSchema
-        ? extractToolReport(result.toolCalls, reportToolName, reportSchema)
-        : undefined;
-    if (
-      deepseekDowngrade &&
-      reportToolName &&
-      reportSchema &&
-      !report
-    ) {
-      // The auto-choice attempt ended without the required report (the model
-      // answered in prose). Retry once with the other known-good DeepSeek
-      // combo: thinking OFF + tool_choice required — the report is guaranteed
-      // by the provider, at the cost of the reasoning trail.
-      console.warn(
-        `[sub-agent] no ${reportToolName} report on DeepSeek auto choice — retrying with thinking off + required`,
-      );
-      const retry =
-        timeoutMs === undefined
-          ? { ok: true as const, result: await run("required", false) }
-          : await withStepTimeout(
-              () => run("required", false),
-              timeoutMs + BACKSTOP_GRACE_MS,
-            );
-      if (retry.ok) {
-        result = retry.result!;
-        report = extractToolReport(result.toolCalls, reportToolName, reportSchema);
-      }
-    }
-    return {
-      ok: true,
-      report,
-      text: result.text,
-      reasoning: result.reasoningText,
-      ...(result.sources.length
-        ? { sources: result.sources as SubAgentResult<Report>["sources"] }
-        : {}),
-    };
-  } catch (err) {
-    if (isTimeoutAbort(err)) {
-      // An abort surfaced. With a budget this is the SDK timeout hook —
-      // return the partial content accumulated before the abort (thinkDeep
-      // partial semantics). Without one it is a provider-side abort — still
-      // a timeout-shaped partial, never a throw.
-      return {
-        ok: false,
-        timedOut: true,
-        text,
-        ...(reasoning ? { reasoning } : {}),
-        error:
-          timeoutMs !== undefined
-            ? `Sub-agent did not finish within ${Math.round(timeoutMs / 1000)}s.`
-            : "Sub-agent aborted mid-stream.",
-      };
-    }
-    return {
-      ok: false,
-      text: "",
-      error: err instanceof Error ? err.message : "Sub-agent failed",
-    };
+    if (opts.timeoutMs === undefined) return await run();
+    const result = await withStepTimeout(run, opts.timeoutMs + 3000);
+    if (result.ok) return result.result!;
+    return {ok:false, timedOut:true, text, reasoning, error:"Sub-agent deadline exceeded"};
+  } catch(error) {
+    const timedOut = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+    return {ok:false, text, reasoning, ...(timedOut ? {timedOut:true} : {}), error:timedOut && opts.timeoutMs !== undefined ? `Sub-agent did not finish within ${Math.round(opts.timeoutMs / 1000)}s.` : error instanceof Error ? error.message : "Sub-agent failed"};
   } finally {
-    // Push the final line so the progress box settles on the real last line
-    // (the last throttled write may have been a few lines behind), then
-    // release the writer lock so the step's HTTP request can terminate.
     const source = text || reasoning;
-    if (source) {
-      emitter.close(
-        source.slice(source.lastIndexOf("\n") + 1),
-        text ? "writing" : "thinking",
-      );
-    } else {
-      emitter.close();
-    }
+    emitter.close(source ? source.slice(source.lastIndexOf("\n")+1) : undefined, text ? "writing" : "thinking");
   }
 }

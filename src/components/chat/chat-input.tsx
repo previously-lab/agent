@@ -6,7 +6,6 @@ import { ArrowUp, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ModelSelector } from "./model-selector";
 import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
@@ -26,8 +25,6 @@ interface ChatInputProps {
   // stay in sync. ChatInput renders the control, ChatPage persists.
   // Thinking is always ON at low effort (pinned server-side in start-turn.ts);
   // there is no thinking/effort UI anymore.
-  currentModelId: string;
-  onModelChange: (modelId: string) => void;
   /**
    * The COMPACT form: one row of controls, no textarea, no attachments.
    *
@@ -86,8 +83,6 @@ export function ChatInput({
   onSubmit,
   isLoading,
   onStop,
-  currentModelId,
-  onModelChange,
   collapsed = false,
   onExpand,
 }: ChatInputProps) {
@@ -283,10 +278,6 @@ export function ChatInput({
             own trigger sit in the row as if the wrapper were not there (and
             the selector itself renders nothing when there is ≤1 model). */}
         <div className="hidden md:contents">
-          <ModelSelector
-            currentModelId={currentModelId}
-            onModelChange={onModelChange}
-          />
         </div>
         {/* Expand — the ledge's one way up, through the panel's own
             transition table. */}
@@ -444,10 +435,6 @@ export function ChatInput({
             in this row duplicated the control (two buttons shared one
             aria-label, one of them zero-sized under the bar's `hidden`). */}
         <div className="flex shrink-0 items-center gap-1.5">
-          <ModelSelector
-            currentModelId={currentModelId}
-            onModelChange={onModelChange}
-          />
           {/* Send / stop coexist mid-run (v0.30 §4.1): the stop key is the
               secondary, send keeps the outer corner and stays usable — the
               message queues into the live episode. */}

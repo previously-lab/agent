@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 
 // Current routes: chat lives at the locale root (/), with settings as the only
 // sub-route. Docs moved to the official site — in-app /docs URLs are 308

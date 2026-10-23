@@ -31,7 +31,7 @@
  * throws — returns an empty analysis on any failure so housekeeping degrades
  * gracefully (no marking, no hint → engineering fallbacks kick in).
  */
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -268,6 +268,7 @@ function emptyAnalysis(): TurnAnalysis {
 
 export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis> {
   const result = await runSubAgent({
+    role: "recall",
     model: input.model,
     system: ANALYZER_SYSTEM,
     prompt: buildPrompt(input),

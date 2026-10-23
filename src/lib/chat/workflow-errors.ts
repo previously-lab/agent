@@ -2,12 +2,12 @@
  * Workflow error classification — the enumerative, keyed-on-error handling for
  * the chat turn's `agent.stream()` boundary.
  *
- * `@ai-sdk/workflow` does NOT import the `@workflow/errors` SDK classes; it only
- * special-cases `AbortError` and bubbles everything else up to the workflow
- * body's catch block. So this module is where the app decides what an error
- * means and what to do:
+ * Native HTTP dispatch owns model retry budgets. This boundary separates
+ * exhausted provider failures from Workflow infrastructure redelivery and
+ * platform-timeout continuation. Legacy error shapes remain readable for
+ * already-started runs.
  *
- *   abort     → client cancelled / SDK abort — end the turn gracefully.
+ *   abort     → client cancelled / request abort — end the turn gracefully.
  *   transient → infrastructure blip (5xx, transport, throttle, replay
  *               divergence) — rethrow so the workflow queue redelivers/retries.
  *   timeout   → a step was platform-killed or a deadline exceeded — the main
@@ -160,7 +160,12 @@ function classifyByEvidence(err: unknown): ClassifiedWorkflowError {
     return { kind: "timeout", message };
   }
 
-  // ── Structured evidence: AI SDK APICallError carries `statusCode` ────────
+  // Native model transport owns bounded retries. Workflow redelivery must not multiply them.
+  if (name === "DeepSeekError") {
+    return {kind:"model",message,userMessage:`The DeepSeek call failed: ${displayMessage(message)}`};
+  }
+
+  // ── Structured evidence: provider errors carry `statusCode` ────────
   // 429 / 5xx / 409 → transient (queue redelivers). 408 → timeout. Every
   // other 4xx is a deterministic model/request failure — surface it.
   const statusCode =

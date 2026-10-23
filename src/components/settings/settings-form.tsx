@@ -53,9 +53,7 @@ export function SettingsForm({
 
   /** Persist the given slicing values and toast the outcome. */
   const save = async (next: SlicingConfig) => {
-    // Model selection lives in the chat UI (model selector) and is persisted
-    // to config.json — intentionally omitted here so a settings save never
-    // overwrites it.
+    // Only slicing is editable; the server owns model and reasoning profiles.
     const res = await saveUserConfig({ slicing: next });
     if (res.ok) toast.success(tRef.current("config.saved"));
     else toast.error(tRef.current("config.saveFailed"));

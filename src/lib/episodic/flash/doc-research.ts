@@ -22,7 +22,7 @@
  *
  * Never throws: failures degrade to skipped items in the result.
  */
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -206,10 +206,10 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
   };
 
   const result = await runSubAgent({
+    role: "recall",
     model,
     system: RESEARCH_SYSTEM,
     prompt,
-    temperature: 0,
     maxSteps: 15,
     tools,
     toolChoice: "auto",

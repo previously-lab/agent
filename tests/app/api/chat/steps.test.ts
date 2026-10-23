@@ -231,37 +231,6 @@ vi.mock("@/lib/chat/hq-log", () => ({
   readReflectionLog: async () => ({ entries: [], available: true }),
 }));
 
-
-// Phase-level bridge outsourcing — runHousekeepingBridge /
-// applyBridgeCardEvolution are replaced with fakes (the report under test is
-// injected verbatim); the report adapter stays REAL.
-const bridgePhases = vi.hoisted(() => ({
-  runHousekeepingBridge: vi.fn(),
-  applyBridgeCardEvolution: vi.fn(
-    async (_input: {
-      card: string;
-      sliceId: string;
-      today: string;
-      reason: string;
-      mutations: unknown[];
-    }): Promise<{
-      ran: boolean;
-      changed: boolean;
-      droppedRecent: number;
-      note: string;
-      summary?: string;
-    }> => ({ ran: true, changed: true, droppedRecent: 0, note: "applied", summary: "card moved" }),
-  ),
-}));
-vi.mock("@/lib/bridge-phases", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/bridge-phases")>();
-  return {
-    ...actual,
-    runHousekeepingBridge: bridgePhases.runHousekeepingBridge,
-    applyBridgeCardEvolution: bridgePhases.applyBridgeCardEvolution,
-  };
-});
-
 const slicer = vi.hoisted(() => ({
   checkSliceAge: vi.fn((_startIso: string, _maxMs: number) => false),
   checkIdleGap: vi.fn((_lastTurnIso: string, _maxMs: number) => false),
@@ -295,8 +264,8 @@ vi.mock("@/lib/evolution/direction-agent", async (importOriginal) => {
 });
 
 // Mock AI SDK for any sub-agent going through the unified runner.
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
+vi.mock("@/lib/deepseek/generate", async () => {
+  const actual = await vi.importActual("@/lib/deepseek/generate");
   return {
     ...actual,
     generateText: vi.fn(async () => ({ toolCalls: [] })),
@@ -309,12 +278,6 @@ vi.mock("ai", async () => {
     })),
   };
 });
-
-vi.mock("@ai-sdk/openai-compatible", () => ({
-  createOpenAICompatible: vi.fn(
-    () => (id: string) => ({ modelId: id }),
-  ),
-}));
 
 // The run's writable: collects everything written for assertions.
 const workflowMock = vi.hoisted(() => {
@@ -456,7 +419,7 @@ function hkFor(slice: TimeSlice): HousekeepingResult & EntryReckoning {
     sliceHeadBlock: "",
     identityPrompt: "",
     analysis: null,
-    bridgeReport: null,
+
     evidenceAttachments: null,
     previouslyUpdate: null,
     sliceOnDisk: true,
@@ -703,7 +666,7 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     expect(episodic.createSlice).not.toHaveBeenCalled();
     // No evolution here — that is the post-reply explicit channel (序 6), and
     // this message carries no explicit instruction anyway.
-    expect(bridgePhases.runHousekeepingBridge).not.toHaveBeenCalled();
+
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
     // No projection writes / catalog reads on the turn path.
     expect(episodic.weaveTimeline).not.toHaveBeenCalled();
@@ -1190,100 +1153,6 @@ describe("explicit-instruction channel (序 6)", () => {
     expect(episodic.analyzeTurn).not.toHaveBeenCalled();
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
-  });
-});
-
-describe("entry beat — bridge (outsourced) path", () => {
-  function bridgeInput(msg = "记住这个") {
-    const base = makeInput(msg, {
-      modelMessages: [
-        { role: "assistant", content: "reply" },
-      ] as unknown as TurnInput["modelMessages"],
-    });
-    return {
-      ...base,
-      model: "bridge/claude",
-      modelConfig: { ...base.modelConfig, id: "bridge/claude", sdk: "bridge" as const },
-    };
-  }
-
-  function setupActiveSlice() {
-    fakeDisk.persistSlice(makeSlice({
-      turns: [
-        { timestamp: "t0", role: "user", content: "old" },
-        { timestamp: "t1", role: "agent", content: "reply" },
-      ],
-    }));
-  }
-
-  function makeReport(overrides: Record<string, unknown> = {}) {
-    return {
-      analysis: {
-        semantic_hint: [],
-        intent: "chat",
-        memory_worthy: true,
-        memory_update: "把这条记下来",
-        emotional_signal: { intensity: "none", register: "neutral", note: "" },
-      },
-      closed_marking: null,
-      evolution: {
-        worth: true,
-        reason: "user asked",
-        mutations: [{ op: "addNow", content: "prefers concrete answers" }],
-      },
-      ...overrides,
-    };
-  }
-
-  it("ONE bridge call with the minimal payload (A1) — no dry slices / merge candidates / signals / playbooks / direction", async () => {
-    setupActiveSlice();
-    bridgePhases.runHousekeepingBridge.mockResolvedValue({
-      ok: true,
-      report: makeReport(),
-    });
-
-    const input = bridgeInput();
-    const hk = await housekeeping(input);
-    await runExplicitEvolution(input, hk);
-
-    expect(bridgePhases.runHousekeepingBridge).toHaveBeenCalledOnce();
-    const payload = bridgePhases.runHousekeepingBridge.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload.userMessage).toBe("记住这个");
-    expect(payload.sliceId).toBe("2026-07-14-0900");
-    // The retired payload fields are simply absent.
-    for (const k of ["drySlices", "strandsForMerge", "signals", "playbookTriggerBuckets", "playbooks", "directionContent", "selfModelContent", "directionMode"]) {
-      expect(payload[k]).toBeUndefined();
-    }
-    // The explicit update's mutations apply through the card-session machinery.
-    expect(bridgePhases.applyBridgeCardEvolution).toHaveBeenCalledOnce();
-    const applyArgs = bridgePhases.applyBridgeCardEvolution.mock.calls[0][0] as {
-      reason: string;
-      mutations: unknown[];
-    };
-    expect(applyArgs.reason).toBe("user asked");
-    expect(applyArgs.mutations).toHaveLength(1);
-  });
-
-  it("a failed bridge call degrades to the deterministic path — warning on the card, no evolution", async () => {
-    setupActiveSlice();
-    bridgePhases.runHousekeepingBridge.mockResolvedValue({
-      ok: false,
-      reason: "bridge-not-found",
-    });
-
-    const input = bridgeInput();
-    const hk = await housekeeping(input);
-    await runExplicitEvolution(input, hk);
-
-    expect(bridgePhases.applyBridgeCardEvolution).not.toHaveBeenCalled();
-    const cardFrames = workflowMock.written.filter(
-      (c) =>
-        c.type === "data-phase" &&
-        (c.data as { phase?: string }).phase === "bridgeHousekeeping",
-    );
-    expect(
-      cardFrames.some((c) => (c.data as { warning?: string }).warning === "bridge-not-found"),
-    ).toBe(true);
   });
 });
 

@@ -6,9 +6,9 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 A Next.js web application where a cloud LLM agent reads and writes repository state through a chat interface. The agent runs server-side and operates only on whitelisted data directories (`memory/`, `tasks/`, `sessions/`).
 
-Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/chat/turn-workflow.ts`), streamed back through `run.readable` and resumable after a dropped connection. The agent loop is AI SDK 7's `WorkflowAgent` (`@ai-sdk/workflow`): the chat turn's agent layer lives in `src/app/api/agent/` (factories, tool definitions, and standalone `"use step"` tool executors), so every LLM call and every tool call is an individually durable, auto-retried workflow step. GitHub files remain the single source of truth for memory — Workflow is only the execution container, never a store. There is intentionally no database/KV; cross-device reconnect is deliberately not implemented because it would require one.
+Every chat turn runs inside a durable Vercel Workflow run (`src/app/api/chat/turn-workflow.ts`), streamed through `run.readable` and resumable after a dropped connection. The native DeepSeek loop (`src/lib/deepseek/`) checkpoints each model call and standalone tool executor separately. HTTP retries are bounded before output; model steps do not retry after emitting output. GitHub files remain the source of truth for memory. Workflow carries execution checkpoints, not a second memory store; there is no database/KV.
 
-**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · Vercel Workflow · octokit · sonner · streamdown
+**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · DeepSeek native API · Vercel Workflow · octokit · sonner · streamdown
 
 ## Project Architecture
 
@@ -70,7 +70,7 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 
 Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full details.
 
-1. **`ChatPage`** (`chat-page.tsx`) — Main container, useChat hook (WorkflowChatTransport), unified message stream
+1. **`ChatPage`** (`chat-page.tsx`) — Main container, useDurableChat hook (application-owned SSE transport), unified message stream
 2. **`ChatMessage`** — Classifies `UIMessage` parts (text / reasoning / tool / data-phase / data-evolution) in a single pass, rendered in stream order
 3. **`ThinkingSteps`** — Reasoning block (Brain icon, streaming subtitle)
 4. **`PhaseIndicator`** — `data-phase` parts (slicing, housekeeping, etc.)
@@ -108,7 +108,7 @@ Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full de
 | Origin Guard | `src/lib/security/origin-guard.ts` | Same-origin guard on POST mutation endpoints (`/api/chat`, `/api/episodic/flush`); optional `ACCESS_SECRET` key check for non-browser callers |
 | Session Manager | `src/lib/session/` | In-memory session state with sliding window (legacy) |
 | Layout Tiers | `src/lib/layout/tiers.ts` + `src/hooks/use-tier.ts` | The ONE place a viewport-dependent number is decided. Four presets (phone/tablet/laptop/wide); the reading column CLAMPS rather than switching so it never narrows as the window widens. The world does NOT scale — 1 world unit stays 1 CSS px, and the column/card take tier values instead |
-| Model Registry | `src/lib/models/` | models.dev-driven catalog, provider dispatch, main-model resolution (`resolve.ts`) — single model: everything runs on the selected model |
+| DeepSeek Runtime | `src/lib/deepseek/` | Fixed `deepseek-flash`, role effort, native SSE, raw message replay, durable model steps and tool execution |
 | Time Rendering | `src/lib/time/relative.ts` + `src/lib/episodic/time-localize.ts` | Locale-aware relative-time annotations on slices/timeline/card reads, computed against the user's timezone |
 | Turn Priming | `src/lib/turn-priming.ts` | v0.9: only the slice-stable pieces survive — the continuity line and the date-anchor table, frozen into the system prompt's L3 block at slice start. The per-turn `Sent:` timestamp / intent / emotional read were evicted from the system prompt (cache stability); the model reads precise time via the `currentTime` tool |
 | Turn Analyzer | `src/lib/episodic/flash/turn-analyzer.ts` | The one housekeeping sub-agent call (main model via the unified runner, thinking ON at low effort): message tags + semantic hint + intent + `memory_worthy` / `memory_update` + (on close) slice marking and the `evolve_card.worth` gate |
@@ -118,22 +118,24 @@ Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full de
 The episodic memory subsystem (`src/lib/episodic/`, see `src/lib/episodic/CLAUDE.md`) is the memory layer:
 
 - **Structure**: `memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/core.md` — one directory per time slice (`timeline/core.md` + `agent.md` + a `previously.md` card snapshot), YAML frontmatter + conversation turns
-- **Sub-agents on the main model** (v0.9): all internal calls (recall scanning, the unified turn analyze — message tags + semantic hint + intent + slice marking — card evolution, strand consolidation, mark backfill) run on the MAIN model through the unified sub-agent runner (`src/lib/agents/sub-agent-runner.ts`, thinking ON at low effort, shared `SHARED_SUBAGENT_BASE` prompt prefix). The old worker tier is gone entirely — single model: everything runs on the selected model. The main model handles the user-facing reply.
+- **Sub-agents**: all use fixed `deepseek-flash` through the native runner. Recall, summary, vision and companion use `low`; chat, search and direction use `high`; reflection and thinkDeep use `max`. Role settings are server-owned. The shared sub-agent prompt prefix remains stable for prefix caching.
 - **Close-time marking**: when a slice closes, the housekeeping analyze call produces its `focus` / `summary` / refined `tags` / `emotional_tone`, written into the frontmatter before the slice persists — so the global timeline and recall see real descriptions, not "(none)".
 - **Slicing** (v0.9, pure time-driven + idle-gap): the slice age cap (`maxSliceMinutes`, default 30 min from slice START) is a periodic autosave CHECKPOINT — the follow-up slice links back via `continuesFrom` and carries the closed slice's last 10 turns as a frozen history prefix; the 50-turn capacity cap is a pure safety valve that checkpoints the same way. A silence of `idleGapMinutes` (default 30) since the last turn closes with `idle_gap` (genuine new conversation, no carry-over), as does context-loss detection (`context_lost`).
-- **Slice-frozen system prompt** (v0.9): the system prompt is layered L0–L5 and anchored to the slice start, byte-stable within a slice to maximize provider prefix caching (DeepSeek automatic prefix cache; explicit ephemeral `cacheControl` breakpoints on the Anthropic path in `src/app/api/agent/agent.ts`). The history window is slice-aligned — the server trims client history to the current slice's turn count (mismatch → `context_lost` → new slice).
+- **Slice-frozen system prompt** (v0.9): the system prompt is layered L0–L5 and anchored to the slice start, byte-stable within a slice to maximize provider prefix caching (DeepSeek automatic prefix cache). The history window is slice-aligned — the server trims client history to the current slice's turn count (mismatch → `context_lost` → new slice).
 - **Write discipline**: batched writes go through an explicit `WriteBatch` (`createBatch()` → `flushBatch()`, `io-helpers.ts`); housekeeping/finalizeTurn on the same slice serialize through a per-sliceId mutex (`slice-mutex.ts`); write conflicts self-heal via append-only turn merge (`turn-merge.ts`).
 - **Timeline**: per-slice `timeline/core.md` + `agent.md` are woven into the global timeline (`timeline/weave.ts`, `timeline/store.ts`, `timeline/render.ts`); `flash/global-timeline.ts` aggregates slice summaries and `flash/backfill-marks.ts` backfills close-time markings on historical slices.
 - **Card evolution**: at a slice boundary the Previously Agent edits the card through validated mutation tools (`card-session.ts`); there is no mechanical card pass — expiry/caps/overdue handling are the agent's decisions, enforced inside the tools.
 - **Strands** (semantic layer): a slice carries `tags` (keywords); a **strand** is a keyword woven through all the slices that carry it. `memory/episodic/strands.json` maps each strand → its slice paths ("the whole history of that thing" across time) — the thin, lossless semantic-memory index over the episodic slices. Built at slice-close via `updateStrands`; `flash/strand-consolidator.ts` merges near-duplicate strands; a richer first-class strand (rolling summary + recall integration) is a future milestone.
 - **Demo data source**: `STORAGE=demo` (or auto-detected when no `GITHUB_TOKEN` and not dev) makes memory reads read-only against the `previously-lab/you` dataset repo (remote via `BENCHMARK_BASE_URL`, or a local sibling `../you` clone in dev). There is no `DEMO_MODE` env var — data-source resolution lives in `src/lib/data-source/resolve.ts`.
 
-### Model Layer (multi-provider)
+### DeepSeek Model Layer
 
-- **Catalog**: models.dev (`https://models.dev/api.json`) is the primary model catalog (`src/lib/models/catalog.ts`), gated by configured API-key env vars and reverse-filtered against each provider's live `/models` endpoint. Falls back to a curated list in `src/lib/models/registry.ts`.
-- **Dispatch**: `src/lib/models/provider.ts` routes by SDK — dedicated `@ai-sdk/anthropic`, OpenAI-compatible for everything else: DeepSeek via `@ai-sdk/openai-compatible` (the dedicated `@ai-sdk/deepseek` dropped image parts), `@ai-sdk/openai` catch-all for the rest (Kimi, Qwen, ...).
-- **Main model** — user-selected in the chat toolbar; persists to `memory/user/config.json` (cross-device, no localStorage). v0.9: every sub-agent also runs on the main model (unified runner, thinking ON at low effort). Thinking is always ON at low effort for the chat main model (pinned server-side in `src/app/api/chat/start-turn.ts`); deep thinking is thinkDeep's job. Single model: everything runs on the selected model — the worker tier (`worker.ts`, manual pin) was removed.
-- **Workflow model deserialization**: no SDK model instance crosses the workflow→step boundary. `createChatAgent` hands WorkflowAgent a `StepBoundaryLanguageModel` (`src/lib/models/step-boundary-model.ts`) — a first-party class (auto-registered by Workflow 5's SWC plugin in both bundles) that serializes to plain `{ config }` JSON and lazily rebuilds the real model inside the step via `createModel`. This sidesteps the upstream step-bundle registration gap (vercel/workflow#2956).
+- **Fixed model**: `deepseek-flash` only; no runtime provider/model picker. Legacy stored model overrides are ignored. `src/lib/models/` exposes the fixed descriptor for existing callers without catalog or provider discovery requests.
+- **Thinking**: always enabled in product flows. DeepSeek's `low / high / max` scale maps the default middle setting to `high`. Roles are defined in `src/lib/deepseek/types.ts`; natural-language task instructions complement these actual API settings.
+- **Durability**: `DeepSeekAgent` coordinates model steps and existing tool steps. Credentials are read inside HTTP dispatch, never serialized into workflow input. Original `reasoning_content` and tool argument strings survive tool loops and timeout continuation. A stream interruption checkpoints partial output before surfacing the failure; completed model calls are not repeated when a tool or persistence acknowledgement retries.
+- **Browser protocol**: the application owns SSE framing, incremental rendering and reconnect. Reconnect attaches to the same run with GET. Bounded local replay records are used after reload only when they match the authoritative saved turn IDs and text; no raw reasoning transcript is added to GitHub memory files.
+- **Credentials and client**: cloud uses `DEEPSEEK_API_KEY`. Client uses its saved DeepSeek BYOK key, then an explicitly inherited environment key. Config responses never return secrets. External-agent execution bridges are retired; history import/scribe remains supported by the client.
+- **Search**: `src/lib/search/deepseek-web.ts` calls DeepSeek's native search endpoint. Existing page-fetch limits and SSRF protections remain in force; no Anthropic compatibility route is used.
 
 ### Chat Rendering
 
@@ -193,7 +195,7 @@ selector — and it is mounted by the SHELL so it exists at every rung.
 **Two renderers, deliberately.** The conversation rung is drawn by the chat's
 own field and the three card rungs by `CardField`. They are not two settings of
 one thing: the conversation rung must show the turn being written RIGHT NOW,
-which lives only in `useChat`'s messages, while `CardField`'s rows come from the
+which lives only in `useDurableChat`'s messages, while `CardField`'s rows come from the
 persisted catalog. Giving the card field a live tail means threading a streaming
 array through props or a store — the re-render storm `card-field.tsx` documents.
 The camera unification (derive `CAM_Z` from the viewport so both fields share one
@@ -266,7 +268,7 @@ Branch: `feature/v0.9.1`
 
 Key pieces:
 
-- **Durable turn**: every chat turn runs in a Vercel Workflow run (`src/app/api/chat/turn-workflow.ts`) via AI SDK's `WorkflowAgent` with `stopWhen: isStepCount(20)`; timed-out steps are re-invoked with a continuation nudge under a hard cap (bounded continuations).
+- **Durable turn**: every turn uses the native `DeepSeekAgent` inside Vercel Workflow. Platform timeouts have bounded continuation with original messages; provider errors exhaust only the HTTP retry budget and surface immediately. Existing persistence handoff and idempotent GitHub writes remain intact.
 - **Evolution triggers**: at a slice boundary the turn analyzer's `evolve_card.worth` gate decides whether the Previously Agent (main model via the unified runner) runs; a legacy (pre-v5) card forces a run so format migration never waits. The agent edits the card through per-entry mutation tools (`card-session.ts`) — over-limit writes are rejected with compression instructions, never silently truncated; a loop brake force-lands repeated identical rejections, and a step-limit stop returns a partial card. An explicit user request or behavioral correction in the analyzer's `memory_update` field widens the fold-in beyond the boundary trigger.
 - **Timeline subsystem**: `src/lib/episodic/timeline/` (weave / store / render / enumerate) plus `flash/global-timeline.ts` and `flash/backfill-marks.ts`.
 - **Time rendering**: all read tools and the system prompt annotate ISO timestamps with the user's local/relative time (`src/lib/time/relative.ts`, `time-localize.ts`); a precomputed date-anchor table (frozen into the system prompt's L3 block at slice start) means the model never does date arithmetic, and the `currentTime` tool returns precise current time / slice elapsed time on demand.

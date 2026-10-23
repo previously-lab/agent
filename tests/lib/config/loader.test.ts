@@ -51,19 +51,21 @@ describe("loadUserConfig cache + invalidation", () => {
     // difference comes from the lock's own env override changing between reads.
     vi.stubEnv("DEMO_MODEL", "locked-a");
     mockReadDemo.mockResolvedValueOnce(
-      JSON.stringify({ model: { provider: "a", thinking: true, reasoningEffort: "low" } }),
+      JSON.stringify({ onboarded: false }),
     );
     const first = await loadUserConfig();
-    expect(first.model.provider).toBe("locked-a");
+    expect(first.onboarded).toBe(false);
+    expect(first.model.provider).toBe("deepseek-flash");
 
     vi.stubEnv("DEMO_MODEL", "locked-b");
     mockReadDemo.mockResolvedValueOnce(
-      JSON.stringify({ model: { provider: "b", thinking: false, reasoningEffort: "high" } }),
+      JSON.stringify({ onboarded: true }),
     );
     invalidateUserConfigCache();
 
     const fresh = await loadUserConfig();
-    expect(fresh.model.provider).toBe("locked-b");
+    expect(fresh.onboarded).toBe(true);
+    expect(fresh.model.provider).toBe("deepseek-flash");
     expect(mockReadDemo).toHaveBeenCalledTimes(2);
   });
 
@@ -78,7 +80,7 @@ describe("loadUserConfig cache + invalidation", () => {
     const config = await loadUserConfig();
     expect(config.model.provider).toBe("deepseek-flash");
     expect(config.model.thinking).toBe(true);
-    expect(config.model.reasoningEffort).toBe("low");
+    expect(config.model.reasoningEffort).toBe("high");
   });
 
   it("falls back to defaults when the config file is missing", async () => {

@@ -11,7 +11,7 @@ import {
   visibleStreamRange,
 } from "@/lib/chat/stream-layout";
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 
 function live(key: string): LiveStreamItem {
   return {

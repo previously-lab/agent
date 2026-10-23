@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractThinkDeepReports } from "@/app/api/chat/turn-workflow";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 
 function toolResultMsg(
   toolCallId: string,

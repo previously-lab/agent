@@ -13,7 +13,7 @@
  * no write batch — the mouth never picks up the pen.
  */
 
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import matter from "gray-matter";
 import { readFile } from "@/lib/tools/readFile";

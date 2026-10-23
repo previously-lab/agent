@@ -45,11 +45,26 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const standaloneDir = join(repoRoot, ".next", "standalone");
+
+function isWithin(root, path) {
+  const rel = relative(root, path);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Next's trace may include a hoisted pnpm link but omit its versioned target.
+ * Recover only that exact installed path, never a different package version. */
+function missingTraceSource(path) {
+  const tracedModules = join(standaloneDir, "node_modules");
+  if (!isWithin(tracedModules, path)) return null;
+  const source = resolve(repoRoot, "node_modules", relative(tracedModules, path));
+  try { lstatSync(source); return source; }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
 
 if (!existsSync(standaloneDir) || !lstatSync(standaloneDir).isDirectory()) {
   console.error(`pack-standalone: ${standaloneDir} does not exist — run \`pnpm build\` first.`);
@@ -60,7 +75,16 @@ if (!existsSync(standaloneDir) || !lstatSync(standaloneDir).isDirectory()) {
 function resolveLinkChain(linkPath) {
   const seen = new Set();
   let current = linkPath;
-  while (lstatSync(current).isSymbolicLink()) {
+  for (;;) {
+    let st;
+    try { st = lstatSync(current); }
+    catch (error) {
+      const source = error.code === "ENOENT" ? missingTraceSource(current) : null;
+      if (!source) throw error;
+      current = source;
+      continue;
+    }
+    if (!st.isSymbolicLink()) return current;
     if (seen.has(current)) {
       throw new Error(`symlink cycle while resolving ${linkPath}`);
     }
@@ -69,7 +93,6 @@ function resolveLinkChain(linkPath) {
     // be relative to the link's directory or absolute (both handled by resolve).
     current = resolve(dirname(current), readlinkSync(current));
   }
-  return current;
 }
 
 /** Nearest ancestor directory named "node_modules" (the pnpm resolution context), or null. */
@@ -191,6 +214,7 @@ for (const link of links.sort().reverse()) {
   try {
     const target = resolveLinkChain(link);
     const st = lstatSync(target); // throws ENOENT if the target is genuinely missing
+    if (!isWithin(standaloneDir, link)) throw new Error(`Refusing to replace a link outside standalone: ${link}`);
     rmSync(link, { force: true, recursive: false });
     copyReal(target, link, new PathStack(), true);
     ok += 1;

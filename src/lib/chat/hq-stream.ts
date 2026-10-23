@@ -22,7 +22,7 @@
  * so the wire parsing is unit-testable under vitest's node environment —
  * same discipline as src/lib/companion/narrate.ts.
  */
-import type { UIMessageChunk } from "ai";
+import type { UIMessageChunk } from "@/lib/chat/protocol";
 
 // ─── The frame contract ───────────────────────────────────────────────────
 

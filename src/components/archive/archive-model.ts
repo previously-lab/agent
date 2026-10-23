@@ -62,7 +62,7 @@ export type BucketKind = "day" | "week" | "undated";
 
 /** The record pile (v0.25b §三): ONE pile per time bucket holding that
  *  bucket's slices — past conversations as paper. Its thickness tiers off
- *  the bucket's TURN volume; its open target is the bucket's NEWEST slice
+ *  the light index's slice count; its open target is the bucket's NEWEST slice
  *  (the pile's top sheet — the reader reaches the bucket's OTHER slices
  *  through the record switch, `recordSiblings` below). */
 export interface RecordPile {
@@ -74,7 +74,7 @@ export interface RecordPile {
   date: string;
   /** How many conversations the pile holds. */
   slices: number;
-  /** Their summed turn volume — the thickness driver. */
+  /** Legacy field name: the light-index caller contributes one per slice. */
   turns: number;
 }
 
@@ -165,7 +165,8 @@ export function buildBuckets(
     bucketFor(pile.updated).piles.push(pile);
   }
   // The records fold: per bucket, the newest slice is the pile's open target
-  // and the summed turns drive its thickness tier.
+  // and the supplied volume drives its thickness tier (one per indexed slice
+  // in the archive field, without a historical transcript read sweep).
   const recordSlices = new Map<string, ArchiveRecord[]>();
   for (const record of records) {
     const bucket = bucketFor(record.date);

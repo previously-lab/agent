@@ -18,7 +18,7 @@
  * the top visible item's time without re-deriving it.
  */
 
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 import type { SliceWithContent } from "@/lib/episodic/actions";
 import type { Turn } from "@/lib/episodic/types";
 import type { NestedBubbleFrame } from "./nested-bubble";

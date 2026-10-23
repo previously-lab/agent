@@ -13,7 +13,18 @@
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { E2E_MEMORY_ROOT } from "./env";
+
+function fixturePath(...parts: string[]): string {
+  const root = path.resolve(E2E_MEMORY_ROOT);
+  const target = path.resolve(root, ...parts);
+  const relative = path.relative(root, target);
+  if (root !== path.resolve(os.tmpdir(), "previously-e2e", "memory") || !relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`memory-fixture: refusing unexpected path: ${target}`);
+  }
+  return target;
+}
 
 export interface FixtureTurn {
   role: "user" | "agent";
@@ -21,6 +32,7 @@ export interface FixtureTurn {
   /** UTC ISO 8601 timestamp. */
   at: string;
   turnId?: string;
+  clientMessageId?: string;
 }
 
 export interface FixtureSlice {
@@ -45,7 +57,7 @@ function episodicRoot(): string {
   if (!E2E_MEMORY_ROOT.includes("previously-e2e")) {
     throw new Error(`memory-fixture: refusing unexpected path: ${E2E_MEMORY_ROOT}`);
   }
-  return path.join(E2E_MEMORY_ROOT, "episodic");
+  return fixturePath("episodic");
 }
 
 /** Derive the slice id (YYYY-MM-DD-HHMM, UTC) from an ISO start time. */
@@ -94,7 +106,7 @@ function serializeSlice(slice: FixtureSlice): string {
   const body = slice.turns
     .map(
       (t, i) =>
-        `## Turn ${t.turnId ?? `ft${i}`} — ${t.at} (${t.role})\n\n${t.content}`,
+        `## Turn ${t.turnId ?? `ft${i}`} — ${t.at} (${t.role})${t.clientMessageId ? ` [message ${encodeURIComponent(t.clientMessageId)}]` : ""}\n\n${t.content}`,
     )
     .join("\n\n");
 
@@ -158,7 +170,7 @@ export async function clearEpisodic(): Promise<void> {
   if (!E2E_MEMORY_ROOT.includes("previously-e2e")) {
     throw new Error(`memory-fixture: refusing unexpected path: ${E2E_MEMORY_ROOT}`);
   }
-  await rm(path.join(E2E_MEMORY_ROOT, "records"), { recursive: true, force: true });
+  await rm(fixturePath("records"), { recursive: true, force: true });
 }
 
 // ─── Case fixtures (the archive field's piles, v0.25a §四) ─────────────────
@@ -228,7 +240,7 @@ export async function seedCases(cases: FixtureCase[]): Promise<void> {
 export async function clearCases(): Promise<void> {
   casesGuard();
   for (const category of CASE_CATEGORY_DIRS) {
-    await rm(path.join(E2E_MEMORY_ROOT, category), {
+    await rm(fixturePath(category), {
       recursive: true,
       force: true,
     });
@@ -264,7 +276,7 @@ export async function seedDossier(): Promise<void> {
 export async function clearDossier(): Promise<void> {
   casesGuard();
   for (const rel of Object.values(DOSSIER_FILES)) {
-    await rm(path.join(E2E_MEMORY_ROOT, rel), { force: true });
+    await rm(fixturePath(rel), { force: true });
   }
 }
 

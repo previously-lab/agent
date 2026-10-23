@@ -1,99 +1,41 @@
-/**
- * Universal stream transform that handles both ModelCallStreamPart (from
- * WorkflowAgent) and UIMessageChunk (from our custom data chunks) in a
- * single readable stream.
- *
- * The built-in `createModelCallToUIChunkTransform()` from @ai-sdk/workflow
- * drops unknown chunk types in its default case. This version is universal:
- * it passes through any UIMessageChunk type unchanged, and only falls back
- * to `toUIMessageChunk()` for ModelCallStreamPart types.
- *
- * Used by the chat route to pipe a workflow run's readable into a
- * UIMessageStream that the client can consume.
- */
+import type { UIMessageChunk } from "@/lib/chat/protocol";
 
-import { toUIMessageChunk } from "@ai-sdk/workflow";
-import type { UIMessageChunk } from "ai";
-import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
-import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
+const LIFECYCLE = new Set(["start", "start-step", "finish-step", "reset-step", "text-start", "text-end", "reasoning-start", "reasoning-end"]);
+const OLD_ENVELOPES = new Set(["model-call-start", "model-call-end", "model-call-response-metadata", "raw", "tool-input-end"]);
+const errorText = (value: unknown) => value instanceof Error ? value.message : String(value ?? "Unknown error");
 
-/**
- * Chunks OUR code writes into the run stream — the only chunks allowed to
- * pass through unchanged:
- * - lifecycle (`start` / `start-step` / `finish-step` / `finish`) written by
- *   the workflow steps, plus step-boundary markers written by WorkflowAgent
- * - `data-belief` / `data-phase` — our custom data chunks
- *
- * Everything else must go through `toUIMessageChunk()`. The `finish` type is
- * ambiguous (ours vs. raw model finish part), so it's discriminated by shape.
- *
- * A chunk type missing HERE is dead on both the POST path and the reconnect
- * path at once (toUIMessageChunk drops it silently) — v0.33's summary chunk
- * shipped exactly that way, so add the constant, never the string.
- */
-const OUR_CHUNK_TYPES = new Set([
-  "start",
-  "start-step",
-  "finish-step",
-  "data-belief",
-  "data-phase",
-  "data-evolution",
-  "data-turn-status",
-  "data-tool-progress",
-  // v0.10 §4.1 — recall's evidence anchors for the references bar.
-  "data-recall-references",
-  // v0.30 §4.2 — the episode's nested-bubble lifecycle frames (transient:
-  // they feed the client's side store via onData, never UIMessage parts).
-  "data-nested-bubble",
-  // v0.33 §3 — the batch summary's runId on the last finisher's stream.
-  PARALLEL_SUMMARY_CHUNK,
-  PERSISTENCE_HANDOFF_CHUNK,
-]);
-
-function isOurs(c: Record<string, unknown>, chunkType: string): boolean {
-  if (OUR_CHUNK_TYPES.has(chunkType)) return true;
-  if (chunkType === "finish") return !("finishReason" in c);
-  // Same discrimination as `finish`: a RAW model part's delta rides the
-  // `text` field, while a step-written UIMessageChunk already has `delta`
-  // (v0.33's batch summary writes these straight into its run stream — the
-  // converter would re-map them to `delta: undefined`, an empty lane).
-  if (chunkType === "text-delta") return "delta" in c;
-  return false;
-}
-
-/**
- * Creates a TransformStream that:
- * 1. Passes all known UIMessageChunk types through unchanged
- * 2. Converts ModelCallStreamPart → UIMessageChunk via toUIMessageChunk
- * 3. Silently drops truly unknown chunks
- *
- * Deliberately STATELESS and ~1:1: lifecycle chunks (start / start-step /
- * finish-step / finish) are written into the durable run stream by the
- * workflow steps themselves (housekeeping / finalizeTurn), never injected
- * here. WorkflowChatTransport resumes by chunk index against the raw run
- * stream — per-connection injection would desynchronize the POST path and
- * the reconnect path.
- */
-export function createMixedStreamTransform(): TransformStream<
-  unknown,
-  UIMessageChunk
-> {
-  return new TransformStream<unknown, UIMessageChunk>({
-    transform(chunk: unknown, controller) {
-      const c = chunk as Record<string, unknown>;
-      const chunkType = typeof c?.type === "string" ? c.type : undefined;
-
-      // One of ours — pass through.
-      if (chunkType && isOurs(c, chunkType)) {
-        controller.enqueue(chunk as UIMessageChunk);
-        return;
-      }
-
-      // Try to convert from ModelCallStreamPart → UIMessageChunk.
-      const uiChunk = toUIMessageChunk(chunk as never);
-      if (uiChunk) {
-        controller.enqueue(uiChunk);
-      }
-    },
-  });
+/** Native runs already use the app protocol. Keep old durable runs readable
+ * while they drain: their per-model finish is not a terminal conversation. */
+export function createMixedStreamTransform(): TransformStream<unknown, UIMessageChunk> {
+  return new TransformStream({ transform(value, controller) {
+    if (!value || typeof value !== "object" || !("type" in value) || typeof value.type !== "string") return;
+    const chunk = value as UIMessageChunk & Record<string, unknown>;
+    const send = (next: UIMessageChunk) => controller.enqueue(next);
+    if (OLD_ENVELOPES.has(chunk.type)) return;
+    if (chunk.type === "finish") {
+      if (!("finishReason" in chunk) || chunk.protocol === "deepseek-v1") send(chunk);
+      return;
+    }
+    if ((chunk.type === "text-delta" || chunk.type === "reasoning-delta") && chunk.delta === undefined) {
+      const { text, ...rest } = chunk;
+      send({ ...rest, delta: typeof text === "string" ? text : "" });
+      return;
+    }
+    if ((chunk.type === "tool-input-start" || chunk.type === "tool-input-delta") && !chunk.toolCallId) {
+      send(chunk.type === "tool-input-start"
+        ? { type: "tool-input-start", toolCallId: chunk.id, toolName: chunk.toolName }
+        : { type: "tool-input-delta", toolCallId: chunk.id, inputTextDelta: chunk.delta });
+      return;
+    }
+    if (chunk.type === "tool-call") {
+      send({ type: chunk.invalid ? "tool-input-error" : "tool-input-available", toolCallId: chunk.toolCallId,
+        toolName: chunk.toolName, input: chunk.input, ...(chunk.invalid ? { errorText: errorText(chunk.error) } : {}) });
+      return;
+    }
+    if (chunk.type === "tool-result") { send({ type: "tool-output-available", toolCallId: chunk.toolCallId, output: chunk.output }); return; }
+    if (chunk.type === "tool-error") { send({ type: "tool-output-error", toolCallId: chunk.toolCallId, errorText: errorText(chunk.error) }); return; }
+    if (chunk.type === "error" && !chunk.errorText) { send({ type: "error", errorText: errorText(chunk.error) }); return; }
+    if (LIFECYCLE.has(chunk.type) || chunk.type.startsWith("data-") || chunk.type.startsWith("tool-") ||
+      chunk.type.startsWith("source-") || ["file", "error", "text-delta", "reasoning-delta"].includes(chunk.type)) send(chunk);
+  } });
 }

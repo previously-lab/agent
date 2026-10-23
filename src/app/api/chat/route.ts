@@ -9,7 +9,8 @@
  * (Phase 2). All memory I/O happens inside the run's steps, writing to GitHub —
  * the Workflow holds only ephemeral execution state.
  */
-import { createUIMessageStreamResponse, type UIMessage } from "ai";
+import { createUIMessageStreamResponse } from "@/lib/chat/server-stream";
+import { type UIMessage } from "@/lib/chat/protocol";
 import { startTurn } from "./start-turn";
 import { createMixedStreamTransform } from "./mixed-stream-transform";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";

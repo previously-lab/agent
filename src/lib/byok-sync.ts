@@ -24,9 +24,9 @@ export function readClientByokSync(): ClientByok | null {
     const path = getBuiltin("node:path") as typeof import("node:path");
     const raw = JSON.parse(
       fs.readFileSync(path.join(home, "config.json"), "utf8"),
-    ) as { byok?: unknown };
+    ) as { byok?: unknown; apiKeys?: Record<string, unknown> };
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-    return parseByok(raw.byok);
+    return parseByok(raw.byok) ?? (raw.byok == null ? parseByok({ provider: "deepseek", apiKey: raw.apiKeys?.DEEPSEEK_API_KEY }) : null);
   } catch {
     return null;
   }

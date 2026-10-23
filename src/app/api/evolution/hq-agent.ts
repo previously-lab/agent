@@ -25,7 +25,7 @@
  * one wake = one round. question-run.ts keeps compiling against
  * background-steps.ts until the last P4 lane retires the old trigger chain.
  */
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
@@ -795,6 +795,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
 
   try {
   const result = await runSubAgent<HqReport>({
+    role: "reflection",
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,

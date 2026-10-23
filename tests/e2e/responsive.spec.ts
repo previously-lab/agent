@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 
 // The app's mobile layout: the top AppHeader stays visible (brand + the "···"
 // overflow trigger, since Settings and Docs left the bar in v0.12), the chat

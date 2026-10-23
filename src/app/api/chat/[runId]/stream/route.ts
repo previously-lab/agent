@@ -13,7 +13,8 @@
  * the single turn renders cleanly. The `x-workflow-stream-tail-index` header is
  * returned so the transport can resolve negative offsets if ever configured.
  */
-import { createUIMessageStreamResponse, type UIMessageChunk } from "ai";
+import { createUIMessageStreamResponse } from "@/lib/chat/server-stream";
+import { type UIMessageChunk } from "@/lib/chat/protocol";
 import { getRun } from "workflow/api";
 import { createMixedStreamTransform } from "../../mixed-stream-transform";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";

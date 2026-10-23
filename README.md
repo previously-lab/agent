@@ -27,7 +27,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-experimental-orange" alt="Status: Experimental">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT">
-  <a href="https://sdk.vercel.ai"><img src="https://img.shields.io/badge/AI_SDK-v7-8b5cf6" alt="AI SDK v7"></a>
+  <a href="https://api-docs.deepseek.com"><img src="https://img.shields.io/badge/DeepSeek-native-4d6bfe" alt="Native DeepSeek runtime"></a>
   <img src="https://img.shields.io/badge/Next.js-16.3-black" alt="Next.js 16.3">
   <img src="https://img.shields.io/badge/TypeScript-6.x-3178C6" alt="TypeScript 6">
   <img src="https://img.shields.io/badge/Tailwind_CSS-4-38bdf8" alt="Tailwind CSS 4">
@@ -70,7 +70,7 @@ The thinking, the recall, and the input bar — each piece is its own card.
 <p align="center">
   <img alt="The agent's internal reasoning" src="public/screenshots/thinking-steps.png" width="480">
   <br>
-  <img alt="The chat input with model selector" src="public/screenshots/chat-input.png" width="260">
+  <img alt="The chat input" src="public/screenshots/chat-input.png" width="260">
 </p>
 
 Light or dark, desktop or phone — it adapts.
@@ -193,7 +193,7 @@ Two things make this unusual:
 - **Darwinian self-evolution** — a six-dimension portrait of who you are (`memory/evolution/direction.md`) plus a code-guarded pool of falsifiable hypotheses; a quantitative fitness ledger (net −5 triggers, a successful run settles the generation) decides *whether* to evolve. The user card and the colleagues' playbooks are products of that loop, not the loop itself
 - **Local time, everywhere** — read tools pre-render your local time, so the agent never mangles timezones
 - **Trivial turns stay out of memory** — a semantic gate keeps "thanks" and "continue" from polluting your timeline
-- **Multi-model** — DeepSeek, Anthropic, and any OpenAI-compatible provider, with a pick-your-main-model toolbar
+- **DeepSeek native** — fixed `deepseek-flash`, role-specific reasoning, durable Vercel Workflow execution, and local BYOK
 - **Client mode** — run the whole thing as a local kernel: your own agent CLI (Claude/Codex/Kimi) as the default zero-setup engine, or bring your own API key (BYOK) for the full streaming experience
 - **Durable background loops** — long-running tasks persist across disconnects and report back
 - **English & 中文** — fully internationalized, with a dark theme
@@ -228,7 +228,7 @@ See [previously-lab/client](https://github.com/previously-lab/client) and the [d
    | `GITHUB_TOKEN` | A GitHub token with contents read/write scope for your private repo |
    | `GITHUB_REPO_OWNER` | Your GitHub username or org |
    | `GITHUB_REPO_NAME` | Your private repo's name |
-   | `DEEPSEEK_API_KEY` | A DeepSeek API key (any AI SDK provider works too) |
+   | `DEEPSEEK_API_KEY` | A DeepSeek API key for the fixed `deepseek-flash` model |
 
 3. **Or run locally** — `git clone` your repo, `pnpm install`, `pnpm dev`. With `PREVIOUSLY_MODE=client` the app runs as a fully local kernel (filesystem storage, no GitHub repo needed) — this is the mode `@previously-lab/client` packages.
 
@@ -278,7 +278,7 @@ This is a one-person research project, so the door is open but the ground rules 
 
 ## Acknowledgments
 
-Thanks to [Vercel AI SDK](https://sdk.vercel.ai), [shadcn/ui](https://ui.shadcn.com), and the [Open Agents](https://github.com/open-agents) community.
+Thanks to [DeepSeek](https://api-docs.deepseek.com), [Vercel Workflow](https://workflow-sdk.dev), [shadcn/ui](https://ui.shadcn.com), and the [Open Agents](https://github.com/open-agents) community.
 
 ---
 

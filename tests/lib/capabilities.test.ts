@@ -52,9 +52,9 @@ describe("capabilities", () => {
       expect(isAIConfigured()).toBe(true);
     });
 
-    it("returns true when only ANTHROPIC_API_KEY is set", () => {
+    it("ignores keys for retired providers", () => {
       process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-      expect(isAIConfigured()).toBe(true);
+      expect(isAIConfigured()).toBe(false);
     });
   });
 
@@ -69,18 +69,18 @@ describe("capabilities", () => {
 
     it("returns true only for the configured provider", () => {
       process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-      expect(isProviderConfigured("anthropic")).toBe(true);
+      expect(isProviderConfigured("anthropic")).toBe(false);
       expect(isProviderConfigured("deepseek")).toBe(false);
     });
 
-    it("recognizes OpenAI-compatible providers like Kimi and Qwen", () => {
+    it("ignores legacy provider keys", () => {
       process.env.MOONSHOT_API_KEY = "sk-moonshot";
-      expect(isProviderConfigured("moonshotai")).toBe(true);
+      expect(isProviderConfigured("moonshotai")).toBe(false);
       expect(isProviderConfigured("deepseek")).toBe(false);
 
       process.env.DASHSCOPE_API_KEY = "sk-dashscope";
-      expect(isProviderConfigured("alibaba")).toBe(true);
-      expect(isAIConfigured()).toBe(true);
+      expect(isProviderConfigured("alibaba")).toBe(false);
+      expect(isAIConfigured()).toBe(false);
     });
 
     it("returns false for an unknown provider", () => {
@@ -97,7 +97,7 @@ describe("capabilities", () => {
     it("lists providers in a stable order", () => {
       process.env.ANTHROPIC_API_KEY = "sk-ant-test";
       process.env.DEEPSEEK_API_KEY = "sk-test";
-      expect(getConfiguredProviders()).toEqual(["deepseek", "anthropic"]);
+      expect(getConfiguredProviders()).toEqual(["deepseek"]);
     });
   });
 

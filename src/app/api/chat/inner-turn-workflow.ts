@@ -29,9 +29,10 @@
  *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */
-import { isStepCount, type ModelMessage } from "ai";
+import { isStepCount } from "@/lib/deepseek/tools";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import { getWritable } from "workflow";
-import type { ModelCallStreamPart } from "@ai-sdk/workflow";
+import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type { InnerTurnInput, InnerTurnReport } from "@/lib/chat/turn-types";

@@ -1,56 +1,10 @@
 /**
- * Web research — provider adapters behind a neutral contract.
- *
- * The webSearch tool's interface (query in → answer + sources + researcher's
- * confidence/controversies out) is OURS; nothing DeepSeek- or
- * Anthropic-shaped may leak out of this module. Today there is one adapter:
- * DeepSeek V4 Flash's native server-side search, reached through DeepSeek's
- * Anthropic-compatible endpoint (the OpenAI-compatible /v1 endpoint cannot
- * express provider-executed tools). Future adapters (Claude native webSearch,
- * Tavily for keyless demo) drop in behind the same contract and MUST also
- * produce the `recommendation` field.
- *
- * The search sub-agent is an independent RESEARCHER (v1.0): it searches
- * (web_search, provider-executed on DeepSeek's servers), then reads the most
- * promising pages ITSELF with its own quota-bounded `webFetch` tool
- * (implemented in-module via fetch-utils + the Document Segment Read
- * helpers), and synthesizes a real answer that combines the found material
- * with its own knowledge — web claims always carry a source mention.
- *
- * DeepSeek adapter specifics (not the contract — just this adapter):
- * - `web_search` is executed on DeepSeek's servers, which ingest the full
- *   page content during inference; the caller only ever sees the model's
- *   synthesized answer + citation URLs. The sub-agent's own `webFetch` closes
- *   the depth gap: pages that matter get read directly, on our side.
- * - `webSearch_20260209` is the @ai-sdk/anthropic SDK's method name for the
- *   provider-executed search tool, not our versioning — the SDK version is
- *   the authority for when to update it.
- *
- * @security — provider coupling. webSearch is currently a DEEPSEEK-ONLY
- * capability: this adapter always reaches `api.deepseek.com` and always needs
- * a `DEEPSEEK_API_KEY`, INDEPENDENT of the user's chosen chat model. If a
- * deployment's user selects Anthropic/OpenAI as the main model but omits
- * `DEEPSEEK_API_KEY`, webSearch will error rather than silently degrade.
- * A non-DeepSeek deployment must either (a) provide a `DEEPSEEK_API_KEY` for
- * this infra call, or (b) add a new adapter behind the `WebSearchResult`
- * contract (e.g. Claude native webSearch, Tavily) and dispatch on it here.
- * Do NOT let a missing key crash the turn — `webSearchExecute` gates on it
- * and returns a user-facing error string before any model call runs.
- *
- * Model roles: this is an INFRASTRUCTURE model call (like recall in
- * lib/episodic/flash/recall.ts) — the user-facing Pro model choice is not
- * affected. The call itself runs on the unified sub-agent runner
- * (src/lib/agents/sub-agent-runner.ts): thinking ON at effort "low" (via the
- * Anthropic-shaped effort mapping — this adapter speaks the Anthropic
- * protocol), NO output/thinking budgets (the runner's default; probed
- * 2026-10-14 — an absent max_tokens does not truncate on this endpoint),
- * a 50-step cap, and a 240s wall-clock budget (sized for the 6-page read
- * quota). The provider path is unchanged: the runner receives a PRE-BUILT
- * model instance so the custom endpoint + normalizing fetch stay exactly as
- * they were.
+ * DeepSeek research with explicit search results, bounded page/image reads,
+ * and a structured answer shared by chat and scout research.
  */
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { tool, type PrepareStepFunction, type ToolSet } from "ai";
+import { tool } from "@/lib/deepseek/tools";
+import type { PrepareStepFunction, ToolSet } from "@/lib/deepseek/types";
+import { deepseekWebSearch, webSearchInputSchema } from "@/lib/search/deepseek-web";
 import { z } from "zod";
 import {
   runSubAgent,
@@ -84,13 +38,8 @@ export interface WebSearchResult {
   suggestedReads: Array<{ url: string; title: string; reason: string }>;
 }
 
-/** Server-side search rounds Flash may use per query. 50: the search cap is
- *  the budget that BINDS — production evidence (nine `max_uses_exceeded`
- *  failures in 8 hours, each degrading the whole research run to its final
- *  text) showed legitimate multi-angle research (reformulate after each read)
- *  dying at 5, and the provider's error variant then takes the whole stream
- *  down (see normalizingFetch). 50 pairs with the 6-page read quota; the
- *  200-step cap and the 600s wall clock still bound the run. */
+/** Search calls allowed per query. Page reads, total steps and the outer
+ * platform timeout also bound each research run. */
 const MAX_SEARCHES_PER_QUERY = 50;
 
 /** Pages the researcher may read in full per run. Reading pages is the
@@ -105,121 +54,7 @@ const MAX_IMAGE_READS = 2;
 const WEB_FETCH_TIMEOUT_MS = 30_000;
 const WEB_FETCH_MAX_CHARS = 15_000;
 
-/**
- * DeepSeek's Anthropic-compatible endpoint deviates from the spec on
- * web_search_tool_result ERRORS (verified 2026-07-17, scripts/archive/smoke-search.mjs;
- * re-diagnosed 2026-11 on a production stream crash): the error comes wrapped
- * in an array ("content":[{error}]) where the Anthropic spec — and
- * @ai-sdk/anthropic's response AND stream-event schemas — expect a bare
- * object. Left as-is, the streamed variant fails schema validation
- * (AI_TypeValidationError) and kills the whole research stream; the
- * half-written step then 400s the provider's NEXT request ("tool_use ids
- * were found without tool_result blocks"). Normalize at the fetch boundary —
- * BOTH whole-body JSON and SSE `data:` event payloads (streamText streams) —
- * so the SDK always sees the spec shape: a failed round becomes an ordinary
- * provider-executed tool error (isError), the tool_use keeps its paired
- * tool_result, and the run continues with the rounds it has left.
- */
-
-/**
- * Replace DeepSeek's array-wrapped web_search error with the spec's bare
- * error object, anywhere in a parsed payload (message content blocks, stream
- * event content_blocks). Logs each rewritten failure — a provider-side search
- * failure must be visible in the server log, not silent. Returns true when a
- * block was rewritten.
- */
-function normalizeWebSearchErrors(node: unknown): boolean {
-  if (Array.isArray(node)) {
-    let hit = false;
-    for (const item of node) hit = normalizeWebSearchErrors(item) || hit;
-    return hit;
-  }
-  if (node === null || typeof node !== "object") return false;
-  const record = node as Record<string, unknown>;
-  let hit = false;
-  if (record.type === "web_search_tool_result" && Array.isArray(record.content)) {
-    const err = (record.content as Array<Record<string, unknown> | null>).find(
-      (c) => c?.type === "web_search_tool_result_error",
-    );
-    if (err) {
-      // Rebuild rather than reuse: the SDK schema requires error_code — an
-      // error item missing it would still fail validation downstream.
-      record.content = {
-        type: "web_search_tool_result_error",
-        error_code:
-          typeof err.error_code === "string" ? err.error_code : "unavailable",
-      };
-      hit = true;
-      console.warn(
-        "[WebSearch] search round failed provider-side:",
-        (record.content as { error_code: string }).error_code,
-      );
-    }
-  }
-  for (const value of Object.values(record)) {
-    hit = normalizeWebSearchErrors(value) || hit;
-  }
-  return hit;
-}
-
-const normalizingFetch: typeof fetch = async (url, init) => {
-  const res = await fetch(url, init);
-  const text = await res.text();
-  const rebuild = (body: string) =>
-    new Response(body, {
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-    });
-
-  // Streaming path (streamText): an SSE event stream — normalize the JSON
-  // payload of each `data:` line, pass everything else through untouched.
-  const contentType = res.headers.get("content-type") ?? "";
-  if (
-    contentType.includes("text/event-stream") ||
-    text.startsWith("event:") ||
-    text.startsWith("data:")
-  ) {
-    let touched = false;
-    const out = text.split("\n").map((line) => {
-      const eol = line.endsWith("\r") ? "\r" : "";
-      const body = eol ? line.slice(0, -1) : line;
-      if (!body.startsWith("data:")) return line;
-      const payload = body.slice(5).trimStart();
-      if (!payload || payload === "[DONE]") return line;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(payload);
-      } catch {
-        return line;
-      }
-      if (!normalizeWebSearchErrors(parsed)) return line;
-      touched = true;
-      return `data: ${JSON.stringify(parsed)}${eol}`;
-    });
-    return rebuild(touched ? out.join("\n") : text);
-  }
-
-  // Non-streaming path: whole-body JSON.
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return rebuild(text);
-  }
-  normalizeWebSearchErrors(body);
-  return rebuild(JSON.stringify(body));
-};
-
-// ─── Researcher tool: webFetch (in-module) ──────────────────────────────
-//
-// Mirrors webFetchExecute in tool-executors.ts (same SSRF guard, same
-// Document Segment Read protocol) but as a PLAIN function — the whole
-// research run already lives inside one step (webSearchExecute), so the
-// page read must not become a step of its own.
-
-/** Range filter for the researcher's webFetch — keyword search (misses
- *  degrade to the full text with a note) or a 1-indexed line range. */
+/** Range filter for the researcher's guarded page reader. */
 type PageReadRange = {
   type: "search" | "lines";
   keywords?: string[];
@@ -350,8 +185,7 @@ const MAX_SEARCH_STEPS = 200;
  * case — the model burns its budget searching/reading and runs out of steps
  * before searchReport. On the LAST permitted step, swap the instructions for
  * an urgent report-now directive. toolChoice is deliberately NOT forced:
- * DeepSeek's thinking mode 400s on a forced tool_choice (see the runner's
- * deepseekDowngrade), and this run keeps thinking on.
+ * DeepSeek thinking mode does not accept a forced tool choice.
  */
 function finalStepReportDirective(
   systemPrompt: string,
@@ -359,11 +193,13 @@ function finalStepReportDirective(
   return ({ stepNumber }) =>
     stepNumber >= MAX_SEARCH_STEPS - 1
       ? {
-          instructions:
+          system:
             `${systemPrompt}\n\n# FINAL STEP — REPORT NOW\n\n` +
             "This is your last step: the run's step budget is exhausted after it. " +
             "You MUST call searchReport in this step with whatever you already have — " +
             "a partial report beats a lost one. Do NOT start new searches or page reads.",
+          activeTools: ["searchReport"],
+          toolChoice: "auto",
         }
       : {};
 }
@@ -382,10 +218,10 @@ function buildSearchRole(
 ): string {
   return `You are an independent researcher: the main agent hands you a topic, and you come back with a real answer.
 
-You both search AND read. web_search (provider-executed) finds the material; webFetch reads the most promising pages yourself — the search digest alone is often too thin to answer well. Pages come back as Markdown (headings, lists, links and tables preserved). You may read at most ${maxPageReads} pages per run — spend them on the strongest sources. When a promising page's key content is an image, viewImage can look at it for you (up to ${MAX_IMAGE_READS} images per run).
+You both search AND read. web_search returns DeepSeek Search result titles, URLs and summaries; webFetch reads the most promising pages yourself — the search digest alone is often too thin to answer well. Pages come back as Markdown (headings, lists, links and tables preserved). You may read at most ${maxPageReads} pages per run — spend them on the strongest sources. When a promising page's key content is an image, viewImage can look at it for you (up to ${MAX_IMAGE_READS} images per run).
 
 Process:
-1. Plan your search: you may use up to ${maxSearchRounds} search rounds. Round 1 may use the query as-is; every later round must either reformulate based on what you have learned or chase a new lead discovered in the material you have already read. Before issuing a new search round, state (in thinking) what is still missing.
+1. Plan your search: each query must contain 1-128 Unicode characters; reformulate long topics into focused queries. You may use up to ${maxSearchRounds} search rounds. Round 1 may use the query as-is; every later round must either reformulate based on what you have learned or chase a new lead discovered in the material you have already read. Before issuing a new search round, state (in thinking) what is still missing.
 2. Search, then read the most promising pages with webFetch between rounds when it sharpens your next query (use its range filters to keep reads focused).
 3. When you have enough, call searchReport with:
    - answer: a real answer to the query (2-5 paragraphs), synthesizing what you found with your own knowledge. Every claim that comes from the web must mention its source. Answer in the query's language — it reaches the user, so it overrides the shared base's English default.
@@ -406,48 +242,15 @@ Distinguish what the sources SAY from what YOU know — never blend the two sile
  *  search/step caps as the budgets that actually bind. */
 export const SEARCH_TIMEOUT_MS = 600_000;
 
-/**
- * Adapter #1: DeepSeek V4 Flash native search. Flash decides what to search
- * and how many rounds (up to MAX_SEARCHES_PER_QUERY), reads results on
- * DeepSeek's servers, and returns a cited digest — we run no search
- * infrastructure and need no extra API key.
- *
- * The researcher searches (web_search is provider-executed on DeepSeek's
- * side), reads the strongest pages itself (webFetch, quota-bounded,
- * implemented in-module above), then reports a cited answer + its confidence
- * assessment (searchReport, structured).
- *
- * Runs on the unified sub-agent runner with a PRE-BUILT model — the DeepSeek
- * Anthropic-compatible endpoint and its normalizing fetch are unchanged.
- * `progress` routes each tool start (each web_search round, each page read,
- * then the searchReport) onto the shared data-tool-progress channel as a live
- * "Searching round N…" / "Reading page …" subtitle. This is SHELL streaming —
- * the actual answer text is not streamed (it's produced inside the structured
- * searchReport tool call), and the web_search execution itself is a
- * DeepSeek-server black box.
- *
- * The researcher's SOP (self/search/index.md, v0.19 §C.2) is loaded by the
- * sub-agent runner itself (`selfSop: "search"`) — FULL text into the system
- * prompt at spawn; absent SOP → no block.
- *
- * Error contract: the runner never throws. Failed runs are re-thrown here as
- * a plain Error carrying the runner's message — EXCEPT a timeout that left
- * partial text behind, which degrades in place to a flagged low-confidence
- * answer (aligned with recall). webSearchExecute's withStepTimeout/triage
- * layer keeps classifying the thrown failures (step retry for transient,
- * error tool result for deterministic).
+/** The researcher uses the fixed search role and an explicit Search API tool.
+ * The shared runner loads its SOP and streams progress. Search sources are
+ * collected from successful API results, including partial-report recovery.
  */
 export async function searchViaFlash(
   query: string,
   progress?: SubAgentProgressRef,
   opts?: { scout?: boolean },
 ): Promise<WebSearchResult> {
-  const provider = createAnthropic({
-    baseURL: "https://api.deepseek.com/anthropic",
-    apiKey: process.env.DEEPSEEK_API_KEY,
-    fetch: normalizingFetch,
-  });
-
   const scout = opts?.scout ?? false;
   // Effective caps: scout is a lean fan-out leg with half the page-read quota
   // and fewer search rounds; standard mode keeps the exported constants.
@@ -459,6 +262,7 @@ export async function searchViaFlash(
     ? "\n\nYou are one of several researchers working in parallel on different sub-questions — stay tightly scoped to your query."
     : "";
   let searchRounds = 0;
+  const observedSources = new Map<string, { title: string; url: string }>();
   // Per-run page-read quota (effectiveMaxPageReads).
   let pageReads = 0;
   // Per-run image-read quota (MAX_IMAGE_READS).
@@ -467,21 +271,28 @@ export async function searchViaFlash(
     buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
   );
   const res = await runSubAgent<SearchReport>({
-    languageModel: provider("deepseek-v4-flash"),
-    // The pre-built model speaks the Anthropic protocol — the effort mapping
-    // must use the Anthropic provider-options shape, not DeepSeek's.
-    effortSdk: "anthropic",
+    role: "search",
     system: systemPrompt,
-    // No maxOutputTokens, no thinking budget — the runner's default (effort
-    // shape only: thinking enabled at the model's own budget). Probed
-    // 2026-10-14 against this compat endpoint: an absent max_tokens does NOT
-    // truncate (end_turn after 38K output tokens); the 2026-11 truncation
-    // note that once pinned 16K/4K here no longer reproduces.
     selfSop: "search",
     prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}`,
     tools: {
-      web_search: provider.tools.webSearch_20260209({
-        maxUses: effectiveMaxSearchRounds,
+      web_search: tool({
+        description: "Search the web with DeepSeek. Returns source URLs, titles and summaries. " +
+          `Up to ${effectiveMaxSearchRounds} searches per run; use webFetch for page contents.`,
+        inputSchema: webSearchInputSchema,
+        execute: async (input, options) => {
+          if (searchRounds >= effectiveMaxSearchRounds) {
+            return { results: [], note: "Search quota exhausted. Report what you have already found." };
+          }
+          searchRounds += 1;
+          const result = await deepseekWebSearch(input, options?.abortSignal);
+          for (const source of result.results) {
+            if (!observedSources.has(source.url)) {
+              observedSources.set(source.url, { title: source.title || source.url, url: source.url });
+            }
+          }
+          return result;
+        },
       }),
       webFetch: tool({
         description:
@@ -579,9 +390,8 @@ export async function searchViaFlash(
     progress,
     onToolProgress: ({ toolName, input: toolInput }) => {
       if (toolName === "web_search") {
-        searchRounds += 1;
         return {
-          line: `Searching the web (round ${searchRounds})…`,
+          line: `Searching the web (round ${Math.min(searchRounds + 1, effectiveMaxSearchRounds)})…`,
           stage: "running",
         };
       }
@@ -611,12 +421,7 @@ export async function searchViaFlash(
     },
   });
 
-  const sources = (res.sources ?? [])
-    .filter(
-      (s): s is typeof s & { sourceType: "url"; url: string } =>
-        s.sourceType === "url" && typeof s.url === "string"
-    )
-    .map((s) => ({ title: s.title ?? s.url, url: s.url }));
+  const sources = [...observedSources.values()];
 
   if (!res.ok) {
     // Soft-timeout degradation, aligned with recall: a run cut off

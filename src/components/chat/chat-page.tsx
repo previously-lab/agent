@@ -1,11 +1,11 @@
 "use client";
 
-import { useChat } from "@ai-sdk/react";
-import { WorkflowChatTransport } from "@ai-sdk/workflow";
+import { useDurableChat } from "@/hooks/use-durable-chat";
+import { messagesWithNativeReplay, rememberNativeReplay } from "@/lib/chat/native-replay";
 import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
 import { usePanelTier } from "./conversation-panel";
@@ -57,7 +57,6 @@ import { getChatRecovery } from "@/lib/chat/actions";
 import { usePersistenceObserver } from "@/hooks/use-persistence-observer";
 import { acceptPersistenceRecovery, readPendingPersistence, rememberSummaryRun, rememberTurnRun } from "@/lib/chat/persistence";
 import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
-import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
@@ -117,7 +116,7 @@ interface ChatPageProps {
   getView?: () => CurrentView | undefined;
 }
 
-/** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
+/** The mount-time verdict: the useDurableChat half (reconnect) plus the arrival gate
  *  half (§2 resume-vs-briefing) plus the persona both were resolved under. */
 interface MountVerdict extends ArrivalDecision {
   arrival: ArrivalState;
@@ -137,8 +136,8 @@ export function ChatPage({
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
-  // this verdict is async — Inner (and therefore useChat) mounts only after it
-  // lands, keeping useChat's init a synchronous, once-only snapshot. Until
+  // this verdict is async — Inner (and therefore useDurableChat) mounts only after it
+  // lands, keeping useDurableChat's init a synchronous, once-only snapshot. Until
   // then nothing renders (the header is outside this tree, so the page chrome
   // still shows). The verdict is gated by raceArrivalVerdict: a timeout or
   // failure shows a retry card instead of an endless skeleton.
@@ -437,24 +436,7 @@ function Inner({
   /** The §2 arrival gate — resume restores the alive slice's turns. */
   arrival: ArrivalState;
 }) {
-  // ── Model selection — reactive, persisted to config.json ─────────────
-  // The single source of truth is memory/config/settings.json (cross-device, no
-  // localStorage). The RSC layout preloads it (initialConfig) so there's no
-  // default-flash + mount reconcile; saves still write back via server action.
-  // Thinking/effort are NOT client state: the server pins thinking ON at low
-  // effort for every turn (see start-turn.ts).
   const locale = useLocale();
-  const [selectedModel, setSelectedModel] = useState(
-    initialConfig?.model.provider ?? "deepseek-flash",
-  );
-
-
-  const handleModelChange = useCallback((modelId: string) => {
-    setSelectedModel(modelId);
-    void saveUserConfig({
-      model: { provider: modelId },
-    });
-  }, []);
 
   const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
 
@@ -533,7 +515,7 @@ function Inner({
   }, [persona]);
 
   // ── The episode side store (v0.30 §4.2) ─────────────────────────────────
-  // Nested-bubble frames live OUTSIDE useChat's messages: a Map keyed by the
+  // Nested-bubble frames live OUTSIDE useDurableChat's messages: a Map keyed by the
   // inner instance's own turnId, written only by onData below (the frames are
   // transient — never UIMessage parts). They survive the turn's end within
   // the session (bubbles stay seated after their user messages); a reload
@@ -545,8 +527,7 @@ function Inner({
 
   // ── Parallel lanes (v0.33 §6) ────────────────────────────────────────────
   // A send while a turn streams starts ANOTHER standard run on a bypass lane
-  // (one useChat instance cannot carry two concurrent streams — ai@7 replaces
-  // activeResponse mid-flight and the old stream's write-back double-pushes).
+  // Each concurrent turn has an independent durable stream reader.
   // Lanes live OUTSIDE `messages` while the burst is in flight; when every
   // lane has settled and the main stream is idle, the fold below appends the
   // bypass user/answer pairs and the batch summary as ordinary messages, so
@@ -555,7 +536,7 @@ function Inner({
   const patchParallelLane = useCallback(
     (
       laneId: string,
-      patch: Partial<Pick<ParallelLane, "text" | "settled" | "runId">>,
+      patch: Partial<Pick<ParallelLane, "text" | "settled" | "runId" | "message">>,
     ) => {
       setParallelLanes((prev) =>
         prev.map((l) => (l.laneId === laneId ? { ...l, ...patch } : l)),
@@ -572,15 +553,8 @@ function Inner({
   }, []);
   useParallelLaneReaders(parallelLanes, patchParallelLane, seatMergeLine);
 
-  // Refresh-resume goes through the SDK's own path: `resume: true` calls
-  // resumeStream() on mount, and prepareReconnectToStreamRequest redirects it
-  // to the durable run (`/api/chat/<runId>/stream?startIndex=0`), which rebuilds
-  // the interrupted turn on a fresh page. The `shouldResume` / `initialMessages`
-  // verdict arrives as PROPS from ChatPage's one-shot arrival decision (the
-  // server is the only authority on whether the run is still in flight) — never
-  // recompute it from localStorage here: a mid-stream flip would re-fire
-  // useChat's `resume` effect (a second writer → #185), and an unstable
-  // messages array itself trips React #185.
+  // The one-shot arrival verdict owns resume. The transport replays the same
+  // durable run from index zero; data checkpoints rebuild with the visible text.
   const {
     messages,
     setMessages,
@@ -589,8 +563,7 @@ function Inner({
     stop,
     regenerate,
     error,
-  } = useChat({
-    // v5 SDK: initial conversation state is passed as `messages` (ChatInit).
+  } = useDurableChat({
     messages: initialMessages,
     resume: shouldResume,
     // v0.30 §4.2 — the episode's side channel: transient `data-nested-bubble`
@@ -605,7 +578,7 @@ function Inner({
         return;
       }
       // v0.40 §2.1 — the merge line's TEXT, emitted by the last finisher's
-      // tail when THAT finisher is this useChat lane (a bypass lane's reader
+      // tail when THAT finisher is this useDurableChat lane (a bypass lane's reader
       // forwards the same chunk instead). 可空: no chunk → no closing bubble.
       if (chunk.type === PARALLEL_SUMMARY_CHUNK) {
         const data = (chunk as { data?: { sliceId?: unknown; text?: unknown } }).data;
@@ -628,16 +601,10 @@ function Inner({
         return next;
       });
     },
-    // v0.8: throttle the UI updates. The resume replay (and heavy streaming)
-    // delivers chunks rapidly; each write() does setStatus + replaceMessage via
-    // useSyncExternalStore, and the per-chunk re-render storm trips React's
-    // #185 "Maximum update depth exceeded". This is the AI SDK's documented fix
-    // (ai-sdk.dev/docs/troubleshooting/react-maximum-update-depth-exceeded).
-    throttle: 50,
     // Clear a stale runId when a reconnect 404s ("Run not available") — the run
     // is gone, so a future reload shouldn't keep retrying it.
     onError: (err) => {
-      console.error("[useChat][onError]", formatErrorDetail(err));
+      console.error("[chat][stream]", formatErrorDetail(err));
       const msg = err instanceof Error ? err.message : String(err);
       if (/404|Run not available/.test(msg)) {
         clearStoredRunId();
@@ -651,73 +618,29 @@ function Inner({
     // just-finished reply.
     onFinish: ({ messages: finished }) => {
       writeStoredMessages(finished.slice(-PERSIST_MESSAGE_CAP));
+      rememberNativeReplay(finished);
     },
-    transport: new WorkflowChatTransport({
-      api: "/api/chat",
-      prepareSendMessagesRequest: (config) => {
-        const sendWindow = config.messages.slice(-SEND_MESSAGE_WINDOW);
-        // v0.13 §5 — what the reader is looking at RIGHT NOW (the shell's
-        // live cursor), as a STRUCTURED field — never text. Absent in the
-        // lobby default: the field is omitted and the server injects no
-        // per-turn block.
-        const view = getView?.();
-        return {
-          api: config.api,
-          headers: config.headers,
-          credentials: config.credentials,
-          body: {
-            // v0.8: send only the working-memory window — the rest is stored in
-            // the slice and reachable via the memory tools (see SEND_MESSAGE_WINDOW).
-            messages: sendWindow,
-            model: selectedModel,
-            timezone:
-              typeof Intl !== "undefined"
-                ? Intl.DateTimeFormat().resolvedOptions().timeZone
-                : "UTC",
-            // UI locale — the turn's relative-time annotations follow it.
-            locale,
-            loadedSliceIds: timelineSlices.map((s) => s.slice_id),
-            ...(view ? { view } : {}),
-            // v0.42 §3 [7283] — the burst identity (see handleSubmit): every
-            // message of a parallel batch carries the SAME id.
-            ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
-            // The regenerate action re-runs the previous user message — the
-            // server must NOT re-append it to the slice (and records an
-            // interaction_regenerate fitness signal). See TurnInput.regenerate.
-            ...(config.trigger === "regenerate-message"
-              ? { regenerate: true }
-              : {}),
-          },
-        };
-      },
-      // Persist the durable run id + chat id the moment a turn starts, so a
-      // dropped/reloaded tab can re-attach to the same run's stream.
-      onChatSendMessage: (response, options) => {
-        const runId = response.headers.get("x-workflow-run-id");
-        if (runId) {
-          writeStoredRunId(runId);
-          try {
-            localStorage.setItem(CHAT_ID_KEY, options.chatId);
-          } catch {
-            /* best-effort */
-          }
-        }
-      },
-      // A clean end means the run is finished — no reconnect needed.
-      onChatEnd: () => clearStoredRunId(),
-      // Point any reconnect at the durable run (not the random per-mount
-      // chatId) so a post-reload resume targets the real stream.
-      prepareReconnectToStreamRequest: (config) => {
-        const runId = readStoredRunId();
-        if (runId) {
-          return {
-            ...config,
-            api: `/api/chat/${encodeURIComponent(runId)}/stream`,
-          };
-        }
-        return config;
-      },
-    }),
+    getRunId: readStoredRunId,
+    prepareBody: (workingMessages, regenerate) => {
+      const view = getView?.();
+      return {
+        messages: messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        locale,
+        loadedSliceIds: timelineSlices.map((slice) => slice.slice_id),
+        ...(view ? { view } : {}),
+        ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
+        ...(regenerate ? { regenerate: true } : {}),
+      };
+    },
+    onRunStarted: (response, chatId) => {
+      const runId = response.headers.get("x-workflow-run-id");
+      if (runId) {
+        writeStoredRunId(runId);
+        try { localStorage.setItem(CHAT_ID_KEY, chatId); } catch { /* best-effort */ }
+      }
+    },
+    onEnd: clearStoredRunId,
   });
 
   // ── Persist the conversation (debounced) so a refresh restores it via
@@ -764,7 +687,7 @@ function Inner({
             ? `sum-${lane.runId ?? lane.laneId}`
             : `ans-${lane.runId ?? lane.laneId}`,
           role: "assistant",
-          parts: [{ type: "text" as const, text: lane.text }],
+          parts: lane.message?.parts ?? [{ type: "text" as const, text: lane.text }],
         });
       }
     }
@@ -1064,7 +987,7 @@ function Inner({
   // two-rungs rewrite — the field that hosted it is gone): the cold-open page
   // of repository history on a briefing arrival, the briefing card as a
   // stream item between history and the live edge, the arrival-restored
-  // resume block, and the live `useChat` messages.
+  // resume block, and the live `useDurableChat` messages.
   const [briefingTimeIso] = useState(() => new Date().toISOString());
   const items = useMemo<ChatStreamItem[]>(() => {
     const restored = recoveredTurnIds(messages);
@@ -1137,10 +1060,7 @@ function Inner({
     const burstId = burstIdRef.current;
 
     // ── Parallel sends (v0.33 §6): a send while a turn streams starts
-    // ANOTHER standard run on a bypass lane — one useChat instance cannot
-    // carry two concurrent streams (ai@7's makeRequest replaces
-    // activeResponse mid-flight and the old stream's write-back double-pushes
-    // the same message). The lane echoes the user text immediately, the new
+    // ANOTHER standard run with its own reader. The lane echoes the user text immediately, the new
     // run's runId arrives in the response header, and the lane reader streams
     // the answer off the durable stream. The say-into-episode route this
     // replaces never answered (episodeEnabled is off) — the red line is "no
@@ -1178,9 +1098,7 @@ function Inner({
           body: JSON.stringify({
             // Same window + fields the transport sends (see
             // prepareSendMessagesRequest) plus the new message.
-            messages: [...messages.slice(-SEND_MESSAGE_WINDOW), userMsg],
-            model: selectedModel,
-            timezone:
+            messages: [...messagesWithNativeReplay(messages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW), userMsg],            timezone:
               typeof Intl !== "undefined"
                 ? Intl.DateTimeFormat().resolvedOptions().timeZone
                 : "UTC",
@@ -1208,7 +1126,7 @@ function Inner({
       return;
     }
 
-    // Images travel as AI SDK file parts (data URLs) — convertToModelMessages
+    // Images travel as project-owned file parts (data URLs) — convertToModelMessages
     // on the server maps them to the provider's image inputs. The files are
     // already downscaled/re-encoded by use-image-attachments.
     const fileParts = await Promise.all(
@@ -1608,10 +1526,7 @@ function Inner({
           <ChatInput
             onSubmit={submitAndRise}
             isLoading={isLoading}
-            onStop={handleStop}
-            currentModelId={selectedModel}
-            onModelChange={handleModelChange}
-          />
+            onStop={handleStop}          />
         }
       />
     </>

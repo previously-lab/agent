@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { UIMessage } from "ai";
+import { type UIMessage } from "@/lib/chat/protocol";
 
 // start-turn.ts is a route module — stub its workflow boundary so importing it
 // for the pure helpers below stays hermetic.
@@ -233,7 +233,7 @@ describe("startTurn thinking/effort pinning", () => {
     });
   });
 
-  it("pins thinking ON and effort LOW, ignoring body + config", async () => {
+  it("pins thinking ON and the middle effort HIGH, ignoring body + config", async () => {
     await startTurn({
       messages,
       model: "deepseek-flash",
@@ -243,27 +243,27 @@ describe("startTurn thinking/effort pinning", () => {
     const input = turnInput();
     expect(input.model).toBe("deepseek-flash");
     expect(input.thinking).toBe(true);
-    expect(input.reasoningEffort).toBe("low");
+    expect(input.reasoningEffort).toBe("high");
   });
 
-  it("pins effort LOW even when the stored config says high", async () => {
+  it("pins the middle effort HIGH even when the stored config says high", async () => {
     await startTurn({ messages, model: "deepseek-v4-pro" });
     const input = turnInput();
     expect(input.thinking).toBe(true);
-    expect(input.reasoningEffort).toBe("low");
+    expect(input.reasoningEffort).toBe("high");
   });
 
-  it("keeps thinking OFF for models without the capability (bridge)", async () => {
+  it("ignores retired bridge env and requested model", async () => {
     process.env.PREVIOUSLY_MODE = "client";
     process.env.PREVIOUSLY_BRAIN = "bridge";
     await startTurn({ messages, model: "bridge/claude", thinking: true });
     const input = turnInput();
-    expect(input.model).toBe("bridge/claude");
-    expect(input.thinking).toBe(false);
-    expect(input.reasoningEffort).toBe("low");
+    expect(input.model).toBe("deepseek-flash");
+    expect(input.thinking).toBe(true);
+    expect(input.reasoningEffort).toBe("high");
   });
 
-  it("demo lock wins over the pin when active", async () => {
+  it("legacy demo overrides cannot change the fixed policy", async () => {
     demoLock.demoModelLock.mockReturnValue({
       model: "deepseek-flash",
       thinking: true,
@@ -277,7 +277,7 @@ describe("startTurn thinking/effort pinning", () => {
     const input = turnInput();
     expect(input.model).toBe("deepseek-flash");
     expect(input.thinking).toBe(true);
-    expect(input.reasoningEffort).toBe("medium");
+    expect(input.reasoningEffort).toBe("high");
   });
 });
 
@@ -304,7 +304,7 @@ describe("startTurn image attachment handling", () => {
     return args[1][0];
   }
 
-  it("non-vision model extracts image attachments and passes them to the workflow", async () => {
+  it("legacy model id cannot disable native image support", async () => {
     const imageUrl = "data:image/png;base64,xx";
     const msgs: UIMessage[] = [
       {
@@ -321,7 +321,8 @@ describe("startTurn image attachment handling", () => {
     // "[Unsupported Image]"), so this is the path that must extract.
     await startTurn({ messages: msgs, model: "deepseek-v4-pro" });
     const input = turnInput();
-    expect(input.imageAttachments).toEqual([imageUrl]);
+    expect(input.imageAttachments).toEqual([]);
+    expect(input.modelMessages).toEqual([{role:"user",content:[{type:"text",text:"what is this?"},{type:"image",image:imageUrl,mediaType:"image/png"}]}]);
     expect(Array.isArray(input.modelMessages)).toBe(true);
   });
 
@@ -396,4 +397,13 @@ describe("startTurn machineContext carriage", () => {
     await startTurn({ messages, machineContext: ` ${"x".repeat(5000)} ` });
     expect(turnInput().machineContext).toHaveLength(MAX_MACHINE_CONTEXT_CHARS);
   });
+});
+
+
+it("never starts capped history on an orphaned native tool result", async () => {
+  loader.loadUserConfig.mockResolvedValue({model:{provider:"deepseek-flash"}});
+  const oldMessages = [{role:"assistant",content:"earlier",deepseek:{role:"assistant",content:"earlier",reasoning_content:"why",tool_calls:Array.from({length:205},(_,i)=>({id:"t"+i,type:"function",function:{name:"read",arguments:"{}"}}))}},...Array.from({length:205},(_,i)=>({role:"tool",content:[{type:"tool-result",toolCallId:"t"+i,toolName:"read",output:{type:"text",value:"value"}}]}))];
+  await startTurn({messages:[{id:"u0",role:"user",parts:[{type:"text",text:"old"}]},{id:"a0",role:"assistant",parts:[{type:"data-deepseek-step",data:{messages:oldMessages}}]},{id:"u1",role:"user",parts:[{type:"text",text:"new"}]}]});
+  const call = workflow.start.mock.calls.at(-1) as unknown as [unknown,[{modelMessages:Array<{role:string;content:unknown}>}]];
+  expect(call[1][0].modelMessages[0]).toEqual({role:"user",content:[{type:"text",text:"new"}]});
 });

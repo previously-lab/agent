@@ -60,7 +60,8 @@
  * callback (wired by housekeeping onto the `data-evolution` channel).
  */
 
-import { tool, type Tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
+import { type Tool } from "@/lib/deepseek/types";
 import { z } from "zod";
 import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
@@ -896,7 +897,6 @@ async function attemptCall(
   session: CardSession,
   sopWrites: SopWrite[],
   directionSession: DirectionSession | null,
-  temperature: number,
 ): Promise<AttemptOutcome> {
   const res = await runSubAgent<{
     reasoning: string;
@@ -911,8 +911,7 @@ async function attemptCall(
     reportToolName: "finish",
     reportSchema: finishReportSchema,
     maxSteps: MAX_STEPS,
-    effort: "low",
-    temperature,
+    role: "summary",
     onLine: input.onLine,
   });
 
@@ -944,7 +943,6 @@ const RETRY_DELAY_MS = 300;
 async function attempt(
   input: PreviouslyAgentInput,
   today: string,
-  temperature: number,
 ): Promise<PreviouslyAgentOutput> {
   // A fresh session per attempt — a retried pass never inherits half-applied
   // mutations. The staged SOP writes and the direction working copy are
@@ -969,7 +967,7 @@ async function attempt(
         log: [],
       }
     : null;
-  const r = await attemptCall(input, session, sopWrites, directionSession, temperature);
+  const r = await attemptCall(input, session, sopWrites, directionSession);
   const failed = r.failed === true;
   // The direction moved when the working copy differs from the on-disk doc.
   const directionChanged =
@@ -1006,23 +1004,21 @@ async function attempt(
  *   - step limit w/o finish → the serialized card flagged `partial` (the
  *     loop brake force-lands repeated length violations, so partial work is
  *     bounded and sane) — the caller writes it back with a partial note;
- *   - hard failure          → ONE retry at temperature 0.4: the higher
- *     temperature breaks the deterministic re-submission loop a cold model
- *     can fall into (the session's loop brake is the in-pass guard). Still
+ *   - hard failure          → ONE retry with a fresh session. Still
  *     failing → empty card + `failed`, so the caller can no-op gracefully.
  */
 export async function runPreviouslyAgent(
   input: PreviouslyAgentInput,
 ): Promise<PreviouslyAgentOutput> {
   const today = input.todayLocal ?? new Date().toISOString().slice(0, 10);
-  const first = await attempt(input, today, 0.1);
+  const first = await attempt(input, today);
   if (!first.failed) return first;
   console.warn(
-    "[PreviouslyAgent] First attempt failed, retrying at temperature 0.4:",
+    "[PreviouslyAgent] First attempt failed, retrying with a fresh session:",
     first.reasoning,
   );
   await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-  const second = await attempt(input, today, 0.4);
+  const second = await attempt(input, today);
   if (!second.failed) return second;
   return {
     updatedCard: "",

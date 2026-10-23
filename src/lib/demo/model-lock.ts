@@ -1,59 +1,7 @@
-/**
- * Demo-mode model lock.
- *
- * PUBLIC demo deployments (the maintainer's, serving anonymous traffic on the
- * maintainer's API key) pin the model and thinking intensity server-side so
- * visitors can't switch to a pricier tier (V4 Pro) or crank reasoning effort.
- *
- * A self-hosted deployment can also land on the demo data source (prod with no
- * GITHUB_TOKEN auto-detects to demo) — indistinguishable from the public demo
- * in code, and there the key is the user's own. So the lock is OPT-IN: it only
- * activates when STORAGE resolves to "demo" AND DEMO_LOCK is truthy ("1",
- * "true", "yes"). Self-hosted deployments leave it unset and stay unlocked.
- *
- * The lock is applied in three places:
- *   - loadUserConfig (config/loader) — the client SEES the locked values
- *   - GET /api/models — the selector only lists the locked model (and hides)
- *   - startTurn (api/chat/start-turn) — the authoritative enforcement; the
- *     per-request client overrides are ignored while locked
- *
- * NOTE: because the project uses a Vercel ignore-command that skips builds when
- * only data files change, updating these environment variables may not trigger
- * an automatic redeploy. After changing DEMO_LOCK / DEMO_MODEL / DEMO_EFFORT,
- * push a code change or manually redeploy so the new values reach the runtime.
- *
- * The default targets the cheapest vision-capable DeepSeek tier so demo image
- * uploads work; override with DEMO_MODEL / DEMO_EFFORT when DeepSeek retires
- * the id — see DEMO_LOCK_DEFAULT_MODEL below for why a retired id breaks the
- * lock rather than merely failing to apply it.
- */
-import { resolveDataSource } from "@/lib/data-source/resolve";
-
-/**
- * Must stay a LIVE DeepSeek id. The catalog is live-driven — a curated-but-
- * retired id never reaches the selector, so the lock's `locked.length > 0`
- * check fails and `/api/models` falls back to the FULL list while `startTurn`
- * keeps enforcing the lock. The picker then offers models the server ignores.
- * That is what `deepseek-v4-flash-vision-exp` did after DeepSeek retired it;
- * `deepseek-flash` (verified vision-capable, 2026-09) is the current id.
- */
-export const DEMO_LOCK_DEFAULT_MODEL = "deepseek-flash";
-
-export interface DemoModelLock {
-  model: string;
-  thinking: boolean;
-  effort: "low" | "medium" | "high";
-}
-
-/** The active lock, or null when not in demo mode / lock not enabled. */
-export function demoModelLock(): DemoModelLock | null {
-  if (resolveDataSource() !== "demo") return null;
-  const enabled = process.env.DEMO_LOCK;
-  if (enabled !== "1" && enabled !== "true" && enabled !== "yes") return null;
-  const envEffort = process.env.DEMO_EFFORT;
-  return {
-    model: process.env.DEMO_MODEL || DEMO_LOCK_DEFAULT_MODEL,
-    thinking: true,
-    effort: envEffort === "medium" || envEffort === "high" ? envEffort : "low",
-  };
+import { DEEPSEEK_MODEL } from "@/lib/models/registry";
+export const DEMO_LOCK_DEFAULT_MODEL = DEEPSEEK_MODEL;
+export interface DemoModelLock { model: string; thinking: boolean; effort: "low" | "medium" | "high"; }
+/** Cloud, demo and local installations share the fixed model/profile. */
+export function demoModelLock(): DemoModelLock {
+  return { model: DEEPSEEK_MODEL, thinking: true, effort: "high" };
 }

@@ -20,11 +20,11 @@ export interface SlicingConfig {
 }
 
 export interface ModelConfig {
-  /** Provider model id (e.g. "deepseek-flash", "deepseek-v4-pro"). */
+  /** Legacy config field, normalized to deepseek-flash on every read/save. */
   provider: string;
-  /** Whether reasoning/thinking is enabled for the Pro tier. */
+  /** Legacy field; thinking is always enabled for application roles. */
   thinking: boolean;
-  /** Thinking depth: "low" | "medium" | "high". Controls reasoning token spend. */
+  /** Legacy field; normalized to high (the middle DeepSeek tier). */
   reasoningEffort: "low" | "medium" | "high";
 }
 

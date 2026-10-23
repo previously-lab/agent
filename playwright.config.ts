@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import path from "node:path";
 import {
   E2E_BASE_URL,
   E2E_HOME,
@@ -18,10 +19,7 @@ const externalBaseURL = process.env.E2E_EXTERNAL_BASE_URL;
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  // Parked: the agent-flow suite needs a model (the bridge costs minutes per
-  // call; a DeepSeek-direct setup is pending) and its second send lands on the
-  // document desk. Blacklisted here rather than rewritten — the file stays as
-  // written for whoever picks it up.
+  // Live model calls require a separate, explicitly authorized verification.
   testIgnore: ["**/agent-flow.spec.ts"],
   fullyParallel: true,
   forbidOnly: true,
@@ -49,15 +47,14 @@ export default defineConfig({
     : {
         webServer: {
           // prepare-env wipes the isolated state roots, generate-identity mirrors the
-          // predev hook, then the dev server boots in client + subscription-bridge
-          // mode against throwaway temp dirs — never the developer's ~/.previously.
+          // predev hook, then the client boots against throwaway temp dirs.
           command: `node tests/e2e/prepare-env.mjs && node scripts/generate-identity.mjs && pnpm exec next dev --turbopack --port ${E2E_PORT}`,
           port: E2E_PORT,
-          reuseExistingServer: !process.env.CI,
+          // A pre-existing server may have a real key or a different memory root.
+          reuseExistingServer: false,
           timeout: 180_000,
           env: {
             PREVIOUSLY_MODE: "client",
-            PREVIOUSLY_BRAIN: "bridge",
             PREVIOUSLY_HOME: E2E_HOME,
             MEMORY_ROOT: E2E_MEMORY_ROOT,
             WORKFLOW_LOCAL_DATA_DIR: E2E_WORKFLOW_ROOT,
@@ -71,6 +68,16 @@ export default defineConfig({
             // .env.local must not leak a datasource override (e.g. a
             // developer's STORAGE=demo) into the seeded local fixture.
             STORAGE: "local",
+            // Explicit values prevent .env.local from restoring credentials.
+            DEEPSEEK_API_KEY: "",
+            OPENAI_API_KEY: "",
+            ANTHROPIC_API_KEY: "",
+            TAVILY_API_KEY: "",
+            EXA_API_KEY: "",
+            BRAVE_SEARCH_API_KEY: "",
+            // Defense in depth: the server can call its local Workflow routes,
+            // but a missed browser mock can never reach an inference/search API.
+            NODE_OPTIONS: `--require "${path.resolve("tests/e2e/deny-network.cjs").replaceAll("\\", "/")}"`,
           },
         },
       }),

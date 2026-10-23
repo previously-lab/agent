@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const ai = vi.hoisted(() => ({ streamText: vi.fn() }));
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
+vi.mock("@/lib/deepseek/generate", async () => {
+  const actual = await vi.importActual("@/lib/deepseek/generate");
   return { ...actual, streamText: ai.streamText };
 });
 vi.mock("@/lib/models/provider", () => ({

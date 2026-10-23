@@ -11,6 +11,7 @@
  * answers capability questions derived from that source.
  */
 
+import { getAvailableModels } from "@/lib/models/registry";
 import { resolveDataSource, isWritable } from "@/lib/data-source/resolve";
 
 // ─── Core checks ──────────────────────────────────────────────────────────
@@ -21,35 +22,13 @@ import { resolveDataSource, isWritable } from "@/lib/data-source/resolve";
  * the coarse "can we make any AI call" gate; the full dynamic catalog (which
  * may include providers beyond this list) is resolved in @/lib/models/catalog.
  */
-const PROVIDER_ENV: Record<string, string[]> = {
-  deepseek: ["DEEPSEEK_API_KEY"],
-  anthropic: ["ANTHROPIC_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
-  moonshotai: ["MOONSHOT_API_KEY"],
-  alibaba: ["DASHSCOPE_API_KEY"],
-  google: ["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
-  mistral: ["MISTRAL_API_KEY"],
-  xai: ["XAI_API_KEY"],
-  groq: ["GROQ_API_KEY"],
-};
-
-/** Is a specific model provider's API key configured? */
 export function isProviderConfigured(provider: string): boolean {
-  const keys = PROVIDER_ENV[provider];
-  return keys ? keys.some((k) => !!process.env[k]) : false;
+  return provider === "deepseek" && getAvailableModels().length > 0;
 }
-
-/** Provider names whose API key is configured, in a stable order. */
 export function getConfiguredProviders(): string[] {
-  return Object.entries(PROVIDER_ENV)
-    .filter(([, keys]) => keys.some((k) => !!process.env[k]))
-    .map(([provider]) => provider);
+  return isProviderConfigured("deepseek") ? ["deepseek"] : [];
 }
-
-/** Can the app make AI calls? Any known provider key is configured. */
-export function isAIConfigured(): boolean {
-  return getConfiguredProviders().length > 0;
-}
+export function isAIConfigured(): boolean { return isProviderConfigured("deepseek"); }
 
 /**
  * Is the app in read-only demo mode?

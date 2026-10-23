@@ -48,7 +48,9 @@
  * start → start-step → (reply) → data-evolution? → data-turn-status →
  * finish-step → finish.
  */
-import { type UIMessageChunk, type ModelMessage, streamText } from "ai";
+import { type UIMessageChunk } from "@/lib/chat/protocol";
+import { type ModelMessage } from "@/lib/deepseek/types";
+import { streamText } from "@/lib/deepseek/generate";
 import crypto from "crypto";
 import { getWritable, getWorkflowMetadata, setAttributes } from "workflow";
 import { getRun, resumeHook, start } from "workflow/api";
@@ -103,21 +105,8 @@ import {
   readUserProfile,
 } from "@/lib/evolution/store";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
-import {
-  adaptHousekeepingReport,
-  applyBridgeCardEvolution,
-  degradedAnalysis,
-  isPhaseOutsourceActive,
-  runHousekeepingBridge,
-  type HousekeepingPhaseReport,
-} from "@/lib/bridge-phases";
-import {
-  createBridgeEventEmitter,
-  type BridgePhaseData,
-} from "@/lib/models/bridge-model";
-import { createModel } from "@/lib/models/provider";
-import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
-import type { HousekeepingStep } from "@/lib/chat/build-stream";
+
+
 import {
   buildAgentIdentityPrompt,
   parseIdentityFromPreviously,
@@ -637,11 +626,8 @@ const CHECKPOINT_CARRY_OVER_TURNS = 10;
  * step boundary.
  */
 export interface EntryReckoning {
-  /** The entry analyzeTurn result (or the adapted bridge housekeeping report). */
+  /** The entry analyzeTurn result. */
   analysis: TurnAnalysis | null;
-  /** Client/bridge mode only: the raw bridge report — 序 6 applies its card
-   *  mutations through the card-session machinery (applyBridgeCardEvolution). */
-  bridgeReport: HousekeepingPhaseReport | null;
   /** Evidence attachments (names + base64 bytes) the user sent THIS
    *  beat — the entry beat commits nothing, so the summary stream
    *  persists them through the same fuse semantics (v0.42 review
@@ -691,67 +677,8 @@ export async function housekeeping(
   // fresh-writer-per-write races drop frames (see createStepStream).
   const stream = createStepStream();
 
-  // ── Phase display: two modes, two components ─────────────────────────
-  // Edge mode emits one compact data-phase chunk per engineering sub-step
-  // (slice / analyze / slice-closed / context) — the client merges them into
-  // the HousekeepingCard checklist.
-  // Client (outsourced) mode renders ONE streaming card instead: the whole
-  // analysis is a single agent call + deterministic wrap-up, so the card
-  // streams the CLI's live activity (tool rows + narration line, fed by the
-  // bridge emitter below) and fills in wrap-up rows as the engineering
-  // steps complete — the edge checklist is NOT emitted (it would sit idle
-  // through the whole call, then jump to done).
-  // The gate also requires the turn's model to run on the bridge — a BYOK
-  // model (sdk "openai") under a bridge env brain keeps the analysis on the
-  // standard API sub-agent path.
-  const phaseOutsource = isPhaseOutsourceActive(input.modelConfig.sdk);
-  /** Wrap-up rows of the client-mode card (same shape as the checklist). */
-  const hkSteps: HousekeepingStep[] = [];
-  /** Last bridge-emitter frame state, folded into every card frame. */
-  const hkActivity: {
-    tools: BridgePhaseData["tools"];
-    live?: string;
-    /** Set when the bridge call failed and the beat degraded to the
-     *  deterministic path — the card shows an amber warning. */
-    warning?: string;
-  } = {
-    tools: [],
-  };
-  const sendHousekeepingCard = (running: boolean) =>
-    stream.send({
-      type: "data-phase" as `data-${string}`,
-      id: "phase-bridge-housekeeping",
-      data: {
-        phase: "bridgeHousekeeping",
-        running,
-        summaries: [],
-        tools: hkActivity.tools,
-        ...(hkActivity.live ? { live: hkActivity.live } : {}),
-        ...(hkActivity.warning ? { warning: hkActivity.warning } : {}),
-        steps: hkSteps.map((s) => ({ ...s })),
-      },
-    } as UIMessageChunk);
-  /** Phase display dispatch: edge → compact checklist chunk; client → a
-   *  wrap-up row inside the bridge housekeeping card. */
-  const emitStep = async (
-    phase: string,
-    running: boolean,
-    summaries?: string[],
-  ): Promise<void> => {
-    if (!phaseOutsource) return emitPhase(stream, phase, running, summaries);
-    const existing = hkSteps.find((s) => s.phase === phase);
-    if (existing) {
-      existing.running = running;
-      if (summaries !== undefined) existing.summaries = summaries;
-    } else {
-      hkSteps.push({
-        phase,
-        running,
-        ...(summaries !== undefined ? { summaries } : {}),
-      });
-    }
-    sendHousekeepingCard(hkSteps.some((s) => s.running));
-  };
+  const emitStep = (phase: string, running: boolean, summaries?: string[]) =>
+    emitPhase(stream, phase, running, summaries);
 
   // ── Phase: slice — manage the time slice (recover/create; decide) ────
   await emitPhase(stream, "slice", true);
@@ -812,7 +739,7 @@ export async function housekeeping(
   // (D10). The registry is an ENHANCER, never a blocker: a world without
   // native attributes or a transient list failure just means no note.
   let parallelSiblings: number | undefined;
-  if (!input.useDemo && input.modelConfig.sdk !== "bridge") {
+  if (!input.useDemo) {
     try {
       const ownId = getWorkflowMetadata().workflowRunId;
       await setAttributes({
@@ -845,54 +772,16 @@ export async function housekeeping(
   // is always zero-归纳. The summary stream re-runs the same analyzer over
   // the ended page when it seals one (same deterministic fallback).
   let analysis: TurnAnalysis | null = null;
-  let bridgeReport: HousekeepingPhaseReport | null = null;
+
   if (!input.useDemo) {
     await emitStep("analyze", true);
-    if (phaseOutsource) {
-      const bridgeCardRaw =
-        (await readUserModel(batch).catch(() => null))?.card ?? "";
-      const bridgeActivity = createBridgeEventEmitter({
-        id: "phase-bridge-housekeeping",
-        phase: "bridgeHousekeeping",
-        write: (data: BridgePhaseData) => {
-          hkActivity.tools = data.tools;
-          hkActivity.live = data.live;
-          sendHousekeepingCard(
-            data.running || hkSteps.some((s) => s.running),
-          );
-        },
-      });
-      const bridgeResult = await runHousekeepingBridge(
-        {
-          userMessage: lastUserMessage,
-          recentTurns: input.recentTurns,
-          cardContent: bridgeCardRaw,
-          sliceId: slice.slice_id,
-          closingSlice: undefined,
-          todayLocal,
-          locale: input.locale,
-        },
-        { onEvent: bridgeActivity.onEvent, onDelta: bridgeActivity.onDelta },
-      );
-      bridgeActivity.finish();
-      if (bridgeResult.ok) {
-        bridgeReport = bridgeResult.report;
-        analysis = adaptHousekeepingReport(bridgeResult.report, false);
-      } else {
-        console.warn(
-          `[HousekeepingBridge] ${bridgeResult.reason} — degraded to the deterministic path`,
-        );
-        analysis = degradedAnalysis();
-        hkActivity.warning = bridgeResult.reason;
-        sendHousekeepingCard(hkSteps.some((s) => s.running));
-      }
-    } else {
+
       analysis = await analyzeTurn({
         model: input.modelConfig,
         userMessage: lastUserMessage,
         closingSlice: undefined,
       });
-    }
+
     await emitStep("analyze", false);
   }
 
@@ -1123,7 +1012,7 @@ export async function housekeeping(
     sliceHeadBlock,
     identityPrompt,
     analysis,
-    bridgeReport,
+
     evidenceAttachments,
     previouslyUpdate,
     sliceOnDisk: !!diskSlice,
@@ -1361,7 +1250,7 @@ export async function finalizeTurn(
   // (read-only preview — 空转零写入).
   const before2 = batch.entries.size;
   if (!input.useDemo) {
-  const phaseOutsource = isPhaseOutsourceActive(input.modelConfig.sdk);
+
   // Ages compare against the USER's local calendar date, not UTC.
   const todayLocal =
     localDateKey(input.startedAtIso, input.clientTimezone) ??
@@ -1418,49 +1307,10 @@ export async function finalizeTurn(
     }
   };
   const explicitUpdate = hk.analysis?.memoryUpdate;
-  /** Client/bridge mode: the entry beat's raw report — its mutation
-   *  proposals apply through the card-session machinery (no second spawn). */
-  const bridgeReport = hk.bridgeReport;
 
   try {
     if (explicitUpdate) {
-      if (phaseOutsource) {
-        // Bridge path: the mutation proposals arrived in the SAME bridge call
-        // as the analysis — apply them through the card-session machinery
-        // (applyBridgeCardEvolution), no second spawn.
-        const cardRaw =
-          (await readUserModel(batch).catch(() => null))?.card ?? "";
-        if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
-          // The card opens in its running state first — a terminal chunk out
-          // of nowhere reads as "it never ran".
-          emitEvolutionProgress(stream, "reviewing");
-          evolutionResult = await withSliceLock("evolution", () =>
-            applyBridgeCardEvolution({
-              card: cardRaw,
-              sliceId: slice.slice_id,
-              today: todayLocal,
-              reason: bridgeReport.evolution.reason || explicitUpdate.content,
-              mutations: bridgeReport.evolution.mutations,
-              batch,
-            }),
-          );
-          await emitEvolutionResult(stream, evolutionResult);
-          await freezeEvolutionSummary(slice);
-          console.log(
-            `[Evolution] bridge user request: changed=${evolutionResult.changed}`,
-          );
-        } else {
-          await emitEvolutionResult(stream, {
-            ran: false,
-            changed: false,
-            droppedRecent: 0,
-            note: bridgeReport
-              ? `Memory update noted — no card mutation proposed (${bridgeReport.evolution.reason || "no reason given"}).`
-              : "Housekeeping bridge unavailable — card evolution skipped this turn.",
-            ...(bridgeReport ? {} : { error: "housekeeping bridge failed" }),
-          });
-        }
-      } else {
+
         // The direction half of the folded model is orientation for the
         // product phase even on an explicit-request run (no direction
         // evaluation and no SOP writes on this channel).
@@ -1486,7 +1336,7 @@ export async function finalizeTurn(
         console.log(
           `[Evolution] explicit user request: changed=${evolutionResult.changed}`,
         );
-      }
+
     }
   } catch (err) {
     console.error(
@@ -2041,7 +1891,7 @@ export async function decideBurstMergeLine(
 /**
  * The merge line's ONE model call (v0.38 §3.2 ②) — no stream writes (the
  * turn's message is already complete; the line rides a transient chunk), no
- * token cap (project-wide ban), thinking OFF (a mechanical reconciliation).
+ * token cap (project-wide ban), summary-role low thinking (a mechanical reconciliation).
  * The prompt's contract: output EMPTY when no answer corrects or contradicts
  * another — 收合只在需要时存在. A model failure returns "" (the caller
  * skips the merge line; the turn is never blocked by its closer).
@@ -2056,15 +1906,10 @@ async function runMergeLineCall(
         ? "你是 Previously 的收尾员。用户在同一时间窗里连发了数条消息，每条已由一个并行实例各自作答（下面按顺序给出这一轮的用户消息与回答）。若后面的消息更正或矛盾于前面的内容（例如「不是包子，是饺子」），用 1–2 句话给出收束，一律以最新陈述为准。若各回答互不矛盾、已经完整，输出 EMPTY（不需要收尾）。不要逐条复述、不用列表、不道歉。"
         : "You are Previously's closer. The user fired several messages in one burst; each was answered by a parallel instance (the user messages and their answers follow, in order). When a later message corrects or contradicts an earlier one (\"not buns — dumplings\"), write a 1–2 sentence closing, the latest statement wins. When the answers do not conflict and are complete, output EMPTY (no closing needed). No per-message recap, no lists, no apologies.";
     const result = streamText({
-      model: createModel(params.modelConfig),
+      role: "summary",
       system,
       prompt: windowText,
-      providerOptions: normalizeReasoningEffort(
-        params.modelConfig.sdk,
-        params.modelConfig.id,
-        false,
-        "low",
-      ),
+      thinking: true,
     });
     let text = "";
     for await (const delta of result.textStream) {

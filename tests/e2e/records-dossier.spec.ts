@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./test";
+import type { Page } from "@playwright/test";
 import {
   clearCases,
   clearDossier,
@@ -14,7 +15,7 @@ import {
  * Records-as-papers + Dossier + desk memory e2e (v0.25b §三, v0.25 §3.4/§4):
  *
  * RECORDS — every time bucket in the archive field carries ONE record pile
- * (its thickness tiers off the bucket's turn volume); opening it reads the
+ * (its thickness tiers off the light index's slice count); opening it reads the
  * bucket's NEWEST slice as a verbatim transcript on the A4 desk — speaker
  * labels over the turns, and the v0.28 letterhead: the wordmark over the
  * slice's wall clock + timezone, the bare RECORD, and the day folder. DOSSIER — the two self-documents (current-previously / direction)
@@ -47,15 +48,17 @@ function recordPiles(page: Page) {
   return page.locator("[data-record-pile]");
 }
 
-/** Seed two record buckets (two slices on day-1, one on day-2) plus one case
+/** Seed two record buckets (four slices on day-1, one on day-2) plus one case
  *  (a records-only field has a single column, which lays out flat with no
  *  header unit — the header assertion needs the mixed grid), and land on the
  *  field with both record piles mounted. */
 async function openRecordField(page: Page): Promise<{ newestA: string }> {
   const a1 = makeSlice(daysAgoIso(1, 9), { tag: "RA1" });
   const a2 = makeSlice(daysAgoIso(1, 14), { tag: "RA2" });
+  const a3 = makeSlice(daysAgoIso(1, 6), { tag: "RA3" });
+  const a4 = makeSlice(daysAgoIso(1, 11), { tag: "RA4" });
   const b1 = makeSlice(daysAgoIso(2, 10), { tag: "RB1" });
-  await seedSlices([a1, a2, b1]);
+  await seedSlices([a1, a2, a3, a4, b1]);
   await seedCases([
     {
       category: "research",
@@ -76,7 +79,7 @@ test.describe("Records are papers", () => {
     await clearDossier();
   });
 
-  test("every bucket's record pile tiers off its turns and opens the newest slice's transcript", async ({
+  test("every bucket's record pile tiers off indexed slices and opens the newest transcript", async ({
     page,
   }) => {
     const { newestA } = await openRecordField(page);
@@ -86,9 +89,11 @@ test.describe("Records are papers", () => {
       page.locator(".archive-header").getByText("Records", { exact: true }),
     ).toBeVisible();
 
-    // Thickness follows the bucket's TURN volume: day-1 holds 2 slices × 2
-    // turns = 4 → medium (6 sheets); day-2 holds 2 turns → thin (3).
+    // The archive uses the light index only: four slice IDs give a medium
+    // pile (6 sheets), one gives a thin pile (3). No per-slice detail sweep.
     const pileA = page.locator(`[data-archive-pile="records/${newestA}"]`);
+    await expect(pileA).toHaveAccessibleName(/4 conversations/);
+    await expect(pileA).not.toHaveAccessibleName(/turns/);
     await expect(pileA.locator(".archive-sheet")).toHaveCount(6);
     await expect(
       recordPiles(page).nth(1).locator(".archive-sheet"),

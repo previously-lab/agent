@@ -6,20 +6,10 @@
  * re-binding it after each mutating step (the module-global `activeSlice` is
  * unusable here — steps run in separate invocations).
  *
- * The agent loop runs in TWO shapes (v0.31): on episode-capable deployments
- * the outer run is a pure ORCHESTRATOR SHELL — it spawns one child run per
- * user message (inner-turn-workflow.ts, each a full WorkflowAgent with its own
- * durable stream), watches the inbox hook, reconciles child reports from the
- * run registry every busy lap (v0.32 — the hook is only a wake-up tap), and
- * persists everything at finalize; the only model call it makes itself is the
- * closing merge summary.
- * Bridge/demo turns keep the classic shape: the outer run IS the answerer and
- * its Pro agent loop runs HERE, in the workflow body, via WorkflowAgent
- * (AI SDK 7 `@ai-sdk/workflow`): each LLM call and each tool call becomes its
- * own durable step (tool executors are standalone `"use step"` functions in
- * src/app/api/agent/tool-executors.ts). Everything else — slice housekeeping,
- * Flash recall, prompt assembly, persistence — lives behind the `"use step"`
- * functions in ./steps, imported here by reference only.
+ * The native DeepSeek agent runs inline in the durable turn. Each model call
+ * and standalone tool executor is a separate checkpoint. The older episode
+ * orchestrator remains disabled; its child-run recovery code is retained.
+ * Housekeeping, recall and persistence live behind the steps in ./steps.
  *
  * GitHub remains the source of truth for memory: the steps write slices,
  * indexes, strands, and notes straight to the repo. The workflow is
@@ -28,10 +18,11 @@
  * Lives under src/app so the `withWorkflow` loader (which scans app/src/app by
  * default) picks up the `"use workflow"` directive.
  */
-import { isStepCount, type ModelMessage } from "ai";
+import { isStepCount } from "@/lib/deepseek/tools";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import { createHook, getWritable, sleep } from "workflow";
 import { start } from "workflow/api";
-import type { ModelCallStreamPart } from "@ai-sdk/workflow";
+import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type {
@@ -184,11 +175,9 @@ export function extractAllAssistantText(
  * Mechanically extract the agent's cognitive process from its message history
  * AND step results.
  *
- * IMPORTANT: In the WorkflowAgent, `result.messages` does NOT contain reasoning
- * parts — the agent strips them when building `conversationPrompt` (see
- * stream-text-iterator.ts:399-415). Reasoning is preserved only in
- * `result.steps[].reasoning`. Tool-call→result statuses are resolved from
- * tool-role messages in `result.messages`.
+ * Native messages preserve raw reasoning for replay. For the persisted
+ * cognition view, use step reasoning exactly once and message tool results
+ * to resolve each call status.
  *
  * This function merges both sources:
  *   - Reasoning + tool calls → from steps
@@ -379,11 +368,13 @@ export function extractThinkDeepReports(
 // ─── Timeout continuation (message assembly) ─────────────────────────────
 
 /**
- * A completed LLM step of an interrupted `agent.stream()` run, captured via
- * `onStepEnd` (the killed step itself never completes — its in-flight partial
- * is lost; the client already saw it via the live stream).
+ * A checkpointed model response and its completed tool results. Native HTTP
+ * interruptions preserve received text/reasoning; a platform-killed invocation
+ * can only recover the checkpoints that completed before it was killed.
  */
 export interface ContinuationStepSnapshot {
+  /** Exact assistant and tool messages from the completed native step. */
+  messages?: ModelMessage[];
   /** Assistant text the step produced ("" when it only called tools). */
   text: string;
   toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
@@ -393,28 +384,6 @@ export interface ContinuationStepSnapshot {
     output: unknown;
     isError?: boolean;
   }>;
-}
-
-/** Wrap a raw tool output into the ModelMessage tool-result envelope. */
-function toToolResultOutput(
-  result: ContinuationStepSnapshot["toolResults"][number],
-): { type: "text"; value: string } | { type: "error-text"; value: string } | { type: "json"; value: unknown } {
-  if (result.isError) {
-    const value =
-      typeof result.output === "string"
-        ? result.output
-        : (JSON.stringify(result.output) ?? "tool error");
-    return { type: "error-text", value };
-  }
-  if (typeof result.output === "string") {
-    return { type: "text", value: result.output };
-  }
-  try {
-    JSON.stringify(result.output);
-    return { type: "json", value: result.output };
-  } catch {
-    return { type: "text", value: String(result.output) };
-  }
 }
 
 /**
@@ -440,40 +409,13 @@ export function buildTimeoutContinuation(opts: {
   nudge: string;
 }): ModelMessage[] {
   const messages: ModelMessage[] = [...opts.history];
-
+  let carriedNative = false;
   for (const step of opts.steps) {
-    if (step.toolCalls.length === 0) continue;
-    messages.push({
-      role: "assistant",
-      content: step.toolCalls.map((tc) => ({
-        type: "tool-call" as const,
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        input: tc.input,
-      })),
-    });
-    // Only results whose call is actually in the assistant message above.
-    const results = step.toolResults.filter((tr) =>
-      step.toolCalls.some((tc) => tc.toolCallId === tr.toolCallId),
-    );
-    if (results.length > 0) {
-      messages.push({
-        role: "tool",
-        content: results.map((tr) => ({
-          type: "tool-result" as const,
-          toolCallId: tr.toolCallId,
-          toolName: tr.toolName,
-          output: toToolResultOutput(tr),
-        })),
-      } as ModelMessage);
-    }
+    if (step.messages?.length) { messages.push(...step.messages); carriedNative = true; }
   }
-
-  const partial = opts.partialText.trim();
-  if (partial) {
-    messages.push({ role: "assistant", content: partial });
-  }
-  messages.push({ role: "user", content: opts.nudge });
+  // Legacy snapshots cannot recreate authentic provider tool calls. Retain their text only.
+  if (!carriedNative && opts.partialText.trim()) messages.push({role:"assistant",content:opts.partialText.trim()});
+  messages.push({role:"user",content:opts.nudge});
   return messages;
 }
 
@@ -625,86 +567,12 @@ export function buildHistoryWindow(opts: {
   return withCheckpointPrefix(base, opts.contextPrefix);
 }
 
-// ─── Bridge mode — notice + fresh-time injection ─────────────────────────
-
-/**
- * L5b — the subscription-bridge limitation notice, injected as the
- * `bridgeNotice` block only when the turn's main model is a bridge model
- * (`modelConfig.sdk === "bridge"`). Exported so tests can pin the contract.
- *
- * The model is a local subscription CLI spawned by the Previously client, so
- * NO kernel tools are mounted for the turn (see createChatAgent). The prompt
- * blocks above still name the kernel tools, so the notice must say explicitly
- * that they are not available here — an unannounced tool-less model would
- * hallucinate calls to them. Memory access instead happens on the bridge side
- * through the client's CONSTRAINED read-only reader commands, described by the
- * per-call workspace instruction file (CLAUDE.md / AGENTS.md); past-looking
- * questions are delegated to a recall sub-agent per the workspace
- * `skills/recall.md` spec (materialized by the client from the payload's
- * `skills.recall`, see src/lib/bridge-skills.ts), which reads the slices
- * itself and returns an evidence-anchored answer.
- */
-export const BRIDGE_NOTICE = `## Subscription bridge mode
-
-You are running as the user's local subscription CLI, invoked by the Previously client. Memory access goes through the read-only reader commands (\`previously timeline\`, \`previously slicesummary\`, \`previously readslice\`, \`previously card\`, \`previously agentlog\`) described by the instruction file (CLAUDE.md or AGENTS.md) in your working directory; read it first, and do not read or write the memory directory directly. (\`previously strands\` still answers, but over a FROZEN legacy index — no new slices enter it, so it covers old conversations only; never treat a strands miss as absence.) When a question touches the past, spawn a sub-agent to search per the \`skills/recall.md\` spec in your workspace (if your runtime supports sub-agents) — it reads the memory itself with the read-only reader commands and returns an answer anchored to verbatim-quote evidence. The kernel tools mentioned elsewhere in this prompt (recallRecent/recallFind/recallSearch/recallRead, webSearch, thinkDeep, delegateTask, …) are NOT available to you here: any thinkDeep guidance elsewhere in this prompt does NOT apply in this mode — use your own native deep-reasoning and search capabilities instead. Conversation persistence and memory evolution are handled outside your process; never try to save or update memory yourself. Your final reply is rendered verbatim in a chat UI — output only the answer, no preamble or meta-commentary.`;
-
-/**
- * Bridge-mode fresh clock read. The system prompt is slice-frozen (prefix
- * caching) and the bridge CLI mounts no kernel tools — so it has no
- * `currentTime` tool to ask for the real "now". Instead the turn stamps the
- * time onto the OUTBOUND tail of the last user message (never the system
- * prompt, never written back to the client history). Zero I/O: the slice's
- * remaining minutes are derived from the slice id itself (its UTC start is
- * encoded in the id, same trick as the currentTime executor). When the
- * remaining time can't be derived (unparseable id, past the cap), only the
- * time part is sent.
- *
- * Pure — `nowIso` is the route-stamped turn start (TurnInput.startedAtIso),
- * so the workflow sandbox never touches a live clock.
- */
-export function buildBridgeTimeLine(opts: {
-  sliceId: string;
-  maxSliceMinutes: number;
-  timezone: string;
-  nowIso: string;
-  /**
-   * When provided, the closing hint also names the idle-gap close (silence of
-   * this many minutes ends the slice EARLIER than the cap — v0.9.1: the hint
-   * used to quote only the time_cap remainder, promising time the idle gap
-   * would not grant). The idle timer resets on every message, so it is
-   * phrased as a silence threshold, not a countdown.
-   */
-  idleGapMinutes?: number;
-}): string {
-  const t = formatLocalTime(opts.nowIso, opts.timezone);
-  const offset = t.offset ? `, ${t.offset}` : "";
-  let line = `\n\n[Current time: ${t.local} (${t.zone}${offset}) / ${t.utc}`;
-  const parsed = parseSliceId(opts.sliceId);
-  if (parsed) {
-    const startMs = Date.parse(
-      `${parsed.y}-${parsed.m}-${parsed.d}T${parsed.hm.slice(0, 2)}:${parsed.hm.slice(2)}:00.000Z`,
-    );
-    const nowMs = Date.parse(opts.nowIso);
-    if (!Number.isNaN(startMs) && !Number.isNaN(nowMs)) {
-      const elapsedMin = Math.max(0, Math.floor((nowMs - startMs) / 60_000));
-      const remaining = opts.maxSliceMinutes - elapsedMin;
-      if (remaining > 0) {
-        line += `; slice closes in ~${remaining} min`;
-        if (opts.idleGapMinutes !== undefined) {
-          line += ` at the latest, or after ~${opts.idleGapMinutes} min of silence`;
-        }
-      }
-    }
-  }
-  return line + "]";
-}
-
 /**
  * Append a line to the LAST user message's text tail (outbound copy — the
  * input array and its message objects are left untouched). No-op when the
  * window carries no user message.
  */
-export function appendBridgeTimeSuffix(
+export function appendContextSuffix(
   messages: ModelMessage[],
   line: string,
 ): ModelMessage[] {
@@ -727,7 +595,7 @@ export function appendBridgeTimeSuffix(
  * The optional machine context block (TurnInput.machineContext — the game
  * client's visit log, engine-built and already fenced by visit-log.ts) as its
  * OWN marked section, appended to the last user message's OUTBOUND copy via
- * the appendBridgeTimeSuffix mechanics. The wrapper names the source (the
+ * the appendContextSuffix mechanics. The wrapper names the source (the
  * client engine) and fences the block off twice over: it must never read as
  * user speech and never as an instruction.
  *
@@ -864,8 +732,6 @@ The user and Previously built this space together: they look back, discuss, and 
  *   L3 sliceHeadBlock  — slice-start snapshot: local time, date anchors,
  *                        birth continuity, birth-evolution summary, drift hint
  *   L5 demoNotice      — static
- *   L5b bridgeNotice — client-mode subscription-bridge limitation notice;
- *                        constant for the deployment's brain config
  *   L6 dueTasksBlock   — the background stream's completion statements (tasks/
  *                        tail lines dated the user's local today); the LEAST
  *                        stable block (it can appear mid-slice when background
@@ -920,12 +786,6 @@ export function assembleSystemPrompt(opts: {
   sliceHeadBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
   demoNotice: string;
-  /**
-   * Pre-built "## Subscription bridge…" limitation notice (bridge main model
-   * has no kernel tools), or ""/undefined to omit. Optional so existing
-   * callers/tests are unaffected.
-   */
-  bridgeNotice?: string;
   /** "YYYY-MM-DD" slice-head local date — anchors the card-freshness header. */
   dateAnchor: string;
 }): string {
@@ -938,7 +798,6 @@ export function assembleSystemPrompt(opts: {
     dueTasksBlock,
     sliceHeadBlock,
     demoNotice,
-    bridgeNotice,
     dateAnchor,
   } = opts;
   return [
@@ -951,7 +810,6 @@ export function assembleSystemPrompt(opts: {
     userProfileBlock ?? "",
     sliceHeadBlock,
     demoNotice,
-    bridgeNotice ?? "",
     dueTasksBlock ?? "",
   ]
     .filter(Boolean)
@@ -979,18 +837,18 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // Bridge/demo turns never nest (D10): no hook, no drain — byte-identical
   // to the pre-episode turn.
   // TEMP (2026-10-14): nested-episode answering hard-OFF. Turns take the
-  // classic single-run branch below (byte-identical to bridge/demo turns) —
+  // classic single-run branch below (shared by client and cloud turns) —
   // no child runs, no inbox, no grace window — while the episode architecture
   // (child-run report channel + the platform's lost-wake exposure) is
   // reworked. Restore by reverting this line to:
-  //   !input.useDemo && input.modelConfig.sdk !== "bridge"
+  //   !input.useDemo
   const episodeEnabled = false;
   // Parallel sends (v0.33): while a turn streams, sending again starts another
   // STANDARD turn run — every run stamps itself into the run registry at
   // housekeeping, and the last survivor spawns the batch's summary run (the
   // tail below). Bridge/demo deployments stay out of the registry (D10):
   // their turns keep the classic shape with no marking, no note, no summary.
-  const parallelEnabled = !input.useDemo && input.modelConfig.sdk !== "bridge";
+  const parallelEnabled = !input.useDemo;
   const episodeRunId = episodeEnabled ? await ownRunId() : "";
   const inboxHook = episodeEnabled
     ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
@@ -1082,14 +940,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`
       : "",
-    // Bridge main model (client mode, PREVIOUSLY_BRAIN=bridge): the model is
-    // a local subscription CLI spawned by the Previously client, so NO kernel
-    // tools are mounted for this turn (see createChatAgent). The static notice
-    // (BRIDGE_NOTICE) says so explicitly — an unannounced tool-less model
-    // would hallucinate calls to the kernel tools the other blocks name. It is
-    // constant for the deployment's brain config, so the freeze is intact.
-    bridgeNotice:
-      input.modelConfig.sdk === "bridge" ? BRIDGE_NOTICE : "",
     dateAnchor,
   });
 
@@ -1179,6 +1029,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // timeout continuation so the re-invoked agent resumes from the COMMITTED
   // context (tool calls + results + text) instead of re-deriving it.
   let interruptedSteps: ContinuationStepSnapshot[] = [];
+  const producedMessages: ModelMessage[] = [];
+  let allCognition = "";
 
   const agent = createChatAgent({
     model: input.modelConfig,
@@ -1207,12 +1059,11 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // serialized payload bounded.
       imageAttachments: input.imageAttachments,
     }),
-    // Fire after every COMPLETED LLM step: snapshot its text + tool
-    // calls/results for a possible timeout continuation. (The killed step
-    // itself never completes, so its in-flight partial is lost — the client
-    // already received it via the live stream, and the continuation works
-    // from the committed context.)
+    // Snapshot exact native messages, including checkpointed partial HTTP
+    // output, for recovery and bounded platform-timeout continuation.
     onStepEnd: (step) => {
+      producedMessages.push(...step.response.messages);
+      allCognition += extractCognition(step.response.messages, [step]);
       // Provider warnings (unsupported settings, silent downgrades such as
       // dropped image parts) never throw — log them so a quiet degradation is
       // visible in the server log.
@@ -1224,6 +1075,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         );
       }
       interruptedSteps.push({
+        messages: step.response.messages,
         text: typeof step.text === "string" ? step.text : "",
         toolCalls: (step.toolCalls ?? []).map((tc) => ({
           toolCallId: tc.toolCallId,
@@ -1262,25 +1114,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   /** The episode tail for finalizeTurn — set only when inner instances ran. */
   let nestedTail: NestedTurnTail | undefined;
   try {
-    let allCognition = "";
-    // Bridge main model: no kernel tools means no currentTime tool, and the
-    // system prompt must stay slice-frozen — so the fresh clock read rides
-    // the tail of the LAST user message on the OUTBOUND copy only (the client
-    // history is never rewritten). Same length as historyWindow, so the
-    // extractAllAssistantText start index below is unaffected.
-    let currentMessages =
-      input.modelConfig.sdk === "bridge"
-        ? appendBridgeTimeSuffix(
-            historyWindow,
-            buildBridgeTimeLine({
-              sliceId: slice.slice_id,
-              maxSliceMinutes: input.config.slicing.maxSliceMinutes,
-              idleGapMinutes: input.config.slicing.idleGapMinutes,
-              timezone: input.clientTimezone,
-              nowIso: input.startedAtIso,
-            }),
-          )
-        : historyWindow;
+    let currentMessages = historyWindow;
     // v0.11 §13 machine context (the game client's engine-built scene log):
     // its own marked section on the OUTBOUND tail of the last user message —
     // the system prompt stays slice-frozen and the persisted user turn keeps
@@ -1288,7 +1122,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // extractAllAssistantText start index is unaffected. Absent on plain
     // chat turns: nothing is appended.
     if (input.machineContext) {
-      currentMessages = appendBridgeTimeSuffix(
+      currentMessages = appendContextSuffix(
         currentMessages,
         buildMachineContextSection(input.machineContext),
       );
@@ -1302,7 +1136,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       prevUserTurnStamp(hk.slice, input.turnId),
     );
     if (reflectionSection) {
-      currentMessages = appendBridgeTimeSuffix(currentMessages, reflectionSection);
+      currentMessages = appendContextSuffix(currentMessages, reflectionSection);
     }
     // v0.33 连发并行: when the user fired a burst, the same OUTBOUND-tail
     // mechanics tell this run about its in-flight siblings — answer THIS
@@ -1310,7 +1144,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // slice-frozen system prompt.
     const parallelSection = buildParallelNoteSection(hk.parallelSiblings ?? null);
     if (parallelSection) {
-      currentMessages = appendBridgeTimeSuffix(currentMessages, parallelSection);
+      currentMessages = appendContextSuffix(currentMessages, parallelSection);
     }
     // ── The answer phase ─────────────────────────────────────────────────
     // v0.31 — the orchestrator shell: on an episode-capable deployment the
@@ -1673,10 +1507,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
               system: systemPrompt,
               ...streamOpts,
             });
-            allCognition += extractCognition(
-              mergeResult.messages,
-              mergeResult.steps,
-            );
+
             nestedTail = buildTail(
               extractAllAssistantText(
                 mergeResult.messages,
@@ -1734,13 +1565,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       let finalFinishReason = "stop";
       let finalMessages: ModelMessage[] = [];
 
-      // ── The agent loop (bridge/demo — D10: those turns never nest) ──────
+      // ── The native agent loop ──────
       // Inline loop — NOT a nested closure: the workflow transform instruments
       // awaits at the top level of the "use workflow" body, so `agent.stream`
       // (self-managed steps) must stay here, exactly as the loop engine does.
       //
       // Tool calls (recall / webSearch / thinkDeep) are handled inline by the
-      // WorkflowAgent loop: the executor runs in its own step and the result
+      // DeepSeekAgent loop: the executor runs in its own step and the result
       // (e.g. a sub-agent report) is fed straight back to the model on the next
       // step. No separate dispatch / polling / integration pass exists.
       while (true) {
@@ -1754,6 +1585,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         } catch (err) {
           // ── Workflow-error classification → what to do ──────────────────
           const classified = classifyWorkflowError(err);
+          finalMessages = [{role:"system",content:systemPrompt}, ...currentMessages, ...interruptedSteps.flatMap(step => step.messages ?? [])];
           // v0.8: log the FULL error on every agent.stream failure. The classify
           // branches below reduce it to a short message (or rethrow it without a
           // word), which leaves transient/timeout/model failures invisible in the
@@ -1814,7 +1646,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           continue;
         }
 
-        allCognition += extractCognition(result.messages, result.steps);
+
         finalMessages = result.messages;
         finalFinishReason = result.finishReason;
 
@@ -1869,7 +1701,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // [system, history, ...contN], and slicing at the original window count
       // captures every continuation's output while excluding prior turns.
       outcome = {
-        text: extractAllAssistantText(finalMessages, 1 + historyWindow.length),
+        text: producedMessages.length ? extractAllAssistantText(producedMessages) : extractAllAssistantText(finalMessages, 1 + historyWindow.length),
         finishReason: finalFinishReason,
         cognition: allCognition,
         error: turnError,
@@ -1894,9 +1726,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       `[Turn:${input.turnId}][workflow] turn failed\n${formatErrorDetail(err)}`,
     );
     outcome = {
-      text: "",
+      text: extractAllAssistantText(producedMessages),
       finishReason: "error",
-      cognition: "",
+      cognition: allCognition,
       error: errorMessage(err, "The workflow run failed."),
     };
   }
@@ -1945,6 +1777,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // complete produced record before closing the stream. Completed sibling
   // results can enhance the batch, but never replace this durable payload.
   const turnResult: TurnRunResult = {
+    ...(producedMessages.length ? {nativeMessages: producedMessages} : {}),
     turnId: input.turnId,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.regenerate ? { regenerate: true } : {}),
@@ -1982,7 +1815,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           sliceId: hk.slice.slice_id,
           ...(input.burstId ? { burstId: input.burstId } : {}),
           date: dateAnchor,
-          own: turnResult,
+          own: { ...turnResult, nativeMessages: undefined },
           slicing: input.config.slicing,
           clientTimezone: input.clientTimezone,
           modelConfig: input.modelConfig,

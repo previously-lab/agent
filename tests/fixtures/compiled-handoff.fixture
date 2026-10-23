@@ -1,30 +1,8 @@
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import { generateText } from "ai";
-
-export async function answer(recordId: string) {
-  "use step";
-  const model = {
-    specificationVersion: "v3" as const,
-    provider: "fixture",
-    modelId: "non-billable",
-    supportedUrls: {},
-    async doGenerate() {
-      await appendFile(join(process.env.FIXTURE_DIR!, "model-calls"), "called\n");
-      return {
-        content: [{ type: "text" as const, text: "fixture answer" }],
-        finishReason: { unified: "stop" as const, raw: "stop" },
-        usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
-        warnings: [],
-      };
-    },
-    async doStream() { throw new Error("fixture does not stream"); },
-  };
-  const result = await generateText({ model, prompt: "fixture", maxRetries: 0 });
-  return { recordId, text: result.text };
-}
+import { DeepSeekAgent } from "./deepseek/workflow-agent";
 
 export async function persist(record: { recordId: string; text: string }) {
   "use step";
@@ -62,6 +40,7 @@ export async function handoff(record: { recordId: string; text: string }) {
 
 export async function parent(recordId: string) {
   "use workflow";
-  const record = await answer(recordId);
-  return await handoff(record);
+  const agent = new DeepSeekAgent({ role: "chat" });
+  const result = await agent.stream({ prompt: "fixture", maxRetries: 0 });
+  return await handoff({ recordId, text: result.text });
 }

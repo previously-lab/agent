@@ -13,7 +13,7 @@
  * the model can act on ("this tool is unavailable because…"); re-throw only
  * transient errors that a retry could actually fix.
  */
-import { InvalidToolInputError } from "ai";
+import { InvalidToolInputError } from "@/lib/deepseek/tools";
 
 /** A re-throwable set of transient network-ish failure patterns. */
 const TRANSIENT_MESSAGE_RE =

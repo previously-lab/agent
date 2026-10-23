@@ -13,9 +13,9 @@ export const DEFAULTS: UserConfig = {
     idleGapMinutes: 30,
   },
   model: {
-    provider: "deepseek-v4-pro",
+    provider: "deepseek-flash",
     thinking: true,
-    reasoningEffort: "medium" as const,
+    reasoningEffort: "high" as const,
   },
   onboarded: false,
   datasource: "demo",
@@ -61,7 +61,7 @@ function sanitizeSlicing(
  * clamp covers both a corrupted stored file and a hostile/buggy client.
  */
 export function mergeConfig(overrides: Partial<UserConfig>): UserConfig {
-  const model = { ...DEFAULTS.model, ...overrides.model };
+  const model = { ...DEFAULTS.model };
   model.provider = resolveModelId(model.provider);
   return {
     slicing: sanitizeSlicing(overrides.slicing),

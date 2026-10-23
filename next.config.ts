@@ -31,7 +31,11 @@ const nextConfig: NextConfig = {
   // the copies Next would ship inside .next/standalone. Shipping them bloats
   // the @previously-lab/kernel artifact with local dev data.
   outputFileTracingExcludes: {
-    "*": ["./memory/**/*", "./you/**/*"],
+    "*": [
+      "./memory/**/*", "./you/**/*", "./tasks/**/*", "./sessions/**/*",
+      "./.workflow-data/**/*", "./.next/workflow-data/**/*",
+      "./.git/**/*", "./.claude/**/*", "./dist-kernel/**/*", "./.env*",
+    ],
   },
   // A second dev server (e2e, probes) must be able to run beside the reader's
   // own — Next binds a lock on its distDir, so the parallel instance names its
@@ -40,11 +44,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
-  // ajv (pulled in by @ai-sdk/workflow for tool contextSchema validation)
-  // uses dynamic require(), which Turbopack can't bundle into the generated
-  // .well-known/workflow step route — keep it external and let Node require
-  // it at runtime.
-  serverExternalPackages: ["ajv"],
   // Docs moved to the official site — permanently redirect all in-app docs
   // URLs (bare and locale-prefixed) to https://previously.ldwid.com.
   async redirects() {

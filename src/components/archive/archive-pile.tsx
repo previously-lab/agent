@@ -51,7 +51,7 @@ export interface RecordPileTexts {
  * The bucket's record pile (v0.25b §三) — the same A4 stack skeleton as a
  * case pile, but the cover prints the BUCKET, not a case: no head stamps,
  * the bucket label as the display line, and one stamp line (label · date ·
- * turns). At pile size nothing more is legible (§九), and the structural
+ * conversations). At pile size nothing more is legible (§九), and the structural
  * difference is what makes a record pile readable as not-a-case at a glance
  * (§四's 一眼可分).
  */

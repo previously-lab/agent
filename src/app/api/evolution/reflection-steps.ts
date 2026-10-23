@@ -29,7 +29,7 @@
 import { getWritable, getWorkflowMetadata } from "workflow";
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import type { UIMessageChunk } from "ai";
+import { type UIMessageChunk } from "@/lib/chat/protocol";
 import {
   assembleLapPlan,
   scopeFromSummaries,

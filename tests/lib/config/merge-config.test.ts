@@ -22,17 +22,17 @@ describe("mergeConfigOverrides", () => {
     expect(result.onboarded).toBe(true);
     expect(result.datasource).toBe("own");
     // The existing model/slicing must survive untouched.
-    expect(result.model.provider).toBe("deepseek-v4-flash");
-    expect(result.model.reasoningEffort).toBe("low");
+    expect(result.model.provider).toBe("deepseek-flash");
+    expect(result.model.reasoningEffort).toBe("high");
     expect(result.slicing.maxSliceMinutes).toBe(30);
     expect(result.slicing.maxTurnsPerSlice).toBe(50);
   });
 
-  it("deep-merges nested overrides while keeping untouched siblings", () => {
+  it("ignores legacy model overrides while keeping unrelated settings", () => {
     const result = mergeConfigOverrides(current, {
       model: { provider: "deepseek-v4-pro" },
     });
-    expect(result.model.provider).toBe("deepseek-v4-pro");
+    expect(result.model.provider).toBe("deepseek-flash");
     expect(result.model.thinking).toBe(true); // sibling survives
     expect(result.onboarded).toBe(false); // untouched top-level stays
   });

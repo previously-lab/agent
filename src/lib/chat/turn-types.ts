@@ -12,7 +12,7 @@
  * TYPE-ONLY MODULE. Everything here is erased at compile time, so importing it
  * from the `"use workflow"` file pulls no Node.js code into the workflow bundle.
  */
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import type { SlicingSignal, TimeSlice } from "@/lib/episodic";
 import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
@@ -38,13 +38,9 @@ export interface TurnInput {
   recentTurns: Array<{ role: string; content: string }>;
   /** The latest user message text, extracted from the raw UI messages. */
   lastUserMessage: string;
-  /** Resolved model id (body override → config default). */
+  /** Fixed DeepSeek model id; request overrides are ignored. */
   model: string;
-  /**
-   * The full resolved model config — carries sdk/baseURL/envKey so the agent
-   * can construct the right provider model for models.dev-derived ids (which
-   * are not in the curated registry). Resolved in start-turn.
-   */
+  /** Fixed, credential-free model descriptor resolved in start-turn. */
   modelConfig: ModelConfig;
   /** Whether DeepSeek thinking is enabled for this turn. */
   thinking: boolean;
@@ -456,6 +452,8 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
  * Legacy runs returned a bare reply string, which readers still tolerate.
  */
 export interface TurnRunResult {
+  /** Exact current-turn replay, kept in Workflow/client state rather than GitHub memory files. */
+  nativeMessages?: ModelMessage[];
   /** This turn's id (the turn headers + dedupe keys carry it). */
   turnId: string;
   clientMessageId?: string;

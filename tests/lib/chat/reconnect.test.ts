@@ -3,7 +3,7 @@ import {
   decideArrival,
   dropTrailingAssistantMessages,
 } from "@/lib/chat/reconnect";
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 
 // dropTrailingAssistantMessages is the pure half of the reconnect reset: it
 // removes the partial in-flight assistant reply so a startIndex-0 replay

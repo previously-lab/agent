@@ -6,8 +6,8 @@ const ai = vi.hoisted(() => ({
   // anti-loop fuse value is assertable.
   isStepCount: vi.fn((n: number) => ({ __stepCount: n })),
 }));
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
+vi.mock("@/lib/deepseek/generate", async () => {
+  const actual = await vi.importActual("@/lib/deepseek/generate");
   return { ...actual, streamText: ai.streamText, isStepCount: ai.isStepCount };
 });
 vi.mock("@/lib/models/provider", () => ({
@@ -264,6 +264,6 @@ describe("analyzeTurn", () => {
       }),
     );
     await analyzeTurn({ model, userMessage: "x" });
-    expect(ai.isStepCount).toHaveBeenCalledWith(50);
+    expect(ai.streamText.mock.calls.at(-1)?.[0].stopWhen.maxSteps).toBe(50);
   });
 });

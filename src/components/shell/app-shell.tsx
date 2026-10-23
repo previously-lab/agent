@@ -83,7 +83,6 @@ import {
   useShell,
   type WorldDriver,
 } from "@/components/shell/shell-provider";
-import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { useTier } from "@/hooks/use-tier";
 import { BoardBar } from "@/components/shell/board-bar";
 import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
@@ -579,10 +578,6 @@ export function AppShell() {
     },
     [],
   );
-  // The narrate entry hides on the bridge brain — /api/companion answers 501
-  // there. Tri-state: hidden until the probe resolves (never flash an entry
-  // a bridge client cannot serve); cloud and BYOK clients get it.
-  const bridgeBrain = useBridgeBrainActive();
 
   // ── THE EVOLUTION STREAM — the pod's second event source ────────────────
   // ChatPage publishes data-evolution frames onto the module-level bus; here
@@ -1099,9 +1094,7 @@ export function AppShell() {
             flight and the panel replays the newest completion when there is
             no narration (props from the shell's bus subscription above). It
             lives here with the shell, so a narration survives rung switches
-            and view changes. Hidden with the narrate entry when the brain is
-            bridge: /api/companion answers 501 there. */}
-        {bridgeBrain === false && (
+            and view changes. */}
           <CompanionPod
             target={narrateTarget}
             onDismiss={() => setNarrateTarget(null)}
@@ -1110,7 +1103,6 @@ export function AppShell() {
             working={evolution.working}
             evolution={evolution}
           />
-        )}
 
           </>
         )}

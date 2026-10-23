@@ -6,13 +6,14 @@ import {
 import type { ImageMetadata } from "@/lib/vision/image-meta";
 
 const aiSdk = vi.hoisted(() => ({ generateText: vi.fn() }));
-vi.mock("ai", () => ({
+vi.mock("@/lib/deepseek/generate", () => ({
   generateText: aiSdk.generateText,
 }));
 
 const registry = vi.hoisted(() => ({ getModel: vi.fn() }));
 vi.mock("@/lib/models/registry", () => ({
   getModel: registry.getModel,
+  getAvailableModels: () => process.env.DEEPSEEK_API_KEY ? [{}] : [],
   ALL_MODELS: [],
 }));
 
@@ -158,7 +159,7 @@ describe("describeImage", () => {
     expect(result.metadata.height).toBe(480);
     expect(aiSdk.generateText).toHaveBeenCalledTimes(1);
     const args = aiSdk.generateText.mock.calls[0]![0];
-    expect(args.model).toEqual({ __kind: "languageModel" });
+    expect(args.role).toBe("vision");
     expect(args.messages[0].content).toHaveLength(2);
     expect(args.messages[0].content[1].text).toContain("What color is it?");
   });
@@ -180,7 +181,7 @@ describe("describeImage", () => {
     expect(aiSdk.generateText).toHaveBeenCalledTimes(1);
     const args = aiSdk.generateText.mock.calls[0]![0];
     expect(args.messages[0].content[0].image).toBe(b64);
-    expect(args.messages[0].content[0].mimeType).toBe("image/png");
+    expect(args.messages[0].content[0].mediaType).toBe("image/png");
     expect(args.messages[0].content[1].text).toContain("用中文回答");
   });
 

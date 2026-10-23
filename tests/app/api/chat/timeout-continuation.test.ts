@@ -1,165 +1,65 @@
-/**
- * Tests for buildTimeoutContinuation (C2) — the timeout-continuation message
- * assembly must carry the interrupted run's completed tool calls + results,
- * not just the partial assistant text.
- */
-import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
-import {
-  buildTimeoutContinuation,
-  type ContinuationStepSnapshot,
-} from "@/app/api/chat/turn-workflow";
+import { describe, expect, it } from "vitest";
+import type { ModelMessage } from "@/lib/deepseek/types";
+import { toNativeMessages } from "@/lib/deepseek/messages";
+import { buildTimeoutContinuation, type ContinuationStepSnapshot } from "@/app/api/chat/turn-workflow";
 
-const HISTORY: ModelMessage[] = [
-  { role: "system", content: "system prompt" },
-  { role: "user", content: "what did we decide about the API?" },
-];
-
-const NUDGE = "You were interrupted by a timeout. Continue.";
-
-function stepWithTool(): ContinuationStepSnapshot {
-  return {
-    text: "Let me look that up.",
-    toolCalls: [
-      { toolCallId: "call_1", toolName: "recall", input: { query: "API decision" } },
-    ],
-    toolResults: [
-      {
-        toolCallId: "call_1",
-        toolName: "recall",
-        output: { hits: [{ slice_id: "2026-08-01-1015" }], confidence: 0.8 },
-      },
+const history: ModelMessage[] = [{ role: "user", content: "what did we decide?" }];
+const nudge = "You were interrupted. Continue.";
+const nativeAssistant = {
+  role: "assistant" as const, content: "Let me check.", reasoning_content: "The complete original reasoning.",
+  tool_calls: [{ type: "function" as const, id: "original-id", function: { name: "recall", arguments: '{ "query" : "API decision" }' } }],
+};
+function completedStep(): ContinuationStepSnapshot {
+  return { text: "Let me check.", toolCalls: [{ toolCallId: "original-id", toolName: "recall", input: { query: "API decision" } }],
+    toolResults: [{ toolCallId: "original-id", toolName: "recall", output: "exact evidence" }],
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "Let me check." }], deepseek: nativeAssistant },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "original-id", toolName: "recall", output: { type: "text", value: "exact evidence" } }] },
     ],
   };
 }
 
-describe("buildTimeoutContinuation", () => {
-  it("includes completed tool call + result before the partial text and nudge", () => {
-    const messages = buildTimeoutContinuation({
-      history: HISTORY,
-      steps: [stepWithTool()],
-      partialText: "Let me look that up.",
-      nudge: NUDGE,
-    });
-
-    expect(messages.slice(0, 2)).toEqual(HISTORY);
-
-    const assistant = messages[2];
-    expect(assistant.role).toBe("assistant");
-    const callParts = assistant.content as Array<Record<string, unknown>>;
-    expect(callParts[0]).toMatchObject({
-      type: "tool-call",
-      toolCallId: "call_1",
-      toolName: "recall",
-      input: { query: "API decision" },
-    });
-
-    const tool = messages[3];
-    expect(tool.role).toBe("tool");
-    const resultParts = tool.content as Array<Record<string, unknown>>;
-    expect(resultParts[0]).toMatchObject({
-      type: "tool-result",
-      toolCallId: "call_1",
-      toolName: "recall",
-      output: {
-        type: "json",
-        value: { hits: [{ slice_id: "2026-08-01-1015" }], confidence: 0.8 },
-      },
-    });
-
-    // Partial assistant text, then the nudge LAST.
-    expect(messages[4]).toEqual({
-      role: "assistant",
-      content: "Let me look that up.",
-    });
-    expect(messages[5]).toEqual({ role: "user", content: NUDGE });
+describe("native timeout continuation", () => {
+  it("carries original reasoning, argument bytes and paired results into the next HTTP request", () => {
+    const step = completedStep();
+    const messages = buildTimeoutContinuation({ history, steps: [step], partialText: step.text, nudge });
+    expect(messages).toEqual([...history, ...step.messages!, { role: "user", content: nudge }]);
+    expect(toNativeMessages(messages)[1]).toEqual(nativeAssistant);
+    expect(toNativeMessages(messages)[2]).toEqual({ role: "tool", tool_call_id: "original-id", content: "exact evidence" });
+    // The visible partial was already carried in the authentic model message.
+    expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
   });
-
-  it("skips text-only steps for the tool messages (their text lives in partialText)", () => {
-    const messages = buildTimeoutContinuation({
-      history: HISTORY,
-      steps: [{ text: "just text", toolCalls: [], toolResults: [] }],
-      partialText: "just text",
-      nudge: NUDGE,
-    });
-
-    expect(messages).toHaveLength(HISTORY.length + 2);
-    expect(messages[messages.length - 2]).toEqual({
-      role: "assistant",
-      content: "just text",
-    });
-    expect(messages[messages.length - 1]).toEqual({ role: "user", content: NUDGE });
+  it("keeps native text-only thinking steps as well as tool steps", () => {
+    const message: ModelMessage = { role: "assistant", content: "answer", deepseek: { role: "assistant", content: "answer", reasoning_content: "reasoned answer" } };
+    const messages = buildTimeoutContinuation({ history, steps: [{ text: "answer", toolCalls: [], toolResults: [], messages: [message] }], partialText: "answer", nudge });
+    expect(messages).toEqual([...history, message, { role: "user", content: nudge }]);
+    expect(toNativeMessages(messages)[1].reasoning_content).toBe("reasoned answer");
   });
-
-  it("wraps error tool results as error-text", () => {
-    const step: ContinuationStepSnapshot = {
-      text: "",
-      toolCalls: [
-        { toolCallId: "call_9", toolName: "webSearch", input: { q: "x" } },
-      ],
-      toolResults: [
-        {
-          toolCallId: "call_9",
-          toolName: "webSearch",
-          output: "fetch failed",
-          isError: true,
-        },
-      ],
-    };
-    const messages = buildTimeoutContinuation({
-      history: HISTORY,
-      steps: [step],
-      partialText: "",
-      nudge: NUDGE,
-    });
-
-    const tool = messages.find((m) => m.role === "tool");
-    expect(tool).toBeDefined();
-    const parts = tool!.content as Array<Record<string, unknown>>;
-    expect(parts[0].output).toEqual({ type: "error-text", value: "fetch failed" });
-    // No partial text → straight from tool result to nudge.
-    expect(messages[messages.length - 1]).toEqual({ role: "user", content: NUDGE });
+  it("preserves failed tool results without reconstructing their calls", () => {
+    const step = completedStep();
+    step.messages![1] = { role: "tool", content: [{ type: "tool-result", toolCallId: "original-id", toolName: "recall", output: { type: "error-text", value: "read failed" } }] };
+    const result = buildTimeoutContinuation({ history, steps: [step], partialText: "", nudge });
+    expect(result[2]).toEqual(step.messages![1]);
   });
-
-  it("omits tool results whose call is missing (defensive)", () => {
-    const step: ContinuationStepSnapshot = {
-      text: "",
-      toolCalls: [
-        { toolCallId: "call_a", toolName: "recall", input: { query: "q" } },
-      ],
-      toolResults: [
-        { toolCallId: "call_OTHER", toolName: "recall", output: {} },
-      ],
-    };
-    const messages = buildTimeoutContinuation({
-      history: HISTORY,
-      steps: [step],
-      partialText: "",
-      nudge: NUDGE,
-    });
-
-    expect(messages.some((m) => m.role === "tool")).toBe(false);
-    expect(messages.some((m) => m.role === "assistant")).toBe(true);
+  it("degrades legacy snapshots to visible text rather than inventing tool history", () => {
+    const step = completedStep(); delete step.messages;
+    const result = buildTimeoutContinuation({ history, steps: [step], partialText: "legacy answer", nudge });
+    expect(result).toEqual([...history, { role: "assistant", content: "legacy answer" }, { role: "user", content: nudge }]);
+    expect(JSON.stringify(toNativeMessages(result))).not.toContain("tool_calls");
   });
-
-  it("handles an empty interruption (no steps, no text) with just the nudge", () => {
-    const messages = buildTimeoutContinuation({
-      history: HISTORY,
-      steps: [],
-      partialText: "",
-      nudge: NUDGE,
-    });
-    expect(messages).toEqual([...HISTORY, { role: "user", content: NUDGE }]);
+  it("keeps completed step order and appends the continuation instruction last", () => {
+    const first = completedStep();
+    const second: ContinuationStepSnapshot = { text: "continuing", toolCalls: [], toolResults: [], messages: [{ role: "assistant", content: "continuing", reasoning_content: "more original reasoning" }] };
+    const result = buildTimeoutContinuation({ history, steps: [first, second], partialText: "Let me check. continuing", nudge });
+    expect(result).toEqual([...history, ...first.messages!, ...second.messages!, { role: "user", content: nudge }]);
   });
-
-  it("does not mutate the history array", () => {
-    const history = [...HISTORY];
-    buildTimeoutContinuation({
-      history,
-      steps: [stepWithTool()],
-      partialText: "x",
-      nudge: NUDGE,
-    });
-    expect(history).toEqual(HISTORY);
+  it("handles an interruption before any completed step", () => {
+    expect(buildTimeoutContinuation({ history, steps: [], partialText: "", nudge })).toEqual([...history, { role: "user", content: nudge }]);
+  });
+  it("does not mutate history or native step messages", () => {
+    const step = completedStep();
+    const before = JSON.stringify({ history, step });
+    buildTimeoutContinuation({ history, steps: [step], partialText: "duplicate", nudge });
+    expect(JSON.stringify({ history, step })).toBe(before);
   });
 });

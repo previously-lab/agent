@@ -2,14 +2,12 @@
 
 import { memo, useMemo, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 import { AnimatePresence, motion } from "motion/react";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
 import { PhaseIndicator } from "./phase-indicator";
 import { HousekeepingCard } from "./housekeeping-card";
-import { BridgeToolCard } from "./bridge-tools-card";
-import { BridgeHousekeepingCard } from "./bridge-housekeeping-card";
 import { RecallReferencesBar } from "./recall-references-bar";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
@@ -149,8 +147,6 @@ function itemKey(item: StreamItem, index: number): string {
       return `tool-${item.toolCallId}`;
     case "housekeeping":
       return `housekeeping-${index}`;
-    case "bridge-tools":
-      return `bridge-tools-${item.phase}-${index}`;
     case "phase":
       return `phase-${item.phase}-${index}`;
     case "recall-references":
@@ -329,33 +325,6 @@ export const ChatMessage = memo(function ChatMessage({
                   }
                   if (item.kind === "housekeeping") {
                     return <HousekeepingCard key={key} steps={item.steps} />;
-                  }
-                  if (item.kind === "bridge-tools") {
-                    // The local CLI's live tool activity (bridge mode).
-                    // Housekeeping gets its own card (client mode: the whole
-                    // phase is one agent call + deterministic wrap-up rows);
-                    // the chat answer keeps the plain tool indicator.
-                    if (item.phase === "bridgeHousekeeping") {
-                      return (
-                        <BridgeHousekeepingCard
-                          key={key}
-                          running={item.running}
-                          tools={item.tools}
-                          live={item.live}
-                          steps={item.steps}
-                          warning={item.warning}
-                        />
-                      );
-                    }
-                    return (
-                      <BridgeToolCard
-                        key={key}
-                        phase={item.phase}
-                        running={item.running}
-                        tools={item.tools}
-                        live={item.live}
-                      />
-                    );
                   }
                   if (item.kind === "phase") {
                     // Terminal interrupted/error — prominent static card.

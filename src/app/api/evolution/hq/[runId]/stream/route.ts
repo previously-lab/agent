@@ -21,7 +21,7 @@
  * a finished run's feed stays replayable: a pod that opens late still sees
  * the run's whole beat log before the stream drains.
  */
-import { createUIMessageStreamResponse } from "ai";
+import { createUIMessageStreamResponse } from "@/lib/chat/server-stream";
 import { getRun } from "workflow/api";
 import { createHQStreamFilter, HQ_ACTIVITY_CHUNK } from "@/lib/chat/hq-stream";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";

@@ -13,22 +13,16 @@
  */
 import { start } from "workflow/api";
 import crypto from "crypto";
-import { convertToModelMessages, type UIMessage } from "ai";
+import { convertToModelMessages } from "@/lib/chat/server-stream";
+import { type UIMessage } from "@/lib/chat/protocol";
 import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
 import { loadUserConfig } from "@/lib/config/loader";
-import {
-  getModel,
-  getDefaultModelId,
-  ALL_MODELS,
-  type ModelConfig,
-} from "@/lib/models/registry";
-import { resolveAvailableModels } from "@/lib/models/catalog";
+import { FIXED_MODEL } from "@/lib/models/registry";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
-import { demoModelLock } from "@/lib/demo/model-lock";
 import { withGitHubReadBudget } from "@/lib/github/client";
 
 export interface StartTurnArgs {
@@ -38,7 +32,7 @@ export interface StartTurnArgs {
   model?: string;
   /** Ignored — thinking is pinned ON server-side (see below). */
   thinking?: boolean;
-  /** Ignored — effort is pinned to "low" server-side (see below). */
+  /** Ignored — effort is pinned to "high" server-side (see below). */
   effort?: "low" | "medium" | "high";
   /** Client-reported timezone, used when minting a new slice. */
   timezone?: string;
@@ -76,32 +70,6 @@ function extractLastUserText(msg: UIMessage | undefined): string {
   }
   const content = (msg as { content?: unknown }).content;
   return typeof content === "string" ? content : "";
-}
-
-/**
- * Resolve a model id to its full config so the agent can route to the right
- * provider. models.dev-derived ids (Kimi, Qwen, ...) are NOT in the curated
- * registry, so they're looked up in the dynamic catalog. Unknown ids fall back
- * to the deployment default.
- *
- * Note: legacy ids are NOT remapped here — the config file is already migrated
- * by `mergeConfig`; a client-stored legacy id simply won't match and falls
- * back to the default.
- */
-async function resolveModelConfig(id: string): Promise<{
-  model: string;
-  modelConfig: ModelConfig;
-}> {
-  const curated = getModel(id);
-  if (curated) return { model: curated.id, modelConfig: curated };
-
-  const available = await resolveAvailableModels();
-  const found = available.find((m) => m.id === id);
-  if (found) return { model: found.id, modelConfig: found };
-
-  const fallbackId = getDefaultModelId();
-  const fallback = getModel(fallbackId) ?? available[0] ?? ALL_MODELS[0];
-  return { model: fallback.id, modelConfig: fallback };
 }
 
 /** Max image attachments extracted per turn when the main model lacks vision. */
@@ -233,28 +201,10 @@ export async function startTurn(
   const config = await withGitHubReadBudget(() => loadUserConfig());
   // Demo mode: model + thinking intensity are pinned server-side (the demo
   // runs on the maintainer's key) — client/config preferences are ignored.
-  const lock = demoModelLock();
-  // Resolve the model id (demo lock → client override → config default, already
-  // migrated by mergeConfig) to a full ModelConfig, falling back to the
-  // deployment default when the id is unknown/unavailable.
-  const requested = lock?.model ?? (args.model || config.model.provider);
-  const { model, modelConfig } = await withGitHubReadBudget(() =>
-    resolveModelConfig(requested),
-  );
-  // Thinking is pinned ON at LOW effort for every turn — fast responses are the
-  // product rule; deep thinking is thinkDeep's job (it keeps its own
-  // model-chosen effort). Client-sent thinking/effort and the stored config
-  // values are IGNORED. The demo lock wins when active (it pins its own
-  // model/thinking/effort for the maintainer's-key demo). Thinking follows the
-  // model's capability — a non-thinking model (bridge, non-reasoning catalog
-  // entries) stays off.
-  const thinking = lock?.thinking ?? modelConfig.capabilities.thinking;
-  const reasoningEffort = lock?.effort ?? "low";
-  // Log the resolved model so a switch is verifiable in the server log.
-  // `requested` = what the client sent; `model` = what actually runs.
-  console.log(
-    `[Turn] model=${model} (requested=${requested}) sdk=${modelConfig.sdk} thinking=${thinking} effort=${reasoningEffort}`,
-  );
+  const modelConfig = FIXED_MODEL;
+  const model = FIXED_MODEL.id;
+  const thinking = true;
+  const reasoningEffort = "high";
   const clientTimezone = args.timezone ?? "UTC";
   // UI locale for relative-time annotations — only zh/en are supported; any
   // other value (or none) falls back to English.
@@ -288,7 +238,10 @@ export async function startTurn(
     }
   }
   const fullMessages = await convertToModelMessages(inbound);
-  const modelMessages = fullMessages.slice(-MAX_HISTORY_MESSAGES);
+  const cappedMessages = fullMessages.slice(-MAX_HISTORY_MESSAGES);
+  // Never begin a provider request with an orphaned tool result.
+  const firstUser = cappedMessages.findIndex(message => message.role === "user");
+  const modelMessages = firstUser >= 0 ? cappedMessages.slice(firstUser) : [];
   const recentTurns = modelMessages.map((m) => ({
     role: m.role as string,
     // Array content must be summarized, not stringified — see

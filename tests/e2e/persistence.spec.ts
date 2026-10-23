@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { execFileSync } from "node:child_process";
 import { clearCases, clearEpisodic, makeSlice, seedCases, seedSlices } from "./memory-fixture";
 import { seedWorkflowRun } from "./workflow-fixture";

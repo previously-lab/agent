@@ -13,7 +13,7 @@
  *   a cell = ONE PILE — one case (its index + its pieces), its thickness the
  *   tiered page volume, its cover printed at the pile's own mm scale (§九).
  *   Every bucket also carries its ONE RECORD PILE (the bucket's slices
- *   folded together, thickness tiered off the TURN volume, opening the
+ *   folded together, thickness tiered off the indexed slice count, opening the
  *   newest slice's transcript on the desk); a bucket with only records is
  *   still a row.
  *
@@ -181,7 +181,7 @@ export function ArchiveField({
   }, [t, tLibrary, locale]);
 
   // The record pile's printed strings — same portal constraint. The stamp
-  // line is the §九 pile-scale ruling made literal: label · date · turns,
+  // line is the §九 pile-scale ruling made literal: label · date · conversations,
   // fixed English (it prints on the cover; only the aria is translated).
   const recordTexts = useMemo<RecordPileTexts>(() => {
     const stamp = dateTimeFormat(locale, { month: "short", day: "numeric" });
@@ -190,10 +190,9 @@ export function ArchiveField({
         t("recordPileAria", {
           date: bucket,
           slices: pile.slices,
-          turns: pile.turns,
         }),
       stampLabel: (pile) =>
-        `Records · ${stamp.format(new Date(`${pile.date}T00:00:00`))} · ${pile.turns} ${pile.turns === 1 ? "turn" : "turns"}`,
+        `Records · ${stamp.format(new Date(`${pile.date}T00:00:00`))} · ${pile.slices} ${pile.slices === 1 ? "conversation" : "conversations"}`,
     };
   }, [t, locale]);
 
@@ -250,6 +249,8 @@ export function ArchiveField({
           records: index.sliceIds.map((id) => ({
             sliceId: id,
             date: id.slice(0, 10),
+            // Keep the existing model field, but count one indexed slice.
+            // Exact turn counts would require reading every historical file.
             turns: 1,
           })),
         };

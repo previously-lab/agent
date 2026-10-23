@@ -19,9 +19,9 @@
  *    housekeeping) and agent turns.
  */
 import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import {
-  appendBridgeTimeSuffix,
+  appendContextSuffix,
   buildReflectionNoteSection,
   prevUserTurnStamp,
 } from "@/app/api/chat/turn-workflow";
@@ -80,7 +80,7 @@ describe("the carry mechanics — outbound copy only, nothing persisted", () => 
       { role: "user", content: "second" },
     ];
     const section = buildReflectionNoteSection(NOTE, null)!;
-    const out = appendBridgeTimeSuffix(msgs, section);
+    const out = appendContextSuffix(msgs, section);
     expect(out).toHaveLength(3); // no message added — the extraction index holds
     expect(out[2]).toEqual({ role: "user", content: "second" + section });
     // the input array and its messages are untouched — the persisted slice

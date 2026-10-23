@@ -19,6 +19,11 @@ function namedError(
 }
 
 describe("classifyWorkflowError", () => {
+  it.each([429, 503])("does not multiply exhausted native HTTP retries for status %s", (statusCode) => {
+    const error = Object.assign(new Error("request failed after bounded retries"), { name: "DeepSeekError", statusCode });
+    expect(classifyWorkflowError(error).kind).toBe("model");
+    expect(classifyWorkflowError(Object.assign(new Error('Step "model" failed'), { name: "FatalError", cause: error })).kind).toBe("model");
+  });
   it("classifies bridge model failures as model errors (message prefix)", () => {
     // The step error itself (name is deliberately "FatalError" so the step
     // runtime doesn't retry a deterministic CLI failure).

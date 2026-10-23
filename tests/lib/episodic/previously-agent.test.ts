@@ -82,8 +82,8 @@ describe("runner wiring", () => {
     expect(opts.maxSteps).toBe(50);
     // v0.34 修订 A: no execution budget — the runner installs no timeout hooks.
     expect("timeoutMs" in opts).toBe(false);
-    expect(opts.effort).toBe("low");
-    expect(opts.temperature).toBe(0.1);
+    expect(opts.role).toBe("summary");
+    expect(opts).not.toHaveProperty("temperature");
     expect(opts.reportToolName).toBe("finish");
     // Static system carries the role instructions; dynamic content is in the
     // user prompt only.
@@ -155,7 +155,7 @@ describe("partial output — step limit without finish", () => {
 });
 
 describe("retry on hard failure", () => {
-  it("retries once at temperature 0.4 when the first attempt fails", async () => {
+  it("retries once with the same fixed profile when the first attempt fails", async () => {
     runSubAgentMock
       .mockResolvedValueOnce({ ok: false, error: "model unreachable", text: "" })
       .mockResolvedValueOnce({
@@ -167,8 +167,8 @@ describe("retry on hard failure", () => {
     expect(out.failed).toBeFalsy();
     expect(out.reasoning).toBe("recovered");
     expect(runSubAgentMock).toHaveBeenCalledTimes(2);
-    expect(runSubAgentMock.mock.calls[0][0].temperature).toBe(0.1);
-    expect(runSubAgentMock.mock.calls[1][0].temperature).toBe(0.4);
+    expect(runSubAgentMock.mock.calls[0][0].role).toBe("summary");
+    expect(runSubAgentMock.mock.calls[1][0].role).toBe("summary");
   });
 
   it("fails with an empty card when both attempts fail", async () => {

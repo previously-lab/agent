@@ -6,9 +6,8 @@ import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 /**
  * Registers window-level error listeners so EVERY client-side error is logged
  * with full detail — not the minified production message. Some errors never
- * reach React's onError: the AI SDK's WorkflowChatTransport catches stream
- * failures and swallows them (console.error only, no rethrow), and unhandled
- * promise rejections bypass React entirely. These listeners catch both and
+ * reach React render boundaries, and unhandled promise rejections bypass
+ * React entirely. These listeners catch browser errors and rejections and
  * print the complete error via formatErrorDetail. Renders null.
  */
 export function ClientErrorCapture(): null {

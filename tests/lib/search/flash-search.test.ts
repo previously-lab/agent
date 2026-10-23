@@ -1,60 +1,43 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
 
-// searchViaFlash runs on the unified sub-agent runner — mock it so tests
-// drive structured runner results instead of real model calls. The DeepSeek
-// provider itself is constructed offline (no network), but we mock the
-// Anthropic SDK factory so we can assert on the webSearch maxUses cap.
-const runner = vi.hoisted(() => ({ runSubAgent: vi.fn() }));
-vi.mock("@/lib/agents/sub-agent-runner", () => ({
-  runSubAgent: runner.runSubAgent,
+const mocks = vi.hoisted(() => ({ runSubAgent: vi.fn(), search: vi.fn(), image: vi.fn() }));
+vi.mock("@/lib/agents/sub-agent-runner", () => ({ runSubAgent: mocks.runSubAgent }));
+vi.mock("@/lib/search/deepseek-web", async (original) => ({
+  ...await original<typeof import("@/lib/search/deepseek-web")>(),
+  deepseekWebSearch: mocks.search,
 }));
-
-const anthropic = vi.hoisted(() => {
-  const modelFn = vi.fn(() => ({ __kind: "languageModel" }));
-  const webSearchToolFn = vi.fn(() => ({ __tool: "web_search" }));
-  const provider = Object.assign(modelFn, {
-    tools: { webSearch_20260209: webSearchToolFn },
-  });
-  return {
-    createAnthropic: vi.fn(() => provider),
-    webSearchToolFn,
-  };
-});
-vi.mock("@ai-sdk/anthropic", () => ({
-  createAnthropic: anthropic.createAnthropic,
-}));
-
+vi.mock("@/lib/vision/describe-image", () => ({ describeImage: mocks.image }));
 import { searchViaFlash } from "@/lib/search/flash-search";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+type Options = RunSubAgentOptions<unknown>;
+const report = { answer: "The answer.", recommendation: "Well supported.", suggested_reads: [] };
+const success = { ok: true, report, text: "" };
+function options(): Options { return mocks.runSubAgent.mock.calls[0]![0]; }
+function execute(opts: Options, toolName: string, input: unknown, abortSignal?: AbortSignal) {
+  return opts.tools[toolName]!.execute!(input, { toolCallId: "test", messages: [], context: {}, abortSignal });
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.runSubAgent.mockResolvedValue(success);
+  mocks.search.mockResolvedValue({ results: [] });
+  mocks.image.mockResolvedValue({ ok: true, description: "Image description" });
 });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("searchViaFlash", () => {
-  it("runs on the runner with a pre-built model, anthropic effort mapping, and the static/dynamic prompt split", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-
+  it("uses the fixed search role and preserves the static/dynamic prompt split", async () => {
     await searchViaFlash("latest Next.js version");
-
-    expect(runner.runSubAgent).toHaveBeenCalledTimes(1);
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    // The provider path is unchanged: a pre-built model on DeepSeek's
-    // Anthropic-compatible endpoint — never a createModel(ModelConfig).
-    expect(opts.languageModel).toBeDefined();
-    expect(opts.model).toBeUndefined();
-    expect(opts.effortSdk).toBe("anthropic");
+    const opts = options();
+    expect(opts.role).toBe("search");
+    expect(opts).not.toHaveProperty("languageModel");
+    expect(opts).not.toHaveProperty("effortSdk");
+    expect(opts).not.toHaveProperty("providerOptions");
     expect(opts.maxSteps).toBe(200);
-    // v0.34 修订 A: no execution budget on the run itself — the outer
-    // webSearch tool wall (SEARCH_TIMEOUT_MS) lives in tool-executors.
-    expect("timeoutMs" in opts).toBe(false);
+    expect(opts).not.toHaveProperty("timeoutMs");
     expect(opts.reportToolName).toBe("searchReport");
-    // Static role in system; the date anchor and query moved to the user prompt.
-    expect(opts.system).toContain("sub-agent of the Previously memory system");
+    expect(opts.selfSop).toBe("search");
     expect(opts.system).toContain("independent researcher");
     expect(opts.system).not.toContain("Today is");
     expect(opts.prompt).toMatch(/^Today is \d{4}-\d{2}-\d{2}\./);
@@ -62,412 +45,147 @@ describe("searchViaFlash", () => {
     expect(Object.keys(opts.tools).sort()).toEqual(["searchReport", "viewImage", "webFetch", "web_search"]);
   });
 
-  it("maps the searchReport into the neutral contract with url sources", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: {
-        answer: "The answer.",
-        recommendation: "Fetch the docs page.",
-        suggested_reads: [
-          { url: "https://example.com/a", title: "A", reason: "primary" },
-          { url: "", title: "bad", reason: "no url" },
-        ],
-      },
-      text: "",
-      sources: [
-        { sourceType: "url", url: "https://example.com/a", title: "A" },
-        { sourceType: "document", title: "not a url" },
-      ],
+  it("maps the report and collects deduplicated sources only from actual search results", async () => {
+    mocks.search.mockResolvedValue({ results: [
+      { title: "A", url: "https://example.com/a", summary: "Evidence" },
+      { title: "A", url: "https://example.com/a", summary: "Duplicate" },
+    ] });
+    mocks.runSubAgent.mockImplementation(async (opts: Options) => {
+      await execute(opts, "web_search", { query: "evidence", count: 3 });
+      return { ...success, report: { ...report, suggested_reads: [
+        { url: "https://example.com/a", title: "A", reason: "primary" },
+        { url: "", title: "bad", reason: "no URL" },
+      ] }, sources: [{ sourceType: "url", title: "Invented", url: "https://invented.example" }] };
     });
-
     const out = await searchViaFlash("q");
-    expect(out.answer).toBe("The answer.");
-    expect(out.recommendation).toBe("Fetch the docs page.");
-    expect(out.suggestedReads).toEqual([
-      { url: "https://example.com/a", title: "A", reason: "primary" },
-    ]);
+    expect(out.answer).toBe(report.answer);
+    expect(out.recommendation).toBe(report.recommendation);
+    expect(out.suggestedReads).toEqual([{ url: "https://example.com/a", title: "A", reason: "primary" }]);
     expect(out.sources).toEqual([{ title: "A", url: "https://example.com/a" }]);
+    expect(mocks.search).toHaveBeenCalledWith({ query: "evidence", count: 3 }, undefined);
   });
 
-  it("degrades to the flagged final text when searchReport was never called (material is never dropped silently)", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: undefined,
-      text: "plain answer text",
-      sources: [],
+  it.each([[false, 50, 6], [true, 20, 3]])("enforces search and page quotas (scout=%s)", async (scout, rounds, pages) => {
+    await searchViaFlash("q", undefined, { scout });
+    const opts = options();
+    expect(opts.system).toContain(`up to ${rounds} search rounds`);
+    expect(opts.system).toContain(`read at most ${pages} pages per run`);
+    for (let i = 0; i < rounds; i++) await execute(opts, "web_search", { query: "q" });
+    expect(await execute(opts, "web_search", { query: "over quota" })).toEqual({
+      results: [], note: "Search quota exhausted. Report what you have already found.",
     });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const out = await searchViaFlash("q");
-    // The final text still reaches the caller as the answer…
-    expect(out.answer).toBe("plain answer text");
-    // …flagged as an unfiled recovery so the main agent treats it with care…
-    expect(out.recommendation).toContain("without filing the structured searchReport");
-    expect(out.recommendation).toContain("lower-confidence");
-    expect(out.suggestedReads).toEqual([]);
-    expect(out.sources).toEqual([]);
-    // …and the degradation is loud in the server log.
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("[WebSearch] searchReport not called"),
-      expect.any(String),
-    );
-  });
-
-  it("re-throws failed runs so the executor's triage keeps retry/error classification", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: false,
-      text: "",
-      error: "HTTP 429 Too Many Requests",
-    });
-    await expect(searchViaFlash("q")).rejects.toThrow(
-      "HTTP 429 Too Many Requests",
-    );
-
-    runner.runSubAgent.mockResolvedValue({
-      ok: false,
-      timedOut: true,
-      text: "",
-      error: "Sub-agent did not finish within 240s.",
-    });
-    await expect(searchViaFlash("q")).rejects.toThrow(
-      "Sub-agent did not finish within 240s.",
-    );
-  });
-
-  it("recovers an interrupted run's partial text as a flagged low-confidence answer on timeout", async () => {
-    // Aligned with recall's soft-timeout degradation: a cut-off research run
-    // still hands back what it had written, instead of losing everything.
-    runner.runSubAgent.mockResolvedValue({
-      ok: false,
-      timedOut: true,
-      text: "The Next.js docs say the latest version is…",
-      error: "Sub-agent did not finish within 240s.",
-      sources: [{ sourceType: "url", url: "https://nextjs.org/docs", title: "Docs" }],
-    });
-    const out = await searchViaFlash("q");
-    expect(out.answer).toContain("The Next.js docs say");
-    expect(out.recommendation).toContain("time budget");
-    expect(out.recommendation).toContain("lower-confidence");
-    expect(out.suggestedReads).toEqual([]);
-    expect(out.sources).toEqual([
-      { title: "Docs", url: "https://nextjs.org/docs" },
-    ]);
-  });
-
-  it("caps the researcher's own page reads at the per-run quota", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    const webFetch = opts.tools.webFetch as {
-      execute: (input: { url: string }) => Promise<string>;
-    };
-    // Invalid URLs error before any network I/O — but still consume a slot.
-    for (let i = 0; i < 6; i++) {
-      const out = await webFetch.execute({ url: "not a url" });
-      expect(out).toContain("ERROR: Invalid URL");
+    expect(mocks.search).toHaveBeenCalledTimes(rounds);
+    for (let i = 0; i < pages; i++) {
+      expect(await execute(opts, "webFetch", { url: "not a url" })).toContain("ERROR: Invalid URL");
     }
-    // Slot 7: quota exhausted — a note, no fetch attempted.
-    const out = await webFetch.execute({ url: "https://example.com" });
-    expect(out).toContain("Page-read quota exhausted");
+    expect(await execute(opts, "webFetch", { url: "https://example.com" })).toContain("Page-read quota exhausted");
+    expect(opts.prompt.includes("one of several researchers working in parallel")).toBe(scout);
   });
 
-  it("uses standard-mode effective caps (6 pages / 50 search rounds) by default", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 50 });
-    expect(opts.system).toContain("up to 50 search rounds");
-    expect(opts.system).toContain("read at most 6 pages per run");
-    expect(opts.tools.webFetch.description).toContain(
-      "one of your 6 page-read slots",
-    );
-    expect(opts.prompt).not.toContain(
-      "one of several researchers working in parallel",
-    );
-  });
-
-  it("uses scout-mode effective caps (3 pages / 20 search rounds) when opts.scout is true", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
+  it("counts failed searches against the quota and propagates cancellation to HTTP", async () => {
     await searchViaFlash("q", undefined, { scout: true });
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 20 });
-    expect(opts.system).toContain("up to 20 search rounds");
-    expect(opts.system).toContain("read at most 3 pages per run");
-    expect(opts.tools.webFetch.description).toContain(
-      "one of your 3 page-read slots",
-    );
-    expect(opts.prompt).toContain(
-      "You are one of several researchers working in parallel on different sub-questions",
-    );
-  });
-
-  it("enforces the lower scout-mode page-read quota", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q", undefined, { scout: true });
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    const webFetch = opts.tools.webFetch as {
-      execute: (input: { url: string }) => Promise<string>;
-    };
-
-    for (let i = 0; i < 3; i++) {
-      const out = await webFetch.execute({ url: "not a url" });
-      expect(out).toContain("ERROR: Invalid URL");
+    const opts = options();
+    const controller = new AbortController();
+    mocks.search.mockRejectedValue(new Error("HTTP 429"));
+    for (let i = 0; i < 20; i++) {
+      await expect(execute(opts, "web_search", { query: "q" }, controller.signal)).rejects.toThrow("HTTP 429");
     }
-    const out = await webFetch.execute({ url: "https://example.com" });
-    expect(out).toContain("Page-read quota exhausted — 3 reads per run");
+    expect(mocks.search).toHaveBeenCalledWith({ query: "q" }, controller.signal);
+    expect(await execute(opts, "web_search", { query: "q" })).toHaveProperty("note");
+    expect(mocks.search).toHaveBeenCalledTimes(20);
   });
 
-  it("embeds query-planning discipline in the researcher role", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
+  it("keeps search quota independent for each run", async () => {
+    await searchViaFlash("q", undefined, { scout: true });
+    const first = options();
+    for (let i = 0; i < 20; i++) await execute(first, "web_search", { query: "q" });
+    await searchViaFlash("another query", undefined, { scout: true });
+    await execute(mocks.runSubAgent.mock.calls[1]![0], "web_search", { query: "q" });
+    expect(mocks.search).toHaveBeenCalledTimes(21);
+  });
 
+  it.each(["http://localhost/a", "http://169.254.169.254", "file:///etc/passwd"])("rejects unsafe page URL %s", async (url) => {
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    await searchViaFlash("q");
+    expect(await execute(options(), "webFetch", { url })).toMatch(/ERROR: (Cannot fetch|Unsupported URL)/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retains redirect validation for page reads", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } }));
+    vi.stubGlobal("fetch", fetch);
+    await searchViaFlash("q");
+    expect(await execute(options(), "webFetch", { url: "https://example.com" })).toContain("private network");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains selective page reads and the plain-text size cap", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("first line\nsecond line\n" + "x".repeat(16000))));
+    await searchViaFlash("q");
+    const opts = options();
+    expect(await execute(opts, "webFetch", { url: "https://example.com", range: { type: "lines", start: 1, end: 2 } })).toContain("first line\nsecond line");
+    expect(await execute(opts, "webFetch", { url: "https://example.com" })).toContain("Truncated at 15000 characters");
+  });
+
+  it("keeps the image quota separate and bounded", async () => {
+    await searchViaFlash("q");
+    const opts = options();
+    for (let i = 0; i < 2; i++) expect(await execute(opts, "viewImage", { url: "https://example.com/a.png" })).toBe("Image description");
+    expect(await execute(opts, "viewImage", { url: "https://example.com/b.png" })).toContain("Image-read quota exhausted");
+    expect(mocks.image).toHaveBeenCalledTimes(2);
+  });
+
+  it("requests the final report using the native prepareStep system override", async () => {
+    await searchViaFlash("q");
+    const prep = options().prepareStep!;
+    expect(await prep({ stepNumber: 198, steps: [], messages: [] })).toEqual({});
+    const last = await prep({ stepNumber: 199, steps: [], messages: [] });
+    expect(last?.system).toContain("MUST call searchReport");
+    expect(last?.system).toContain("independent researcher");
+    expect(last?.activeTools).toEqual(["searchReport"]);
+    expect(last?.toolChoice).toBe("auto");
+  });
+
+  it("preserves planning and per-tool progress without consuming search quota in the progress callback", async () => {
+    await searchViaFlash("q");
+    const opts = options();
     expect(opts.system).toContain("Round 1 may use the query as-is");
-    expect(opts.system).toContain(
-      "every later round must either reformulate based on what you have learned or chase a new lead",
-    );
-    expect(opts.system).toContain(
-      "Before issuing a new search round, state (in thinking) what is still missing",
-    );
-    expect(opts.system).toContain(
-      "read the most promising pages with webFetch between rounds",
-    );
+    expect(opts.system).toContain("every later round must either reformulate");
+    expect(opts.system).toContain("1-128 Unicode characters");
+    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 1");
+    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 1");
+    await execute(opts, "web_search", { query: "q" });
+    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 2");
+    expect(opts.onToolProgress!({ toolName: "webFetch", input: { url: "https://example.com/a" } })?.line).toContain("example.com");
+    expect(opts.onToolProgress!({ toolName: "searchReport", input: {} })?.line).toContain("Compiling");
   });
 
-  it("mentions viewImage in the researcher role", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    expect(opts.system).toContain("viewImage can look at it");
-    expect(opts.system).toContain("up to 2 images");
+  it("recovers an unfiled report as explicitly lower-confidence final text", async () => {
+    mocks.runSubAgent.mockResolvedValue({ ok: true, text: "Partial findings" });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = await searchViaFlash("q");
+    expect(out.answer).toBe("Partial findings");
+    expect(out.recommendation).toContain("without filing the structured searchReport");
+    expect(out.sources).toEqual([]);
   });
 
-  it("caps the researcher's image reads at the per-run quota", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
+  it("preserves observed sources when a timed-out run has partial text", async () => {
+    mocks.search.mockResolvedValue({ results: [{ title: "Docs", url: "https://example.com/docs" }] });
+    mocks.runSubAgent.mockImplementation(async (opts: Options) => {
+      await execute(opts, "web_search", { query: "q" });
+      return { ok: false, timedOut: true, text: "Partial findings", error: "Deadline" };
     });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    const viewImage = opts.tools.viewImage as {
-      execute: (input: { url: string }) => Promise<string>;
-    };
-    for (let i = 0; i < 2; i++) {
-      const out = await viewImage.execute({ url: "https://example.com/a.png" });
-      expect(out).not.toContain("quota exhausted");
-    }
-    const out = await viewImage.execute({ url: "https://example.com/b.png" });
-    expect(out).toContain("Image-read quota exhausted");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = await searchViaFlash("q");
+    expect(out.answer).toBe("Partial findings");
+    expect(out.recommendation).toContain("lower-confidence");
+    expect(out.sources).toEqual([{ title: "Docs", url: "https://example.com/docs" }]);
   });
 
-  it("carries no token budgets — the runner's effort shape supplies thinking, nothing caps output", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    // The 2026-10-14 probe: this compat endpoint's absent max_tokens does NOT
-    // truncate — budgets are banned project-wide, so neither key is passed.
-    expect(opts.maxOutputTokens).toBeUndefined();
-    expect(opts.providerOptions).toBeUndefined();
-  });
-
-  it("swaps in a report-now directive on the final step only (prepareStep)", async () => {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const opts = runner.runSubAgent.mock.calls[0]![0];
-    const prep = opts.prepareStep as (o: { stepNumber: number }) => {
-      instructions?: string;
-    };
-    // Mid-run steps get no override.
-    expect(prep({ stepNumber: 0 })).toEqual({});
-    expect(prep({ stepNumber: 198 })).toEqual({});
-    // The last step of the 200-step budget: instructions become report-now.
-    const last = prep({ stepNumber: 199 });
-    expect(last.instructions).toContain("FINAL STEP — REPORT NOW");
-    expect(last.instructions).toContain("MUST call searchReport");
-    // The base role is preserved ahead of the directive.
-    expect(last.instructions).toContain("independent researcher");
-  });
-
-  /** Capture the normalizing fetch the adapter hands to the Anthropic provider. */
-  async function captureBoundaryFetch(): Promise<typeof fetch> {
-    runner.runSubAgent.mockResolvedValue({
-      ok: true,
-      report: { answer: "a", recommendation: "r", suggested_reads: [] },
-      text: "",
-    });
-    await searchViaFlash("q");
-    const calls = anthropic.createAnthropic.mock.calls as unknown as Array<
-      [{ fetch: typeof fetch }]
-    >;
-    return calls[0]![0].fetch;
-  }
-
-  it("normalizes array-wrapped web_search errors in whole-body JSON responses (error variant must not crash the stream)", async () => {
-    const boundaryFetch = await captureBoundaryFetch();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              id: "msg_1",
-              type: "message",
-              content: [
-                {
-                  type: "web_search_tool_result",
-                  tool_use_id: "srvtoolu_1",
-                  content: [
-                    {
-                      type: "web_search_tool_result_error",
-                      error_code: "max_uses_exceeded",
-                    },
-                  ],
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-      ),
-    );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
-      method: "POST",
-    });
-    const body = (await res.json()) as {
-      content: Array<{ content: unknown }>;
-    };
-    // The bare error object — the only error shape the SDK schema accepts.
-    expect(body.content[0]!.content).toEqual({
-      type: "web_search_tool_result_error",
-      error_code: "max_uses_exceeded",
-    });
-    // The provider-side failure is loud in the server log, not silent.
-    expect(warn).toHaveBeenCalledWith(
-      "[WebSearch] search round failed provider-side:",
-      "max_uses_exceeded",
-    );
-  });
-
-  it("normalizes array-wrapped web_search errors inside SSE event streams", async () => {
-    const boundaryFetch = await captureBoundaryFetch();
-    const sse = [
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}]}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":1}',
-      '',
-      '',
-    ].join("\n");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(sse, {
-            status: 200,
-            headers: { "content-type": "text/event-stream" },
-          }),
-      ),
-    );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
-      method: "POST",
-    });
-    const out = await res.text();
-    const lines = out.split("\n");
-    const startLine = lines.find((l) =>
-      l.startsWith('data: {"type":"content_block_start"'),
-    )!;
-    const event = JSON.parse(startLine.slice(5)) as {
-      content_block: { content: unknown };
-    };
-    expect(event.content_block.content).toEqual({
-      type: "web_search_tool_result_error",
-      error_code: "max_uses_exceeded",
-    });
-    // Everything else passes through byte-identical.
-    expect(lines[0]).toBe("event: content_block_start");
-    expect(out).toContain('data: {"type":"content_block_stop","index":1}');
-    expect(warn).toHaveBeenCalledWith(
-      "[WebSearch] search round failed provider-side:",
-      "max_uses_exceeded",
-    );
-  });
-
-  it("leaves successful web_search result arrays untouched (the paired tool_result stays valid)", async () => {
-    const boundaryFetch = await captureBoundaryFetch();
-    const payload = {
-      id: "msg_2",
-      type: "message",
-      content: [
-        {
-          type: "web_search_tool_result",
-          tool_use_id: "srvtoolu_1",
-          content: [
-            {
-              type: "web_search_result",
-              url: "https://example.com/a",
-              title: "A",
-              encrypted_content: "enc-1",
-            },
-          ],
-        },
-      ],
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify(payload), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
-      method: "POST",
-    });
-    expect(await res.json()).toEqual(payload);
-    expect(warn).not.toHaveBeenCalled();
+  it("throws failed or empty timed-out runs for outer error classification", async () => {
+    mocks.runSubAgent.mockResolvedValue({ ok: false, text: "", error: "HTTP 429" });
+    await expect(searchViaFlash("q")).rejects.toThrow("HTTP 429");
+    mocks.runSubAgent.mockResolvedValue({ ok: false, timedOut: true, text: "", error: "Deadline" });
+    await expect(searchViaFlash("q")).rejects.toThrow("Deadline");
   });
 });

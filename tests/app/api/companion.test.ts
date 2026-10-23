@@ -21,7 +21,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("ai", () => ({
+vi.mock("@/lib/deepseek/generate", () => ({
   streamText: hoisted.streamText,
   // tool() passthrough — companion-tools.test.ts exercises the real shape.
   tool: (def: unknown) => def,
@@ -158,17 +158,14 @@ describe("POST /api/companion origin guard", () => {
 });
 
 describe("POST /api/companion narration", () => {
-  it("streams text/plain on success and instantiates the resolved model plainly", async () => {
+  it("streams text/plain using the fixed companion profile", async () => {
     const res = await POST(companionReq(validBody({ timezone: "Asia/Shanghai" })));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
     expect(await res.text()).toBe("narration-text");
 
-    // createModel receives the resolved curated config directly (no
-    // StepBoundaryLanguageModel wrapper — plain instantiation).
-    expect(hoisted.createModel).toHaveBeenCalledTimes(1);
-    const cfg = hoisted.createModel.mock.calls[0][0] as { id: string; sdk: string };
-    expect(cfg.id).toBe("deepseek-flash");
+    expect(hoisted.streamText.mock.calls[0][0].role).toBe("companion");
+    expect(hoisted.streamText.mock.calls[0][0]).not.toHaveProperty("model");
   });
 
   it("layers the prompt stable-first with the event context last", async () => {
@@ -268,7 +265,7 @@ describe("POST /api/companion narration", () => {
 });
 
 describe("POST /api/companion model resolution", () => {
-  it("returns 501 when the resolved model is the bridge brain", async () => {
+  it("ignores retired bridge settings and uses native companion calls", async () => {
     vi.stubEnv("PREVIOUSLY_MODE", "client");
     vi.stubEnv("PREVIOUSLY_BRAIN", "bridge");
     const { loadUserConfig } = await import("@/lib/config/loader");
@@ -276,10 +273,9 @@ describe("POST /api/companion model resolution", () => {
       model: { provider: "bridge/claude" },
     } as never);
     const res = await POST(companionReq(validBody()));
-    expect(res.status).toBe(501);
-    const data = await res.json();
-    expect(data.error).toBeTruthy();
-    expect(hoisted.streamText).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("narration-text");
+    expect(hoisted.streamText.mock.calls.at(-1)?.[0].role).toBe("companion");
   });
 });
 

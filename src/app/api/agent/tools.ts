@@ -12,9 +12,9 @@
  * constructs its own path internally and only accesses its specific concept.
  */
 
-import { tool } from "ai";
+import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
-import { isClientMode } from "@/lib/mode";
+
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { RECALL_CATEGORIES } from "@/lib/memory/categories";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
@@ -35,7 +35,6 @@ import {
   thinkDeepExecute,
   currentTimeExecute,
   describeRoomExecute,
-  delegateTaskExecute,
   viewImageExecute,
   writeCaseExecute,
   startLongTaskExecute,
@@ -54,7 +53,7 @@ const modelConfigSchema = z.object({
   name: z.string(),
   provider: z.string(),
   providerName: z.string(),
-  sdk: z.enum(["deepseek", "anthropic", "openai", "bridge"]),
+  sdk: z.literal("deepseek"),
   envKey: z.string(),
   baseURL: z.string().optional(),
   capabilities: z.object({
@@ -825,7 +824,7 @@ export const chatTools = {
       "question). Two first-class uses: (a) genuinely hard problems where the " +
       "clean room sustains depth that your live context would dilute — " +
       "trade-offs, architecture decisions, deep analysis; dispatch with " +
-      "medium or high effort because the effort setting matters. (b) Parallel " +
+      "the fixed maximum reasoning profile. (b) Parallel " +
       "reasoning when the user raises several independent questions or angles " +
       "in one turn — break it into one self-contained question per direction " +
       "and dispatch all of them in the SAME step (tool calls within one step " +
@@ -840,74 +839,27 @@ export const chatTools = {
       "Returns the conclusion plus its thinking trail; a pod may come back " +
       "partial (`status: timeout`) — its `answer` and `reasoning` hold what " +
       "it already produced; work with them, or gather the missing facts " +
-      "yourself and dispatch a finer question. Tag each question with the " +
-      "right effort: low = simple verification, medium = comparison, high = " +
-      "structural analysis. A question worth thinking about deserves the " +
-      "effort it deserves. Synthesize what comes back into your answer in " +
-      "your own voice.",
+      "yourself and dispatch a finer question. The thinking role always uses max " +
+      "effort. Synthesize its evidence in your own voice.",
     inputSchema: z.object({
       question: z
         .string()
         .describe("Self-contained question for the thinking pod. Include all necessary context, facts, AND the user's decision criteria — it has no tools and cannot look anything up."),
-      effort: z
-        .enum(["low", "medium", "high"])
-        .optional()
-        .describe("Reasoning intensity: 'low' for simple logical verification, 'medium' for a comparison, 'high' for structural analysis. Defaults to 'low'."),
     }),
     contextSchema: toolContextSchema,
     execute: thinkDeepExecute,
   }),
 };
 
-// ─── Client-mode-only tools (subscription bridge) ────────────────────────
-//
-// Registered ONLY in client mode (PREVIOUSLY_MODE=client): the bridge command
-// is a local operator-controlled executable and cloud deployments must never
-// expose it (doc/design/v0.9-client.md §2 — mode changes "who do I talk to",
-// never identity). Chat-only, like webSearch/thinkDeep.
-const delegateTaskTool = tool({
-  description:
-    "Delegate a self-contained task to the local subscription bridge — an " +
-    "operator-installed adapter process that executes the task with the " +
-    "user's own local tools/subscriptions and returns its stdout as the " +
-    "result. Use it for work that needs something local rather than doing it " +
-    "yourself. Embed everything the task needs in `task` and `context` — the " +
-    "bridge has no access to your memory. On failure you get a structured " +
-    "error with a reason (bridge-not-found / spawn-failed / timeout / " +
-    "exit-code / empty-output) — report it honestly, then decide whether to " +
-    "retry, rephrase, or do the work yourself.",
-  inputSchema: z.object({
-    task: z
-      .string()
-      .describe("Self-contained task instruction for the bridge to execute."),
-    context: z
-      .string()
-      .optional()
-      .describe("Supporting context the bridge needs (facts, constraints, inputs)."),
-  }),
-  contextSchema: toolContextSchema,
-  execute: delegateTaskExecute,
-});
-
-/**
- * The chat tool set for this process: `chatTools`, plus the bridge dispatch
- * tool when running in client mode. Called at agent construction, inside the
- * workflow body — process.env is a frozen per-run snapshot there, so the mode
- * read is deterministic. The union return type (not an optional key) keeps
- * tool-call inference free of `undefined` for consumers like turn-workflow.
- */
-export function getChatTools():
-  | typeof chatTools
-  | (typeof chatTools & { delegateTask: typeof delegateTaskTool }) {
-  return isClientMode() ? { ...chatTools, delegateTask: delegateTaskTool } : chatTools;
-}
+/** Cloud and local BYOK share the same tool surface. */
+export function getChatTools(): typeof chatTools { return chatTools; }
 
 // ─── toolsContext builders ───────────────────────────────────────────────
 
 /** Same serializable chat context, fanned out to every chat tool by name. */
 export function buildChatToolsContext(
   ctx: ToolContext,
-): Record<keyof typeof chatTools, ToolContext> & { delegateTask?: ToolContext } {
+): Record<keyof typeof chatTools, ToolContext> {
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
     recallRecent: ctx,
     recallFind: ctx,
@@ -926,6 +878,6 @@ export function buildChatToolsContext(
   };
   // Keep the context map in lockstep with getChatTools(): a registered tool
   // must never lack its context entry.
-  return isClientMode() ? { ...contexts, delegateTask: ctx } : contexts;
+  return contexts;
 }
 

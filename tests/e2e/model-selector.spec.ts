@@ -1,70 +1,59 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
+import { clearEpisodic, makeSlice, seedSlices } from "./memory-fixture";
 
-// The chat model selector (src/components/chat/model-selector.tsx) fetches
-// /api/models; in client + PREVIOUSLY_BRAIN=bridge mode it must list a
-// "Subscription Bridge" group with one bridge/<agent> entry per known CLI
-// (src/lib/models/registry.ts). Assertions use brand/English strings only —
-// locale-independent. The seeded user config (tests/e2e/prepare-env.mjs) pins
-// the current model to bridge/claude, so the trigger label is deterministic.
-test.describe("Model selector — subscription bridge group", () => {
-  test("lists claude/codex/kimi bridge entries", async ({ page }) => {
-    await page.goto("/en/app");
+test.afterEach(async () => { await clearEpisodic(); });
 
-    const trigger = page.getByRole("button", {
-      name: /Claude \(subscription bridge\)/,
-    });
-    await expect(trigger).toBeVisible();
-    await trigger.click();
-
-    const popover = page.locator('[data-slot="popover-content"]');
-    await expect(
-      popover.getByText("Subscription Bridge", { exact: true }),
-    ).toBeVisible();
-
-    for (const agent of ["Claude", "Codex", "Kimi"]) {
-      await expect(
-        popover.getByRole("button", {
-          name: new RegExp(`${agent} \\(subscription bridge\\)`),
-        }),
-      ).toBeVisible();
-    }
-    // Exactly three bridge entries — one per known agent CLI.
-    await expect(
-      popover.locator("button").filter({ hasText: "(subscription bridge)" }),
-    ).toHaveCount(3);
+test("chat uses the fixed model and carries verified native steps into the next request after reload", async ({ page }) => {
+  test.setTimeout(120_000);
+  const posts: Array<{ messages: Array<{ id: string; role: string; parts: unknown[] }>; model?: unknown; effort?: unknown }> = [];
+  const native = { messages: [{ role: "assistant", content: "Native fixture answer", deepseek: { role: "assistant", content: "Native fixture answer", reasoning_content: "Original fixture reasoning" } }] };
+  await page.route("**/api/chat", async (route) => {
+    posts.push(route.request().postDataJSON());
+    const chunks = [
+      { type: "start", messageId: `fixture-answer-${posts.length}` },
+      { type: "text-start", id: "text" },
+      { type: "text-delta", id: "text", delta: posts.length === 1 ? "Native fixture answer" : "Second fixture answer" },
+      { type: "text-end", id: "text" },
+      { type: "data-deepseek-step", id: `fixture-step-${posts.length}`, data: native },
+      { type: "finish" },
+    ];
+    await route.fulfill({ contentType: "text/event-stream", body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n" });
   });
-
-  // Thinking is always ON at low effort (pinned server-side in
-  // start-turn.ts) — the effort cycle button (Zap icon) and the thinking
-  // switch row were removed from the chat UI. These are negative assertions
-  // against locale-independent hooks: the lucide icon class and the ARIA
-  // role of the Base UI Switch.
-  test("locked thinking/effort UX — no effort button, no thinking switch", async ({
-    page,
-  }) => {
-    await page.goto("/en/app");
-
-    // (a) No effort cycle button anywhere in the chat input area. The
-    // fullscreen composer is the .composer-bar holding the textarea (the
-    // pill tier's bar holds a one-line input instead).
-    const chatInput = page.locator(".composer-bar", {
-      has: page.locator("textarea"),
-    });
-    await expect(chatInput).toBeVisible();
-    await expect(chatInput.locator("svg.lucide-zap")).toHaveCount(0);
-
-    // (b) The model selector popover has no thinking switch row.
-    const trigger = page.getByRole("button", {
-      name: /Claude \(subscription bridge\)/,
-    });
-    await expect(trigger).toBeVisible();
-    await trigger.click();
-
-    const popover = page.locator('[data-slot="popover-content"]');
-    await expect(
-      popover.getByText("Subscription Bridge", { exact: true }),
-    ).toBeVisible();
-    await expect(popover.locator('[role="switch"]')).toHaveCount(0);
-    await expect(popover.getByText("Thinking", { exact: true })).toHaveCount(0);
-  });
+  await page.goto("/en/app");
+  const expand = page.getByRole("button", { name: "Expand to full screen" });
+  const retry = page.getByRole("button", { name: "Retry", exact: true });
+  const exit = page.getByRole("button", { name: "Exit full screen" }).first();
+  await expect(expand.or(retry).or(exit).first()).toBeVisible({ timeout: 30_000 });
+  if (await retry.isVisible()) await retry.click();
+  await expect(expand.or(exit).first()).toBeVisible({ timeout: 30_000 });
+  if (await expand.isVisible()) await expand.click();
+  const input = page.getByRole("textbox", { name: "Send a message..." });
+  await expect(input).toBeVisible();
+  const composer = page.locator(".composer-bar", { has: input });
+  await expect(composer.getByRole("combobox")).toHaveCount(0);
+  await expect(composer.getByRole("button", { name: /DeepSeek|Claude|Kimi|Codex|model|effort|thinking/i })).toHaveCount(0);
+  await input.fill("First offline fixture question");
+  await input.press("Enter");
+  await expect(page.getByText("Native fixture answer", { exact: true })).toHaveCount(1);
+  // Simulate the summary's authoritative saved record, then reload with no
+  // active run. The old live stash alone must never decide what to restore.
+  const at = new Date().toISOString();
+  const saved = makeSlice(at, { tag: "NATIVE-REPLAY" });
+  delete saved.closedBy;
+  delete saved.end;
+  saved.turns = [
+    { role: "user", at, content: "First offline fixture question", turnId: "native-turn", clientMessageId: posts[0].messages.at(-1)!.id },
+    { role: "agent", at, content: "Native fixture answer", turnId: "native-turn" },
+  ];
+  await seedSlices([saved]);
+  await page.reload();
+  await expect(expand.or(exit).first()).toBeVisible({ timeout: 30_000 });
+  if (await expand.isVisible()) await expand.click();
+  await expect(page.getByText("Native fixture answer", { exact: true })).toHaveCount(1);
+  await input.fill("Second offline fixture question");
+  await input.press("Enter");
+  await expect(page.getByText("Second fixture answer", { exact: true })).toHaveCount(1);
+  expect(posts).toHaveLength(2);
+  expect(posts.every((body) => body.model === undefined && body.effort === undefined)).toBe(true);
+  expect(posts[1].messages.find((message) => message.role === "assistant")?.parts).toContainEqual({ type: "data-deepseek-step", id: "fixture-step-1", data: native });
 });

@@ -14,9 +14,9 @@
  * absent) lives in chat.test.ts and start-turn.test.ts.
  */
 import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import {
-  appendBridgeTimeSuffix,
+  appendContextSuffix,
   buildMachineContextSection,
 } from "@/app/api/chat/turn-workflow";
 
@@ -43,7 +43,7 @@ describe("buildMachineContextSection (engine-marked section)", () => {
       { role: "user", content: "second" },
     ];
     const section = buildMachineContextSection(BLOCK);
-    const out = appendBridgeTimeSuffix(msgs, section);
+    const out = appendContextSuffix(msgs, section);
     expect(out).toHaveLength(3); // no message added — the extraction index holds
     expect(out[2]).toEqual({ role: "user", content: "second" + section });
     expect(out[0]).toEqual({ role: "user", content: "first" });
@@ -53,7 +53,7 @@ describe("buildMachineContextSection (engine-marked section)", () => {
   it("is a no-op when the window has no user message", () => {
     const msgs: ModelMessage[] = [{ role: "assistant", content: "hi" }];
     expect(
-      appendBridgeTimeSuffix(msgs, buildMachineContextSection(BLOCK)),
+      appendContextSuffix(msgs, buildMachineContextSection(BLOCK)),
     ).toEqual(msgs);
   });
 });

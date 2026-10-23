@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acceptPersistenceRecovery, readPendingPersistence, rememberTurnRun, rememberSummaryRun, subscribePersistenceCommits } from "@/lib/chat/persistence";
 import { recoveredTurnIds, recoveryMessages, mergeRecoveredMessages, mergeSavedTurns } from "@/lib/chat/reconnect";
-import { Chat } from "@ai-sdk/react";
-import type { UIMessage, UIMessageChunk } from "ai";
+import { readDurableChat } from "@/lib/chat/client-transport";
+import type { UIMessage, UIMessageChunk } from "@/lib/chat/protocol";
 const record = { turnId: "u1", sliceId: "s", at: "2026-10-22T00:00:00Z", userText: "question", replyText: "answer", cognition: "" };
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -59,24 +59,24 @@ describe("pending persistence acknowledgement", () => {
     expect(recoveryMessages([regenerated], new Set(), new Set(["question-id"])).map((message) => message.role)).toEqual(["assistant"]);
   });
 
-  it("keeps a completed bypass answer when the real chat SDK resumes the main run", async () => {
+  it("keeps a completed bypass answer when the durable chat transport resumes the main run", async () => {
     const stored: UIMessage[] = [{ id: "main-question", role: "user", parts: [{ type: "text", text: "main question" }] }];
     const bypass = { ...record, clientMessageId: "bypass-question" };
     const messages = mergeRecoveredMessages(stored, [bypass]);
-    const chat = new Chat<UIMessage>({ messages, transport: {
-      sendMessages: async () => { throw new Error("must not rerun the model"); },
-      reconnectToStream: async () => new ReadableStream<UIMessageChunk>({ start(controller) {
-        for (const chunk of [
-          { type: "start", messageId: "main-answer" }, { type: "text-start", id: "text" },
-          { type: "text-delta", id: "text", delta: "resumed answer" }, { type: "text-end", id: "text" }, { type: "finish" },
-        ] as UIMessageChunk[]) controller.enqueue(chunk);
-        controller.close();
-      } }),
-    } });
-    await chat.resumeStream();
-    expect(chat.error).toBeUndefined();
-    expect(chat.messages.map((message) => message.id)).toEqual(["main-question", "bypass-question", "recovery-agent-u1", "main-answer"]);
-    expect(chat.messages.flatMap((message) => message.parts).filter((part) => part.type === "text").map((part) => part.text)).toEqual(["main question", "question", "answer", "resumed answer"]);
+    let restored = messages;
+    const wire = [
+      { type: "start", messageId: "main-answer" }, { type: "text-start", id: "text" },
+      { type: "text-delta", id: "text", delta: "resumed answer" }, { type: "text-end", id: "text" }, { type: "finish" },
+    ] as UIMessageChunk[];
+    const request = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.method ?? "GET").toBe("GET");
+      return new Response(wire.map((chunk) => "data: " + JSON.stringify(chunk) + "\n\n").join(""));
+    });
+    await readDurableChat({ runId: "main-run", assistantId: "fallback", signal: new AbortController().signal,
+      fetch: request, onMessage: (answer) => { restored = [...messages, answer]; } });
+    expect(request).toHaveBeenCalledOnce();
+    expect(restored.map((message) => message.id)).toEqual(["main-question", "bypass-question", "recovery-agent-u1", "main-answer"]);
+    expect(restored.flatMap((message) => message.parts).filter((part) => part.type === "text").map((part) => part.text)).toEqual(["main question", "question", "answer", "resumed answer"]);
   });
 
   it("restores an already acknowledged bypass from the slice while the main run reconnects", () => {

@@ -432,7 +432,7 @@
     },
     "client": {
       "heading": "Client",
-      "desc": "本内核正以本地客户端实例运行。这里展示本地状态并管理执行设置——保存到客户端主目录（config.json），而非记忆仓库。",
+      "desc": "本地客户端的运行状态与 DeepSeek API 配置。密钥保存在客户端目录的 config.json。",
       "loadFailed": "无法加载客户端状态",
       "statusHeading": "运行状态",
       "agentsHeading": "本地 Agent",
@@ -459,7 +459,7 @@
       "engineLabel": "引擎",
       "brainByok": "自带 API Key（推荐）",
       "byokWhyRecommended": "为什么推荐？架构所限——只有使用自己的 API key，才能体验完整的 Previously 能力（流式输出、响应更快、无 CLI 冷启动）。",
-      "byokDesc": "推荐——体验最完整(流式、快、无 CLI 冷启动)。密钥仅保存在本机 config.json,除发送给所选服务商外不会离开本机。",
+      "byokDesc": "使用自己的 DeepSeek API key。密钥保存在本机，仅用于向 DeepSeek 发起请求；设置页面只显示配置状态。",
       "byokProviderLabel": "服务商",
       "byokProviderCustom": "自定义(OpenAI 兼容)",
       "byokApiKeyLabel": "API key",
@@ -471,7 +471,13 @@
       "bridgeAgentNotDetected": "本机未检测到 {agent}——已保存的配置可能在其他机器上有效，或 PATH 已变化。",
       "saved": "已保存 ✓",
       "saveFailed": "保存失败，请重试。",
-      "applyHint": "改动自动保存，引擎切换即时生效，无需重启——进行中的调用会按旧配置自然跑完。"
+      "applyHint": "保存后对新请求生效，无需重启。进行中的请求继续使用原有配置。",
+      "keyConfigured": "已配置 API key",
+      "keyMissing": "尚未配置 API key",
+      "keyReplace": "替换 API key",
+      "keySave": "保存密钥",
+      "keySaving": "保存中…",
+      "keyRemove": "移除密钥"
     }
   },
   "conversationPanel": {
@@ -511,7 +517,7 @@
     "weekOf": "{date} 当周",
     "undated": "无日期",
     "recordsLabel": "记录",
-    "recordPileAria": "{date}——{slices} 场对话，共 {turns} 轮"
+    "recordPileAria": "{date}——{slices} 场对话"
   },
   "recordSwitch": {
     "toggle": "{date}的记录",

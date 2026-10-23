@@ -432,7 +432,7 @@
     },
     "client": {
       "heading": "Client",
-      "desc": "This kernel is running as a local client instance. Status and local execution settings — saved to the client home (config.json), not your memory repo.",
+      "desc": "Local client status and DeepSeek API configuration. The key is stored in config.json in the client home.",
       "loadFailed": "Couldn't load client status",
       "statusHeading": "Status",
       "agentsHeading": "Local agents",
@@ -459,7 +459,7 @@
       "engineLabel": "Engine",
       "brainByok": "Your own API key (recommended)",
       "byokWhyRecommended": "Why recommended? By design, the full Previously experience — streaming, faster responses, no CLI cold start — is only available with your own API key.",
-      "byokDesc": "Recommended — the fullest experience (streaming, fast, no CLI cold start). The key is stored locally in config.json and never leaves this machine except to the chosen provider.",
+      "byokDesc": "Use your own DeepSeek API key. It is stored on this machine and used only for requests to DeepSeek. Settings show its configuration status only.",
       "byokProviderLabel": "Provider",
       "byokProviderCustom": "Custom (OpenAI-compatible)",
       "byokApiKeyLabel": "API key",
@@ -471,7 +471,13 @@
       "bridgeAgentNotDetected": "{agent} isn't detected on this machine — the saved config may be valid elsewhere, or the PATH changed.",
       "saved": "Saved ✓",
       "saveFailed": "Couldn't save. Try again.",
-      "applyHint": "Changes save automatically and engine switches apply immediately — no restart needed. In-flight calls finish on the old configuration."
+      "applyHint": "Saved changes apply to new requests without restarting. In-flight requests keep their existing configuration.",
+      "keyConfigured": "API key configured",
+      "keyMissing": "No API key configured",
+      "keyReplace": "Replace API key",
+      "keySave": "Save key",
+      "keySaving": "Saving…",
+      "keyRemove": "Remove key"
     }
   },
   "conversationPanel": {
@@ -511,7 +517,7 @@
     "weekOf": "Week of {date}",
     "undated": "Undated",
     "recordsLabel": "Records",
-    "recordPileAria": "{date} — {slices, plural, one {# conversation} other {# conversations}}, {turns, plural, one {# turn} other {# turns}}"
+    "recordPileAria": "{date} — {slices, plural, one {# conversation} other {# conversations}}"
   },
   "recordSwitch": {
     "toggle": "Records from {date}",

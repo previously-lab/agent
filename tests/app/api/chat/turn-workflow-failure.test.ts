@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   startSummaryRun: vi.fn(async (_payload: unknown) => "run-summary-1"),
   streamError: null as Error | null,
   successful: false,
+  nativeStep: null as null | {role:"assistant";content:string;deepseek:{role:"assistant";content:string;reasoning_content:string}},
 }));
 
 vi.mock("workflow", () => ({
@@ -47,10 +48,11 @@ vi.mock("@/app/api/chat/steps", () => ({
 }));
 
 vi.mock("@/app/api/agent/agent", () => ({
-  createChatAgent: vi.fn(() => ({
+  createChatAgent: vi.fn((opts: {onStepEnd?: (step: unknown) => void}) => ({
     // The answer stream blows up mid-turn with a TRANSIENT error —
     // classifyWorkflowError rethrows those into the workflow's outer catch.
     stream: vi.fn(async () => {
+      if (h.nativeStep) opts.onStepEnd?.({text:h.nativeStep.content,response:{messages:[h.nativeStep]},reasoning:[{type:"reasoning",text:h.nativeStep.deepseek.reasoning_content}],toolCalls:[],toolResults:[]});
       if (h.successful) return {
         messages: [{ role: "system", content: "fixture" }, { role: "user", content: "我的问题" }, { role: "assistant", content: "already produced answer" }],
         steps: [], finishReason: "stop",
@@ -162,8 +164,10 @@ beforeEach(() => {
   h.housekeeping.mockResolvedValue(hkResult());
   h.streamError = null;
   h.successful = false;
+  h.nativeStep = null;
   h.finalizeTurn.mockResolvedValue(undefined);
   h.startSummaryRun.mockResolvedValue("run-summary-1");
+  h.shouldStartSummary.mockResolvedValue(true);
 });
 
 describe("turnWorkflow — the v0.42 §5 failure floor", () => {
@@ -227,4 +231,17 @@ describe("turnWorkflow — the v0.42 §5 failure floor", () => {
     expect(payload.own.replyText).toBe("");
   });
 
+});
+
+
+it("retains checkpointed native output after a provider failure without another paid attempt", async () => {
+  h.nativeStep = {role:"assistant",content:"already streamed partial",deepseek:{role:"assistant",content:"already streamed partial",reasoning_content:"preserved reasoning"}};
+  h.streamError = Object.assign(new Error("upstream unavailable after retries"),{name:"DeepSeekError",statusCode:503});
+  const result = await turnWorkflow(input());
+  expect(result.replyText).toBe("already streamed partial");
+  expect(result.nativeMessages).toEqual([h.nativeStep]);
+  expect(result.cognition).toContain("preserved reasoning");
+  expect(h.startSummaryRun).toHaveBeenCalledOnce();
+  expect(h.startSummaryRun.mock.calls[0][0]).toMatchObject({own:{replyText:"already streamed partial",nativeMessages:undefined}});
+  expect(h.closeTurnStream).toHaveBeenCalledWith(expect.objectContaining({text:"already streamed partial",finishReason:"error"}),TURN_ID,{summaryRunId:"run-summary-1"});
 });

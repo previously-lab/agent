@@ -12,7 +12,7 @@ vi.mock("@/app/api/chat/start-turn", () => ({
   startTurn: (args: unknown) => mockStartTurn(args),
 }));
 
-vi.mock("ai", () => ({
+vi.mock("@/lib/deepseek/generate", () => ({
   createUIMessageStreamResponse: vi.fn(
     ({ headers }: { stream: unknown; headers?: Record<string, string> }) =>
       new Response("mocked-ui-stream", {

@@ -184,8 +184,8 @@ vi.mock("@/lib/chat/hq-log", () => ({
 vi.mock("@/lib/models/provider", () => ({
   createModel: vi.fn(() => ({ _mock: "model" })),
 }));
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
+vi.mock("@/lib/deepseek/generate", async () => {
+  const actual = await vi.importActual("@/lib/deepseek/generate");
   return {
     ...actual,
     streamText: vi.fn(() => ({

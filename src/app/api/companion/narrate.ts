@@ -18,20 +18,11 @@
  *   L3 event context — now (user-local), locale, target sliceId (varies)
  */
 
-import { streamText, isStepCount } from "ai";
-import { loadUserConfig } from "@/lib/config/loader";
-import { demoModelLock } from "@/lib/demo/model-lock";
-import {
-  getModel,
-  getDefaultModelId,
-  ALL_MODELS,
-  type ModelConfig,
-} from "@/lib/models/registry";
-import { resolveAvailableModels } from "@/lib/models/catalog";
+import { streamText } from "@/lib/deepseek/generate";
+import { isStepCount } from "@/lib/deepseek/tools";
+
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
-import { createModel } from "@/lib/models/provider";
-import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import {
   buildAgentIdentityPrompt,
   parseIdentityFromPreviously,
@@ -80,29 +71,6 @@ export function streamFailureMarker(locale: "zh" | "en"): string {
   return locale === "zh"
     ? "\n\n[ Previously 暂时走神了，稍后再试。 ]"
     : "\n\n[ Previously got distracted — please try again later. ]";
-}
-
-/**
- * Resolve a model id to its full config — the start-turn resolver sequence
- * (curated registry → live catalog → deployment default). Re-implemented
- * here rather than imported: start-turn.ts pulls in the whole durable
- * workflow (workflow/api + turn-workflow), and the mouth must stay a plain
- * streamText endpoint.
- */
-async function resolveModelConfig(id: string): Promise<{
-  model: string;
-  modelConfig: ModelConfig;
-}> {
-  const curated = getModel(id);
-  if (curated) return { model: curated.id, modelConfig: curated };
-
-  const available = await resolveAvailableModels();
-  const found = available.find((m) => m.id === id);
-  if (found) return { model: found.id, modelConfig: found };
-
-  const fallbackId = getDefaultModelId();
-  const fallback = getModel(fallbackId) ?? available[0] ?? ALL_MODELS[0];
-  return { model: fallback.id, modelConfig: fallback };
 }
 
 /** Injection cap for the live companion playbook (the companion's own
@@ -170,30 +138,6 @@ export async function narrateSlice(
   args: NarrateArgs,
   opts: NarrateOptions = {},
 ): Promise<Response> {
-  // Model resolution mirrors the chat turn (start-turn.ts:170-192): config →
-  // demo lock → resolve; thinking pinned to the model's capability; effort
-  // pinned low (fast responses are the product rule).
-  const config = await loadUserConfig();
-  const lock = demoModelLock();
-  const requested = lock?.model ?? config.model.provider;
-  const { model, modelConfig } = await resolveModelConfig(requested);
-  const thinking = lock?.thinking ?? modelConfig.capabilities.thinking;
-  const reasoningEffort = lock?.effort ?? "low";
-  console.log(
-    `[Companion] model=${model} (requested=${requested}) sdk=${modelConfig.sdk} thinking=${thinking} effort=${reasoningEffort}`,
-  );
-
-  if (modelConfig.sdk === "bridge") {
-    return Response.json(
-      {
-        error:
-          "The subscription bridge brain cannot narrate — the bridge CLI " +
-          "returns plain text and cannot run the companion read-only tools.",
-      },
-      { status: 501 },
-    );
-  }
-
   // Same data-source resolution as the chat turn (start-turn.ts:197-198).
   const locale: "zh" | "en" = args.locale === "zh" ? "zh" : "en";
   const timezone = args.timezone ?? "UTC";
@@ -244,30 +188,16 @@ export async function narrateSlice(
     `Answer in ${locale === "zh" ? "Chinese (中文)" : "English"}.`,
   ].join(" ");
 
-  // Plain AI SDK streamText — NOT a workflow, no StepBoundaryLanguageModel:
-  // createModel instantiates the real provider model directly. The agent
-  // loop is bounded at 6 steps (read tools + narration fit comfortably).
-  //
-  // Overall abort: a hung provider must not leave the response hanging for
-  // many minutes — cut the stream at the wall clock and terminate. (DeepSeek
-  // has been observed queue-timing-out requests with a 900s upstream limit.)
+  // Ephemeral read-only narration uses the fixed companion profile.
   const streamTimeoutMs = opts.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
   const abortSignal = AbortSignal.timeout(streamTimeoutMs);
   const result = streamText({
-    model: createModel(modelConfig),
+    role: "companion",
     system,
     prompt: userPrompt,
     tools: buildCompanionTools(toolCtx),
-    providerOptions: normalizeReasoningEffort(
-      modelConfig.sdk,
-      modelConfig.id,
-      thinking,
-      reasoningEffort,
-    ),
+    thinking: true,
     stopWhen: isStepCount(6),
-    // Narration, not deduction: some warmth/variety; the read-only tools and
-    // the playbook's honesty rules keep it grounded.
-    temperature: 0.7,
     abortSignal,
     onError: ({ error }) => {
       console.error("[Companion] narration stream error:", error);
@@ -309,7 +239,7 @@ export async function narrateSlice(
           } else if (part.type === "error") {
             throw part.error;
           } else if (part.type === "abort") {
-            throw new Error(part.reason ?? "aborted");
+            throw new Error(String(part.error ?? "aborted"));
           }
           // finish / step / tool parts: narration prose is text-delta only.
         }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { ModelMessage } from "ai";
+import { type ModelMessage } from "@/lib/deepseek/types";
 import {
   buildHistoryWindow,
   sanitizeCheckpointPrefix,

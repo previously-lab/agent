@@ -11,14 +11,15 @@
  * definitions that bind these executors live in ./tools.ts.
  */
 
-import { streamText, type UIMessageChunk } from "ai";
+import { streamText } from "@/lib/deepseek/generate";
+import { type UIMessageChunk } from "@/lib/chat/protocol";
 import { getWritable } from "workflow";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
 // serialization-class registration for it runs before any doStreamStep
 // message is handled (see src/lib/models/step-boundary-model.ts).
-import "@/lib/models/step-boundary-model";
+
 import { readFile, readFileViaTree, getRepoTree } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {
@@ -92,18 +93,9 @@ import {
   textLines,
   searchResultToString,
 } from "@/lib/retrieval/doc-segments";
-import {
-  getBridgeCommand,
-  getBridgeTimeoutMs,
-  runBridge,
-  splitBridgeCommand,
-  BRIDGE_PROTOCOL_VERSION,
-  type BridgeRunResult,
-} from "@/lib/bridge";
+
 import { resolveMainModelFromConfig } from "@/lib/models/resolve";
 import { resolveSubAgentModel } from "@/lib/agents/sub-agent-runner";
-import { createModel } from "@/lib/models/provider";
-import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import type { ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { isTransientError, triageErrorMessage } from "@/lib/chat/tool-triage";
@@ -920,12 +912,10 @@ export async function webSearchExecute(
   // @security note). Gate on the key itself, not the generic isAIConfigured():
   // a deployment with ANTHROPIC_API_KEY but no DEEPSEEK_API_KEY would pass the
   // generic check and then fail deep inside the adapter.
-  if (!process.env.DEEPSEEK_API_KEY) {
+  if (!isAIConfigured()) {
     return {
       error:
-        "Web search requires a DEEPSEEK_API_KEY. It runs as a separate DeepSeek " +
-        "infrastructure call independent of the chat model you selected. Add " +
-        "DEEPSEEK_API_KEY to enable it, or swap in your own search adapter.",
+        "Web search requires a DeepSeek API key. Configure DeepSeek BYOK in client settings or DEEPSEEK_API_KEY on the server.",
     };
   }
 
@@ -1168,70 +1158,6 @@ export async function viewImageExecute(
   return `${result.description}\n\n[image: ${formatImageMetadata(result.metadata)}]`;
 }
 
-// ── delegateTask — subscription bridge dispatch (client mode only) ───────
-//
-// The bridge env contract, command splitter, and spawn helper live in
-// src/lib/bridge.ts (shared with the bridge main model, see
-// src/lib/models/bridge-model.ts).
-
-export type DelegateTaskResult =
-  | BridgeRunResult
-  // Demo refusal — returned before the bridge process is ever spawned. The
-  // BridgeFailureReason enum (lib/bridge.ts) covers spawn outcomes only, so
-  // the demo refusal carries its own reason literal.
-  | { status: "error"; reason: "demo-mode"; error: string; elapsedMs: number };
-
-/**
- * delegateTask — hand a self-contained task to the local subscription bridge
- * (client mode only; the tool itself is registered conditionally in
- * ./tools.ts). The kernel owns only the dispatch half: the bridge command
- * (PREVIOUSLY_BRIDGE_CMD, default `previously bridge-exec`) is
- * operator-controlled env — never tool input — and receives `{ task, context }`
- * as JSON on stdin; its stdout is the result. The bridge adapters live in the
- * client repo (doc/design/v0.9-client.md).
- */
-export async function delegateTaskExecute(
-  { task, context }: { task: string; context?: string },
-  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
-): Promise<DelegateTaskResult> {
-  "use step";
-  if (ctx.useDemo) {
-    return {
-      status: "error",
-      reason: "demo-mode",
-      error:
-        "Demo mode runs on read-only benchmark data — bridge tasks are not dispatched.",
-      elapsedMs: 0,
-    };
-  }
-  await emitToolProgress(toolCallId, "delegateTask", "Delegating to the local bridge…", "running");
-
-  const cmd = getBridgeCommand();
-  const result = await runBridge(
-    splitBridgeCommand(cmd),
-    JSON.stringify({
-      task,
-      context: context ?? null,
-      protocol: BRIDGE_PROTOCOL_VERSION,
-    }),
-    getBridgeTimeoutMs(),
-  );
-
-  await emitToolProgress(
-    toolCallId,
-    "delegateTask",
-    result.status === "ok" ? "Bridge returned a result" : `Bridge failed: ${result.reason}`,
-    "done",
-  );
-  // Protocol-2 activity events are display data for the kernel UI — strip
-  // them so they don't bloat the model-facing tool result.
-  if (result.status === "ok" && result.events) {
-    const { events: _events, ...rest } = result;
-    return rest;
-  }
-  return result;
-}
-
 // ── currentTime — the "watch check" for a precise now ────────────────────
 
 /**
@@ -1462,7 +1388,6 @@ function buildSubAgentSystemPrompt(baseSystemPrompt: string | undefined): string
 /** One fragment as the model supplies it in the batch call. */
 export interface ThinkDeepFragmentInput {
   question: string;
-  effort?: "low" | "medium" | "high";
 }
 
 /** One fragment's structured result, tagged with its question. */
@@ -1481,10 +1406,9 @@ export interface ThinkDeepFragmentResult extends ThinkDeepResult {
  * rebuild context on their own.
  */
 export async function thinkDeepExecute(
-  { question, effort = "low" }: {
+  { question }: {
     question: string;
-    effort?: "low" | "medium" | "high";
-  },
+    },
   { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<ThinkDeepFragmentResult> {
   "use step";
@@ -1495,7 +1419,7 @@ export async function thinkDeepExecute(
       ok: false,
       status: "error",
       error:
-        "AI is not configured (no API key). Set DEEPSEEK_API_KEY or another provider key.",
+        "AI is not configured (no API key). Configure DeepSeek BYOK or DEEPSEEK_API_KEY.",
     };
   }
 
@@ -1510,7 +1434,7 @@ export async function thinkDeepExecute(
 
   // Single fragment (index 0 of 1) → streams WITHOUT the [i/N] prefix.
   return runThinkDeepFragment(
-    { question, effort },
+    { question },
     0,
     1,
     {
@@ -1539,19 +1463,14 @@ async function runThinkDeepFragment(
     stepStartMs: number;
   },
 ): Promise<ThinkDeepFragmentResult> {
-  const { question, effort = "low" } = fragment;
+  const { question } = fragment;
   const { modelConfig, baseSystemPrompt, toolCallId, stepStartMs } = opts;
 
   const prefix = total > 1 ? `[${index + 1}/${total}] ` : "";
 
   // Thinking is always requested for a reasoning fragment; the injector owns
   // the provider-specific effort mapping.
-  const providerOptions = normalizeReasoningEffort(
-    modelConfig.sdk,
-    modelConfig.id,
-    true,
-    effort,
-  );
+
   // self/ SOP spawn loading (v0.19 §C.2): the thinkdeep SOP rides the SYSTEM
   // prompt in FULL (this fragment runner predates the shared runSubAgent, so
   // it loads directly). Absent/unreadable → no block, never a failed spawn.
@@ -1674,19 +1593,19 @@ async function runThinkDeepFragment(
           // streamText (not generateText) so onChunk can capture BOTH channels
           // progressively — never lost, even mid-thought.
           const stream = await streamText({
-            model: createModel(modelConfig),
+            role: "think",
             system,
             prompt: userPrompt,
-            providerOptions,
+            thinking: true,
             // The SDK timeout hook — aborts the stream cleanly at the deadline.
             timeout: streamTimeoutMs,
             onChunk({ chunk }) {
               if (chunk.type === "text-delta") {
-                answer += chunk.text;
+                answer += (chunk.text ?? chunk.delta ?? "");
                 // Stream the live reasoning/answer line to the client.
                 writeProgress();
               } else if (chunk.type === "reasoning-delta") {
-                reasoning += chunk.text;
+                reasoning += (chunk.text ?? chunk.delta ?? "");
                 writeProgress();
               }
             },

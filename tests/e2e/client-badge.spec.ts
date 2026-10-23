@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 
 // The client-mode header badge (src/components/layout/client-badge.tsx) gates
 // at runtime on GET /api/version — the e2e webServer runs with

@@ -26,7 +26,7 @@ function mockStreamResponse(chunks: unknown[]): void {
     "fetch",
     vi.fn(async () => ({
       ok: true,
-      body: laneStream(chunks),
+      body: laneStream([...chunks, { type: "finish" }]),
     })) as unknown as typeof fetch,
   );
 }

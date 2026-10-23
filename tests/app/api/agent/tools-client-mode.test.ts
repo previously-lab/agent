@@ -35,15 +35,15 @@ describe("client-mode tool gating", () => {
     expect(buildChatToolsContext(ctx)).not.toHaveProperty("delegateTask");
   });
 
-  it("client mode: delegateTask is registered with a context entry", () => {
+  it("client BYOK uses the same tools without an external-agent executor", () => {
     process.env.PREVIOUSLY_MODE = "client";
     const tools = getChatTools();
-    expect(tools).toHaveProperty("delegateTask");
+    expect(tools).not.toHaveProperty("delegateTask");
     for (const name of Object.keys(chatTools)) {
       expect(tools).toHaveProperty(name);
     }
     const contexts = buildChatToolsContext(ctx);
-    expect(contexts.delegateTask).toBe(ctx);
+    expect(contexts).not.toHaveProperty("delegateTask");
   });
 });
 

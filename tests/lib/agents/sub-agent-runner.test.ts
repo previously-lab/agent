@@ -1,571 +1,159 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { AgentOptions, ModelCallStreamPart } from "@/lib/deepseek/types";
+import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
 
-const ai = vi.hoisted(() => ({ streamText: vi.fn() }));
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
-  return { ...actual, streamText: ai.streamText };
-});
-vi.mock("@/lib/models/provider", () => ({
-  createModel: vi.fn((c: unknown) => ({ _mock: c })),
-}));
-
-const evolutionStore = vi.hoisted(() => ({
-  readSelfSop: vi.fn(async (): Promise<string | null> => null),
-}));
-vi.mock("@/lib/evolution/store", () => ({
-  readSelfSop: evolutionStore.readSelfSop,
-}));
-
+const native = vi.hoisted(() => ({ streamText: vi.fn() }));
+vi.mock("@/lib/deepseek/generate", () => ({ streamText: native.streamText }));
+const evolution = vi.hoisted(() => ({ readSelfSop: vi.fn(async (): Promise<string | null> => null) }));
+vi.mock("@/lib/evolution/store", () => evolution);
 const workflow = vi.hoisted(() => {
   const writer = { write: vi.fn(async () => {}), releaseLock: vi.fn() };
-  return {
-    writer,
-    getWritable: vi.fn(() => ({ getWriter: () => writer })),
-  };
+  return { writer, getWritable: vi.fn(() => ({ getWriter: () => writer })) };
 });
 vi.mock("workflow", () => ({ getWritable: workflow.getWritable }));
+const deadline = vi.hoisted(() => ({ withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({ ok: true, result: await work(), elapsedMs: 0 })) }));
+vi.mock("@/lib/chat/step-timeout", () => deadline);
 
-// Passthrough spy on the backstop wrapper so tests can pin WHEN it is
-// installed (explicit budget) vs skipped (omitted — v0.34 修订 A).
-const stepTimeout = vi.hoisted(() => ({
-  withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({
-    ok: true,
-    timedOut: false,
-    result: await work(),
-    elapsedMs: 0,
-  })),
-}));
-vi.mock("@/lib/chat/step-timeout", () => ({
-  withStepTimeout: stepTimeout.withStepTimeout,
-}));
-
-import {
-  runSubAgent,
-  extractToolReport,
-  createProgressEmitter,
-} from "@/lib/agents/sub-agent-runner";
-import type { ModelConfig } from "@/lib/models/registry";
-
-const model: ModelConfig = {
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
-  provider: "deepseek",
-  providerName: "DeepSeek",
-  sdk: "deepseek",
-  envKey: "DEEPSEEK_API_KEY",
-  capabilities: { thinking: true, vision: false, maxTokens: 393216 },
-  defaultThinking: false,
-  defaultEffort: "low",
-};
-
-const reportSchema = z.object({
-  verdict: z.string(),
-  count: z.number(),
+import { createProgressEmitter, extractToolReport, resolveSubAgentModel, runSubAgent } from "@/lib/agents/sub-agent-runner";
+import { FIXED_MODEL } from "@/lib/models/registry";
+const reportSchema = z.object({ verdict: z.string(), count: z.number() });
+type Report = z.infer<typeof reportSchema>;
+const options = (overrides: Partial<RunSubAgentOptions<Report>> = {}): RunSubAgentOptions<Report> => ({
+  system: "fixed system", prompt: "fixture task", tools: {}, reportToolName: "report", reportSchema, ...overrides,
 });
-
-function baseOpts(overrides: Record<string, unknown> = {}) {
-  return {
-    model,
-    system: "static system",
-    prompt: "do the task",
-    tools: {},
-    reportToolName: "report",
-    reportSchema,
-    ...overrides,
-  };
-}
-
-type StreamOpts = {
-  onChunk?: (event: { chunk: { type: string; text: string } }) => void;
-};
-
-interface FakeStreamSpec {
-  /** Chunks replayed through onChunk before the final promises resolve. */
-  chunks?: Array<{ type: "text-delta" | "reasoning-delta"; text: string }>;
-  text?: string;
-  reasoningText?: string;
-  toolCalls?: Array<{ toolName: string; input: unknown }>;
-  sources?: Array<{ sourceType: string; url?: string; title?: string }>;
-}
-
-/** A StreamTextResult stand-in: replays chunks via onChunk, then resolves. */
-function fakeStream(spec: FakeStreamSpec = {}) {
-  ai.streamText.mockImplementation(async (opts: StreamOpts) => {
-    for (const chunk of spec.chunks ?? []) opts.onChunk?.({ chunk });
-    const joined = (type: string) =>
-      (spec.chunks ?? [])
-        .filter((c) => c.type === type)
-        .map((c) => c.text)
-        .join("");
-    return {
-      text: Promise.resolve(spec.text ?? joined("text-delta")),
-      toolCalls: Promise.resolve(spec.toolCalls ?? []),
-      reasoningText: Promise.resolve(
-        spec.reasoningText ?? (joined("reasoning-delta") || undefined),
-      ),
-      sources: Promise.resolve(spec.sources ?? []),
-      warnings: Promise.resolve([]),
-    };
+function fakeStream(spec: { chunks?: ModelCallStreamPart[]; text?: string; reasoning?: string; calls?: Array<{ toolName: string; input: unknown }>; sources?: Array<{ sourceType: string; url?: string; title?: string }> } = {}) {
+  native.streamText.mockImplementation(async (opts: AgentOptions) => {
+    for (const chunk of spec.chunks ?? []) await opts.onChunk?.({ chunk });
+    const joined = (type: string) => (spec.chunks ?? []).filter((chunk) => chunk.type === type).map((chunk) => chunk.text ?? chunk.delta ?? "").join("");
+    return { text: Promise.resolve(spec.text ?? joined("text-delta")), reasoningText: Promise.resolve(spec.reasoning ?? joined("reasoning-delta")),
+      toolCalls: Promise.resolve(spec.calls ?? []), sources: Promise.resolve(spec.sources ?? []), warnings: Promise.resolve([]) };
   });
 }
+const lastCall = () => native.streamText.mock.calls.at(-1)![0] as AgentOptions;
+beforeEach(() => { vi.clearAllMocks(); evolution.readSelfSop.mockResolvedValue(null); });
 
-function lastCall() {
-  return ai.streamText.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-});
-
-describe("runSubAgent", () => {
-  it("extracts and validates the report tool call", async () => {
-    fakeStream({
-      toolCalls: [
-        { toolName: "other", input: { ignored: true } },
-        { toolName: "report", input: { verdict: "ok", count: 3 } },
-      ],
+describe("native sub-agent runner", () => {
+  it("validates the named structured report", async () => {
+    fakeStream({ calls: [{ toolName: "other", input: {} }, { toolName: "report", input: { verdict: "yes", count: 3 } }] });
+    expect(await runSubAgent(options())).toMatchObject({ ok: true, report: { verdict: "yes", count: 3 } });
+  });
+  it("returns missing reports honestly without a second model request", async () => {
+    fakeStream({ text: "unfiled prose", reasoning: "thinking retained" });
+    expect(await runSubAgent(options())).toMatchObject({ ok: true, text: "unfiled prose", reasoning: "thinking retained", report: undefined });
+    expect(native.streamText).toHaveBeenCalledTimes(1);
+  });
+  it("rejects malformed reports without discarding text", async () => {
+    fakeStream({ text: "usable partial result", calls: [{ toolName: "report", input: { verdict: 42 } }] });
+    expect(await runSubAgent(options())).toMatchObject({ ok: true, text: "usable partial result", report: undefined });
+  });
+  it("uses the fixed model and passes only server-owned role settings", async () => {
+    expect(await resolveSubAgentModel()).toEqual(FIXED_MODEL);
+    fakeStream(); await runSubAgent(options());
+    expect(lastCall()).toMatchObject({ role: "recall", thinking: true, toolChoice: "auto" });
+    expect(lastCall()).not.toHaveProperty("providerOptions");
+    expect(lastCall()).not.toHaveProperty("maxOutputTokens");
+    expect(lastCall()).not.toHaveProperty("temperature");
+    await runSubAgent(options({ role: "reflection" }));
+    expect(lastCall().role).toBe("reflection");
+  });
+  it("keeps exact source citations returned by the native tool run", async () => {
+    const sources = [{ sourceType: "url", url: "https://example.test", title: "fixture" }];
+    fakeStream({ sources }); expect((await runSubAgent(options())).sources).toEqual(sources);
+  });
+  it("keeps complete accumulated thinking and text on timeout", async () => {
+    native.streamText.mockImplementation(async (opts: AgentOptions) => {
+      await opts.onChunk?.({ chunk: { type: "reasoning-delta", text: "half a thought" } });
+      await opts.onChunk?.({ chunk: { type: "text-delta", delta: "partial answer" } });
+      throw new DOMException("fixture timeout", "TimeoutError");
     });
-
-    const res = await runSubAgent(baseOpts());
-    expect(res.ok).toBe(true);
-    expect(res.report).toEqual({ verdict: "ok", count: 3 });
+    expect(await runSubAgent(options({ timeoutMs: 5000 }))).toMatchObject({ ok: false, timedOut: true, text: "partial answer", reasoning: "half a thought", error: "Sub-agent did not finish within 5s." });
+    expect(native.streamText).toHaveBeenCalledTimes(1);
   });
-
-  it("returns report: undefined when the report tool was never called", async () => {
-    fakeStream();
-    const res = await runSubAgent(baseOpts());
-    expect(res.ok).toBe(true);
-    expect(res.report).toBeUndefined();
+  it("returns provider failures as structured failures", async () => {
+    native.streamText.mockRejectedValue(new Error("provider unavailable"));
+    expect(await runSubAgent(options())).toMatchObject({ ok: false, text: "", error: "provider unavailable" });
   });
-
-  it("returns report: undefined when the report input fails schema validation", async () => {
-    fakeStream({
-      toolCalls: [{ toolName: "report", input: { verdict: 42 } }],
-    });
-    const res = await runSubAgent(baseOpts());
-    expect(res.ok).toBe(true);
-    expect(res.report).toBeUndefined();
+  it("installs both deadline and backstop only for an explicit wall-clock bound", async () => {
+    fakeStream(); await runSubAgent(options({ timeoutMs: 12000 }));
+    expect(lastCall().timeout).toBe(12000);
+    expect(deadline.withStepTimeout).toHaveBeenCalledWith(expect.any(Function), 15000);
   });
-
-  it("surfaces the final text and reasoning from the stream promises", async () => {
-    fakeStream({
-      toolCalls: [{ toolName: "report", input: { verdict: "ok", count: 1 } }],
-      text: "some text",
-      reasoningText: "thought trail",
-    });
-    const res = await runSubAgent(baseOpts());
-    expect(res.text).toBe("some text");
-    expect(res.reasoning).toBe("thought trail");
+  it("does not invent a timeout when the caller omitted one", async () => {
+    fakeStream(); await runSubAgent(options());
+    expect(lastCall()).not.toHaveProperty("timeout"); expect(deadline.withStepTimeout).not.toHaveBeenCalled();
   });
-
-  it("returns a structured timeout on the SDK abort, keeping the accumulated partial", async () => {
-    ai.streamText.mockImplementation(async (opts: StreamOpts) => {
-      opts.onChunk?.({ chunk: { type: "reasoning-delta", text: "half a thought" } });
-      opts.onChunk?.({ chunk: { type: "text-delta", text: "partial answer" } });
-      const err = new Error("aborted");
-      err.name = "AbortError";
-      throw err;
-    });
-
-    const res = await runSubAgent(baseOpts({ timeoutMs: 5_000 }));
-    expect(res.ok).toBe(false);
-    expect(res.timedOut).toBe(true);
-    expect(res.error).toMatch(/5s/);
-    // thinkDeep partial semantics: whatever streamed before the abort survives.
-    expect(res.text).toBe("partial answer");
-    expect(res.reasoning).toBe("half a thought");
+  it("applies the requested round limit", async () => {
+    fakeStream(); await runSubAgent(options({ maxSteps: 4 }));
+    const stop = lastCall().stopWhen;
+    expect(typeof stop).toBe("function");
+    if (typeof stop !== "function") throw new Error("expected stop condition");
+    expect(stop({ steps: new Array(4).fill({}) })).toBe(true);
+    expect(stop({ steps: new Array(3).fill({}) })).toBe(false);
   });
-
-  it("returns a structured error result on other failures (never throws)", async () => {
-    ai.streamText.mockRejectedValue(new Error("provider down"));
-    const res = await runSubAgent(baseOpts());
-    expect(res.ok).toBe(false);
-    expect(res.timedOut).toBeUndefined();
-    expect(res.text).toBe("");
-    expect(res.error).toBe("provider down");
+  it("leaves unspecified limits to the native call contract", async () => {
+    fakeStream(); await runSubAgent(options()); expect(lastCall()).not.toHaveProperty("stopWhen");
   });
-
-  it("passes the step cap as stopWhen: isStepCount(maxSteps)", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts({ maxSteps: 4 }));
-
-    const stopWhen = lastCall().stopWhen as (opts: {
-      steps: unknown[];
-    }) => boolean;
-    expect(typeof stopWhen).toBe("function");
-    expect(stopWhen({ steps: new Array(4).fill({}) })).toBe(true);
-    expect(stopWhen({ steps: new Array(3).fill({}) })).toBe(false);
+  it("loads the complete SOP without truncating it", async () => {
+    const sop = `# SOP\n${"guidance\n".repeat(300)}`;
+    evolution.readSelfSop.mockResolvedValueOnce(sop);
+    fakeStream(); await runSubAgent(options({ selfSop: "search" }));
+    expect(lastCall().system).toContain(sop.trim()); expect(lastCall().system?.startsWith("fixed system")).toBe(true);
   });
-
-  it("omits stopWhen when no step cap is given", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts());
-    expect(lastCall().stopWhen).toBeUndefined();
+  it("degrades a missing or unreadable SOP without failing the run", async () => {
+    fakeStream(); await runSubAgent(options({ selfSop: "search" }));
+    expect(lastCall().system).toMatch(/^fixed system\n\nFinish by calling report/);
+    expect(lastCall().system).not.toContain("Your SOP");
+    evolution.readSelfSop.mockRejectedValueOnce(new Error("fixture unavailable"));
+    await runSubAgent(options({ selfSop: "search" }));
+    expect(lastCall().system).toMatch(/^fixed system\n\nFinish by calling report/);
+    expect(lastCall().system).not.toContain("Your SOP");
   });
-
-  it("appends the self/ SOP in FULL to the system prompt when selfSop is set (§C.2 spawn loading)", async () => {
-    const sop = `# Search SOP\n\n${"guidance line\n".repeat(300)}`;
-    evolutionStore.readSelfSop.mockResolvedValueOnce(sop);
-    fakeStream();
-    await runSubAgent(baseOpts({ selfSop: "search" }));
-    const system = lastCall().system as string;
-    expect(system).toContain("## Your SOP (self/search/index.md");
-    expect(system).toContain(sop.trim()); // FULL text — no injection cap
-    expect(system.startsWith("static system")).toBe(true);
+  it("requests a report without an unsupported forced choice or thinking-off retry", async () => {
+    fakeStream({ text: "missing report" });
+    await runSubAgent(options({ toolChoice: "required" }));
+    expect(lastCall()).toMatchObject({ toolChoice: "auto", thinking: true, role: "recall" });
+    expect(lastCall().system).toContain("Finish by calling report with the structured report.");
+    expect(native.streamText).toHaveBeenCalledTimes(1);
   });
-
-  it("leaves the system prompt untouched when the SOP is absent or unreadable", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts({ selfSop: "search" })); // readSelfSop → null
-    expect(lastCall().system).toBe("static system");
-
-    evolutionStore.readSelfSop.mockRejectedValueOnce(new Error("disk gone"));
-    fakeStream();
-    await runSubAgent(baseOpts({ selfSop: "search" }));
-    expect(lastCall().system).toBe("static system"); // degrades, never fails
-  });
-
-  it("requests thinking ON at low effort by default (DeepSeek shape)", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts());
-    expect(lastCall().providerOptions).toEqual({
-      deepseek: { thinking: { type: "enabled" }, reasoningEffort: "low" },
-    });
-  });
-
-  it("honors an explicit effort override", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts({ effort: "high" }));
-    expect(lastCall().providerOptions).toEqual({
-      deepseek: { thinking: { type: "enabled" }, reasoningEffort: "high" },
-    });
-  });
-
-  it("an explicit timeoutMs installs BOTH hooks: SDK timeout + withStepTimeout backstop (budget + grace)", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts({ timeoutMs: 12_000 }));
-    expect(lastCall().timeout).toBe(12_000);
-    expect(stepTimeout.withStepTimeout).toHaveBeenCalledWith(
-      expect.any(Function),
-      15_000,
-    );
-  });
-
-  it("omitting timeoutMs installs NEITHER hook — the SDK timeout key is absent and the backstop is skipped (v0.34 修订 A)", async () => {
-    fakeStream();
-    const res = await runSubAgent(baseOpts());
-    expect(res.ok).toBe(true);
-    expect("timeout" in lastCall()).toBe(false);
-    expect(stepTimeout.withStepTimeout).not.toHaveBeenCalled();
-  });
-
-  it("omits maxOutputTokens by default (project-wide ban)", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts());
-    expect("maxOutputTokens" in lastCall()).toBe(false);
-  });
-
-  it("merges caller providerOptions over the effort mapping (one level deep)", async () => {
-    fakeStream();
-    await runSubAgent(
-      baseOpts({
-        providerOptions: {
-          deepseek: { thinking: { type: "disabled" } },
-        },
-      }),
-    );
-    expect(lastCall().providerOptions).toEqual({
-      deepseek: {
-        thinking: { type: "disabled" },
-        reasoningEffort: "low",
-      },
-    });
-  });
-
-  it("omits temperature on thinking calls (provider rejects it) and sends it on the thinking-off retry", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const prose = {
-      text: Promise.resolve("prose answer, no tool call"),
-      toolCalls: Promise.resolve([]),
-      reasoningText: Promise.resolve(undefined),
-      sources: Promise.resolve([]),
-      warnings: Promise.resolve([]),
-    };
-    const reported = () => ({
-      text: Promise.resolve(""),
-      toolCalls: Promise.resolve([
-        { toolName: "report", input: { verdict: "retried", count: 2 } },
-      ]),
-      reasoningText: Promise.resolve(undefined),
-      sources: Promise.resolve([]),
-      warnings: Promise.resolve([]),
-    });
-    ai.streamText
-      .mockImplementationOnce(async () => prose)
-      .mockImplementationOnce(async () => reported())
-      .mockImplementationOnce(async () => prose)
-      .mockImplementationOnce(async () => reported());
-    // Default: the thinking-on attempt omits temperature, the retry sends 0.1.
-    await runSubAgent(baseOpts({ toolChoice: "required" }));
-    expect(ai.streamText.mock.calls[0]?.[0]).not.toHaveProperty("temperature");
-    expect(lastCall().temperature).toBe(0.1);
-    // Override: the retry honors an explicit 0.
-    await runSubAgent(baseOpts({ toolChoice: "required", temperature: 0 }));
-    expect(ai.streamText.mock.calls[2]?.[0]).not.toHaveProperty("temperature");
-    expect(lastCall().temperature).toBe(0);
-    warn.mockRestore();
-  });
-
-  it("emits a start line onto data-tool-progress when a toolCallId is present", async () => {
-    fakeStream();
-    await runSubAgent(
-      baseOpts({
-        progress: { toolCallId: "tc-1", toolName: "turn-analyzer" },
-        startLine: "分析本轮…",
-      }),
-    );
-
-    expect(workflow.writer.write).toHaveBeenCalledWith({
-      type: "data-tool-progress",
-      id: "tool-tc-1",
-      data: {
-        toolCallId: "tc-1",
-        toolName: "turn-analyzer",
-        text: "分析本轮…",
-        stage: "running",
-      },
-    });
-    // The writer lock is always released on settle.
-    expect(workflow.writer.releaseLock).toHaveBeenCalled();
-  });
-
-  it("degrades progress to a noop without a toolCallId (getWritable never touched)", async () => {
-    fakeStream();
-    await runSubAgent(
-      baseOpts({ progress: { toolName: "turn-analyzer" }, startLine: "x" }),
-    );
-    expect(workflow.getWritable).not.toHaveBeenCalled();
-  });
-
-  it("streams reasoning chunks as thinking lines, then text chunks as writing lines", async () => {
-    fakeStream({
-      chunks: [
-        { type: "reasoning-delta", text: "first thought!!" },
-        { type: "reasoning-delta", text: "\nnext" },
-        { type: "text-delta", text: "the answer" },
-      ],
-      toolCalls: [{ toolName: "report", input: { verdict: "ok", count: 1 } }],
-    });
-    await runSubAgent(
-      baseOpts({ progress: { toolCallId: "tc-2", toolName: "recall" } }),
-    );
-
-    const lines = (
-      workflow.writer.write.mock.calls as unknown as Array<
-        [{ data: { text: string; stage: string } }]
-      >
-    ).map((c) => c[0].data);
-    // First reasoning line is "thinking"; the newline resets the current line
-    // (shorter → forces a send); the stage change to "writing" forces a send
-    // even within the throttle window.
-    expect(lines).toContainEqual(
-      expect.objectContaining({ text: "first thought!!", stage: "thinking" }),
-    );
-    expect(lines).toContainEqual(
-      expect.objectContaining({ text: "next", stage: "thinking" }),
-    );
-    expect(lines).toContainEqual(
-      expect.objectContaining({ text: "the answer", stage: "writing" }),
-    );
-    // Settle: the final line was already the last write, and the lock is
-    // always released.
-    expect(lines.at(-1)).toEqual(
-      expect.objectContaining({ text: "the answer", stage: "writing" }),
-    );
-    expect(workflow.writer.releaseLock).toHaveBeenCalled();
-  });
-
-  it("downgrades a required tool choice to auto on DeepSeek (thinking × forced choice is a provider 400)", async () => {
-    fakeStream({
-      toolCalls: [{ toolName: "report", input: { verdict: "ok", count: 1 } }],
-    });
-    const res = await runSubAgent(baseOpts({ toolChoice: "required" }));
-    expect(res.ok).toBe(true);
-    expect(res.report).toEqual({ verdict: "ok", count: 1 });
-    expect(lastCall().toolChoice).toBe("auto");
-    // Thinking stays ON for the primary attempt.
-    expect(lastCall().providerOptions).toMatchObject({
-      deepseek: { thinking: { type: "enabled" } },
-    });
-    expect(ai.streamText).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries once with thinking OFF + required when the DeepSeek auto attempt yields no report", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    ai.streamText
-      .mockImplementationOnce(async () => ({
-        text: Promise.resolve("prose answer, no tool call"),
-        toolCalls: Promise.resolve([]),
-        reasoningText: Promise.resolve(undefined),
-        sources: Promise.resolve([]),
-        warnings: Promise.resolve([]),
-      }))
-      .mockImplementationOnce(async () => ({
-        text: Promise.resolve(""),
-        toolCalls: Promise.resolve([
-          { toolName: "report", input: { verdict: "retried", count: 2 } },
-        ]),
-        reasoningText: Promise.resolve(undefined),
-        sources: Promise.resolve([]),
-        warnings: Promise.resolve([]),
-      }));
-    const res = await runSubAgent(baseOpts({ toolChoice: "required" }));
-    expect(res.ok).toBe(true);
-    expect(res.report).toEqual({ verdict: "retried", count: 2 });
-    expect(ai.streamText).toHaveBeenCalledTimes(2);
-    const second = ai.streamText.mock.calls[1]?.[0] as Record<string, unknown>;
-    expect(second.toolChoice).toBe("required");
-    expect(second.providerOptions).toMatchObject({
-      deepseek: { thinking: { type: "disabled" } },
-    });
-    warn.mockRestore();
-  });
-
-  it("ignores caller providerOptions on the thinking-off retry (would resurrect the forced-choice 400)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    ai.streamText
-      .mockImplementationOnce(async () => ({
-        text: Promise.resolve("prose answer, no tool call"),
-        toolCalls: Promise.resolve([]),
-        reasoningText: Promise.resolve(undefined),
-        sources: Promise.resolve([]),
-        warnings: Promise.resolve([]),
-      }))
-      .mockImplementationOnce(async () => ({
-        text: Promise.resolve(""),
-        toolCalls: Promise.resolve([
-          { toolName: "report", input: { verdict: "retried", count: 2 } },
-        ]),
-        reasoningText: Promise.resolve(undefined),
-        sources: Promise.resolve([]),
-        warnings: Promise.resolve([]),
-      }));
-    const res = await runSubAgent(
-      baseOpts({
-        toolChoice: "required",
-        providerOptions: {
-          deepseek: { thinking: { type: "enabled" } },
-        },
-      }),
-    );
-    expect(res.ok).toBe(true);
-    expect(ai.streamText).toHaveBeenCalledTimes(2);
-    const second = ai.streamText.mock.calls[1]?.[0] as Record<string, unknown>;
-    // The thinking-disabled shape stands — the caller's thinking override is
-    // NOT merged into a thinking-off attempt.
-    expect(second.providerOptions).toEqual({
-      deepseek: { thinking: { type: "disabled" } },
-    });
-    warn.mockRestore();
-  });
-
-  it("keeps toolChoice required as-is for non-DeepSeek providers", async () => {
-    fakeStream({
-      toolCalls: [{ toolName: "report", input: { verdict: "ok", count: 1 } }],
-    });
-    await runSubAgent(
-      baseOpts({
-        toolChoice: "required",
-        model: { ...model, sdk: "anthropic" },
-      }),
-    );
-    expect(lastCall().toolChoice).toBe("required");
-  });
-
-  it("delivers live lines to onLine even without a toolCallId (evolution path)", async () => {
-    fakeStream({
-      chunks: [
-        { type: "reasoning-delta", text: "reasoning " },
-        { type: "reasoning-delta", text: "grows" },
-        { type: "text-delta", text: "done" },
-      ],
-    });
+  it("streams live reasoning then writing progress and releases its writer", async () => {
+    fakeStream({ chunks: [{ type: "reasoning-delta", text: "first thought" }, { type: "reasoning-delta", text: "\nnext" }, { type: "text-delta", text: "answer" }] });
     const onLine = vi.fn();
-    await runSubAgent(baseOpts({ onLine }));
-
-    // Raw per-delta callback — the caller owns throttling.
-    expect(onLine.mock.calls).toEqual([
-      ["reasoning ", "thinking"],
-      ["reasoning grows", "thinking"],
-      ["done", "writing"],
-    ]);
-    // No toolCallId → the tool-progress emitter stayed noop.
-    expect(workflow.getWritable).not.toHaveBeenCalled();
+    await runSubAgent(options({ progress: { toolCallId: "tc", toolName: "thinkDeep" }, startLine: "Starting", onLine }));
+    expect(onLine.mock.calls).toEqual([["first thought", "thinking"], ["next", "thinking"], ["answer", "writing"]]);
+    expect(workflow.writer.write).toHaveBeenCalledWith(expect.objectContaining({ type: "data-tool-progress", id: "tool-tc", data: expect.objectContaining({ text: "answer", stage: "writing" }) }));
+    expect(workflow.writer.releaseLock).toHaveBeenCalled();
   });
-
-  it("still maps sub-agent tool starts to progress lines (onToolProgress)", async () => {
-    fakeStream();
-    const onToolProgress = vi.fn(() => ({ line: "Searching…", stage: "running" as const }));
-    await runSubAgent(
-      baseOpts({
-        progress: { toolCallId: "tc-3", toolName: "flash-search" },
-        onToolProgress,
-      }),
-    );
-
-    const hook = lastCall().onToolExecutionStart as (e: {
-      toolCall: { toolName: string; input: unknown };
-    }) => void;
-    hook({ toolCall: { toolName: "web_search", input: {} } });
-    expect(onToolProgress).toHaveBeenCalledWith({
-      toolName: "web_search",
-      input: {},
+  it("delivers onLine outside a tool without accessing Workflow streams", async () => {
+    fakeStream({ chunks: [{ type: "reasoning-delta", delta: "thought" }, { type: "text-delta", delta: "answer" }] });
+    const onLine = vi.fn(); await runSubAgent(options({ onLine }));
+    expect(onLine.mock.calls).toEqual([["thought", "thinking"], ["answer", "writing"]]); expect(workflow.getWritable).not.toHaveBeenCalled();
+  });
+  it("maps nested tool starts to progress during the active run", async () => {
+    native.streamText.mockImplementation(async (opts: AgentOptions) => {
+      await opts.onToolExecutionStart?.({ toolCall: { toolCallId: "nested", toolName: "web_search", input: {} } });
+      return { text: Promise.resolve(""), reasoningText: Promise.resolve(""), toolCalls: Promise.resolve([]), sources: Promise.resolve([]) };
     });
-    expect(workflow.writer.write).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ text: "Searching…", stage: "running" }),
-      }),
-    );
+    const onToolProgress = vi.fn(() => ({ line: "Searching", stage: "running" as const }));
+    await runSubAgent(options({ progress: { toolCallId: "search", toolName: "research" }, onToolProgress }));
+    expect(onToolProgress).toHaveBeenCalledWith(expect.objectContaining({ toolName: "web_search", input: {} }));
+    expect(workflow.writer.write).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ text: "Searching" }) }));
   });
 });
-
-describe("extractToolReport", () => {
-  it("finds the named tool call and validates its input", () => {
-    const report = extractToolReport(
-      [{ toolName: "report", input: { verdict: "v", count: 2 } }],
-      "report",
-      reportSchema,
-    );
-    expect(report).toEqual({ verdict: "v", count: 2 });
-  });
-
-  it("returns undefined for missing calls, null input, or schema mismatch", () => {
+describe("report and progress helpers", () => {
+  it("validates reports and rejects absent, null or malformed inputs", () => {
+    expect(extractToolReport([{ toolName: "report", input: { verdict: "yes", count: 1 } }], "report", reportSchema)).toEqual({ verdict: "yes", count: 1 });
     expect(extractToolReport(undefined, "report", reportSchema)).toBeUndefined();
-    expect(
-      extractToolReport([{ toolName: "report", input: null }], "report", reportSchema),
-    ).toBeUndefined();
-    expect(
-      extractToolReport([{ toolName: "report", input: { nope: 1 } }], "report", reportSchema),
-    ).toBeUndefined();
+    expect(extractToolReport([{ toolName: "report", input: null }], "report", reportSchema)).toBeUndefined();
+    expect(extractToolReport([{ toolName: "report", input: { verdict: true } }], "report", reportSchema)).toBeUndefined();
   });
-});
-
-describe("createProgressEmitter", () => {
-  it("is a noop without a toolCallId", () => {
-    const e = createProgressEmitter({ toolName: "x" });
-    e.emit("line", "running");
-    e.close("done");
+  it("never opens a stream without a tool identity", () => {
+    const emitter = createProgressEmitter({ toolName: "test" }); emitter.emit("line", "running"); emitter.close("done");
     expect(workflow.getWritable).not.toHaveBeenCalled();
   });
-
-  it("stays noop when getWritable throws (outside a workflow step)", () => {
-    workflow.getWritable.mockImplementationOnce(() => {
-      throw new Error("no writable");
-    });
-    const e = createProgressEmitter({ toolCallId: "tc-x", toolName: "x" });
-    e.emit("line", "running");
-    e.close("final");
+  it("degrades progress outside a Workflow step", () => {
+    workflow.getWritable.mockImplementationOnce(() => { throw new Error("not a step"); });
+    const emitter = createProgressEmitter({ toolCallId: "test", toolName: "test" }); emitter.emit("line", "running"); emitter.close("done");
     expect(workflow.writer.write).not.toHaveBeenCalled();
   });
 });

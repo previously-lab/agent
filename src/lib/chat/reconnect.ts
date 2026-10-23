@@ -1,4 +1,4 @@
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@/lib/chat/protocol";
 import type { TurnRunResult } from "./turn-types";
 import type { Turn } from "@/lib/episodic/types";
 
@@ -13,12 +13,15 @@ export function recoveryMessages(records: TurnRunResult[], persistedTurnIds: Rea
     userIds.add(userId);
     return [
       ...(showUser ? [{ id: userId, role: "user" as const, metadata: { recoveryTurnId: record.turnId }, parts: [{ type: "text" as const, text: record.userText }] }] : []),
-      ...(record.replyText ? [{ id: `recovery-agent-${record.turnId}`, role: "assistant" as const, metadata: { recoveryTurnId: record.turnId }, parts: [{ type: "text" as const, text: record.replyText }] }] : []),
+      ...(record.replyText ? [{ id: `recovery-agent-${record.turnId}`, role: "assistant" as const, metadata: { recoveryTurnId: record.turnId }, parts: [
+        { type: "text" as const, text: record.replyText },
+        ...(record.nativeMessages?.length ? [{ type: "data-deepseek-step" as const, id: `recovery-native-${record.turnId}`, data: { messages: record.nativeMessages } }] : []),
+      ] }] : []),
     ];
   });
 }
 
-/** History can finish loading after a pending run was restored into useChat. */
+/** History can finish loading after a pending run was restored into useDurableChat. */
 export function recoveredTurnIds(messages: readonly UIMessage[]): ReadonlySet<string> {
   return new Set(messages.map((message) => (message.metadata as { recoveryTurnId?: string } | undefined)?.recoveryTurnId).filter((id): id is string => typeof id === "string"));
 }
@@ -109,9 +112,9 @@ export function dropTrailingAssistantMessages(
 }
 
 export interface ArrivalDecision {
-  /** Passed to useChat's `resume` — re-attach to the in-flight run's stream. */
+  /** Passed to useDurableChat's `resume` — re-attach to the in-flight run's stream. */
   shouldResume: boolean;
-  /** Passed to useChat's `messages` — the conversation the live view opens with. */
+  /** Passed to useDurableChat's `messages` — the conversation the live view opens with. */
   initialMessages: UIMessage[];
 }
 
@@ -119,14 +122,14 @@ export interface ArrivalDecision {
  * The mount-time arrival decision — the pure half (side effects like reading /
  * clearing localStorage live in the caller).
  *
- * The rule is one-dimensional: the live view's useChat state restores ONLY
+ * The rule is one-dimensional: the live view's useDurableChat state restores ONLY
  * in-flight work. `runActive` is the server's verdict on the persisted run
  * ("pending" / "running" — see isChatRunActive); the client never infers slice
  * boundaries from timestamps or silence windows.
  *
  * - Run still active → genuine reconnect: keep the working conversation, but
  *   drop the trailing partial assistant turn (the replay rebuilds it).
- * - Anything else (no run, or a terminal one) → useChat opens empty. This is
+ * - Anything else (no run, or a terminal one) → useDurableChat opens empty. This is
  *   NOT "the conversation is gone": since v0.10, continuity for an alive
  *   slice is restored from the slice itself (getArrivalState — see
  *   resolveArrival), and older conversation lives in the unified stream's

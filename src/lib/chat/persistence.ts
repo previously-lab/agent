@@ -1,6 +1,8 @@
 import type { ChatRecovery } from "./actions";
 import type { PersistenceReceipt } from "./turn-types";
 import { persistenceReceiptKey } from "./persistence-receipt";
+import { recoveryMessages } from "./reconnect";
+import { rememberNativeReplay } from "./native-replay";
 
 const KEY = "previously:pending-persistence:v1";
 type Pending = { runIds: string[]; summaryRunIds: string[] };
@@ -33,6 +35,7 @@ export function rememberSummaryRun(summaryRunId: string) {
 }
 
 export function acceptPersistenceRecovery(recovery: ChatRecovery) {
+  rememberNativeReplay(recoveryMessages(recovery.records.map(({ record }) => record)));
   const pending = readPendingPersistence();
   const acknowledged = new Set(recovery.savedRunIds);
   // A summary can cover many turns. Keep its pointer while any carried record

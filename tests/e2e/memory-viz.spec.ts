@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./test";
+import type { Page } from "@playwright/test";
 import {
   clearEpisodic,
   makeSlice,
@@ -327,13 +328,13 @@ test.describe("Memory viz (two rungs)", () => {
       // game's own Exit is on screen and the board bar is gone — the hotel
       // keeps its viewport clear of product chrome.
       await rungButton(page, "Scene").click();
-      await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+      await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
         timeout: 30_000,
       });
       await expect(rungs(page)).toHaveCount(0, { timeout: 30_000 });
 
       // Back to the reader through the game's own exit.
-      await page.getByRole("button", { name: "Exit" }).click();
+      await page.getByRole("button", { name: "Exit", exact: true }).click();
       await expect(rungButton(page, "Manuscript")).toHaveAttribute(
         "aria-pressed",
         "true",
@@ -364,14 +365,14 @@ test.describe("Memory viz (two rungs)", () => {
       // The conversation layer lives at the LAYOUT, so the world switch does
       // not unmount it: the same pill floats over the hotel, draft intact.
       await rungButton(page, "Scene").click();
-      await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+      await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
         timeout: 30_000,
       });
       await expect(pillInput).toHaveValue("still here");
 
       // And back: same composer instance, same draft — and it survives
       // expanding to the fullscreen form too (one never-unmounted component).
-      await page.getByRole("button", { name: "Exit" }).click();
+      await page.getByRole("button", { name: "Exit", exact: true }).click();
       await expect(rungButton(page, "Manuscript")).toHaveAttribute(
         "aria-pressed",
         "true",
@@ -400,7 +401,7 @@ test.describe("Memory viz (two rungs)", () => {
       // board bar unmounts there, so it cannot answer.
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+        await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
           timeout: 3_000,
         });
       }).toPass({ timeout: 60_000 });

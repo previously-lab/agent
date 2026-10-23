@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { clearEpisodic, makeSlice, seedSlices } from "./memory-fixture";
 
 const status = {
@@ -15,7 +15,6 @@ test("finished activity does not reattach, and a hidden open panel performs no p
   let logReads = 0;
   let streams = 0;
   await page.route("**/api/chat", (route) => route.abort());
-  await page.route("**/api/client/status", (route) => route.fulfill({ json: { bridge: { active: false } } }));
   await page.route("**/api/evolution/hq-status", (route) => { statusReads += 1; return route.fulfill({ json: status }); });
   await page.route("**/api/evolution/hq-log", (route) => { logReads += 1; return route.fulfill({ json: { asOf: status.asOf, log: { state: "unavailable", reason: "fixture" } } }); });
   await page.route("**/api/evolution/hq/fixture-hq/stream", (route) => {

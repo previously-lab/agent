@@ -1,250 +1,41 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import {
-  ALL_MODELS,
-  BYOK_PROVIDERS,
-  getAvailableModels,
-  getByokModel,
-  getModel,
-  resolveModelId,
-  getDefaultModelId,
-} from "@/lib/models/registry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ALL_MODELS, getAvailableModels, getDefaultModelId, getModel, resolveModelId } from "@/lib/models/registry";
+import { readClientByokSync } from "@/lib/byok-sync";
 
-const SAVED_ENV = { ...process.env };
+vi.mock("@/lib/byok-sync", () => ({ readClientByokSync: vi.fn() }));
+const byok = vi.mocked(readClientByokSync);
+beforeEach(() => { vi.stubEnv("PREVIOUSLY_MODE", "cloud"); vi.stubEnv("DEEPSEEK_API_KEY", ""); byok.mockReturnValue(null); });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
-describe("model registry", () => {
-  beforeEach(() => {
-    // Deterministic env: no provider keys configured by default, no
-    // client-mode state (PREVIOUSLY_HOME / brain / default-model injection).
-    delete process.env.DEEPSEEK_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.PREVIOUSLY_MODE;
-    delete process.env.PREVIOUSLY_HOME;
-    delete process.env.PREVIOUSLY_BRAIN;
-    delete process.env.PREVIOUSLY_BRAIN_AGENT;
-    delete process.env.PREVIOUSLY_DEFAULT_MODEL;
-  });
-
-  afterEach(() => {
-    process.env = { ...SAVED_ENV };
-  });
-
-  // ─── Catalog shape ──────────────────────────────────────────────────
-
-  it("includes DeepSeek and Anthropic models", () => {
-    const providers = new Set(ALL_MODELS.map((m) => m.provider));
-    expect(providers).toContain("deepseek");
-    expect(providers).toContain("anthropic");
-  });
-
-  it("every model declares envKey, sdk, providerName, defaultThinking, defaultEffort", () => {
-    for (const m of ALL_MODELS) {
-      expect(m.envKey.length).toBeGreaterThan(0);
-      expect(["deepseek", "anthropic", "openai"]).toContain(m.sdk);
-      expect(m.providerName.length).toBeGreaterThan(0);
-      expect(typeof m.defaultThinking).toBe("boolean");
-      expect(["low", "medium", "high"]).toContain(m.defaultEffort);
+describe("fixed DeepSeek model", () => {
+  it("normalizes every persisted legacy preference to Flash without selecting another provider", () => {
+    for (const id of ["deepseek-v4-flash", "deepseek-v4-pro", "bridge/claude", "byok/gpt-4", "unknown", ""]) {
+      expect(getModel(id)).toMatchObject({ id: "deepseek-flash", sdk: "deepseek", defaultThinking: true, defaultEffort: "high" });
+      expect(resolveModelId(id)).toBe("deepseek-flash");
     }
-  });
-
-  it("defaults thinking ON for every thinking-capable model", () => {
-    for (const m of ALL_MODELS) {
-      if (m.capabilities.thinking) {
-        expect(m.defaultThinking).toBe(true);
-      }
-    }
-  });
-
-  it("defaults effort to LOW for every user-selectable model", () => {
-    // Fast responses are the product rule; deep thinking is thinkDeep's job.
-    // startTurn pins effort=low server-side regardless — the catalog default
-    // must agree so the UI seed and the actual call never diverge.
-    for (const m of ALL_MODELS) {
-      expect(m.defaultEffort).toBe("low");
-    }
-  });
-
-  // ─── getAvailableModels (env-gated) ─────────────────────────────────
-
-  it("returns nothing when no provider keys are set", () => {
-    expect(getAvailableModels()).toHaveLength(0);
-  });
-
-  it("returns only DeepSeek models when only DEEPSEEK_API_KEY is set", () => {
-    process.env.DEEPSEEK_API_KEY = "sk-test";
-    const models = getAvailableModels();
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.provider === "deepseek")).toBe(true);
-  });
-
-  it("returns only Anthropic models when only ANTHROPIC_API_KEY is set", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-    const models = getAvailableModels();
-    expect(models.length).toBeGreaterThan(0);
-    expect(models.every((m) => m.provider === "anthropic")).toBe(true);
-  });
-
-  it("returns both providers when both keys are set", () => {
-    process.env.DEEPSEEK_API_KEY = "sk-test";
-    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-    const providers = new Set(getAvailableModels().map((m) => m.provider));
-    expect(providers.has("deepseek")).toBe(true);
-    expect(providers.has("anthropic")).toBe(true);
-  });
-
-  // ─── getModel ───────────────────────────────────────────────────────
-
-  it("returns a known model by id", () => {
-    expect(getModel("deepseek-v4-pro")?.provider).toBe("deepseek");
-    expect(getModel("claude-sonnet-5")?.provider).toBe("anthropic");
-  });
-
-  it("curates the DeepSeek multimodal model with vision capability", () => {
-    const vision = getModel("deepseek-flash");
-    expect(vision?.capabilities.vision).toBe(true);
-    expect(vision?.capabilities.thinking).toBe(true);
-    expect(vision?.defaultEffort).toBe("low");
-  });
-
-  it("returns undefined for an unknown id", () => {
-    expect(getModel("nope")).toBeUndefined();
-  });
-
-  // ─── resolveModelId (legacy migration) ──────────────────────────────
-
-  it("maps legacy DeepSeek ids forward to a live curated id", () => {
-    // The target must be both live (so it survives the catalog) and curated
-    // (so getModel finds it) — deepseek-v4-flash is neither any more.
-    expect(resolveModelId("deepseek-chat")).toBe("deepseek-flash");
-    expect(resolveModelId("deepseek-reasoner")).toBe("deepseek-v4-pro");
-  });
-
-  it("passes through current ids unchanged", () => {
-    expect(resolveModelId("deepseek-v4-pro")).toBe("deepseek-v4-pro");
-    expect(resolveModelId("claude-sonnet-5")).toBe("claude-sonnet-5");
-  });
-
-  // ─── getDefaultModelId ──────────────────────────────────────────────
-
-  it("picks the first available model for the deployment", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-    expect(getDefaultModelId()).toMatch(/^claude-/);
-  });
-
-  it("falls back to a hardcoded default when nothing is configured", () => {
+    expect(ALL_MODELS).toHaveLength(1);
     expect(getDefaultModelId()).toBe("deepseek-flash");
   });
 
-  // ─── BYOK (client mode, config.json `byok` section) ─────────────────
-
-  describe("getByokModel", () => {
-    const byok = { provider: "deepseek", apiKey: "sk-byok", model: "deepseek-chat" };
-
-    it("returns undefined without a byok section or in cloud mode", () => {
-      process.env.PREVIOUSLY_MODE = "client";
-      expect(getByokModel(null)).toBeUndefined();
-      expect(getByokModel(undefined)).toBeUndefined();
-      process.env.PREVIOUSLY_MODE = "cloud";
-      expect(getByokModel(byok)).toBeUndefined();
-    });
-
-    it("builds the byok/<model> entry on the openai-compatible sdk path", () => {
-      process.env.PREVIOUSLY_MODE = "client";
-      const m = getByokModel(byok);
-      expect(m).toMatchObject({
-        id: "byok/deepseek-chat",
-        provider: "byok",
-        providerName: "Your API key",
-        sdk: "openai",
-        // The preset baseURL comes from BYOK_PROVIDERS, the key from config.
-        baseURL: "https://api.deepseek.com",
-        apiKey: "sk-byok",
-        defaultThinking: false,
-        defaultEffort: "low",
-      });
-      expect(m?.name).toContain("(BYOK)");
-      expect(m?.capabilities.thinking).toBe(false);
-    });
-
-    it("uses the custom baseUrl for custom providers", () => {
-      process.env.PREVIOUSLY_MODE = "client";
-      const m = getByokModel({
-        provider: "custom",
-        apiKey: "sk-x",
-        baseUrl: "https://llm.example.com/v1",
-        model: "my-model",
-      });
-      expect(m?.id).toBe("byok/my-model");
-      expect(m?.baseURL).toBe("https://llm.example.com/v1");
-    });
-
-    it("covers every preset the settings UI offers (minus custom)", () => {
-      // The UI's provider list mirrors these keys — a drift breaks validation
-      // (client-config validateByok accepts exactly these + custom).
-      expect(BYOK_PROVIDERS.map((p) => p.key)).toEqual([
-        "deepseek",
-        "openai",
-        "moonshotai",
-        "alibaba",
-        "google",
-        "mistral",
-        "xai",
-        "groq",
-      ]);
-    });
+  it("does not activate retired bridges or provider credentials", () => {
+    vi.stubEnv("PREVIOUSLY_BRAIN", "bridge"); vi.stubEnv("OPENAI_API_KEY", "not-deepseek"); vi.stubEnv("ANTHROPIC_API_KEY", "not-deepseek");
+    expect(getAvailableModels()).toEqual([]);
   });
 
-  // ─── getDefaultModelId with BYOK (no env-key models) ────────────────
+  it("lists cloud Flash only with a nonblank DeepSeek credential", () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", " ");
+    expect(getAvailableModels()).toEqual([]);
+    vi.stubEnv("DEEPSEEK_API_KEY", "fixture-secret");
+    expect(getAvailableModels()).toHaveLength(1);
+    expect(JSON.stringify(getAvailableModels())).not.toContain("fixture-secret");
+    expect(byok).not.toHaveBeenCalled();
+  });
 
-  describe("getDefaultModelId with BYOK", () => {
-    let home: string;
-
-    const writeByok = (byok: unknown) =>
-      writeFile(join(home, "config.json"), JSON.stringify({ byok }));
-
-    beforeEach(async () => {
-      home = await mkdtemp(join(tmpdir(), "previously-home-"));
-      process.env.PREVIOUSLY_MODE = "client";
-      process.env.PREVIOUSLY_HOME = home;
-    });
-
-    afterEach(async () => {
-      await rm(home, { recursive: true, force: true });
-    });
-
-    it("prefers the byok entry when no env-key model is available", async () => {
-      await writeByok({ provider: "deepseek", apiKey: "sk-byok", model: "deepseek-chat" });
-      expect(getDefaultModelId()).toBe("byok/deepseek-chat");
-    });
-
-    it("keeps the first env-key model as the default when one is available", async () => {
-      await writeByok({ provider: "deepseek", apiKey: "sk-byok", model: "deepseek-chat" });
-      process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-      expect(getDefaultModelId()).toMatch(/^claude-/);
-    });
-
-    it("uses PREVIOUSLY_DEFAULT_MODEL when the byok section omits model", async () => {
-      await writeByok({ provider: "deepseek", apiKey: "sk-byok" });
-      process.env.PREVIOUSLY_DEFAULT_MODEL = "deepseek-v4-pro";
-      expect(getDefaultModelId()).toBe("byok/deepseek-v4-pro");
-    });
-
-    it("falls back to ALL_MODELS[0] on a missing/corrupt config.json (never throws)", async () => {
-      // Missing file.
-      expect(getDefaultModelId()).toBe("deepseek-flash");
-      // Corrupt file.
-      await writeFile(join(home, "config.json"), "{ not json");
-      expect(getDefaultModelId()).toBe("deepseek-flash");
-    });
-
-    it("resolves a byok default id back to its config (the start-turn chain)", async () => {
-      await writeByok({ provider: "deepseek", apiKey: "sk-byok", model: "deepseek-chat" });
-      const id = getDefaultModelId();
-      expect(getModel(id)?.provider).toBe("byok");
-      expect(getModel(id)?.apiKey).toBe("sk-byok");
-    });
+  it("resolves local BYOK availability without putting its key in model/workflow configuration", () => {
+    vi.stubEnv("PREVIOUSLY_MODE", "client");
+    byok.mockReturnValue({ provider: "deepseek", model: "deepseek-flash", apiKey: "local-fixture-secret" });
+    expect(getAvailableModels().map((model) => model.id)).toEqual(["deepseek-flash"]);
+    expect(JSON.stringify(getModel("deepseek-flash"))).not.toContain("local-fixture-secret");
+    expect(getModel("deepseek-flash")).not.toHaveProperty("apiKey");
   });
 });

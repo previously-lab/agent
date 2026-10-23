@@ -17,11 +17,7 @@ export type AnyPart = {
   output?: unknown;
   text?: string;
   data?: unknown;
-  /**
-   * Provider metadata survives stream → part assembly (unlike text block
-   * ids). The bridge model marks its authoritative re-emitted answer block
-   * with `providerMetadata["previously-bridge"].authoritative === true`.
-   */
+  /** Optional metadata attached to a streamed block. */
   providerMetadata?: Record<string, Record<string, unknown>>;
   /** File parts (user attachments): data URL + media metadata. */
   mediaType?: string;
@@ -116,17 +112,6 @@ export type HousekeepingStep = {
 };
 
 /**
- * One row of the bridge-tool indicator — a protocol-2 tool-activity event from
- * the local CLI (mirrors BridgeEvent in src/lib/bridge.ts; declared
- * structurally so this pure module stays server-free).
- */
-export type BridgeToolRow = {
-  name: string;
-  summary: string;
-  status: "start" | "ok" | "error";
-};
-
-/**
  * One recall evidence anchor surfaced to the user (v0.10 §4.1) — a slice the
  * recall colleague quoted, rendered as a clickable jump chip. The full quote
  * stays in the recall tool card; the bar carries only id + backing note.
@@ -149,28 +134,6 @@ export type StreamItem =
       streamingStage?: string;
     }
   | { kind: "housekeeping"; steps: HousekeepingStep[] }
-  | {
-      /** The bridge activity indicator (client+bridge mode): one row per
-       *  CLI tool event. Carried by data-phase chunks whose data carries a
-       *  `tools` array (chat phase "stageWorking" / housekeeping phase
-       *  "bridgeHousekeeping"); frames are cumulative, last chunk wins. */
-      kind: "bridge-tools";
-      phase: string;
-      running: boolean;
-      tools: BridgeToolRow[];
-      /** The CLI's rolling narration line (housekeeping deltas) — last
-       *  frame wins; shown only while running. */
-      live?: string;
-      /** Client-mode housekeeping only: the deterministic wrap-up rows
-       *  (slice / analyze / tags / context / strands) filling in as the
-       *  engineering steps complete around the single bridge call. Renders
-       *  as a checklist inside the bridge housekeeping card. */
-      steps?: HousekeepingStep[];
-      /** Client-mode housekeeping only: set when the bridge call failed and
-       *  the turn degraded to the deterministic path — the card shows an
-       *  amber warning instead of settling silently green. */
-      warning?: string;
-    }
   | {
       kind: "phase";
       phase: string;
@@ -226,7 +189,7 @@ export function deriveAgentStage(parts: readonly AnyPart[]): AgentStage | null {
     } else if (p.type === "data-phase") {
       // Bridge mode: the chat answer's activity frames (phase "stageWorking")
       // are the only in-flight signal — light the pill while the CLI works.
-      // Housekeeping frames ("bridgeHousekeeping" / compact sub-steps) are
+      // Housekeeping frames (compact sub-steps) are
       // ignored: the prep card is showing, same as normal mode.
       const d = p.data as { phase?: string; running?: boolean } | undefined;
       if (d?.phase === "stageWorking") {
@@ -344,16 +307,6 @@ export function buildStream(
         items.push({ kind: "reasoning", text: reasoningText });
       }
     } else if (p.type === "text") {
-      // Bridge authoritative re-emit (the envelope result diverged from the
-      // advisory deltas): the marked block REPLACES every text item streamed
-      // so far instead of appending — bridge turns have a single answer
-      // block, so dropping the advisory text is exactly "the result wins".
-      if (p.providerMetadata?.["previously-bridge"]?.authoritative === true) {
-        textBuf = [];
-        for (let i = items.length - 1; i >= 0; i--) {
-          if (items[i].kind === "text") items.splice(i, 1);
-        }
-      }
       textBuf.push(p.text ?? "");
     } else if (p.type === "data-phase") {
       flushText();
@@ -364,41 +317,13 @@ export function buildStream(
             mode?: string;
             summaries?: string[];
             compact?: boolean;
-            tools?: BridgeToolRow[];
             live?: string;
             steps?: HousekeepingStep[];
             warning?: string;
           }
         | undefined;
       if (d?.phase) {
-        if (Array.isArray(d.tools)) {
-          // Bridge activity (client+bridge mode) — the generic tool-event
-          // indicator. Frames are cumulative (each carries the full tools
-          // list + the current narration line); merge by phase name, last
-          // chunk wins. Chat and housekeeping use distinct phase names, so
-          // they never merge.
-          const existing = items.find(
-            (it): it is Extract<StreamItem, { kind: "bridge-tools" }> =>
-              it.kind === "bridge-tools" && it.phase === d.phase,
-          );
-          if (existing) {
-            existing.running = d.running ?? false;
-            existing.tools = d.tools;
-            existing.live = d.live;
-            if (d.steps !== undefined) existing.steps = d.steps;
-            if (d.warning !== undefined) existing.warning = d.warning;
-          } else {
-            items.push({
-              kind: "bridge-tools",
-              phase: d.phase,
-              running: d.running ?? false,
-              tools: d.tools,
-              ...(d.live !== undefined ? { live: d.live } : {}),
-              ...(d.steps !== undefined ? { steps: d.steps } : {}),
-              ...(d.warning !== undefined ? { warning: d.warning } : {}),
-            });
-          }
-        } else if (d.compact) {
+        if (d.compact) {
           // Housekeeping sub-step — merge into the single grouped card.
           upsertHousekeepingStep(d.phase, d.running ?? false, d.summaries);
         } else {
@@ -461,7 +386,7 @@ export function buildStream(
         (p as { toolName?: string }).toolName ?? p.type.replace("tool-", "");
 
       // Merge tool parts sharing the same toolCallId into one StreamItem.
-      // The AI SDK emits separate parts for input-streaming → input-available →
+      // The stream may emit separate parts for input-streaming → input-available →
       // output-available; we fold them into a single card so it doesn't remount.
       const existing = items.find(
         (it): it is Extract<StreamItem, { kind: "tool" }> =>

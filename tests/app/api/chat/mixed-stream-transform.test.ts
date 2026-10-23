@@ -25,6 +25,24 @@ async function through(chunks: unknown[]): Promise<unknown[]> {
 }
 
 describe("createMixedStreamTransform", () => {
+  it("keeps the versioned native terminal finish, including usage", async () => {
+    const finish = { type: "finish", protocol: "deepseek-v1", finishReason: "stop", usage: { totalTokens: 4 } };
+    expect(await through([finish])).toEqual([finish]);
+  });
+  it("preserves original native replay records byte-for-byte on POST and reconnect", async () => {
+    const replay = { type: "data-deepseek-step", id: "deepseek:0:0:replay", data: { messages: [{ role: "assistant", content: "answer",
+      deepseek: { role: "assistant", content: "answer", reasoning_content: "original reasoning", tool_calls: [{ id: "original", type: "function", function: { name: "lookup", arguments: '{ "id" : 1 }' } }] } }] } };
+    expect(await through([replay])).toEqual([replay]);
+  });
+  it("does not interpret an old per-model finish as the end of an ongoing tool turn", async () => {
+    const out = await through([
+      { type: "finish", finishReason: "tool-calls", usage: {} },
+      { type: "tool-result", toolCallId: "call", output: "evidence" },
+      { type: "text-delta", id: "answer", text: "answer after tool" },
+      { type: "finish" },
+    ]);
+    expect(out).toEqual([{ type: "tool-output-available", toolCallId: "call", output: "evidence" }, { type: "text-delta", id: "answer", delta: "answer after tool" }, { type: "finish" }]);
+  });
   it("preserves the durable persistence handoff on POST and reconnect", async () => {
     const chunk = { type: "data-persistence-handoff", id: "persistence-turn", data: { summaryRunId: "summary", turnId: "turn" } };
     expect(await through([chunk])).toEqual([chunk]);

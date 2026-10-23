@@ -12,9 +12,8 @@
  * Header-parsed metadata (see image-meta.ts) is attached to every result.
  */
 
-import { generateText } from "ai";
-import { createModel } from "@/lib/models/provider";
-import { getModel } from "@/lib/models/registry";
+import { generateText } from "@/lib/deepseek/generate";
+import { getModel, getAvailableModels } from "@/lib/models/registry";
 import { fetchWithGuard, isPrivateHost } from "@/lib/search/fetch-utils";
 import {
   decodeDataUrl,
@@ -295,7 +294,7 @@ export async function describeImage(
     reason,
   });
 
-  if (!process.env.DEEPSEEK_API_KEY) {
+  if (!getAvailableModels().length) {
     return degraded("DEEPSEEK_API_KEY is not set");
   }
 
@@ -306,7 +305,7 @@ export async function describeImage(
 
   try {
     const { text } = await generateText({
-      model: createModel(visionModel),
+      role: "vision",
       messages: [
         {
           role: "user",
@@ -314,7 +313,7 @@ export async function describeImage(
             {
               type: "image",
               image: imageData.data,
-              ...(imageData.mimeType ? { mimeType: imageData.mimeType } : {}),
+              ...(imageData.mimeType ? { mediaType: imageData.mimeType } : {}),
             },
             { type: "text", text: buildInstruction(input.question, input.locale) },
           ],
