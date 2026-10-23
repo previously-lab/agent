@@ -5,13 +5,10 @@
  * column per page, and a stack of paper slots (the card field's
  * stacked-papers look) carries the current, next, and previous pages.
  *
- * PRINT SCALE. The sheet's typography is expressed in millimetres via one
- * variable, --desk-mm (the sheet height ÷ 297), so the type-to-paper ratio
- * is A4-true at every sheet size: a 547×774 sheet IS a 210×297mm page at
- * ≈2.6px/mm, the 4mm body ≈ 11pt, the 25mm side margins leave a 160mm text
- * block — exactly what a printed A4 page proportions. §10's older absolute
- * sizes (15–16px body, 3.5em margins) are superseded by this scale (see
- * doc/design/v0.24-paged-reader.md).
+ * PRINT SCALE. A physical 210×297mm sheet at the browser's fixed 96dpi.
+ * The page, type and body frame never depend on viewport units. Only the
+ * ancestor scale/pan transforms adapt to the screen, preserving every
+ * line break and page boundary on phone, desktop and at every zoom.
  *
  * THE TURN IS A SHUFFLE, NOT A FLIP (user ruling): the top sheet lifts off
  * the deck, travels, and is put at the very back — no rotation anywhere.
@@ -28,18 +25,19 @@
  * here is inline.
  */
 
-/* ── The stack: the A4 sizing element, and the source of the print millimetre.
-   The sheet's height drives its width (pane-width clamp inside the min); the
-   aspect ratio is A4's. The stack re-enables hits: the pane chain above it
+/* ── The stack: the fixed A4 sizing element and print millimetre.
+   The stack re-enables hits: the pane chain above it
    is pointer-events-none, and only the paper (the top shell — see
    .desk-shell--top) takes the pointer, exactly the Html portal's old
    `pointerEvents="auto"` contract. ────────────────────────────────────── */
 .desk-stack {
-  --desk-mm: calc(min(86vh, calc((100vw - 3rem) * 297 / 210)) / 297);
+  --desk-mm: 1mm;
   position: relative;
-  height: min(86vh, calc((100vw - 3rem) * 297 / 210));
-  aspect-ratio: 210 / 297;
+  width: 210mm;
+  height: 297mm;
+  flex: none;
   pointer-events: auto;
+  touch-action: none;
 }
 
 /* ── THE DOCUMENT TIER (v0.30) — the transform stack the migrated reader
@@ -60,7 +58,7 @@
    motion-reduce. ────────────────────────────────────────────────────── */
 .desk-stage {
   position: absolute;
-  inset: 0;
+  inset: 72px 0 132px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -78,6 +76,7 @@
 }
 
 .desk-giveway {
+  flex: none;
   transform: translate3d(var(--desk-giveway-x, 0px), 0, 0);
   transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -219,12 +218,54 @@
    (the root em is the body face, so `ch` measures the body and every em
    inside stays proportionate to the 4mm body). */
 .desk-paper {
+  /* The scanned light stock stays ivory even against the night world.
+     Rebind ink in this scope so inherited dark-mode text stays legible. */
+  --paper: #f8f6ee;
+  --foreground: #303b32;
+  --color-foreground: #303b32;
+  --card-foreground: #303b32;
+  --muted-foreground: #70796a;
+  --color-muted-foreground: #70796a;
+  --muted: #eeece2;
+  --color-muted: #eeece2;
+  --hljs-comment: #70796a;
+  --hljs-keyword: #8d513b;
+  --hljs-string: #3c614e;
+  --hljs-number: #386277;
+  --hljs-title: #6d5171;
+  --hljs-attr: #38675f;
+  --hljs-type: #795d36;
+  --hljs-meta: #795d36;
+  --paper-line: #7d847569;
+  --paper-plate: #eeece2;
+  --paper-grain-map: url("/paper-grain-light.webp");
   position: absolute;
   inset: 0;
   display: flex;
   flex-direction: column;
   font-family: var(--font-serif, serif);
-  font-size: calc(var(--desk-mm) * 4);
+  font-size: 11.5pt;
+  color: #303b32;
+  background-color: var(--paper);
+  background-image: linear-gradient(#f8f6ee55, #f8f6ee55), var(--paper-grain-map);
+  background-size: auto, 1024px 600px;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #17251e24, 0 1px 2px #17251e4a, 0 5px 9px -2px #17251e40;
+}
+
+.desk-paper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(130deg, #fff9e633, transparent 25%, transparent 78%, #80644809),
+    linear-gradient(92deg, transparent 94%, #9a8e6212 99%, #fff7e245);
+}
+
+.dark .desk-paper {
+  --paper: #eae8da;
+  background-image: linear-gradient(#eae8da70, #eae8da70), var(--paper-grain-map);
 }
 
 .desk-face {
@@ -243,7 +284,9 @@
    is made by WEIGHT, size and tracking. A line whose data does not exist is
    omitted from the block. ─────────────────────────────────────────────── */
 .desk-masthead {
-  margin: calc(var(--desk-mm) * 12) calc(var(--desk-mm) * 25) 0;
+  position: absolute;
+  inset: 19mm 22mm auto;
+  margin: 0;
   padding-bottom: calc(var(--desk-mm) * 2);
   border-bottom: 1px solid var(--paper-line);
   display: flex;
@@ -292,11 +335,13 @@
    running line — the document's ref left, its time right — instead of
    introducing itself again. ─────────────────────────────────────────── */
 .desk-runhead {
+  position: absolute;
+  inset: 19mm 22mm auto;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: calc(var(--desk-mm) * 6);
-  margin: calc(var(--desk-mm) * 14) calc(var(--desk-mm) * 25) 0;
+  margin: 0;
   padding-bottom: calc(var(--desk-mm) * 2);
   border-bottom: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -322,9 +367,10 @@
    a document mid-line because a document no longer lives on one sheet).
    ───────────────────────────────────────────────────────────────────── */
 .desk-bodywrap {
-  position: relative;
-  flex: 1 1 0%;
-  min-height: 0;
+  /* First-page letterhead and continuation running head share one print
+     frame. Turning a sheet must never re-paginate the same document. */
+  position: absolute;
+  inset: 61mm 22mm 22mm;
 }
 
 .desk-body {
@@ -339,7 +385,7 @@
    block A4 prints. */
 .desk-pagebox {
   position: absolute;
-  inset: calc(var(--desk-mm) * 4) calc(var(--desk-mm) * 25);
+  inset: 0;
   overflow: hidden;
 }
 
@@ -404,10 +450,12 @@
    letterhead). Sits inside the bottom print margin.
    ───────────────────────────────────────────────────────────────────── */
 .desk-foot {
+  position: absolute;
+  inset: auto 22mm 10mm;
   display: flex;
   align-items: baseline;
   justify-content: center;
-  margin: 0 calc(var(--desk-mm) * 25) calc(var(--desk-mm) * 10);
+  margin: 0;
   padding-top: calc(var(--desk-mm) * 2);
   border-top: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -419,8 +467,8 @@
 
 /* ── The markdown body, re-rhythmmed for print (§10's grammar, print scale) */
 .desk-paper .typeset {
-  --typeset-size: calc(var(--desk-mm) * 4);
-  --typeset-leading: 1.5;
+  --typeset-size: 11.5pt;
+  --typeset-leading: 1.85;
   --typeset-flow: 0.9em;
   font-family: var(--font-serif, serif);
 }
@@ -490,7 +538,10 @@
   border-color: var(--paper-line);
   border-radius: 0;
   background-color: var(--paper-plate);
+  overflow: visible;
 }
+
+.desk-paper .typeset a { color: #8d513b; }
 
 .desk-paper .code-block > div:first-child {
   background-color: transparent;
@@ -504,6 +555,9 @@
 .desk-paper .code-block pre {
   max-height: none;
   background-color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
 }
 
 .desk-paper .code-block pre + div {
@@ -514,12 +568,24 @@
    crosses a page break BETWEEN rows, never through one. */
 .desk-paper .typeset table {
   font-size: 0.9em;
+  width: 100%;
+  table-layout: fixed;
 }
 
-.desk-paper .typeset tr,
+.desk-paper .typeset-scroll,
+.desk-paper [data-slot="table-container"] {
+  overflow: visible;
+}
+
+.desk-paper .typeset th,
+.desk-paper .typeset td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .desk-paper .typeset li,
 .desk-paper .typeset blockquote {
-  break-inside: avoid;
+  break-inside: auto;
 }
 
 .desk-paper .typeset h1,
@@ -582,4 +648,69 @@
   text-decoration-thickness: max(1px, calc(var(--desk-mm) * 0.2));
   text-underline-offset: calc(var(--desk-mm) * 0.8);
   text-decoration-color: var(--paper-line);
+}
+
+/* Only the controls are soft and translucent. The printed sheet keeps
+   its square corners and scanned texture in both world themes. */
+.desk-toolbar {
+  position: fixed;
+  z-index: 30;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 20px);
+  color: #34473b;
+  pointer-events: auto;
+}
+
+.desk-toolbar-group,
+.desk-tool-close {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #53695026;
+  border-radius: 999px;
+  background: #eef0e4d9;
+  box-shadow: 0 3px 12px #15271a12;
+  backdrop-filter: blur(10px);
+}
+
+.desk-tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.desk-tool-button:hover:not(:disabled) { background-color: #45634a14; }
+.desk-tool-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.desk-tool-button:disabled { opacity: 0.35; cursor: default; }
+.desk-tool-close { width: 44px; height: 44px; }
+.desk-tool-readout { width: 52px; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
+.desk-page-position { min-width: 42px; text-align: center; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
+
+.dark .desk-toolbar { color: #e1e6d6; }
+.dark .desk-toolbar-group,
+.dark .desk-tool-close { background-color: #293d32d9; border-color: #c1cdb22e; }
+.dark .desk-tool-button:hover:not(:disabled) { background-color: #e1e7d314; }
+
+@media (max-width: 600px) {
+  /* Chrome moves; the A4 sheet and all print rules above remain fixed. */
+  .desk-toolbar { gap: 5px; }
+  .desk-toolbar-group { gap: 0; padding: 3px; }
+  .desk-tool-button { width: 31px; height: 34px; }
+  .desk-tool-readout { width: 45px; }
+  .desk-tool-close { width: 40px; height: 40px; }
+  .desk-page-position { min-width: 36px; }
 }

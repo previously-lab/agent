@@ -24,7 +24,7 @@ import { useEffect, useMemo, type JSX } from "react";
 import * as THREE from "three";
 import { terrainHeight } from "@/lib/game/terrain";
 import type { SpaceRecipe } from "@/lib/game/space-types";
-import type { RoomPaperSpot } from "@/lib/game/room-papers";
+import { ROOM_PAPER_HEIGHT, ROOM_PAPER_WIDTH, type RoomPaperSpot } from "@/lib/game/room-papers";
 
 /** One loose sheet: where it lies + which document it carries. */
 export interface RoomPaperItem {
@@ -35,9 +35,10 @@ export interface RoomPaperItem {
   date: string;
 }
 
-/* A4 at the floor's 1:1 meter scale. */
-const SHEET_W = 0.21;
-const SHEET_H = 0.297;
+/* A4 proportions, enlarged slightly for the fixed RTS view. Shared with
+ * the placement margin so a readable sheet still stays clear of walls. */
+const SHEET_W = ROOM_PAPER_WIDTH;
+const SHEET_H = ROOM_PAPER_HEIGHT;
 /* Lift above the terrain: no z-fight, no visible hover. The flat-room
  * floor is a STACK of dressing planes above the terrain top (GROUND_Y):
  * the parquet at +0.006, the per-module floor tints at +0.009, the
@@ -82,6 +83,9 @@ function createPaperTexture(title: string, date: string): THREE.CanvasTexture | 
   ctx.font = "400 12px ui-monospace, Menlo, Consolas, monospace";
   ctx.fillStyle = "rgba(30,30,36,0.55)";
   ctx.fillText(date, 28, 76);
+  // A warm index tab is visible from the scene camera before the title is.
+  ctx.fillStyle = "#ba8b61";
+  ctx.fillRect(canvas.width - 39, 0, 13, 38);
   // Body suggestion: hairlines with a ragged right edge.
   ctx.strokeStyle = "rgba(30,30,36,0.28)";
   ctx.lineWidth = 1;
@@ -188,7 +192,9 @@ export function RoomPapers({
             >
               <planeGeometry args={[SHEET_W, SHEET_H]} />
               <meshStandardMaterial
-                color="#f4f1ea"
+                color="#f5eedb"
+                emissive="#d9cfb5"
+                emissiveIntensity={0.045}
                 roughness={0.9}
                 metalness={0}
                 {...(textures[i] ? { map: textures[i] } : {})}

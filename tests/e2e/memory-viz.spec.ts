@@ -7,31 +7,7 @@ import {
   type FixtureSlice,
 } from "./memory-fixture";
 
-/**
- * Memory-viz e2e, two-rungs rewrite (v0.26): the conversation is a FLOATING
- * layer — the pill by default, risen to fullscreen by the expand verb, by a
- * send, or by a slice jump — and the world has exactly two rungs: 原稿 /
- * Manuscript (the document reader) and 现场 / Scene (the hotel), switched by
- * the board bar through the shell's transition machine. The four-rung ladder
- * and its R3F conversation field are retired: `dom-chat-list.tsx` is the only
- * conversation surface, so these specs read a plain DOM scroller.
- *
- * What is covered: the arrival resume/briefing gate (the briefing card is a
- * stream item in the panel's list, between the cold-open history page and the
- * live edge; an EMPTY memory auto-rises the panel once), the cold-open page's
- * honest boundary (the panel pages NOTHING older — happened-time browsing
- * belongs to the archive dispatch), the search palette's jump-to-slice (which
- * RISES the panel), and the two-rung board bar + the Ctrl+. world toggle.
- *
- * All specs seed slice files + the timeline catalog straight into the
- * isolated MEMORY_ROOT (see memory-fixture.ts) — no chat turn ever runs, so
- * the bridge-mode dev server never needs a real agent CLI.
- *
- * Serialized within the file: every test rewrites the shared MEMORY_ROOT the
- * (single) dev server reads. The webServer env pins slicing.idleGapMinutes
- * to its 30-minute default, so "fresh" slices are seeded <10 min old and
- * "historical" ones in February 2026 (now ≈ September 2026).
- */
+/** Isolated history, search and scene/reading navigation regression tests. */
 
 const DAY = 24 * 3600_000;
 
@@ -100,7 +76,7 @@ function freshSlice(): FixtureSlice {
   return slice;
 }
 
-test.describe("Memory viz (two rungs)", () => {
+test.describe("Memory and scene navigation", () => {
   // NOT serial. Every test here seeds its OWN slices and `afterEach` clears
   // them, so the tests are already independent — and the config's one worker
   // is what stops them racing the shared dev server. Serial mode bought
@@ -259,7 +235,7 @@ test.describe("Memory viz (two rungs)", () => {
       // badge only renders after its mount-time fetch resolved — a reliable
       // post-hydration signal in this client-mode suite.
       await expect(
-        page.getByRole("button", { name: "Local", exact: true }),
+        page.locator("[data-game-manuscripts]"),
       ).toBeVisible();
       await page.keyboard.press("Control+k");
       const input = page.locator("[cmdk-input]");
@@ -290,133 +266,48 @@ test.describe("Memory viz (two rungs)", () => {
     });
   });
 
-  // The world has TWO rungs — 原稿 / Manuscript (the reader) and 现场 /
-  // Scene (the hotel) — and the board bar is the control that moves between
-  // them. The rung is the shell's IN-MEMORY state: the URL carries no
-  // navigation (deep-link explains what little query contract remains), so
-  // these tests drive the bar and assert on its own pressed state. The
-  // conversation is not a rung — it floats above either world as the pill.
-  test.describe("the two rungs", () => {
-    /** The board bar's rung group and one tag in it. */
-    const rungs = (page: Page) => page.getByRole("group", { name: "Worlds" });
-    const rungButton = (page: Page, name: string) =>
-      rungs(page).getByRole("button", { name });
-
-    // The first hotel mount compiles the three.js chunk in dev — allow
-    // triple the default timeout anywhere the game world mounts.
-    test("the app opens on 原稿 and the board bar moves to 现场 and back", async ({
-      page,
-    }) => {
+  test.describe("scene and reading", () => {
+    test("opens on the scene and resumes after browsing manuscripts", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
-
       await page.goto("/en/app");
-      // The opening rung is the reader: the Manuscript tag is pressed, the
-      // library control is up, and the conversation floats as the pill.
-      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
-      await expect(page.locator("[data-library-toggle]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(
-        page.getByRole("button", { name: "Expand to full screen" }),
-      ).toBeVisible();
-
-      // To the hotel: the move is a transition, and once it settles the
-      // game's own Exit is on screen and the board bar is gone — the hotel
-      // keeps its viewport clear of product chrome.
-      await rungButton(page, "Scene").click();
-      await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(rungs(page)).toHaveCount(0, { timeout: 30_000 });
-
-      // Back to the reader through the game's own exit.
-      await page.getByRole("button", { name: "Exit", exact: true }).click();
-      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-        { timeout: 30_000 },
-      );
+      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+      await page.locator("[data-game-manuscripts]").click();
+      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+      await expect(page.locator("[data-library-toggle]")).toBeVisible();
+      await page.locator("[data-scene-resume]").click();
+      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
     });
 
-    test("the draft survives a round trip through the hotel", async ({
-      page,
-    }) => {
+    test("the same draft survives scene, reading and fullscreen writing", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
-
       await page.goto("/en/app");
-      // Hydration gate before clicking (the onClick attaches on mount) — the
-      // client badge only renders after its mount-time fetch resolved.
-      await expect(
-        page.getByRole("button", { name: "Local", exact: true }),
-      ).toBeVisible();
-
-      // The pill's single-line input takes the draft.
-      const pillInput = page.getByRole("textbox", { name: "Send a message..." });
-      await expect(pillInput).toBeVisible();
-      await pillInput.click();
-      await page.keyboard.type("still here");
-      await expect(pillInput).toHaveValue("still here");
-
-      // The conversation layer lives at the LAYOUT, so the world switch does
-      // not unmount it: the same pill floats over the hotel, draft intact.
-      await rungButton(page, "Scene").click();
-      await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(pillInput).toHaveValue("still here");
-
-      // And back: same composer instance, same draft — and it survives
-      // expanding to the fullscreen form too (one never-unmounted component).
-      await page.getByRole("button", { name: "Exit", exact: true }).click();
-      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-        { timeout: 30_000 },
-      );
-      await expect(pillInput).toHaveValue("still here");
-      await page.getByRole("button", { name: "Expand to full screen" }).click();
+      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
+      const input = page.getByRole("textbox", { name: "Send a message..." });
+      await input.pressSequentially("still here");
+      await page.locator("[data-game-manuscripts]").click();
+      await expect(page.locator('[data-app-world="field"]')).toBeVisible();
+      await expect(input).toHaveValue("still here");
+      await page.locator("[data-scene-resume]").click();
+      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+      await expect(input).toHaveValue("still here");
+      await risePanel(page);
       await expect(page.locator("textarea").first()).toHaveValue("still here");
     });
 
-    test("Cmd/Ctrl+. toggles between the reader and the hotel", async ({
-      page,
-    }) => {
+    test("Ctrl+. toggles reading and scene without changing the URL", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
-
       await page.goto("/en/app");
-      // Same hydration gate as the search palette test — the Ctrl+. listener
-      // attaches on mount.
-      await expect(
-        page.getByRole("button", { name: "Local", exact: true }),
-      ).toBeVisible();
-      // The listener mounts after the gate button under full-suite load, so
-      // press-until-toggled instead of firing once into a dead window. The
-      // hotel's own Exit button is the "we are in 现场" assertion — the
-      // board bar unmounts there, so it cannot answer.
-      await expect(async () => {
-        await page.keyboard.press("Control+.");
-        await expect(page.getByRole("button", { name: "Exit", exact: true })).toBeVisible({
-          timeout: 3_000,
-        });
-      }).toPass({ timeout: 60_000 });
-      // Toggling back before the hotel settles is a REVERSAL, not a drop —
-      // the toggle reads the live move's destination. Still, gate on the
-      // hotel having settled (the Exit above) so the assertions do not race
-      // the transition machine.
-      await expect(async () => {
-        await page.keyboard.press("Control+.");
-        await expect(rungButton(page, "Manuscript")).toHaveAttribute(
-          "aria-pressed",
-          "true",
-          { timeout: 3_000 },
-        );
-      }).toPass({ timeout: 60_000 });
+      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
+      await page.keyboard.press("Control+.");
+      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+      await page.keyboard.press("Control+.");
+      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
+      await expect(page).toHaveURL(/\/en\/app$/);
     });
   });
 });

@@ -24,7 +24,7 @@
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { CornerDownRight } from "lucide-react";
-import { Message, MessageContent } from "@/components/ui/message";
+import { ConversationTurn } from "./conversation-turn";
 import { MarkdownRenderer } from "./markdown";
 import type { NestedBubbleFrame } from "@/lib/chat/nested-bubble";
 
@@ -158,13 +158,11 @@ export function NestedBubble({
 
   return (
     <div
-      className="py-1"
       data-nested-bubble
       data-reply-to={frame.replyTo}
       data-bubble-status={frame.status}
     >
-      <Message align="start" className="gap-1">
-        <MessageContent className="min-w-0">
+      <ConversationTurn role="assistant">
           <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
             <CornerDownRight className="size-3 shrink-0" />
             <span className="min-w-0 truncate">{t("replyTo", { excerpt })}</span>
@@ -190,12 +188,11 @@ export function NestedBubble({
               beyond the chip: the episode's closing summary states the
               failure plainly (§3.6), the chip stays the mechanical record. */}
           {shownText && (
-            <div className="border-l-2 border-paper-line pl-3 font-serif font-light">
+            <div className="conversation-prose">
               <MarkdownRenderer content={shownText} />
             </div>
           )}
-        </MessageContent>
-      </Message>
+      </ConversationTurn>
     </div>
   );
 }

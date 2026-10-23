@@ -20,8 +20,9 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
   };
 
   return (
-    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity mt-1">
+    <div className="conversation-message-actions">
       <button
+        type="button"
         onClick={handleCopy}
         className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[28px]"
         title={copied ? t("copiedTooltip") : t("copyTooltip")}
@@ -35,6 +36,7 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
       </button>
       {onRegenerate && (
         <button
+          type="button"
           onClick={onRegenerate}
           className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[28px]"
           title={t("regenerateTooltip")}

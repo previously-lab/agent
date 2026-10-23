@@ -29,8 +29,8 @@ export default async function SettingsPage({
   const clientMode = isClientMode();
 
   return (
-    <div className="p-6 max-w-3xl mx-auto pt-16">
-      <h1 className="text-2xl font-bold mb-2">{t("pageTitle")}</h1>
+    <div className="settings-sheet">
+      <h1>{t("pageTitle")}</h1>
       <p className="text-muted-foreground text-sm mb-8">
         {t(clientMode ? "pageSubtitleClient" : "pageSubtitleCloud")}
       </p>

@@ -21,7 +21,7 @@ test("finished activity does not reattach, and a hidden open panel performs no p
     streams += 1;
     return route.fulfill({ contentType: "text/event-stream", body: 'data: {"type":"data-hq-activity","data":{"kind":"finished","at":"t","status":"idle"}}\n\n' });
   });
-  await page.goto("/en/app");
+  await page.goto("/en/app?view=field");
   await expect.poll(() => streams).toBe(1);
   await page.locator("[data-companion-pod]").click();
   await expect(page.locator("[data-companion-pod-panel]")).toBeVisible();

@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
-import { Card, CardContent } from "@/components/ui/card";
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { Loader2, ChevronDown, CircleX, OctagonPause } from "lucide-react";
 
@@ -14,7 +13,7 @@ interface PhaseIndicatorProps {
   label: string;
   summary?: ReactNode;
   meta?: ReactNode;
-  /** Extra classes on the card container — used for brand-tier tint washes. */
+  /** Extra classes on the status container — used for state tint washes. */
   className?: string;
   state: ToolRenderState;
   /** Only for streaming mode — the reasoning text that arrives in deltas. */
@@ -25,7 +24,7 @@ interface PhaseIndicatorProps {
    * thinking then its written answer visibly transitions between the two.
    */
   subtitleTone?: "thinking" | "answer";
-  /** Card content when expanded. */
+  /** Detail content when expanded. */
   expandedContent?: ReactNode;
 }
 
@@ -176,7 +175,7 @@ export function PhaseIndicator({
     setIsExpanded(!isExpanded);
   }, [canToggle, isExpanded]);
 
-  // Delay unmount of the Card DOM until the collapse animation finishes.
+  // Delay unmount of the detail DOM until the collapse animation finishes.
   useEffect(() => {
     if (!hasExpandedDetails) {
       setShouldRenderExpandedContent(false);
@@ -349,7 +348,7 @@ export function PhaseIndicator({
         )}
       </AnimatePresence>
 
-      {/* Expanded Card */}
+      {/* Expanded status details */}
       {hasExpandedDetails && (
         <div
           aria-hidden={!isExpanded}
@@ -365,15 +364,9 @@ export function PhaseIndicator({
           <div className="min-h-0">
             {shouldRenderExpandedContent && (
               <div className="pb-1 pt-1.5">
-                {/* ring-inset: the Card's ring is a box-shadow that the grid's
-                    overflow-hidden would otherwise clip on the left/right (the
-                    card is flush with the clip container). Drawing it inset
-                    keeps the border visible. */}
-                <Card size="sm" className="ring-inset">
-                  <CardContent className="max-h-80 overflow-auto text-sm">
-                    {expandedContent}
-                  </CardContent>
-                </Card>
+                <div className="conversation-detail max-h-80 overflow-auto text-sm">
+                  {expandedContent}
+                </div>
               </div>
             )}
           </div>

@@ -18,29 +18,28 @@ import { WALL_HEIGHT } from "../hotel";
  * Day/night — the corridor INTERIOR follows the app's Tailwind dark mode (the
  * integrator reads it via next-themes and passes `dark` down; the R3F
  * reconciler never sees that React context, so it arrives as a plain
- * prop). The void behind the hotel, though, is always black: the hotel
- * floats in darkness whatever the app theme, and a bright corridor
- * suspended in a black void is the liminal look. Every themed surface
+ * prop). The space behind the hotel shares the room's muted sage family
+ * so the cutaway feels continuous with the page. Every themed surface
  * color lives in THEME_COLORS; one shared material per role (see
  * HotelMaterials) is lerped between its day and night targets by a single
  * useFrame in Corridor, so a theme toggle eases over ~a second instead of
  * snapping. Exported: the integrator keeps the scene background/fog on
  * VOID_COLORS so the corridor's end-fade planes always match.
  */
-export const VOID_COLORS = { night: "#101219", day: "#101219" } as const;
+export const VOID_COLORS = { night: "#7d8d77", day: "#becbb2" } as const;
 
 /** Surface palette per theme — warm neutrals, day lifted from the night set. */
 export const THEME_COLORS = {
-  floor: { night: "#6b5d4f", day: "#bfae93" }, // wood; the runner below carries the carpet
-  wall: { night: "#8a7f70", day: "#d9d2c5" }, // greige → warm off-white
+  floor: { night: "#a59478", day: "#c8b38f" }, // warm wood
+  wall: { night: "#b0bca3", day: "#dedfca" }, // sage plaster / ivory
   trim: { night: "#463f36", day: "#8f867a" }, // baseboards, frames, brackets
   slab: { night: "#7b6d5c", day: "#cbbfa9" }, // door slabs
   desk: { night: "#7a6a58", day: "#c4b49b" },
   cushion: { night: "#9c8b76", day: "#ded4c3" },
   pot: { night: "#5f5648", day: "#a79d8c" },
   foliage: { night: "#7d8a66", day: "#9cae87" },
-  carpet: { night: "#54222b", day: "#9c626c" }, // corridor runner — deep wine → dusty rose
-  carpetEdge: { night: "#33141b", day: "#6e4249" }, // runner binding stripes
+  carpet: { night: "#75896c", day: "#9dad8e" }, // restrained sage runner
+  carpetEdge: { night: "#62765d", day: "#809472" },
   wainscot: { night: "#6e6252", day: "#cfc3ae" }, // wainscot band — a shade darker than the wall
 } as const;
 

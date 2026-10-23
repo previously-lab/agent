@@ -10,7 +10,7 @@ test.describe("Client badge", () => {
   test("shows the Local badge in the header and its popover copy", async ({
     page,
   }) => {
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
 
     const badge = page
       .locator("header")

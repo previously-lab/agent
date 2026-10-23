@@ -27,7 +27,7 @@ export function WorldBlur({ active }: { active: boolean }): ReactNode {
       aria-hidden
       data-world-blur
       data-active={active || undefined}
-      className="pointer-events-none absolute inset-0 opacity-0 backdrop-blur-xl bg-background/25 transition-opacity duration-300 motion-reduce:transition-none data-[active]:opacity-100"
+      className="pointer-events-none absolute inset-0 opacity-0 backdrop-blur-md bg-background/75 transition-opacity duration-300 motion-reduce:transition-none data-[active]:opacity-100"
     />
   );
 }

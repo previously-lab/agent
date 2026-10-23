@@ -12,22 +12,15 @@
  * The movement clamps themselves live in src/lib/game/clamps.ts (pure,
  * unit-tested); this file only decides when to apply them.
  *
- * CAMERA. Fixed 45° top-down: an orthographic camera parked at a (−12, +16,
- * +12) offset from the player, looking back at them — the corridor runs
- * top-right→bottom-left on screen. It never rotates; useFrame lerps the
- * follow point (factor 1 − e^(−6·dt)), so the view glides instead of
- * snapping — except on a hotel hop (page/return/strand door), whose
- * cross-hotel teleport snaps the focus on the spot
- * (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
- * The zoom TARGET is CAMERA_ZOOM (44 — pulled in ~29% per doc B.12) in the
- * corridor and eases down
- * by clamp(S, 1, ∞)^ROOM_ZOOM_SCALE_EXP (capped at ~3× pull-back) inside a
- * scaled room, so a colossal room stays legible as a room instead of
- * reading as a local patch — the dollhouse stays readable (doc §1 A4).
+ * CAMERA. Fixed 43° RTS view from southeast (+X, −Z; north is +Z).
+ * The orthographic rig follows the player in the corridor and frames the
+ * room's bounds inside a space, with a small amount of player follow.
+ * Focus and zoom ease to their targets; a hotel hop snaps the focus.
+ * rtsRoomZoom fits the actual scaled dimensions to the current viewport.
  *
  * MOVEMENT & CLAMPS. WASD + arrow keys move the player on the XZ plane at
  * 4 m/s in the corridor, delta-time corrected, screen-relative (screen-up
- * is world (+x, −z), screen-right (+x, +z) for this camera — verified
+ * is world (−x, +z), screen-right (−x, −z) for this camera — verified
  * against the lookAt direction). Inside a space the speed is boosted by
  * clamp(S, 1, ∞)^ROOM_SPEED_SCALE_EXP so a colossal room feels immense
  * without wasting the player's time. The door manager alternates
@@ -79,8 +72,8 @@
  * every space stay inside the frustum); soft FILL comes from one scene-wide
  * <Environment> of Lightformer cards (IBL, no HDRI) that also gives every
  * PBR material something to reflect; the AMBIENT term is a deliberately low
- * floor so light pools instead of filling evenly (doc §1 A3). Tone mapping
- * is AgX, not the ACES default — saturated accent colors clip under ACES.
+ * floor so light pools instead of filling evenly (doc §1 A3). The active
+ * EffectComposer uses NoToneMapping, pinned by the shared world transition.
  *
  * DEPTH CUE. There is NO scene fog
  * anywhere: with the camera ~23m above the player, every fog band that
@@ -197,6 +190,7 @@ import { compositionForRecipe, seamPartitionsFor } from "@/lib/game/room-modules
 import { WORLD_SEED } from "@/lib/game/seed";
 import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { rtsRoomZoom, scenarioPalette, shouldInteractWithScene } from "@/lib/game/scenario-art";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
 import {
   CORE_TIMELINE_ID,
@@ -591,11 +585,9 @@ function resolveAtmosphere(
   out: AtmosphereTargets,
 ): AtmosphereTargets {
   if (space !== null) {
-    const { palette } = space.recipe;
-    // Background uses the recipe's atmosphere fog: a deep, hue-faithful
-    // shadow of the room's own palette (see atmosphereFog in space-recipe),
-    // so the room's far edge melts seamlessly into its own shadow. There
-    // is no scene fog to target (removed — see Atmosphere).
+    const palette = scenarioPalette(space.recipe.palette, dark);
+    // The sage backdrop matches the room's material family. There is no
+    // scene fog to target (removed — see Atmosphere).
     out.background.set(palette.fog);
     out.sunColor.set(palette.sunColor);
     // B.13 摄影棚论 (user 2026-09-18): nothing here is lit by a sun
@@ -1102,6 +1094,7 @@ function CameraRig({
   solids: readonly SolidBox[];
   waterSide: number;
 }): JSX.Element {
+  const viewportSize = useThree((state) => state.size);
   const focus = useRef(
     new THREE.Vector3(playerRef.current.x, 0, playerRef.current.z),
   );
@@ -1200,12 +1193,22 @@ function CameraRig({
     const wt = WORLD_TRANSITION;
 
     if (mode === "top") {
-      // THE LEGACY DOLLHOUSE — byte-for-byte the v0.27 rig.
+      // A fixed RTS direction. The room is the subject; a small amount of
+      // player follow makes walking legible without orbiting the scene.
       const k = 1 - Math.exp(-CAMERA_LERP_RATE * step);
-      focus.current.x += (p.x - focus.current.x) * k;
-      focus.current.z += (p.z - focus.current.z) * k;
-      const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
-      zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
+      const dir = space === null ? 1 : roomOrientationFor(space.door).dir;
+      const centerX = space?.door.x ?? p.x;
+      const centerZ = space === null ? p.z : space.door.z + dir * space.scaledRecipe.size.extent / 2;
+      const targetX = space === null ? p.x : centerX * 0.88 + p.x * 0.12;
+      const targetZ = space === null ? p.z : centerZ * 0.88 + p.z * 0.12;
+      focus.current.x += (targetX - focus.current.x) * k;
+      focus.current.z += (targetZ - focus.current.z) * k;
+      const zoom = rtsRoomZoom(viewportSize, space === null ? null : {
+        width: space.scaledRecipe.width,
+        depth: space.scaledRecipe.size.extent,
+        wallHeight: scaledWallHeight(space.scale.factor),
+      });
+      zoomRef.current += (zoom - zoomRef.current) * k;
       const ortho = camera as THREE.OrthographicCamera;
       if (wt.active && wt.mode !== "pause") {
         const follow: FollowPose = {
@@ -1546,15 +1549,10 @@ function createStageGradientTexture(): THREE.DataTexture {
  * every usable fog band washed the whole visible room into the fog color
  * (the translucent-room bug, commits 9116243/09c757b/d9edf93). This disc
  * is plain geometry at a fixed depth — its shading has no camera-distance
- * term, so it structurally cannot reproduce that failure. The disc IS tone
- * mapped like every lit surface: anything visible through or above the
- * room's walls must ride the same AgX curve as the room itself, otherwise
- * the backdrop renders relatively brighter than the tone-mapped scene and
- * bleeds milk through every opening. The scene background stays the
- * renderer's clear color (a Color background bypasses tone mapping by
- * design — WebGLBackground), but the disc covers the entire view and its
- * transparent rim converges to that exact color at opacity 0, so the two
- * still meet seamlessly.
+ * term, so it structurally cannot reproduce that failure. The disc and lit
+ * surfaces share the active post chain; EffectComposer currently forces
+ * NoToneMapping (there is no separate ToneMapping effect). Its transparent
+ * rim converges to the scene's clear background at opacity 0.
  */
 function StageBackdrop({
   space,
@@ -2265,7 +2263,7 @@ function GameLoop({
 }
 
 /* ------------------------------------------------------------------ */
-/* Touch controls (v0.28) — one thumb, no second hand                   */
+/* Pointer controls — click to read; one-thumb movement on touch      */
 /* ------------------------------------------------------------------ */
 
 /** Stick knob travel (px) — the vector saturates at the rim. */
@@ -2283,8 +2281,9 @@ const TAP_MAX_MS = 400;
  * under it through the tap-to-interact resolver — a loose sheet, the
  * terminal, a door. No look control, no second button.
  *
- * Touch pointers ONLY: the desktop keeps the arrow keys with the same
- * movement vocabulary, and mouse gestures pass to the chrome. Seating:
+ * Mouse-left and pen taps use the same resolver; only a touch can engage
+ * the floating movement stick. A drag never becomes a tap, even if it
+ * returns to its starting point. The desktop also keeps arrow keys. Seating:
  * the layer fills the game pane UNDER the chrome — the exit and gallery
  * buttons (z-10/z-20) and the conversation pill (layout level) keep
  * their taps by stacking order; the world gate is field chrome and never
@@ -2307,6 +2306,7 @@ function TouchControls({
     startY: number;
     startT: number;
     engaged: boolean;
+    moved: boolean;
     lowerHalf: boolean;
   } | null>(null);
 
@@ -2318,11 +2318,14 @@ function TouchControls({
     CHASE_LIVE.stickActive = false;
   }, []);
 
+  useEffect(() => () => clearTouch(), [clearTouch]);
+
   return (
     <div
+      data-game-pointer-surface
       className="absolute inset-0 touch-none"
       onPointerDown={(e) => {
-        if (e.pointerType !== "touch" || touchRef.current !== null) return;
+        if (e.button !== 0 || !e.isPrimary || touchRef.current !== null) return;
         e.currentTarget.setPointerCapture(e.pointerId);
         touchRef.current = {
           pointerId: e.pointerId,
@@ -2330,7 +2333,8 @@ function TouchControls({
           startY: e.clientY,
           startT: performance.now(),
           engaged: false,
-          lowerHalf: e.clientY > window.innerHeight / 2,
+          moved: false,
+          lowerHalf: e.pointerType === "touch" && e.clientY > window.innerHeight / 2,
         };
       }}
       onPointerMove={(e) => {
@@ -2338,11 +2342,12 @@ function TouchControls({
         if (t === null || e.pointerId !== t.pointerId) return;
         const dx = e.clientX - t.startX;
         const dy = e.clientY - t.startY;
+        const len = Math.hypot(dx, dy);
+        if (len >= STICK_DEAD_PX) t.moved = true;
         if (!t.engaged) {
-          if (!t.lowerHalf || Math.hypot(dx, dy) < STICK_DEAD_PX) return;
+          if (!t.lowerHalf || len < STICK_DEAD_PX) return;
           t.engaged = true;
         }
-        const len = Math.hypot(dx, dy);
         const clamped = Math.min(len, STICK_RADIUS_PX);
         const nx = len > 0 ? dx / len : 0;
         const ny = len > 0 ? dy / len : 0;
@@ -2362,13 +2367,16 @@ function TouchControls({
         const t = touchRef.current;
         if (t === null || e.pointerId !== t.pointerId) return;
         const wasTap =
-          !t.engaged &&
+          !t.engaged && !t.moved &&
           performance.now() - t.startT < TAP_MAX_MS &&
           Math.hypot(e.clientX - t.startX, e.clientY - t.startY) < STICK_DEAD_PX;
         clearTouch();
         if (wasTap) onTap(e.clientX, e.clientY);
       }}
       onPointerCancel={(e) => {
+        if (touchRef.current?.pointerId === e.pointerId) clearTouch();
+      }}
+      onLostPointerCapture={(e) => {
         if (touchRef.current?.pointerId === e.pointerId) clearTouch();
       }}
     >
@@ -2401,6 +2409,7 @@ function Hud({
   paper,
   enterHint,
   readHint,
+  onInteract,
 }: {
   door: CorridorDoor | null;
   anchor: AnchorHud | null;
@@ -2410,17 +2419,31 @@ function Hud({
   enterHint: string;
   /** The paper prompt's verb ("Read") — a sheet is opened, not entered. */
   readHint: string;
+  onInteract: () => void;
 }): JSX.Element | null {
   const label = paper ? paper.title : anchor ? anchor.label : door?.label;
   const hint = paper ? readHint : enterHint;
   if (label === undefined) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center">
-      <div className="rounded-full bg-black/35 px-4 py-1.5 font-serif text-sm text-neutral-300 backdrop-blur-sm">
-        <span className="text-neutral-100">{label}</span>
-        <span className="mx-2 text-neutral-500">·</span>
-        <span>{hint}</span>
-      </div>
+      {paper || anchor ? (
+        <button
+          type="button"
+          data-game-interact={paper ? "paper" : "anchor"}
+          onClick={onInteract}
+          className="pointer-events-auto flex max-w-[min(80vw,30rem)] items-center gap-3 rounded-full border border-tool-line bg-tool/90 px-4 py-2 text-sm text-foreground shadow-float backdrop-blur-md transition hover:bg-tool"
+        >
+          <span className="truncate font-serif">{label}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{hint}</span>
+          <kbd aria-hidden className="hidden text-[10px] text-muted-foreground sm:inline">↵</kbd>
+        </button>
+      ) : (
+        <div className="rounded-full border border-tool-line bg-tool/85 px-4 py-2 text-sm text-foreground shadow-float backdrop-blur-md">
+          <span className="font-serif">{label}</span>
+          <span className="mx-2 text-muted-foreground">·</span>
+          <span className="text-xs text-muted-foreground">{hint}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -2563,7 +2586,7 @@ export default function GameCanvas({
   onActiveSliceChange,
   focusSlice = null,
   onOpenDoc,
-  cameraMode = "chase",
+  cameraMode = "top",
   suspended = false,
 }: {
   /** The CORE timeline's door list (newest first) — the spawn hotel. */
@@ -2968,7 +2991,7 @@ export default function GameCanvas({
     });
   }, [activeSpace, activeRoomGeometry, corridorEnd, doorXs, returnSides]);
 
-  // TAP-TO-INTERACT (touch, v0.28): a tap projects to the ground plane
+  // POINTER PICKUP: a mouse click, pen tap or touch projects to the ground plane
   // (the rig's projectTap) and picks what is under it — a loose sheet
   // opens straight into the manuscript (the same call the interact key's
   // paper branch makes); the terminal and the corridor doors start a
@@ -3395,19 +3418,24 @@ export default function GameCanvas({
       // the page's scroll) keep their default behaviour while reading.
       if (GAME_SIM_FREEZE.frozen) return;
       const key = event.key.toLowerCase();
-      // THE ANCHOR INTERACTION (§13.1): Enter (the same word the door
-      // prompt shows) or E fires the terminal in reach. Only swallowed
-      // when one IS in reach, so focused buttons and inputs keep their
-      // default keys otherwise.
+      const targetOwnsKeys = isEditableTarget(event.target) ||
+        (event.target instanceof HTMLElement && event.target.closest("button, a, select, [role='button'], [role='menuitem']") !== null);
+      // Nearby papers and terminals share Enter/E. Focused chrome owns
+      // its keys, including menu arrows, while the scene remains visible.
       if (key === "enter" || key === "e") {
-        if (isEditableTarget(event.target)) return;
-        if (anchorHudRef.current !== null) {
+        if (shouldInteractWithScene({
+          key,
+          blocked: WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen,
+          targetOwnsKeys,
+          hasPaper: paperHudRef.current !== null,
+          hasAnchor: anchorHudRef.current !== null,
+        })) {
           event.preventDefault();
           interactRef.current();
         }
         return;
       }
-      if (!HANDLED_KEYS.has(key) || isEditableTarget(event.target)) return;
+      if (!HANDLED_KEYS.has(key) || targetOwnsKeys) return;
       event.preventDefault();
       pressed.add(key);
     }
@@ -3435,7 +3463,7 @@ export default function GameCanvas({
   // the game world is mounted:
   //   shadows → PCFShadowMap (three 0.185 deprecated PCFSoft; the shared
   //   canvas declares it via fiber's object form, world-canvas.tsx),
-  //   AgX tone mapping (saturated accents clip under the ACES default),
+  //   the active composer's NoToneMapping pin (world-transition.ts),
   //   and the §14.1 frameloop freeze is the shared canvas's `paused` prop.
   // Softer shadows stay rejected: VSM leaks through thin interior geometry,
   // drei <SoftShadows> recompiles every material per streamed room, and
@@ -3630,6 +3658,7 @@ export default function GameCanvas({
             paper={hudPaper}
             enterHint={t("enter")}
             readHint={t("readDoc")}
+            onInteract={() => interactRef.current()}
           />
         </>
       )}

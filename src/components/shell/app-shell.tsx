@@ -1,44 +1,9 @@
 "use client";
 
 /**
- * AppShell — the app route's shell: the one shared world canvas (the reader's
- * field and the hotel), the world transition machine, and the TWO RUNGS.
- * Product navigation is IN-MEMORY state; the URL carries none of it.
- *
- * THE WORLD HAS TWO RUNGS (v0.26). 原稿 / Manuscript is the field world — the
- * document reader (the floating library, the desk and its paper); 现场 /
- * Scene is the game world — the hotel. The board bar's two tags switch
- * between them through the transition machine below — a move, never a snap.
- * The four-rung zoom ladder (conversation · slice · day · week) retired: the
- * three card rungs rendered the same reader, and the conversation stopped
- * being a rung at all — it is a floating layer mounted by the LAYOUT
- * (`chat/conversation-overlay.tsx`), a sibling of this route, above the
- * canvas by z-index, surviving navigation and world moves. The retired
- * ladder's chrome (the pane slot, the rung slide, the zoom hint, the jump
- * controls, the AxisBand DOM) is gone; the card field's own components stay
- * in the tree untouched (`timeline-3d/**`) for the archive field to re-wire
- * later — the shell simply stops importing them.
- *
- * WHAT THE LAYOUT OWNS (§3.1). The state the conversation layer and this
- * shell SHARE lives in `shell/shell-provider.tsx` — the panel tier, the
- * shared slice cursor, the per-turn view getter (`getChatView`), the
- * world-freeze signal (`worldFrozen`, which still arrives here as the
- * canvas's `paused`), the one band feed, and the composer clearance. What
- * stays HERE is the world's half: the canvas, the transition clock, and the
- * catalog window the band's braid reads its range from. The shell registers
- * a `WorldDriver` with the provider on mount (the nav action's world-motion
- * half, the pose read, the turn callback) and pushes its pose / feed lease
- * up as they change — the layout talks to the world through that channel; it
- * does not own it.
- *
- * THE URL IS DEV-ONLY. The only query params anyone reads are the debug
- * gallery's (`?view=game&debug=rooms&page=&skin=`, game-shell.tsx) and the
- * playground route's — never product navigation. `?view=game` is read ONCE
- * as the cold-boot world (so the gallery link still opens the hotel); it is
- * never written back and never reconciled. `?at=`/`?atStart=` remain a
- * cold-boot conversation deep link consumed once by ChatPage (chat-page.tsx,
- * in the layout's overlay) — a shared link still lands on its slice, but
- * nothing inside the session ever produces one.
+ * Scene-first shell. Reading pauses the mounted world; continuing restores
+ * its position. Conversation state belongs to the layout and survives both.
+ * `?view=field` is an explicit reading entrance; subsequent moves stay local.
  */
 import {
   useCallback,
@@ -123,11 +88,6 @@ import {
 let restoreAttempted = false;
 
 export function AppShell() {
-  // THE URL IS DEV-ONLY. `?view=game` is read ONCE, as the cold-boot world,
-  // so the debug gallery's link (`?view=game&debug=rooms`, game-shell.tsx)
-  // still opens straight into the hotel. Nothing else reads the query string
-  // here and nothing ever writes it: a refresh returns to the reader,
-  // exactly like a fresh visit.
   const searchParams = useSearchParams();
   // The demo persona rides the dev-only URL, exactly like `?view=game` —
   // read once at mount, forwarded to the library column's server actions.
@@ -138,9 +98,21 @@ export function AppShell() {
   // the hotel for the documents is the Control-style pause: the world
   // freezes under a blur layer and stays mounted behind the document tier.
   const [dissolveDebug] = useState(() => searchParams.get("dissolve") === "1");
+  // Exploration is the default. Explicit reader entry remains available for
+  // a direct reading session and does not eagerly mount the game behind it.
+  const [readerEntry] = useState(() => searchParams.get("view") === "field");
   const [settledView, setSettledView] = useState<WorldKind>(() =>
-    searchParams.get("view") === "game" ? "game" : "field",
+    readerEntry ? "field" : "game",
   );
+  // Restoration belongs only to the untouched cold reader entrance. Once
+  // navigation or a document selection supersedes it, returning to the
+  // field must not revive a slow response from that original entrance.
+  const bootRestoreAllowedRef = useRef(readerEntry);
+  const shellMountedRef = useRef(false);
+  useEffect(() => {
+    shellMountedRef.current = true;
+    return () => { shellMountedRef.current = false; };
+  }, []);
 
   // ── THE SHARED CHANNEL (shell-provider.tsx, layout level) ───────────────
   // Everything the conversation overlay and this shell both read or write:
@@ -154,6 +126,7 @@ export function AppShell() {
     sharedSlice,
     deskDoc,
     openDesk,
+    closeDesk,
     getCursor,
     feed,
     registerWorldDriver,
@@ -186,18 +159,8 @@ export function AppShell() {
   // (GAME_SIM_FREEZE), the blur layer up, the canvas showing the frozen
   // frame. Leaving for the hotel from this state is a RESUME: no scripted
   // shot, because the camera never moved.
-  //
-  // v0.29: EVERY fresh load starts in this state — the hotel is mounted
-  // behind the document tier from the reader's first entry (frozen under
-  // the blur veil, exactly the pause's steady state), not built on their
-  // first visit to it. Entering the world is then always the resume beat:
-  // the blur lifts and the world is already there. A `?view=game` cold
-  // boot opts out — the hotel is the settled world, nothing suspended.
-  const [gameSuspended, setGameSuspended] = useState(() => {
-    const cold = searchParams.get("view") !== "game";
-    if (cold) GAME_SIM_FREEZE.frozen = true;
-    return cold;
-  });
+  const [gameSuspended, setGameSuspended] = useState(false);
+  const documentFromSceneRef = useRef(false);
   const view: WorldKind = settledView;
   const mountedWorlds: readonly WorldKind[] = transition
     ? [transition.from, transition.to]
@@ -239,7 +202,7 @@ export function AppShell() {
   } | null>(null);
   /** The suspension state's synchronous mirror for the mode pick (the same
    *  outrun-the-render-pipeline reason as getCursor below). Initialised
-   *  from the cold-boot state (v0.29: a fresh load starts suspended). */
+   *  from the actual initial world state. */
   const gameSuspendedRef = useRef(gameSuspended);
   /** THE "WHERE WAS I" MEMORY (v0.13 §6): the cursor's value when the reader
    *  last LEFT the world for the reader — written in startMove on every
@@ -274,6 +237,7 @@ export function AppShell() {
       sliceId: string | null,
       mode: WorldTransitionMode,
     ) => {
+      bootRestoreAllowedRef.current = false;
       const wt = WORLD_TRANSITION;
       wt.active = true;
       wt.id += 1;
@@ -363,16 +327,43 @@ export function AppShell() {
       const wouldMove = live ? live.to !== world : settledRef.current !== world;
       if (!wouldMove) return;
       setPanelMode("pill");
+      if (world === "game") {
+        documentFromSceneRef.current = false;
+        closeDesk();
+      }
       beginTransition(world, null);
     },
-    [beginTransition, setPanelMode],
+    [beginTransition, closeDesk, setPanelMode],
   );
+
+  // Every document entrance (world paper, reference, or chat receipt) uses
+  // the same pause. Closing a world pickup resumes its existing scene;
+  // closing a document picked from the index returns to that index.
+  const previousDocumentRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousDocumentRef.current;
+    previousDocumentRef.current = deskDoc;
+    if (deskDoc !== null && previous !== deskDoc) {
+      bootRestoreAllowedRef.current = false;
+      if (settledRef.current === "game" && transitionRef.current?.to !== "game") {
+        documentFromSceneRef.current = true;
+        beginTransition("field", null);
+      }
+    } else if (previous !== null && deskDoc === null && documentFromSceneRef.current) {
+      documentFromSceneRef.current = false;
+      setPanelMode("pill");
+      beginTransition("game", null);
+    }
+  }, [deskDoc, beginTransition, setPanelMode]);
 
   /** The Scene word's room choice, delegated to the provider's nav action:
    *  the cursor write (theirs) composed with the world move (the driver
    *  registered below) — the same path the old world gate's rulings took. */
   const enterRoom = useCallback(
-    (sliceId: string) => nav.standAtSlice(sliceId),
+    (sliceId: string) => {
+      if (transitionRef.current) return;
+      nav.standAtSlice(sliceId);
+    },
     [nav],
   );
 
@@ -400,8 +391,11 @@ export function AppShell() {
   // action calls this through the registered driver.
   const driveStandAtSlice = useCallback(() => {
     if (transitionRef.current) return;
+    documentFromSceneRef.current = false;
+    closeDesk();
+    setPanelMode("pill");
     if (settledRef.current !== "game") beginTransition("game", null);
-  }, [beginTransition]);
+  }, [beginTransition, closeDesk, setPanelMode]);
   /** The live pose for the provider's send-time view getter (via this ref
    *  read — the transport asks outside React's render). A mid-move read
    *  reports the SETTLED world: that is where the reader stands. */
@@ -536,6 +530,7 @@ export function AppShell() {
   useEffect(() => {
     if (view !== "game") return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key !== "Escape") return;
       if (panelMode !== "pill") setPanelMode("pill");
       else beginTransition("field", null);
@@ -606,6 +601,7 @@ export function AppShell() {
       zoomOut: tDesk("zoomOut"),
       zoomIn: tDesk("zoomIn"),
       zoomReset: tDesk("zoomReset"),
+      close: tDesk("close"),
       // The record paper's speaker labels (v0.25b §三) ride INTO the record
       // read — the transcript's markdown composes server-side with them.
       recordUserLabel: tDesk("recordUser"),
@@ -729,22 +725,24 @@ export function AppShell() {
   // field world — a `?view=game` cold boot has the hotel as its explicit
   // destination. StrictMode-safe: the once-guard is module state (the
   // simulated remount's second pass returns early), and the preflight's
-  // continuation is provider-owned (openDesk is layout-level), so the
-  // simulated cleanup cannot strand the restore — the deskDocRef check at
-  // resolution keeps a slow preflight from overriding a document the
-  // reader opened by hand in the meantime.
+  // mounted ref is restored by the simulated remount. The intent ref is
+  // invalidated by actual navigation/selection and never reset: a slow
+  // response cannot override even a field → game → field round trip.
   const deskDocRef = useRef<string | null>(deskDoc);
   useEffect(() => {
     deskDocRef.current = deskDoc;
   }, [deskDoc]);
   useEffect(() => {
-    if (restoreAttempted) return;
+    if (restoreAttempted) {
+      setBootResolved(true);
+      return;
+    }
     restoreAttempted = true;
     if (deskDoc !== null) {
       setBootResolved(true);
       return;
     }
-    if (searchParams.get("view") === "game") {
+    if (!readerEntry) {
       setBootResolved(true);
       return;
     }
@@ -766,6 +764,7 @@ export function AppShell() {
     void (async () => {
       try {
         for (const ref of candidates) {
+          if (!bootRestoreAllowedRef.current || !shellMountedRef.current) return;
           const kind = deskRefKind(ref);
           const record = kind === "record" ? parseRecordRef(ref) : null;
           const ok =
@@ -776,7 +775,9 @@ export function AppShell() {
               : kind === "dossier"
                 ? (await getDossierDoc(ref)) !== null
                 : (await getCaseDoc(ref)) !== null;
+          if (!bootRestoreAllowedRef.current || !shellMountedRef.current) return;
           if (ok) {
+            bootRestoreAllowedRef.current = false;
             if (deskDocRef.current === null) openDesk(ref);
             return;
           }
@@ -789,7 +790,7 @@ export function AppShell() {
           }
         }
       } finally {
-        setBootResolved(true);
+        if (shellMountedRef.current) setBootResolved(true);
       }
     })().catch(() => {
       // A failed preflight opens nothing — a flaky read must not erase the
@@ -934,7 +935,7 @@ export function AppShell() {
         `overscroll-behavior: none` kills the rubber-band/bounce that
         `overflow-hidden` alone does not. (Measured: scrollY stays 0 under
         trusted wheel input over all three surfaces.) */}
-    <div className="fixed inset-0 flex overflow-hidden overscroll-none">
+    <div data-app-world={view} data-scene-suspended={gameSuspended || undefined} className="fixed inset-0 flex overflow-hidden overscroll-none">
       {/* The floating chrome (app-header) is a FIELD-world fixture; the game
           keeps only its own overlay. Hidden with a style tag because the
           header itself is not this file's to change. Hidden from the start
@@ -1018,6 +1019,7 @@ export function AppShell() {
             field's rig is shell-held (above): Escape returns to the same
             scroll. */}
         {shownSide === "archive" ? (
+          transition?.to !== "game" &&
           <motion.div
             key="archive"
             // The wrapper has no paint of its own (the piles render through
@@ -1073,16 +1075,13 @@ export function AppShell() {
           </motion.div>
         )}
 
-        {/* THE BOARD BAR — the two rungs, floating at the top of the screen.
-            Field-world chrome: in the hotel the game's own Exit is the way
-            back. Mid-move the DESTINATION's tag lights, so the bar states
-            where you are going, not where the fade started. See
-            `board-bar.tsx`. */}
+        {/* The reading layer offers one primary action: continue the scene. */}
         <BoardBar
           world={transition ? transition.to : settledView}
           onSelect={selectRung}
+          canTravel={!transitionActive}
           sceneChoice={{
-            current: sharedSlice,
+            current: deskDoc ? parseRecordRef(deskDoc)?.sliceId ?? null : null,
             remembered: prevRoomCursor,
           }}
           onEnterRoom={enterRoom}
@@ -1110,7 +1109,10 @@ export function AppShell() {
         {mountedWorlds.includes("game") && (
           <div className="relative flex-1 min-h-0">
             <GameShell
-              onExit={() => beginTransition("field", null)}
+              onExit={() => {
+                documentFromSceneRef.current = false;
+                beginTransition("field", null);
+              }}
               focusSlice={sharedSlice}
               // The hotel's own chrome stands down for the whole pause —
               // the steady state and both pause-mode flights.
@@ -1121,6 +1123,7 @@ export function AppShell() {
               // the desk opens on the field world while the game world
               // stays mounted behind it — the way back is the desk's Esc.
               onOpenDoc={(ref) => {
+                documentFromSceneRef.current = true;
                 openDesk(ref);
                 beginTransition("field", null);
               }}

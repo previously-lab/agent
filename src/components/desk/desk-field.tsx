@@ -1,71 +1,14 @@
 "use client";
 
 /**
- * The paged document desk (v0.24; DOM tier v0.30) — the open document as
- * PLAIN DOM above the one world canvas. The paper, its pages and its stack
- * are ordinary elements in the pane's z-10 layer; the frozen world (the
- * suspended hotel, blurred) stays mounted behind them on the z-0 canvas.
+ * A fixed A4 document over the paused world. Print geometry never responds
+ * to viewport size: only the viewing scale and pan change. The initial
+ * view fits the whole sheet; zooming reads the same lines at a closer
+ * distance. Page shuffling and cyclic navigation preserve the existing
+ * paper interaction, with a constant body frame on every page.
  *
- * THE MIGRATION (v0.30, doc/design/v0.28-document-tier-architecture.md step
- * 2). The reader used to live INSIDE the R3F scene: the desk registered a
- * `DeskScene` into the field world's slot and drei's `<Html transform>`
- * projected the paper's DOM into the pane, while a per-frame `useFrame`
- * rewrote the camera (zoom/pan) and the sheet's matrix — so every frame of
- * a zoom ease made the browser flatten and re-rasterize up to five
- * full-page text layers. Now the desk registers NO scene: the table plane,
- * the lights, the clip-plane bookkeeping and the Html portal are gone (the
- * field's ground is the shell's `data-field-backdrop`; the paper separates
- * from it by its contact shadow, exactly the archive piles' read). What
- * drew the paper was always DOM — that part is unchanged, down to the
- * markup and the print-scale CSS.
- *
- * ZOOM AND PAN ARE DOM TRANSFORMS NOW (rule 18's intent unchanged: the
- * sheet is a fixed 210×297mm object, the reading distance changes). Three
- * nested wrappers, each owning one transform so their transitions never
- * fight:
- *
- *   .desk-giveway  the give-way x (the open library panel's measured width)
- *                  — a 300ms CSS transition, the damped pan of old;
- *   .desk-pan      the user's drag pan — NO transition: it tracks the
- *                  pointer 1:1;
- *   .desk-zoom     `scale(zoom)` — a 300ms CSS transition, the damping of
- *                  old, now compositor-owned.
- *
- * THE ZOOM IS BANDED (v0.30, the owner's ruling): `DESK_ZOOM_BANDS` in
- * lib/timeline3d/desk-camera — a few discrete stops (0.7× 1.0× 1.2× 1.45×
- * 1.7× 2.0×), opening at 1.45×, `0`/the readout resetting to the whole
- * page (1.0×). The buttons, the `+`/`−` keys and ctrl/cmd-wheel all step
- * between stops — a continuous wheel is what made the raster cost
- * unpredictable. The pure state machine keeps the targets and the clamped
- * pan; the visual value is the stop itself, animated by CSS.
- *
- * THE TURN IS UNTOUCHED (the product's beat): the same shuffle, the same
- * five shells, the same pure-CSS keyframes — only the traveling sheet ever
- * changes transform, a settle repaints nothing.
- *
- * THE PANE HANDSHAKE (unchanged): while `deskDoc` is set, the shell unmounts
- * the archive field and mounts this component in the same pane branch, on a
- * hand-timed handover (see app-shell.tsx). No world-slot registration any
- * more — the field world's GL slot is simply empty while the desk is open.
- *
- * PAGINATION (v0.24, cyclic in v0.29). One sheet = one PAGE of the
- * document. The markdown flows through CSS multi-column layout inside a
- * fixed-height 版心 (one column per page; `column-fill: auto` packs each
- * column to the page height) and five paper SLOTS carry the current, next,
- * and previous pages (the other two are blank paper, their edges peeking —
- * the card field's stacked-papers look). A turn SHUFFLES (the user's ruling
- * — no rotation): the top sheet lifts off, travels, and is put at the very
- * back; the deck closes rank beneath it; going back is the same gesture in
- * reverse. Pure CSS transform animation, only the traveler ever moves. THE
- * STACK IS A CYCLE (v0.29, the owner's ruling): forward past the last page
- * returns to the first, back past the first to the last — like turning a
- * held stack of paper over. Nothing prints a total: the count is READ off
- * the live layout (the flow container stays one page wide, the browser
- * fragments the content into as many overflow columns as it needs, and
- * scrollWidth / pageW IS the true count — no measurer, no lower bound, no
- * growth loop, and never a sheet beyond what the flow fills); the only
- * page indicator is the folio printed on the sheet itself, true by
- * construction.
+ * The shell owns pause/resume and the place the paper came from. This
+ * reader only calls openDesk/closeDesk; it never moves the world itself.
  */
 import {
   useCallback,
@@ -81,23 +24,24 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useLocale } from "next-intl";
-import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { useShell } from "@/components/shell/shell-provider";
 import {
   clampViewCentre,
-  createDeskCamera,
   dragPanBy,
   panBoundsFor,
-  resetDeskCamera,
-  stepDeskZoomBand,
   type DeskCameraState,
 } from "@/lib/timeline3d/desk-camera";
-import { ISLAND_BAR, ISLAND_CONTROL } from "@/components/layout/island";
+import { formatDeskZoom } from "./desk-zoom";
 import {
-  deskZoomAtMax,
-  deskZoomAtMin,
-  formatDeskZoom,
-} from "@/components/desk/desk-zoom";
+  fitPaperZoom,
+  PAPER_HEIGHT,
+  PAPER_WIDTH,
+  PAPER_ZOOM_MAX,
+  paperPageCount,
+  paperZoomAtMin,
+  stepPaperZoom,
+} from "./paper-view";
 import {
   getCaseDoc,
   type CaseDocContent,
@@ -140,6 +84,8 @@ import "./desk.css";
 export interface DeskTexts {
   /** aria-label of the desk region — carries the Escape affordance. */
   regionLabel: string;
+  /** Put down the paper; the shell restores its original world or index. */
+  close?: string;
   /** The body line while the document is in flight. */
   loading: string;
   /** The dead-link paper's heading. */
@@ -150,11 +96,7 @@ export interface DeskTexts {
   prevPage: string;
   /** aria-label of the page-control's next-page button. */
   nextPage: string;
-  /** RETIRED (v0.29): the island no longer prints a position — the stack is
-   *  a cycle and a total is never announced (the folio on the sheet is the
-   *  only page indicator). Optional so the shell's wiring keeps compiling
-   *  until the shell lane deletes it (app-shell.tsx `pagePosition`, and the
-   *  `desk.pagePosition` key in messages/en.json + messages/zh.json). */
+  /** Accessible reading position; the printed folio remains on the sheet. */
   pagePosition?(current: number, total: number): string;
   /** aria-label of the zoom island's zoom-out button. */
   zoomOut: string;
@@ -185,71 +127,16 @@ const WHEEL_ZOOM_THRESHOLD_PX = 50;
  *  dominance the horizontal component needs over the vertical one. */
 const SWIPE_THRESHOLD_PX = 56;
 
-/** The give-way breakpoint (v0.25 R1-A): at ≥lg the paper pans aside; below
- *  it the panel closes on selection instead (library-control's half of the
- *  ruling) — a phone never gets both the panel and a shifted sheet. */
-const LIBRARY_GIVEWAY_MQ = "(min-width: 1024px)";
-
-/** How wide the open library panel stands, in px — 0 when it is closed or
- *  the viewport is below lg. The panel renders `[data-library-panel]` and
- *  its toggle carries `aria-expanded`, so the desk MEASURES the truth
- *  instead of importing a copy of the panel's state (the chrome-inset
- *  idiom). The open signal reads off the TOGGLE, not the panel's presence:
- *  the panel lingers through its exit beat, and the paper's return pan
- *  starts on the close click, not 200 ms after it.
- *
- *  Two observers because the two inputs change differently: the toggle's
- *  aria-expanded and the panel's mount/unmount are mutations on the
- *  control's subtree; the panel's WIDTH follows the viewport (its formula
- *  is viewport-derived), which is a resize. rAF-debounced, equality-guarded. */
-function measureLibraryPanelWidth(): number {
-  if (!window.matchMedia(LIBRARY_GIVEWAY_MQ).matches) return 0;
-  const control = document.querySelector("[data-library-control]");
-  const toggle = control?.querySelector("[data-library-toggle]");
-  if (toggle?.getAttribute("aria-expanded") !== "true") return 0;
-  const panel = control?.querySelector("[data-library-panel]");
-  if (!panel) return 0;
-  return panel.getBoundingClientRect().width;
+function createPaperCamera(zoom = 1): DeskCameraState {
+  return { zoom, zoomTarget: zoom, pan: { x: 0, y: 0 }, panTarget: { x: 0, y: 0 } };
 }
 
-function useLibraryPanelShift(): number {
-  const [shift, setShift] = useState(0);
-  useEffect(() => {
-    const apply = () => {
-      const w = measureLibraryPanelWidth();
-      setShift((prev) => (prev === w ? prev : w));
-    };
-    apply();
-    let frame = 0;
-    const remeasure = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(apply);
-    };
-    const mo = new MutationObserver(remeasure);
-    // The desk mounts inside the shell that already rendered the control —
-    // the root is there by the time this effect runs.
-    const root = document.querySelector("[data-library-control]");
-    if (root) {
-      mo.observe(root, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["aria-expanded"],
-      });
-    }
-    window.addEventListener("resize", remeasure);
-    return () => {
-      cancelAnimationFrame(frame);
-      mo.disconnect();
-      window.removeEventListener("resize", remeasure);
-    };
-  }, []);
-  return shift;
+function editableTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
 }
 
 export function DeskField({
   docRef,
-  camXOffset,
   reducedMotion,
   texts,
   leaving = false,
@@ -257,10 +144,7 @@ export function DeskField({
   /** The open document's reference (`deskDoc` — never null here: app-shell
    *  mounts the desk only when a ref is set). */
   docRef: string;
-  /** The field camera's half-band x shift — 0 in the reader (the library
-   *  control floats; there is no column to clear). The give-way pan (v0.25
-   *  R1-A) is ADDED ON TOP inside the field: it derives from the panel's
-   *  measured width, not from this prop. */
+  /** Legacy shell prop. The paper now centres in its own reading viewport. */
   camXOffset: number;
   reducedMotion: boolean;
   texts: DeskTexts;
@@ -273,16 +157,6 @@ export function DeskField({
   const { closeDesk, openDesk } = useShell();
   const locale = useLocale();
   const leave = leaving;
-
-  // The give-way (v0.25 R1-A): the open library panel's measured width,
-  // SUBTRACTED from the camera's x — the view's centre sits left of the
-  // paper and the paper reads shifted RIGHT (the card field's band bias is
-  // the same sign convention). The .desk-giveway wrapper carries it as a
-  // 300ms CSS transition, so open/close is a glide, not a jump.
-  const panelShift = useLibraryPanelShift();
-  const panelShiftRef = useRef(panelShift);
-  panelShiftRef.current = panelShift;
-  const effectiveCamX = camXOffset - panelShift;
 
   // The document arrives lazily, one server-action round trip per open —
   // the shelf's own rhythm. `undefined` = in flight; null = dead link (the
@@ -414,7 +288,7 @@ export function DeskField({
   const readTotal = useCallback((el: HTMLDivElement) => {
     const w = el.clientWidth;
     if (w <= 0) return; // not in a laid-out state — keep the previous truth
-    const actual = Math.max(1, Math.round(el.scrollWidth / w));
+    const actual = paperPageCount(el.scrollWidth, w);
     setTotal((prev) => (prev === actual ? prev : actual));
   }, []);
 
@@ -454,119 +328,56 @@ export function DeskField({
   // still be stale and the page would bump twice (observed: 1 → 2 → 3).
   const settledRef = useRef(true);
 
-  // THE READER'S CAMERA STATE (v0.25a §一, rule 18; DOM tier v0.30): the
-  // sheet's size is FIXED; zoom (banded — see the module header) and pan
-  // are reading-distance state. The machine is pure
-  // (lib/timeline3d/desk-camera); gestures write its TARGETS, clamped on
-  // every write so the sheet can never leave the viewport. The RENDERED
-  // value is the target itself: the .desk-zoom wrapper's CSS transition is
-  // the damping, so no per-frame JS advance exists any more.
-  const cameraRef = useRef<DeskCameraState>(createDeskCamera());
-
-  // THE ZOOM ISLAND'S MIRROR (v0.28 zoom chrome, banded v0.30). The state
-  // machine is a ref; React sees it only through this state. Banded, there
-  // is no per-frame ease to mirror — gestures (buttons, keys, wheel)
-  // re-render it once per STOP with the display string and the two
-  // range-end flags; between stops the string is stable.
-  const [zoomView, setZoomView] = useState(() => {
-    const cam = cameraRef.current;
-    return {
-      text: formatDeskZoom(cam.zoomTarget),
-      atMin: deskZoomAtMin(cam.zoomTarget),
-      atMax: deskZoomAtMax(cam.zoomTarget),
-    };
-  });
-  const syncZoomView = useCallback(() => {
-    const cam = cameraRef.current;
-    setZoomView((prev) => {
-      const text = formatDeskZoom(cam.zoomTarget);
-      const atMin = deskZoomAtMin(cam.zoomTarget);
-      const atMax = deskZoomAtMax(cam.zoomTarget);
-      if (prev.text === text && prev.atMin === atMin && prev.atMax === atMax) {
-        return prev;
-      }
-      return { text, atMin, atMax };
-    });
-  }, []);
-
-  // ── THE PAN/ZOOM GEOMETRY (DOM tier v0.30) ────────────────────────────
-  // The stage's box IS the viewport the pan bounds clamp against (the pane
-  // spans the screen; the old code read the canvas's size).
+  // The print sheet is fixed. Zoom is its real CSS scale, independent of
+  // paper layout and the shell's camera. Fit mode alone follows resizing.
+  const cameraRef = useRef<DeskCameraState>(createPaperCamera());
+  const fitModeRef = useRef(true);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef({ w: 0, h: 0 });
+  const [panTick, setPanTick] = useState(0);
+  const [zoomView, setZoomView] = useState({ text: formatDeskZoom(1), atMin: false, atMax: false });
+  const syncZoomView = useCallback(() => {
+    const zoom = cameraRef.current.zoomTarget;
+    const fit = fitPaperZoom(viewRef.current.w, viewRef.current.h);
+    setZoomView({ text: formatDeskZoom(zoom), atMin: paperZoomAtMin(zoom, fit), atMax: zoom >= PAPER_ZOOM_MAX - 0.001 });
+  }, []);
+  const clampCameraPan = useCallback((cam: DeskCameraState): DeskCameraState => {
+    const view = viewRef.current;
+    const bounds = panBoundsFor(PAPER_WIDTH, PAPER_HEIGHT, view.w, view.h, cam.zoomTarget);
+    return { ...cam, panTarget: clampViewCentre(cam.panTarget, bounds) };
+  }, []);
   useEffect(() => {
     const el = stageRef.current;
     if (!el) return;
     const measure = () => {
       viewRef.current = { w: el.clientWidth, h: el.clientHeight };
+      cameraRef.current = fitModeRef.current
+        ? createPaperCamera(fitPaperZoom(el.clientWidth, el.clientHeight))
+        : clampCameraPan(cameraRef.current);
+      syncZoomView();
+      setPanTick((tick) => tick + 1);
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
-
-  // The sheet's size in LAYOUT px — measured off the top paper (the fixed
-  // 210×297mm object; ancestor transforms never touch offsetWidth). The
-  // pan bounds derive from it.
-  const paperSizeRef = useRef({ w: 0, h: 0 });
-  const paperRORef = useRef<ResizeObserver | null>(null);
-  const attachPaperRef = useCallback((el: HTMLDivElement | null) => {
-    paperRORef.current?.disconnect();
-    paperRORef.current = null;
-    if (!el) return;
-    const measure = () => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      if (w > 0 && h > 0) paperSizeRef.current = { w, h };
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    paperRORef.current = ro;
-  }, []);
-
-  // Re-clamp the pan TARGET against the current bounds (the give-way x
-  // counts toward the centre, so a panel-open desk can't be panned off the
-  // paper either). Runs on every gesture that moves the zoom or the pan;
-  // with whole-page fits the bounds are zero and the clamp is a no-op.
-  const clampCameraPan = useCallback((cam: DeskCameraState): DeskCameraState => {
-    const paper = paperSizeRef.current;
-    const view = viewRef.current;
-    if (paper.w <= 0 || view.w <= 0) return cam;
-    const camX = camXOffset - panelShiftRef.current;
-    const bounds = panBoundsFor(
-      paper.w,
-      paper.h,
-      view.w,
-      view.h,
-      cam.zoomTarget,
-    );
-    const centre = clampViewCentre(
-      { x: camX + cam.panTarget.x, y: cam.panTarget.y },
-      bounds,
-    );
-    return { ...cam, panTarget: { x: centre.x - camX, y: centre.y } };
-  }, [camXOffset]);
-
-  const zoomStep = useCallback(
-    (dir: 1 | -1) => {
-      cameraRef.current = clampCameraPan(
-        stepDeskZoomBand(cameraRef.current, dir),
-      );
-      syncZoomView();
-    },
-    [clampCameraPan, syncZoomView],
-  );
-  const zoomReset = useCallback(() => {
-    cameraRef.current = clampCameraPan(resetDeskCamera(cameraRef.current));
+  }, [clampCameraPan, syncZoomView]);
+  const zoomStep = useCallback((dir: 1 | -1) => {
+    fitModeRef.current = false;
+    const cam = cameraRef.current;
+    const zoom = stepPaperZoom(cam.zoomTarget, dir, fitPaperZoom(viewRef.current.w, viewRef.current.h));
+    cameraRef.current = clampCameraPan({ ...cam, zoom, zoomTarget: zoom });
     syncZoomView();
   }, [clampCameraPan, syncZoomView]);
-
-  // Drag writes pan 1:1 with no CSS transition, so the styles must update
-  // without waiting for a zoom/page state change — a tick re-renders the
-  // wrappers (the flow stays memoized; the shells diff cheap).
-  const [panTick, setPanTick] = useState(0);
+  const zoomReset = useCallback(() => {
+    fitModeRef.current = true;
+    cameraRef.current = createPaperCamera(fitPaperZoom(viewRef.current.w, viewRef.current.h));
+    syncZoomView();
+  }, [syncZoomView]);
+  const panBy = useCallback((dx: number, dy: number) => {
+    cameraRef.current = clampCameraPan(dragPanBy(cameraRef.current, dx, dy));
+    setPanTick((tick) => tick + 1);
+  }, [clampCameraPan]);
 
   // The entrance/exit beat (the pull-out, v0.22 §3): in, the paper rises
   // from below the viewport over the pane's own 300 ms; out, the same beat
@@ -590,22 +401,20 @@ export function DeskField({
     setTurn(null);
     setTotal(1);
     settledRef.current = true;
-    cameraRef.current = createDeskCamera();
+    fitModeRef.current = true;
+    cameraRef.current = createPaperCamera(fitPaperZoom(viewRef.current.w, viewRef.current.h));
     setEntered(false);
   }
+  useEffect(() => syncZoomView(), [docRef, syncZoomView]);
 
   // THE COUNT IS READ, NOT PLANNED (v0.29). The top sheet's flow container
   // stays one page wide; with `column-fill: auto` the browser fragments the
   // whole flow into page-height columns on demand, letting the excess
   // overflow the box horizontally — so scrollWidth / pageW is the exact
-  // filled-column count, in both directions (it shrinks as readily as it
-  // grows: the container's own width no longer floors the reading). A
-  // vertical spill NEVER grows the count: a block taller than one page
-  // overflows its column permanently, and reading that as "needs another
-  // column" counted air (a taller column is a pagination imperfection
-  // prints tolerate, not a missing page). The attach callback above covers
-  // the late mount; THIS effect covers the later changes — content swap,
-  // pane resize. INERT WHILE A TURN IS IN FLIGHT: every input is frozen
+  // filled-column count. Print CSS allows long blocks to fragment instead
+  // of treating clipped vertical overflow as another empty page. The
+  // attach callback covers late mounts; this effect covers content and
+  // font changes. INERT WHILE A TURN IS IN FLIGHT: every input is frozen
   // then, and re-counting mid-gesture collapses the deck for a frame — the
   // reader-visible flicker.
   useLayoutEffect(() => {
@@ -723,15 +532,8 @@ export function DeskField({
   const zoomStepRef = useRef(zoomStep);
   zoomStepRef.current = zoomStep;
 
-  // The wheel's TWO jobs (v0.28 camera; banded v0.30). Plain wheel keeps
-  // turning pages — the established gesture: the accumulator turns a page
-  // at the threshold and the quiet window eats trackpad momentum.
-  // Ctrl/cmd+wheel — which is ALSO what a trackpad pinch sends — steps the
-  // zoom BANDS instead (accumulated to a stop threshold, so the wheel lands
-  // only on stops, never between). Only the zoom leg preventDefaults
-  // (keeping the browser's own pinch-zoom out of the fight), so the
-  // listener is non-passive but the page-turn leg stays a pure observer,
-  // exactly as before.
+  // At reading distance the wheel moves across the fixed paper. When the
+  // whole sheet fits, its established wheel gesture turns the stack.
   useEffect(() => {
     if (!ready) return;
     let acc = 0;
@@ -749,14 +551,21 @@ export function DeskField({
         zoomAcc += e.deltaY;
         if (zoomAcc >= WHEEL_ZOOM_THRESHOLD_PX) {
           zoomAcc = 0;
-          zoomStepRef.current(1);
+          zoomStepRef.current(-1);
         } else if (zoomAcc <= -WHEEL_ZOOM_THRESHOLD_PX) {
           zoomAcc = 0;
-          zoomStepRef.current(-1);
+          zoomStepRef.current(1);
         }
         return;
       }
       zoomAcc = 0;
+      const view = viewRef.current;
+      const bounds = panBoundsFor(PAPER_WIDTH, PAPER_HEIGHT, view.w, view.h, cameraRef.current.zoomTarget);
+      if (bounds.x > 0 || bounds.y > 0) {
+        e.preventDefault();
+        panBy(-e.deltaX, -e.deltaY);
+        return;
+      }
       if (total <= 1) return;
       const now = performance.now();
       if (now - lastEvent > WHEEL_QUIET_MS) acc = 0;
@@ -773,26 +582,30 @@ export function DeskField({
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
-  }, [ready, total]);
+  }, [ready, total, panBy]);
 
-  /** The camera keys: `+`/`=` and `-` step the zoom one BAND, `0` resets
-   *  to the whole page. Returns false for every other key. Callers guard
+  /** `+`/`=` and `-` step zoom, `0` fits the whole page. Up/down pan;
+   *  shift-left/right reach the sides without changing pages. Callers guard
    *  modifiers (ctrl/cmd+= is the browser's own zoom) and editable targets
    *  (a `+` typed into the floating chat is text). */
   const applyZoomKey = useCallback(
-    (key: string): boolean => {
+    (key: string, shiftKey = false): boolean => {
       if (key === "+" || key === "=") {
         zoomStep(1);
       } else if (key === "-") {
         zoomStep(-1);
       } else if (key === "0") {
         zoomReset();
+      } else if (key === "ArrowDown" || key === "ArrowUp") {
+        panBy(0, key === "ArrowDown" ? -60 : 60);
+      } else if (shiftKey && (key === "ArrowLeft" || key === "ArrowRight")) {
+        panBy(key === "ArrowRight" ? -60 : 60, 0);
       } else {
         return false;
       }
       return true;
     },
-    [zoomStep, zoomReset],
+    [zoomStep, zoomReset, panBy],
   );
 
   // Escape puts the document back; the arrows turn its pages. The desk is
@@ -808,32 +621,33 @@ export function DeskField({
   }, []);
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent) => {
+      if (editableTarget(e.target)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         closeDesk();
+      } else if (!(e.ctrlKey || e.metaKey || e.altKey) && applyZoomKey(e.key, e.shiftKey)) {
+        e.preventDefault();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         turnPage("next");
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         turnPage("prev");
-      } else if (!(e.ctrlKey || e.metaKey || e.altKey) && applyZoomKey(e.key)) {
-        e.preventDefault();
       }
     },
     [closeDesk, turnPage, applyZoomKey],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      if (e.key === "Escape") closeDesk();
-      else if (e.key === "ArrowRight") turnPageRef.current("next");
-      else if (e.key === "ArrowLeft") turnPageRef.current("prev");
-      else if (!(e.ctrlKey || e.metaKey || e.altKey)) {
-        const t = e.target as HTMLElement | null;
-        if (t?.closest?.('input, textarea, select, [contenteditable="true"]'))
-          return;
-        if (applyZoomKey(e.key)) e.preventDefault();
+      if (e.defaultPrevented || editableTarget(e.target)) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeDesk();
+      } else if (!(e.ctrlKey || e.metaKey || e.altKey) && applyZoomKey(e.key, e.shiftKey)) {
+        e.preventDefault();
+      } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        turnPageRef.current(e.key === "ArrowRight" ? "next" : "prev");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -874,21 +688,30 @@ export function DeskField({
     y: number;
     id: number;
     panned: boolean;
+    canPan: boolean;
+    canSwipe: boolean;
   } | null>(null);
   const onStackPointerDown = useCallback((e: ReactPointerEvent) => {
-    dragRef.current = { x: e.clientX, y: e.clientY, id: e.pointerId, panned: false };
+    if ((e.target as Element).closest("button, a, input, textarea, [contenteditable=true]")) return;
+    // Mouse text selection remains native. Alt/middle drag pans; touch and
+    // pen drag pan when zoomed, or turn the sheet when it fits.
+    if (e.pointerType === "mouse" && (e.button === 1 || e.altKey)) e.preventDefault();
+    dragRef.current = {
+      x: e.clientX, y: e.clientY, id: e.pointerId, panned: false,
+      canPan: e.pointerType !== "mouse" || e.button === 1 || e.altKey,
+      canSwipe: e.pointerType !== "mouse",
+    };
   }, []);
   const onStackPointerMove = useCallback(
     (e: ReactPointerEvent) => {
       const drag = dragRef.current;
-      if (!drag || drag.id !== e.pointerId) return;
+      if (!drag || drag.id !== e.pointerId || !drag.canPan) return;
       const cam = cameraRef.current;
-      const paper = paperSizeRef.current;
       const view = viewRef.current;
-      if (paper.w <= 0 || view.w <= 0) return;
+      if (view.w <= 0) return;
       const bounds = panBoundsFor(
-        paper.w,
-        paper.h,
+        PAPER_WIDTH,
+        PAPER_HEIGHT,
         view.w,
         view.h,
         cam.zoomTarget,
@@ -922,7 +745,7 @@ export function DeskField({
       }
       const dx = e.clientX - start.x;
       const dy = e.clientY - start.y;
-      if (
+      if (start.canSwipe &&
         Math.abs(dx) > SWIPE_THRESHOLD_PX &&
         Math.abs(dx) > 2 * Math.abs(dy)
       ) {
@@ -961,9 +784,7 @@ export function DeskField({
   // position (camX + pan.x, pan.y, camZ) looking at the sheet's plane).
   const camNow = cameraRef.current;
   const zoomNow = camNow.zoomTarget;
-  const givewayStyle = {
-    "--desk-giveway-x": `${-effectiveCamX * zoomNow}px`,
-  } as CSSProperties;
+  const givewayStyle = { "--desk-giveway-x": "0px" } as CSSProperties;
   const panStyle = {
     "--desk-pan-x": `${-camNow.panTarget.x * zoomNow}px`,
     "--desk-pan-y": `${camNow.panTarget.y * zoomNow}px`,
@@ -992,9 +813,8 @@ export function DeskField({
       >
         {/* THE DOCUMENT TIER (v0.30) — the open document as plain DOM above
             the frozen world. .desk-stage owns the entrance/exit beat,
-            .desk-giveway the panel give-way glide, .desk-pan the drag (no
-            transition — it tracks the pointer), .desk-zoom the banded scale
-            (the CSS transition IS the damping). */}
+            .desk-pan the drag (no transition, so it tracks the pointer),
+            and .desk-zoom the viewing scale. Neither changes print layout. */}
         <div
           ref={stageRef}
           data-desk-stage
@@ -1077,11 +897,12 @@ export function DeskField({
                             : ""
                         }`}
                         style={shellStyle}
+                        aria-hidden={!isTop || undefined}
+                        inert={!isTop}
                       >
                         <div
                           className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact text-card-foreground"
                           data-locale={locale}
-                          ref={isTop ? attachPaperRef : undefined}
                         >
                           {shellPage === null ? (
                             // Blank paper: the stack's peek, nothing printed.
@@ -1152,7 +973,7 @@ export function DeskField({
                                             : ""
                                         }`}
                                         key={reducedMotion && isTop ? page : shellId}
-                                        ref={isTop ? pagesRef : undefined}
+                                        ref={isTop ? attachPagesRef : undefined}
                                         style={pagesStyle}
                                       >
                                         <div className="desk-flow">
@@ -1205,107 +1026,35 @@ export function DeskField({
           </div>
         </div>
       </div>
-      {/* THE PAGE CONTROL (v0.29: two turn buttons, NO readout) — the stack
-          is a cycle: turn back / turn forward, past either end the other
-          end's sheet arrives. Nothing prints a position or a total — the
-          folio on the sheet itself is the only page indicator, true by
-          construction. The buttons disable only while a turn is in flight
-          (the cycle has no edges to guard). Floating with the app's other
-          chrome: the bottom-left corner itself is the world gate's seat
-          (z-20 at the pane root), so the control stacks one bar-height
-          above it (bottom-14) — both stay clickable. It also lives OUTSIDE
-          the desk's pane branch, which the pane caps at z-10: under the
-          gate even a z-50 control would lose every hit test, so it renders
-          through a body-level portal (page state stays here, where it is
-          owned). */}
-      {ready && total > 1 &&
-        createPortal(
-          <div
-            data-page-controls
-            className="pointer-events-none fixed bottom-27 left-2 z-30 md:bottom-14 md:left-4"
-          >
-            <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
-              <button
-                type="button"
-                data-page-prev
-                aria-label={texts.prevPage}
-                disabled={turn !== null}
-                onClick={() => turnPage("prev")}
-                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-              >
-                <ChevronLeft className="size-4 shrink-0" />
-              </button>
-              <button
-                type="button"
-                data-page-next
-                aria-label={texts.nextPage}
-                disabled={turn !== null}
-                onClick={() => turnPage("next")}
-                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-              >
-                <ChevronRight className="size-4 shrink-0" />
-              </button>
-            </div>
-          </div>,
-          document.body,
-        )}
-      {/* THE ZOOM ISLAND (v0.28 zoom chrome; banded v0.30) — the reader's
-          camera gestures are banded now (see the module header): `−`/`+`
-          step one stop, the readout prints the current stop and activating
-          it fits the whole page (the `0` key's visible twin). Same
-          floating-island idiom as the page bar, stacked one bar-height +
-          the grid's 4px gap ABOVE it in the bottom-left column (mobile
-          bottom-37 = 108+36+4, desktop bottom-24 = 56+36+4 — the
-          grid-derived seat, not a magic number). No aria-live: the stop
-          text only changes on a gesture, and a polite region would be
-          noise; the static aria-label carries the affordance. Body portal
-          for the same reason as the page bar: the pane caps its branch at
-          z-10, under the world gate.
-          Z-ORDER (fixed 2026-10-15): the desk's own islands sit at z-30 —
-          above the gate's z-20 and the paper's z-10, and BELOW the expanded
-          conversation panel's z-40, which used to be covered by them; the
-          app's chrome stays at z-50, above everything. Raise neither island
-          past 30 without re-reading the panel's own contract. */}
-      {ready &&
-        createPortal(
-          <div
-            data-zoom-controls
-            className="pointer-events-none fixed bottom-37 left-2 z-30 md:bottom-24 md:left-4"
-          >
-            <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
-              <button
-                type="button"
-                data-zoom-out
-                aria-label={texts.zoomOut}
-                disabled={zoomView.atMin}
-                onClick={() => zoomStep(-1)}
-                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-              >
-                <Minus className="size-4 shrink-0" />
-              </button>
-              <button
-                type="button"
-                data-zoom-readout
-                aria-label={texts.zoomReset}
-                onClick={zoomReset}
-                className={`${ISLAND_CONTROL} min-w-10 px-1 font-mono text-xs tabular-nums`}
-              >
-                {zoomView.text}
-              </button>
-              <button
-                type="button"
-                data-zoom-in
-                aria-label={texts.zoomIn}
-                disabled={zoomView.atMax}
-                onClick={() => zoomStep(1)}
-                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-              >
-                <Plus className="size-4 shrink-0" />
-              </button>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {createPortal(
+        <div className="desk-toolbar" data-desk-toolbar>
+          <div className="desk-toolbar-group" data-page-controls>
+            <button type="button" data-page-prev aria-label={texts.prevPage} title={texts.prevPage}
+              disabled={!ready || total <= 1 || turn !== null} onClick={() => turnPage("prev")} className="desk-tool-button">
+              <ChevronLeft className="size-4" />
+            </button>
+            <span className="desk-page-position" aria-label={texts.pagePosition?.(page, total)}>{page} / {total}</span>
+            <button type="button" data-page-next aria-label={texts.nextPage} title={texts.nextPage}
+              disabled={!ready || total <= 1 || turn !== null} onClick={() => turnPage("next")} className="desk-tool-button">
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
+          <div className="desk-toolbar-group" data-zoom-controls>
+            <button type="button" data-zoom-out aria-label={texts.zoomOut} title={texts.zoomOut}
+              disabled={!ready || zoomView.atMin} onClick={() => zoomStep(-1)} className="desk-tool-button">
+              <Minus className="size-4" />
+            </button>
+            <button type="button" data-zoom-readout aria-label={texts.zoomReset} title={texts.zoomReset}
+              onClick={zoomReset} className="desk-tool-button desk-tool-readout">{zoomView.text}</button>
+            <button type="button" data-zoom-in aria-label={texts.zoomIn} title={texts.zoomIn}
+              disabled={!ready || zoomView.atMax} onClick={() => zoomStep(1)} className="desk-tool-button">
+              <Plus className="size-4" />
+            </button>
+          </div>
+          <button type="button" data-desk-close onClick={closeDesk} className="desk-tool-button desk-tool-close"
+            aria-label={texts.close ?? texts.regionLabel} title={texts.close ?? texts.regionLabel}><X className="size-4" /></button>
+        </div>, document.body,
+      )}
     </>
   );
 }

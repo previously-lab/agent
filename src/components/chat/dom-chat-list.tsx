@@ -552,7 +552,7 @@ export function DomChatList({
     switch (item.kind) {
       case "seam":
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+          <div className="conversation-stream-row">
             <SliceSeam
               seam={item.seam}
               dateIso={item.dateIso}
@@ -569,7 +569,7 @@ export function DomChatList({
         return briefing ? <EmptyBriefing variant="card" {...briefing} /> : null;
       case "history-turn":
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+          <div className="conversation-stream-row">
             <HistoryTurn
               role={item.turn.role}
               content={item.turn.content}
@@ -581,7 +581,7 @@ export function DomChatList({
         );
       case "live":
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+          <div className="conversation-stream-row">
             <ChatMessage
               message={item.message}
               isStreaming={item.isStreaming}
@@ -594,7 +594,7 @@ export function DomChatList({
         // An inner episode instance's answer (v0.30 §4.3) — seated by the
         // merge view after the user message it replied to.
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+          <div className="conversation-stream-row">
             <NestedBubble frame={item.frame} excerpt={item.excerpt} />
           </div>
         );
@@ -602,7 +602,7 @@ export function DomChatList({
         // A parallel burst lane (v0.33 §6) — bypass run or the collapsed
         // main lane; the seat carries everything the view renders.
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+          <div className="conversation-stream-row">
             <ParallelLaneView lane={item.lane} />
           </div>
         );
@@ -610,7 +610,7 @@ export function DomChatList({
   };
 
   return (
-    <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">
+    <div className="conversation-stream-shell relative mx-auto h-full">
       {/* The scroller's top/bottom padding — the MEASURED chrome and
           composer heights (px) plus the static tail pad; see
           use-chrome-inset and ComposerHost. */}

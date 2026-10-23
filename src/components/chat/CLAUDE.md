@@ -4,7 +4,9 @@
 
 The chat rendering system uses project-owned `UIMessage` parts (`src/lib/chat/protocol.ts`) for text, reasoning, tools and custom data. `useDurableChat` posts a turn once; `readDurableChat` parses SSE and reconnects only to the same durable Vercel Workflow run. A replay rebuilds the assistant message from index zero, preserving original DeepSeek checkpoints without duplicated text. No AI SDK dependency is required.
 
-The world has TWO RUNGS (v0.26): 原稿 / Manuscript (the field world — the document reader) and 现场 / Scene (the game world — the hotel). The board bar (`shell/board-bar.tsx`, top centre) switches between them through the app shell's transition machine; the four-rung zoom ladder (conversation · slice · day · week) retired, and with it the pane slot, the AxisBand DOM, the jump controls and the lens switcher (their components stay in `src/components/timeline-3d/` untouched, preserved for the archive field — the shell simply stops importing them).
+**Shared manuscript presentation.** `conversation-turn.tsx` and `writing.css` give live replies and saved turns the same reading column: serif prose, sans speaker/time metadata, and quiet ruled tool details. Both voices align in the column; a user turn has a light margin rule rather than a bubble. This conversation is responsive, naturally flowing text. Only the document desk uses fixed A4 geometry. Use `--background` and `--foreground` here, because the desk's `--paper` stays light even in dark mode. The persistent composer uses `--tool-glass` and `--shadow-float`, with round controls and visible attachment removal actions.
+
+The app opens in the scene. Picking up a document pauses the mounted world and opens the paper reader; putting it down or choosing Continue restores the same position. The on-demand manuscript index also opens the reader. The board bar (`shell/board-bar.tsx`, top centre) appears only while reading, with Continue and an explicit action to visit an open record's room. `?view=field` remains a direct reading entrance. These moves use the app shell's existing transition machine; there is no permanent navigation ladder.
 
 The conversation is NOT a rung — it is the CONVERSATION LAYER (`conversation-panel.tsx`, v0.11 §14.1, reworked v0.13 §4): a persistent two-tier overlay (floating pill / fullscreen) over either world — `position: fixed`, so opening it never resizes the canvas (覆盖，不挤压), and fullscreen freezes the world's `frameloop` without unmounting it. Since v0.13 §3.1 the layer mounts at the LAYOUT (`conversation-overlay.tsx`, gated per route by `conversation-overlay-mount.tsx` — the home route hides it), a sibling of the route content that survives navigation and world rebuilds; the state it shares with the route (tier, slice cursor, view getter, freeze signal, feed, composer clearance) lives in `shell/shell-provider.tsx`. The pill is the default tier everywhere; sending a message or jumping to a slice RISES the panel to fullscreen (on `/app` — utility routes force-fold it), folding returns the pill. The composer's COMPACT form (`chat-input.tsx`'s `collapsed`) is fully latent — nothing renders it.
 
@@ -25,10 +27,10 @@ ConversationOverlay (conversation-overlay.tsx — layout-level, gated per route
         │   ├── DomChatList (dom-chat-list.tsx — THE renderer: windowed DOM
         │   │   scroller; history page + briefing card + resume block + live)
         │   │   ├── SliceSeam         ← the boundary as hairline checkpoint / date-pill
-        │   │   ├── HistoryTurn       ← plain-body bubbles
+        │   │   ├── HistoryTurn       ← saved turns in ConversationTurn
         │   │   ├── ResumeBanner      ← "继续 <date> 的对话"
         │   │   ├── EmptyBriefing     ← the arrival card, a stream item (variant="card")
-        │   │   ├── ChatMessage       ← the live turns
+        │   │   ├── ChatMessage       ← live stream parts in ConversationTurn
         │   │   └── ErrorBanner
         │   ├── StreamTimeIndicator (mobile floating "where am I in time" pill)
         │   ├── [time-travel cover] RelativeTimeReadout overlay (never unmounts the list)

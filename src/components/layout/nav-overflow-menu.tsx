@@ -70,8 +70,6 @@ export function NavOverflowMenu() {
       <DropdownMenuTrigger
         data-testid="nav-overflow-trigger"
         aria-label={t("overflow")}
-        // The square instrument button (v0.29 §3): matte tool stock, hairline,
-        // one contact shadow; hover turns the hairline to ink.
         className={`${ISLAND} flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
@@ -80,10 +78,7 @@ export function NavOverflowMenu() {
         align="end"
         side="bottom"
         sideOffset={8}
-        // The panel is a tool tray: matte, hairline-ruled, with the
-        // instrument radius. The class overrides the primitives' rounded/glass
-        // defaults through the same tailwind-merge the primitives use.
-        className="w-44 rounded-lg! bg-tool text-foreground shadow-paper-contact ring-tool-line"
+        className="w-48 rounded-2xl! bg-tool text-foreground shadow-[var(--shadow-panel)] ring-tool-line"
       >
         <DropdownMenuGroup>
           {/* Disabled, not hidden: the entry is where the reader left it, and

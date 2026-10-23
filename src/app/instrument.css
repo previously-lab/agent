@@ -1,25 +1,6 @@
-/* The instrument edge of the reading desk (v0.29 §3) — the chrome's one
-   material, defined here (globals.css is another lane's this round).
-   Chrome is matte SOLID: no grain, no fibre, no --paper-grain-map on any
-   control or panel — the paper keeps the texture; a control wearing the
-   sheet's texture reads as another sheet laid on the paper. Round belongs
-   to the world; every control here is square. Controls SIT on the desk:
-   one contact shadow, no lift, no glow.
-
-   TOKENS (both themes):
-     --tool            the matte instrument surface: one step off the board,
-                       far from ink. Opaque.
-     --tool-line       the hairline on a tool — the neutral cousin of
-                       --paper-line, same mix formula (surface 82% + ink).
-     --ink-accent      THE ACCENT (#0066ff family) — ALLOWED ON SCREEN CHROME
-                       ONLY (tool surfaces), never on paper. Its meaning:
-                       the agent's voice and the LIVE state. It is never a
-                       decorative fill — ink block / hairline do the work
-                       everywhere else.
-     --ink-accent-paper  the paper cousin of the accent — same hue family,
-                       deeper and less saturated, ALLOWED ON PAPER ONLY
-                       (pod panel's live dot, the streaming cursor). Tuned
-                       per theme for legibility on the stock. */
+/* Controls sit above the scene: rounded edges, restrained glass and soft
+   shadows. Paper texture stays on documents. Theme values are supplied by
+   visual-language.css after this structural stylesheet. */
 
 :root {
   --tool: oklch(0.93 0.006 90);
@@ -42,28 +23,26 @@
    (both menus and the search dialog) rendered with no background at all. If
    you add a token, register it there. */
 
-/* ── The island material ────────────────────────────────────────────────
-   ISLAND — a standalone floating control: matte, square, hairline-ruled,
-   one contact shadow. Hover turns the hairline to ink; focus-visible is
-   the same ink line (no glow ring). */
+/* Standalone controls use a pill or a circle; focus stays clearly visible. */
 
 .chrome-island {
-  background: var(--tool);
+  background: var(--tool-glass, var(--tool));
   border: 1px solid var(--tool-line);
-  box-shadow: var(--paper-contact);
-  border-radius: var(--radius-md, 6px);
+  box-shadow: var(--shadow-float, var(--paper-contact));
+  border-radius: 999px;
+  backdrop-filter: blur(16px) saturate(1.08);
   transition:
     border-color 150ms ease,
     color 150ms ease;
 }
 
 .chrome-island:hover {
-  border-color: var(--foreground);
+  border-color: var(--ring);
 }
 
 .chrome-island:focus-visible {
-  outline: none;
-  border-color: var(--foreground);
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
 }
 
 /* ISLAND_BAR — a tray that holds controls. The bar itself is inert
@@ -71,10 +50,11 @@
    on it signal their own hover. */
 
 .chrome-bar {
-  background: var(--tool);
+  background: var(--tool-glass, var(--tool));
   border: 1px solid var(--tool-line);
-  box-shadow: var(--paper-contact);
-  border-radius: var(--radius-md, 6px);
+  box-shadow: var(--shadow-float, var(--paper-contact));
+  border-radius: 999px;
+  backdrop-filter: blur(16px) saturate(1.08);
 }
 
 /* ISLAND_CONTROL — a control ON a bar (or bare): quiet at rest, ink on
@@ -85,12 +65,13 @@
   align-items: center;
   justify-content: center;
   color: var(--muted-foreground);
-  border-radius: var(--radius-sm, 4px);
-  transition: color 150ms ease;
+  border-radius: 999px;
+  transition: color 150ms ease, background-color 150ms ease;
 }
 
 .chrome-control:hover {
   color: var(--foreground);
+  background: var(--accent);
 }
 
 .chrome-control:focus-visible {
@@ -140,13 +121,13 @@
 
 /* ── Tool panels and their rows ───────────────────────────────────────── */
 
-/* A panel — matte square tray. Inert material: no hover state. */
+/* Opaque menus keep text readable above the scene. */
 
 .chrome-panel {
   background: var(--tool);
   border: 1px solid var(--tool-line);
-  box-shadow: var(--paper-contact);
-  border-radius: var(--radius-lg, 10px);
+  box-shadow: var(--shadow-panel, var(--paper-contact));
+  border-radius: 18px;
 }
 
 .chrome-panel-head {
@@ -154,18 +135,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 7px 8px 7px 14px;
+  padding: 13px 14px 13px 18px;
   border-bottom: 1px solid var(--tool-line);
 }
 
-/* A row inside a tool panel: divided by hairlines like a type case.
-   Hover turns the ROW'S hairline to ink — never a grey wash. Selected is
-   an ink block reversed out (the pressed type slug). */
+/* Menu rows use a soft fill for hover and selection. */
 
 .chrome-row {
   width: 100%;
   border: 0;
-  border-bottom: 1px solid var(--tool-line);
+  border-radius: 10px;
   color: var(--foreground);
   background: none;
   font: inherit;
@@ -178,13 +157,13 @@
 }
 
 .chrome-row:hover {
-  border-bottom-color: var(--foreground);
+  background: var(--accent);
 }
 
 .chrome-row.is-active,
 .chrome-row.is-active * {
-  background: var(--foreground);
-  color: var(--paper);
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .chrome-row.is-active:hover {
@@ -236,9 +215,7 @@
   color: var(--foreground);
 }
 
-/* The menu's radio mark is a small ink square (the lab idiom) — the
-   primitives' own Check indicator is hidden, the square rendered by the
-   menu file so its ON state is plain data, not a slot override. */
+/* A compact round marker identifies the selected option. */
 
 .chrome-menu-item [data-slot="dropdown-menu-radio-item-indicator"],
 .chrome-menu-item [data-slot="command-item"] > svg:last-child {
@@ -250,6 +227,7 @@
   height: 7px;
   flex: none;
   border: 1px solid var(--tool-line);
+  border-radius: 50%;
 }
 
 .chrome-radio.is-on {
@@ -257,98 +235,22 @@
   border-color: var(--foreground);
 }
 
-/* ── The rung dateline (top row centre) ─────────────────────────────────
-   Two mono words, a · between them, the current one at 700 with a 2px ink
-   underline. During a world move the underline LEAVES the old word and
-   grows toward the new one — the shell's transition progress read as
-   print. The strip spans both words; the bar inside it grows from the old
-   word's side (--p: 0 → 1), so the arithmetic is locale-independent (the
-   words are not fixed-width — "Scene" and "Manuscript" measure
-   differently). At rest the current word carries its own underline. */
-
-.chrome-rungs {
-  position: relative;
-  display: flex;
-  align-items: baseline;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  color: var(--foreground);
-}
-
-.chrome-rung {
-  display: inline-block;
-  padding: 0 0.6em 7px;
-  text-align: center;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-  background: none;
-  border: 0;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: none;
-  cursor: pointer;
-  transition: color 150ms ease;
-}
-
-.chrome-rung:hover {
-  color: var(--foreground);
-}
-
-.chrome-rung.is-current {
-  font-weight: 700;
-  color: var(--foreground);
-  box-shadow: inset 0 -2px 0 var(--foreground);
-}
-
-.chrome-rung-sep {
-  display: inline-block;
-  padding-bottom: 7px;
-  text-align: center;
-  color: var(--muted-foreground);
-}
-
-/* The growing rule — rendered only while a move is live. */
-
-.chrome-rung-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  pointer-events: none;
-}
-
-.chrome-rung-line > i {
-  display: block;
-  height: 100%;
-  background: var(--foreground);
-  width: calc(var(--p, 0) * 100%);
-}
-
-.chrome-rung-line--from-right > i {
-  margin-left: auto;
-}
-
-/* ── The composer — the writing ledge ───────────────────────────────────
-   A square bar of SOLID paper (paper's extension, no grain on chrome),
-   hairline-ruled, compartments divided by hairline verticals like a type
-   case. One contact shadow — it sits on the desk. */
+/* The shared writing ledge. Live conversation adds its responsive layout. */
 
 .composer-bar {
-  background: var(--paper);
-  border: 1px solid var(--paper-line);
-  box-shadow: var(--paper-contact);
-  border-radius: var(--radius-lg, 10px);
+  background: var(--card);
+  border: 1px solid var(--tool-line);
+  box-shadow: var(--shadow-float, var(--paper-contact));
+  border-radius: 24px;
   transition: border-color 150ms ease;
 }
 
 .composer-bar:hover {
-  border-color: var(--foreground);
+  border-color: var(--ring);
 }
 
 .composer-bar:focus-within {
-  border-color: var(--foreground);
+  border-color: var(--ring);
 }
 
 /* A drag over the ledge is the one live signal — the accent, never red. */

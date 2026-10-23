@@ -62,7 +62,7 @@ export const TURN_LERP_RATE = 12;
 /** Avatar Y snapping toward the terrain (or back to corridor floor). */
 export const GROUND_LERP_RATE = 10;
 
-export const PLAYER_BODY = "#e8935c"; // warm accent
+export const PLAYER_BODY = "#c9875b"; // a small, warm focal point
 export const PLAYER_HEAD = "#f4d3ae";
 export const SUN_BASE_COLOR = "#fff4e0";
 /** Key-light base level. The sun is the ONE strong, shadow-casting light
@@ -96,17 +96,14 @@ export const CORRIDOR_AMBIENT = 0.06;
  *  soundstage's overall key, justified by the clerestory band). It stays
  *  shadow-casting at the reduced level — the fill still grounds furniture
  *  with a soft shadow everywhere, while the window's spot is the room's
- *  true key with the strong motivated shadows. 0.32 keeps the measured
- *  shadow separation comfortably open (the fill's shadow-to-lit step is
- *  proportional, and the key adds on top of the lit side only) while the
- *  lamp and window visibly own the room. */
-export const ROOM_INTERIOR_SUN_FILL = 0.32;
-/** Space palettes still carry ambient values (0.28–0.6) authored for the
- *  old ambient-dominant model; scale them into the same key-dominant
- *  hierarchy here (the palette data itself is owned by another lane). 0.15
- *  lands the in-room ambient floor at 0.04–0.09 — the level the shadow-
- *  visibility measurements (see SUN_BASE_INTENSITY) were taken at. */
-export const SPACE_AMBIENT_SCALE = 0.15;
+ *  true key with the strong motivated shadows. The lifted fill keeps
+ *  furniture and scattered documents readable from the RTS view while
+ *  preserving shadows beneath them. */
+export const ROOM_INTERIOR_SUN_FILL = 0.65;
+/** Broad bounced light preserves the room's material colors from the RTS
+ *  view. Directional and fixture lights still provide the shaped shadows;
+ *  walls facing away from them must not fall into near-black. */
+export const SPACE_AMBIENT_SCALE = 0.45;
 /** Background/fog/sun lerp rate when a space opens or closes. */
 export const ATMOSPHERE_LERP_RATE = 2.5;
 /** Wade depth below the water plane inside a pool basin. */
@@ -119,9 +116,9 @@ export const WADE_DEPTH = 0.25;
 /** Key-light offset from the player. The light + its shadow camera follow
  *  the player (the target tracks the player on the ground plane), so
  *  shadows exist down the whole streaming corridor and inside every space;
- *  the light DIRECTION stays the original (8, 14, 4) → origin, so surface
- *  response is unchanged. */
-export const SUN_OFFSET = { x: 8, y: 14, z: 4 };
+ *  the direction stays fixed southeast → northwest in the repo's +Z-north
+ *  coordinates, lighting the room from the same side as the RTS view. */
+export const SUN_OFFSET = { x: 8, y: 14, z: -6 };
 /** PCF shadow-map resolution for the key light (three 0.185 runs
  *  PCFShadowMap — PCFSoft was deprecated and is silently rewritten to
  *  PCF, so the canvas asks for "percentage" to match what ships). */
@@ -145,15 +142,10 @@ export const SUN_SHADOW_NORMAL_BIAS = 0.02;
 /* IBL — one scene-wide Environment of Lightformer cards (no HDRI)      */
 /* ------------------------------------------------------------------ */
 
-/** scene.environmentIntensity — the soft-fill half of the hierarchy and
- *  the reflection budget every PBR material in the game shares. 0.12
- *  (measured, v0.11 shadow fix): the five Lightformer cards carry their
- *  own intensities (1–2.5), so even 0.45 of them flooded every floor to
- *  ~112/255 display luminance with the sun off — the key light only added
- *  ~13 more after AgX compression and cast shadows (~5% dips) were
- *  invisible. At 0.12 the no-sun floor sits low enough that the sun owns
- *  the room and shadows ground the furniture (doc §2 req 1). */
-export const ENV_INTENSITY = 0.12;
+/** Soft environment fill and the reflection budget every PBR material
+ *  shares. Lifted from 0.12 to 0.20 for the RTS view: walls retain their
+ *  hue while the directional and local lights still define the shadows. */
+export const ENV_INTENSITY = 0.20;
 /** Env cube-map resolution; the map is a few broad emissive cards, so
  *  256 px is plenty and cheap. */
 export const ENV_RESOLUTION = 256;
@@ -256,20 +248,20 @@ export const POST_MSAA_SAMPLES = 4;
 /** Bloom — the highest-impact effect for this look. Threshold 1.0 keeps
  *  it on emissive fixtures and the sun's hot pools, off lit walls, so the
  *  frame does not turn milky. */
-export const BLOOM_INTENSITY = 0.4;
+export const BLOOM_INTENSITY = 0.22;
 export const BLOOM_LUMINANCE_THRESHOLD = 1.0;
 export const BLOOM_LUMINANCE_SMOOTHING = 0.25;
 /** N8AO (half-res, performance quality) — screen-space contact shading;
  *  the first half of the depth cue that replaced scene fog. Unlike
  *  distance fog it is camera-distance independent, so it cannot wash the
  *  whole room into a veil from the 45° camera 23 m up. */
-export const AO_INTENSITY = 1.5;
+export const AO_INTENSITY = 0.9;
 export const AO_RADIUS = 1.0;
 export const AO_DISTANCE_FALLOFF = 1.0;
 /** Vignette — mild frame-edge falloff; the second half of the depth cue.
  *  Screen-space like AO, so it shares the same safety argument. */
 export const VIGNETTE_OFFSET = 0.35;
-export const VIGNETTE_DARKNESS = 0.4;
+export const VIGNETTE_DARKNESS = 0.18;
 
 /** Door grab distance when resolving which space a wall crossing enters. */
 export const DOOR_GRAB_DIST = 2.5;

@@ -115,6 +115,7 @@ import { RoomPapers, type RoomPaperItem } from "./room-papers";
 import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
+import { scenarioPalette, scenarioSkin } from "@/lib/game/scenario-art";
 import {
   GROUND_Y,
   POOL_DEPTH,
@@ -188,9 +189,7 @@ import {
 import {
   SUN_SHADOW_BIAS,
   SUN_SHADOW_NORMAL_BIAS,
-  SKIN_APRON_DARKEN,
   skinFloorHex,
-  skinSkirtApronHex,
   skinSkirtOverhangScale,
   skinWallAlpha,
   skinWallHex,
@@ -7812,7 +7811,7 @@ function RoomEnvelope({
 }): JSX.Element {
   const groupRef = useRef<THREE.Group>(null);
   const scratch = useRef(new THREE.Vector3());
-  const hiddenRef = useRef(false);
+  const hiddenRef = useRef(true);
   useFrame(({ camera }) => {
     const g = groupRef.current;
     if (!g) return;
@@ -7838,7 +7837,7 @@ function RoomEnvelope({
   useEffect(() => () => ceilingMaterial.dispose(), [ceilingMaterial]);
   const ceilingY = wallHeight + 0.06;
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} visible={false}>
       {wallRuns.map(({ wall }, i) => {
         const h = wallHeights[i];
         if (h >= wallHeight - 1e-6) return null;
@@ -7894,7 +7893,7 @@ function RoomEnvelope({
 }
 
 export function SpaceScene({
-  recipe,
+  recipe: sourceRecipe,
   door,
   playerRef,
   corridorGone,
@@ -7939,6 +7938,11 @@ export function SpaceScene({
    *  Render-only data, the roomDoors pattern. */
   papers?: readonly RoomPaperItem[];
 }): JSX.Element {
+  const night = useAppDark();
+  const recipe = useMemo(
+    () => ({ ...sourceRecipe, palette: scenarioPalette(sourceRecipe.palette, night) }),
+    [sourceRecipe, night],
+  );
   const spec = ARCHETYPES[recipe.archetype];
   const { dir, rotationY } = roomOrientationFor(door);
 
@@ -7979,18 +7983,15 @@ export function SpaceScene({
   const { extent } = scaledRecipe.size;
   const width = scaledRecipe.width;
 
-  // v0.12 P3 — the biome skin this slice wears (skins.ts). The DEBUG FORCE
-  // (`dbg-skin:<id>`, alone or composed) wins; every other id resolves its
-  // WORLD ASSIGNMENT — the compiled archetype's skin — and an interior
-  // world answers null, the temperate baseline, so an interior room renders
-  // pixel-for-pixel as before (every resolver below answers null for it and
-  // each call site keeps its legacy expression behind a `??` / branch). A
-  // resolved skin is a pure function of the slice id (A6), so the same
-  // slice always rebuilds the same world.
-  // The force reads the DOOR's id — the corridor-facing identity: the
-  // recipe may carry the skin-stripped id (P3-b1), and the skin
-  // must still recognise itself.
-  const skin = skinForSlice(door.sliceId);
+  // Real records draw a skin, including temperate. Recolor only the render
+  // copy so its floor/wall/window/apron overrides share the scenario palette;
+  // the catalogue, seeded choice, material kinds and movement stay unchanged.
+  // The door id retains explicit debug forces; a skinless debug room keeps
+  // the palette path. Both themes are derived together, without reseeding.
+  const skin = useMemo(
+    () => scenarioSkin(skinForSlice(door.sliceId), sourceRecipe.palette),
+    [door.sliceId, sourceRecipe.palette],
+  );
   // P3-b1: the skin rides the VIEW, never the SEEDS. Every seeded
   // derivation in this render runs on the skin-stripped id
   // (debug-slice.ts debugSliceIdWithoutSkin — the same strip
@@ -8653,9 +8654,9 @@ export function SpaceScene({
     return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors);
   }, [recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors, seedId]);
 
-  // Dollhouse cutaway: entrance segments always keep full height (the door
-  // handoff depends on them); of the rest, the segments whose outward face
-  // looks toward the fixed camera are drawn at sill height — opaque, but
+  // Cutaway: camera-facing segments, including the entrance's flanks,
+  // are drawn at sill height. Door slabs retain their own full-height
+  // geometry and handoff. These boundary segments remain opaque, but
   // low enough that the interior reads over them. Runs inherit their
   // source segment's orientation, so the test holds after the door split.
   // Declared above the template features and fixtures: both consume the
@@ -8664,7 +8665,7 @@ export function SpaceScene({
   const wallHeights = useMemo(
     () =>
       wallRuns.map(({ wall }) =>
-        wall.entrance || !wallFacesCamera(plan, wall, dir)
+        !wallFacesCamera(plan, wall, dir)
           ? wallHeight
           : Math.min(wallHeight, WALL_SILL_HEIGHT),
       ),
@@ -8784,13 +8785,11 @@ export function SpaceScene({
   // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
   // and cool at night while the lamp burns brighter (readability never
   // depends on the window).
-  const night = useAppDark();
   // The skin's render inputs for the CURRENT theme — primitive, so the
   // memo dependency arrays below stay flat. null/1 = the legacy path.
   const floorHex = skinFloorHex(skin, night);
   const wallHex = skinWallHex(skin, night);
   const wallAlpha = skinWallAlpha(skin);
-  const skirtHex = skinSkirtApronHex(skin, night);
   const windowNightTint = skinWindowNightTintHex(skin);
   // Fixture LIGHT takes the palette's own sun color (the room's one light
   // register, A5), lifted toward white so the hue survives the bloom, then
@@ -8919,11 +8918,10 @@ export function SpaceScene({
     [waterColor],
   );
 
-  // Grounding skirt: a dark rectangular apron around the plan (hole cut for
-  // the plan itself), darkened ~38% from the ground color. The overhang
-  // rides the room scale (a colossal room needs a colossal apron) but never
-  // drops below SKIRT_OVERHANG_MIN — a miniature room still grounds its
-  // diorama in the mist.
+  // Background apron around the plan, with a hole for the lit room itself.
+  // Its unlit sage color joins the stage backdrop; indoor lighting must not
+  // darken this large background surface. Reach still follows room scale
+  // and the skin's mist density, with a minimum for miniature rooms.
   const skirtGeometry = useMemo(() => {
     // v0.12 P3: a forced skin's fog density stretches the apron — the
     // skirt IS this renderer's mist band (there is no scene fog). ×1 on
@@ -8952,16 +8950,10 @@ export function SpaceScene({
     return new THREE.ShapeGeometry(shape);
   }, [width, extent, scaleFactor, skin]);
   useEffect(() => () => skirtGeometry.dispose(), [skirtGeometry]);
-  const skirtColor = useMemo(() => {
-    // v0.12 P3: the apron wears the skin's own FOG out past the walls
-    // (the far field runs up to the room's feet), darkened per the
-    // horizon's 远景读法 (SKIN_APRON_DARKEN). The default path is
-    // palette.ground × 0.62, exactly as before.
-    const base = skirtHex
-      ? new THREE.Color(skirtHex)
-      : new THREE.Color(recipe.palette.ground);
-    return base.multiplyScalar(skin ? SKIN_APRON_DARKEN[skin.fog.horizon] : 0.62);
-  }, [recipe, skirtHex, skin]);
+  const skirtColor = useMemo(
+    () => new THREE.Color(recipe.palette.fog),
+    [recipe.palette.fog],
+  );
 
   const canopyColor = useMemo(
     () =>
@@ -8978,7 +8970,7 @@ export function SpaceScene({
       // ground darkened 20%, exactly as before.
       wallHex
         ? new THREE.Color(wallHex)
-        : new THREE.Color(recipe.palette.ground).multiplyScalar(0.8),
+        : new THREE.Color(recipe.palette.wall ?? recipe.palette.ground),
     [recipe, wallHex],
   );
   // Dado panel stiles sit a touch lighter than the wall they panel (the
@@ -9462,17 +9454,15 @@ export function SpaceScene({
       rotation={[0, rotationY, 0]}
       visible={!prewarm}
     >
-      {/* Grounding skirt: dark apron extending SKIRT_OVERHANG meters beyond
-          the walls on every side (hole cut for the plan). Below the corridor
-          floor at the threshold — no z-fight, and the space edge fades into
-          dark ground in the mist instead of ending in a geometric cut. */}
+      {/* Unlit background apron joins the sage stage beyond the walls.
+          The plan's hole keeps room floors and furniture fully lit; the
+          apron stays below the corridor floor to avoid threshold z-fighting. */}
       <mesh
         geometry={skirtGeometry}
         position={[0, SKIRT_Y, extent / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
-        receiveShadow
       >
-        <meshStandardMaterial color={skirtColor} roughness={1} />
+        <meshBasicMaterial color={skirtColor} />
       </mesh>
 
       {/* Ground: width × extent plane (scaled dims), displaced by the

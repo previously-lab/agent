@@ -1,0 +1,267 @@
+/* Live conversation is a flowing manuscript, not a fixed print page. The
+   reading desk owns A4 geometry; this surface keeps native responsive text. */
+.conversation-panel[data-panel-tier="fullscreen"] {
+  background: var(--background);
+}
+
+.conversation-panel-heading {
+  min-height: 3.75rem;
+  padding-inline: clamp(1rem, 3vw, 2.5rem);
+  border-bottom: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.conversation-panel-heading > span {
+  font-family: var(--font-serif, serif);
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: 0.025em;
+  text-transform: none;
+}
+
+.conversation-stream-shell {
+  width: 100%;
+  max-width: 56rem;
+}
+
+.conversation-stream-row {
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+
+.conversation-turn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.7rem;
+  padding-block: 1.35rem;
+  min-width: 0;
+  color: var(--foreground);
+}
+
+.conversation-byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.85rem;
+  min-width: 0;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 0.7rem;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+.conversation-speaker {
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.conversation-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-turn-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.conversation-prose,
+.conversation-prose > .typeset {
+  --typeset-size: 1.0625rem;
+  --typeset-leading: 1.95;
+  --typeset-flow: 0.9em;
+  font-family: var(--font-serif, serif);
+  font-size: var(--typeset-size);
+  font-weight: 400;
+  line-height: var(--typeset-leading);
+}
+
+.conversation-turn[data-role="user"] .conversation-prose {
+  padding-inline-start: 1rem;
+  border-inline-start: 1px solid color-mix(in oklab, var(--foreground) 19%, transparent);
+}
+
+.conversation-prose--literal {
+  white-space: pre-wrap;
+}
+
+.conversation-stream-parts > .conversation-prose:not(:last-child) {
+  margin-bottom: 1rem;
+}
+
+.conversation-stream-parts > .conversation-prose:not(:first-child) {
+  margin-top: 0.8rem;
+}
+
+.conversation-stage,
+.conversation-heartbeat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.conversation-heartbeat { margin-top: 0.75rem; }
+.conversation-stage > span,
+.conversation-heartbeat > span { background: var(--primary); }
+
+.conversation-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.conversation-attachments > img {
+  max-height: 20rem;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  object-fit: contain;
+}
+
+.conversation-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  font: 0.75rem/1.6 var(--font-sans, sans-serif);
+  color: var(--muted-foreground);
+}
+
+.conversation-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.9rem;
+}
+
+.conversation-message-actions button {
+  min-height: 2rem;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+}
+
+.conversation-composer.composer-bar {
+  background: var(--tool-glass, var(--background));
+  border: 1px solid color-mix(in oklab, var(--foreground) 13%, transparent);
+  border-radius: 1.35rem;
+  box-shadow: var(--shadow-float, 0 8px 30px -15px rgb(26 37 28 / 0.25));
+  backdrop-filter: blur(18px);
+}
+
+.conversation-composer--pill.composer-bar {
+  border-radius: 999px;
+  padding-inline: 0.35rem;
+}
+
+.conversation-composer .composer-cell {
+  width: 2.2rem;
+  min-width: 2.2rem;
+  height: 2.2rem;
+  border: 0;
+  border-radius: 999px;
+}
+
+.conversation-composer .composer-cell.is-active,
+.conversation-control.conversation-send {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.conversation-composer textarea,
+.conversation-composer input:not([type="file"]) {
+  font: 1rem/1.8 var(--font-serif, serif);
+  color: var(--foreground);
+}
+
+.conversation-composer textarea::placeholder,
+.conversation-composer input::placeholder {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.conversation-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.8rem 0.7rem;
+}
+
+.conversation-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  transition: background-color 150ms, color 150ms;
+}
+
+.conversation-control:hover {
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+}
+
+.conversation-control.conversation-send:hover {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.conversation-control--stop { color: var(--destructive); }
+.conversation-control:disabled { opacity: 0.35; pointer-events: none; }
+
+.conversation-control:focus-visible,
+.conversation-composer .composer-cell:focus-visible,
+.conversation-attachment-remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.conversation-attachment-remove {
+  border-radius: 999px;
+  opacity: 1;
+}
+
+.conversation-detail {
+  border-inline-start: 1px solid var(--border);
+  padding: 0.6rem 0.9rem;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+@media (min-width: 768px) {
+  .conversation-turn {
+    grid-template-columns: 6rem minmax(0, 1fr);
+    gap: 1.5rem;
+    padding-block: 1.65rem;
+  }
+  .conversation-byline {
+    flex-direction: column;
+    align-items: flex-start;
+    padding-top: 0.3rem;
+    gap: 0.4rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .conversation-control,
+  .conversation-message-actions button,
+  .conversation-composer .composer-cell { min-width: 2.75rem; min-height: 2.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-control { transition: none; }
+}

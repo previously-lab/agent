@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronRight, Split, WrapText } from "lucide-react";
-import { Message, MessageContent } from "@/components/ui/message";
+import { ConversationTurn } from "./conversation-turn";
 import { MarkdownRenderer } from "./markdown";
 import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
 import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
@@ -193,13 +193,11 @@ export function ParallelLaneView({ lane }: { lane: ParallelLaneSeat }) {
 
   return (
     <div
-      className="py-1"
       data-parallel-lane={lane.laneId}
       data-lane-status={lane.settled ? "settled" : "streaming"}
       {...(lane.summary ? { "data-lane-summary": "true" } : {})}
     >
-      <Message align="start" className="gap-1">
-        <MessageContent className="min-w-0">
+      <ConversationTurn role="assistant">
           <button
             type="button"
             onClick={() => setOverride(collapsed ? false : true)}
@@ -228,14 +226,14 @@ export function ParallelLaneView({ lane }: { lane: ParallelLaneSeat }) {
             )}
           </button>
           {!collapsed && (
-            <div className="border-l-2 border-paper-line pl-3">
+            <div>
               {lane.userText && (
                 <div className="mb-1 text-xs text-muted-foreground">
                   {lane.userText}
                 </div>
               )}
               {lane.text ? (
-                <div className="font-serif font-light">
+                <div className="conversation-prose">
                   <MarkdownRenderer content={lane.text} />
                 </div>
               ) : (
@@ -247,8 +245,7 @@ export function ParallelLaneView({ lane }: { lane: ParallelLaneSeat }) {
               )}
             </div>
           )}
-        </MessageContent>
-      </Message>
+      </ConversationTurn>
     </div>
   );
 }

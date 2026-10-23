@@ -78,6 +78,7 @@ import {
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import "./writing.css";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
 export type ConversationPanelMode = "pill" | "fullscreen";
@@ -271,9 +272,9 @@ export function ConversationPanel({
             ? "100dvh"
             : PILL_HEIGHT_PX + SUBTITLE_LINE_HEIGHT_PX + 4 + PILL_BOTTOM_GAP_PX,
         }}
-        className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+        className={`conversation-panel fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
-            ? "z-50 bg-paper"
+            ? "z-50 bg-background"
             : "pointer-events-none z-40 overflow-hidden bg-transparent"
         }`}
       >
@@ -328,7 +329,9 @@ export function ConversationPanel({
             nor clickable. In-flow, so the conversation below reserves
             nothing. */}
         <div
-          className={`h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2 transition-opacity duration-200 ${
+          aria-hidden={!open}
+          inert={!open}
+          className={`conversation-panel-heading shrink-0 items-center gap-1 transition-opacity duration-200 ${
             open ? "flex opacity-100" : "pointer-events-none flex opacity-0"
           }`}
         >
@@ -349,7 +352,7 @@ export function ConversationPanel({
             size="icon-sm"
             aria-label={t("exitFullscreen")}
             onClick={() => onModeChange(reducePanelMode(mode, "collapse"))}
-            className="text-muted-foreground"
+            className="rounded-full text-muted-foreground"
           >
             <X aria-hidden />
           </Button>

@@ -354,7 +354,9 @@ describe("door affordance parameter (§7) — additive", () => {
     CASES.forEach(([id, w, e], ci) => {
       const plan = roomPlanFor(id, w, e, COLONNADE_BAY);
       const walls = wallSegmentsFor(plan, THICK);
-      const hostable = hostableWallsFor(plan, walls, 1);
+      // Mirror the fixture with the southeast camera: its local camera
+      // direction remains the original northwest pin's (-X, +Z).
+      const hostable = hostableWallsFor(plan, walls, -1);
       COUNTS.forEach((count, ki) => {
         expect(pin(placeRoomDoors(id, plan, walls, hostable, count))).toBe(
           PINS[ci][ki],
@@ -469,13 +471,14 @@ describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
 
   it("is exactly the largest count the ladder places WITHOUT relaxing", () => {
     // The number selection steers by is the number placement honours.
-    // dir = -1 keeps the far (axial) wall full-height: rung 0 — the only
+    // With the southeast camera, dir = 1 keeps the far wall full-height:
+    // rung 0 — the only
     // non-relaxing rung — is hostableOnly, so the measure must be taken
     // against a hostable flag set that HAS an axial host.
     for (const [w, e] of [[48, 32], [96, 64], [19.2, 19.2]] as const) {
       const plan = rectPlan(w, e);
       const walls = wallSegmentsFor(plan, THICK);
-      const hostable = hostableWallsFor(plan, walls, -1);
+      const hostable = hostableWallsFor(plan, walls, 1);
       const affordance = { walls: ["left", "right", "far"] as const };
       const cap = doorCapacityFor(plan, walls, hostable, affordance);
       expect(cap).toBeGreaterThan(0);

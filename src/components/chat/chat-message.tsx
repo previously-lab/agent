@@ -11,8 +11,8 @@ import { HousekeepingCard } from "./housekeeping-card";
 import { RecallReferencesBar } from "./recall-references-bar";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
-import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
-import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { ConversationTurn } from "./conversation-turn";
+import { TimeDisplay, sameDay } from "./time-display";
 import {
   Activity,
   AlertTriangle,
@@ -27,7 +27,6 @@ import {
   type StreamItem,
   type AgentStage,
 } from "@/lib/chat/build-stream";
-import { strandTint } from "@/lib/timeline3d/ink";
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -36,8 +35,8 @@ interface ChatMessageProps {
   startedAt?: string;
   /**
    * @deprecated Retired with the strand layer (§A.2.4) — accepted (the
-   * non-writable callers still pass it) and ignored. The user bubble prints
-   * in the one neutral strandless grey, always.
+   * older callers still pass it) and ignored. Both voices now share the
+   * manuscript's neutral prose surface.
    */
   strands?: string[];
 }
@@ -53,24 +52,6 @@ const STAGE_KEYS: Record<AgentStage, string> = {
 
 /** How long without a new stream part before the "still working" nudge shows. */
 const SILENT_MS = 10000;
-
-// ── Ink film (paper-and-ink material model) ─────────────────────────────
-// The user bubble is PRINTED INK, not relief: a flat translucent film over
-// the paper. INK_FILM_ALPHA covers ~70% of the sheet's tooth so a quarter
-// to a third of the grain survives through the fill — a fully opaque block
-// would read as a UI rectangle. INK_EDGE_ALPHA is the dot-gain boundary:
-// the SAME hue at slightly higher opacity, never a light/dark relief pair.
-// Deliberately NOT the shared STRAND_TINT_ALPHA (0.12) — that constant is
-// the timeline cards' whisper tint and stays untouched.
-//
-// The film used to hue-shift with the slice's first strand. The strand
-// layer is retired (§A.2.4), so the bubble prints in the ONE neutral
-// strandless grey, always.
-
-/** Interior film alpha — ~30% of the paper texture shows through. */
-const INK_FILM_ALPHA = 0.7;
-/** Dot-gain edge alpha — same hue, denser at the boundary. */
-const INK_EDGE_ALPHA = 0.9;
 
 // ── Unified stream: walk parts in natural order ────────────────────────
 
@@ -212,6 +193,9 @@ export const ChatMessage = memo(function ChatMessage({
     .join("\n");
 
   const hasContent = streamItems.length > 0;
+  const timestamp = startedAt ? (
+    <TimeDisplay timestamp={startedAt} mode={sameDay(startedAt) ? "time" : "full"} />
+  ) : undefined;
 
   // ── User message ──────────────────────────────────────────────────
   if (isUser) {
@@ -219,233 +203,201 @@ export const ChatMessage = memo(function ChatMessage({
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
       .join("\n");
-    // Neutral strandless ink — the strand tint this once took went with the
-    // strand layer (§A.2.4). The bubble is ALWAYS translucent ink — the
-    // variant's opaque bg-secondary never shows. Text stays foreground at
-    // this alpha, in both themes.
-    const userTint = strandTint(undefined, INK_FILM_ALPHA);
-    const userTintEdge = strandTint(undefined, INK_EDGE_ALPHA);
     // File parts (attachments): images render inline from their data URL;
     // anything else collapses to a small file chip.
     const fileParts = parts.filter((p) => p.type === "file" && p.url);
     return (
-      <div className="py-1">
-        <Message align="end" className="gap-1">
-          <MessageContent className="min-w-0">
-            {fileParts.length > 0 && (
-              <div className="mb-1 flex flex-wrap justify-end gap-2">
-                {fileParts.map((p, i) =>
-                  p.mediaType?.startsWith("image/") ? (
-                    <img
-                      key={i}
-                      src={p.url}
-                      alt={p.filename ?? tChat("attachment")}
-                      className="max-h-64 max-w-full rounded-lg border border-border object-cover"
-                    />
-                  ) : (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2 py-1 text-xs text-muted-foreground"
-                    >
-                      <Paperclip className="h-3.5 w-3.5" />
-                      {p.filename ?? tChat("attachment")}
-                    </span>
-                  ),
-                )}
-              </div>
-            )}
-            {(userText || fileParts.length === 0) && (
-              <Bubble variant="secondary">
-                <BubbleContent
-                  // Neutral ink from JS — the film arrives as --user-tint and
-                  // the dot-gain edge as --user-tint-edge; .user-tint in
-                  // globals.css owns the fill, the ring utility owns the
-                  // denser boundary. No relief shadow either side.
-                  className="user-tint ring-1 ring-(--user-tint-edge)"
-                  style={
-                    {
-                      "--user-tint": userTint,
-                      "--user-tint-edge": userTintEdge,
-                    } as React.CSSProperties
-                  }
+      <ConversationTurn role="user" metadata={timestamp}>
+        {fileParts.length > 0 && (
+          <div className="conversation-attachments">
+            {fileParts.map((p, i) =>
+              p.mediaType?.startsWith("image/") ? (
+                <img
+                  key={i}
+                  src={p.url}
+                  alt={p.filename ?? tChat("attachment")}
+                  className="conversation-image"
+                />
+              ) : (
+                <span
+                  key={i}
+                  className="conversation-file"
                 >
-                  <div className="font-serif font-light">
-                    <MarkdownRenderer content={userText} />
-                  </div>
-                </BubbleContent>
-              </Bubble>
+                  <Paperclip className="h-3.5 w-3.5" />
+                  {p.filename ?? tChat("attachment")}
+                </span>
+              ),
             )}
-          </MessageContent>
-        </Message>
-      </div>
+          </div>
+        )}
+        {(userText || fileParts.length === 0) && (
+          <div className="conversation-prose">
+            <MarkdownRenderer content={userText} />
+          </div>
+        )}
+      </ConversationTurn>
     );
   }
 
-  // ── Assistant: unified stream inside one bubble ────────────────────
+  // Keep every stream part in its original order within the shared column.
   return (
-    <div className="py-1">
-      <Message align="start" className="gap-1">
-        <MessageContent className="min-w-0">
-          {/* Live agent-stage pill — a small brand marker of what the agent is doing */}
-          {isStreaming && stage && (
-            <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
-              <span className="size-1.5 animate-pulse rounded-full bg-brand-500" />
-              {t(STAGE_KEYS[stage])}
-            </div>
-          )}
+    <ConversationTurn role={message.role} metadata={timestamp}>
+      {/* Live agent-stage pill — a small brand marker of what the agent is doing */}
+      {isStreaming && stage && (
+        <div className="conversation-stage">
+          <span className="size-1.5 animate-pulse rounded-full bg-brand-500" />
+          {t(STAGE_KEYS[stage])}
+        </div>
+      )}
 
-          {hasContent && (
-            <div className="space-y-1">
-              <AnimatePresence>
-                {streamItems.map((item, i) => {
-                  const key = itemKey(item, i);
+      {hasContent && (
+        <div className="conversation-stream-parts">
+          <AnimatePresence>
+            {streamItems.map((item, i) => {
+              const key = itemKey(item, i);
 
-                  if (item.kind === "reasoning") {
-                    return (
-                      <ThinkingSteps
-                        key={key}
-                        text={item.text}
-                        isStreaming={isStreaming && i === streamItems.length - 1}
-                      />
-                    );
-                  }
-                  if (item.kind === "tool") {
-                    return (
-                      <ToolRenderer
-                        key={key}
-                        toolName={item.toolName}
-                        state={item.state}
-                        input={item.input}
-                        output={item.output}
-                        streamingText={item.streamingText}
-                        streamingStage={item.streamingStage}
-                        isStreaming={isStreaming ?? false}
-                      />
-                    );
-                  }
-                  if (item.kind === "housekeeping") {
-                    return <HousekeepingCard key={key} steps={item.steps} />;
-                  }
-                  if (item.kind === "phase") {
-                    // Terminal interrupted/error — prominent static card.
-                    if (item.mode === "terminal") {
-                      const isInterrupted = item.phase.includes("interrupted");
-                      // The client-visible explanation for a terminal/model failure
-                      // (buildStream puts it in `summaries` from data-turn-status).
-                      // Show the first line in the header and the full text
-                      // expandable, so a failed turn says WHY it failed.
-                      const detail = (item.summaries ?? []).join("\n");
-                      return (
-                        <PhaseIndicator
-                          key={key}
-                          mode="static"
-                          icon={
-                            isInterrupted
-                              ? TERMINAL_INTERRUPTED_ICON
-                              : TERMINAL_ERROR_ICON
-                          }
-                          label={
-                            isInterrupted
-                              ? t("turnInterrupted")
-                              : t("turnError")
-                          }
-                          state={
-                            isInterrupted
-                              ? TERMINAL_INTERRUPTED_STATE
-                              : TERMINAL_ERROR_STATE
-                          }
-                          summary={detail ? detail.split("\n")[0] : undefined}
-                          expandedContent={
-                            detail ? (
-                              <p className="whitespace-pre-wrap">{detail}</p>
-                            ) : undefined
-                          }
-                        />
-                      );
+              if (item.kind === "reasoning") {
+                return (
+                  <ThinkingSteps
+                    key={key}
+                    text={item.text}
+                    isStreaming={isStreaming && i === streamItems.length - 1}
+                  />
+                );
+              }
+              if (item.kind === "tool") {
+                return (
+                  <ToolRenderer
+                    key={key}
+                    toolName={item.toolName}
+                    state={item.state}
+                    input={item.input}
+                    output={item.output}
+                    streamingText={item.streamingText}
+                    streamingStage={item.streamingStage}
+                    isStreaming={isStreaming ?? false}
+                  />
+                );
+              }
+              if (item.kind === "housekeeping") {
+                return <HousekeepingCard key={key} steps={item.steps} />;
+              }
+              if (item.kind === "phase") {
+                // Terminal interrupted/error — persistent status annotation.
+                if (item.mode === "terminal") {
+                  const isInterrupted = item.phase.includes("interrupted");
+                  // The client-visible explanation for a terminal/model failure
+                  // (buildStream puts it in `summaries` from data-turn-status).
+                  // Show the first line in the header and the full text
+                  // expandable, so a failed turn says WHY it failed.
+                  const detail = (item.summaries ?? []).join("\n");
+                  return (
+                    <PhaseIndicator
+                      key={key}
+                      mode="static"
+                      icon={
+                        isInterrupted
+                          ? TERMINAL_INTERRUPTED_ICON
+                          : TERMINAL_ERROR_ICON
+                      }
+                      label={
+                        isInterrupted
+                          ? t("turnInterrupted")
+                          : t("turnError")
+                      }
+                      state={
+                        isInterrupted
+                          ? TERMINAL_INTERRUPTED_STATE
+                          : TERMINAL_ERROR_STATE
+                      }
+                      summary={detail ? detail.split("\n")[0] : undefined}
+                      expandedContent={
+                        detail ? (
+                          <p className="whitespace-pre-wrap">{detail}</p>
+                        ) : undefined
+                      }
+                    />
+                  );
+                }
+
+                // Regular (non-compact) phase — PhaseIndicator static.
+                const doneKey = PHASE_DONE_KEYS[item.phase];
+                const label = item.running
+                  ? t(item.phase)
+                  : doneKey
+                    ? t(doneKey)
+                    : t(item.phase);
+                const hasSummaries =
+                  item.summaries && item.summaries.length > 0;
+                return (
+                  <PhaseIndicator
+                    key={key}
+                    mode="static"
+                    icon={PHASE_ICON}
+                    label={label}
+                    state={
+                      item.running ? PHASE_RUNNING_STATE : PHASE_DONE_STATE
                     }
+                    expandedContent={
+                      hasSummaries ? (
+                        <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+                          {item.summaries!.map((s, j) => (
+                            <div key={j}>{s}</div>
+                          ))}
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                );
+              }
 
-                    // Regular (non-compact) phase — PhaseIndicator static.
-                    const doneKey = PHASE_DONE_KEYS[item.phase];
-                    const label = item.running
-                      ? t(item.phase)
-                      : doneKey
-                        ? t(doneKey)
-                        : t(item.phase);
-                    const hasSummaries =
-                      item.summaries && item.summaries.length > 0;
-                    return (
-                      <PhaseIndicator
-                        key={key}
-                        mode="static"
-                        icon={PHASE_ICON}
-                        label={label}
-                        state={
-                          item.running ? PHASE_RUNNING_STATE : PHASE_DONE_STATE
-                        }
-                        expandedContent={
-                          hasSummaries ? (
-                            <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
-                              {item.summaries!.map((s, j) => (
-                                <div key={j}>{s}</div>
-                              ))}
-                            </div>
-                          ) : undefined
-                        }
-                      />
-                    );
-                  }
+              if (item.kind === "recall-references") {
+                // The "referenced N time slices" bar — trails the reply.
+                return (
+                  <RecallReferencesBar
+                    key={key}
+                    references={item.references}
+                  />
+                );
+              }
 
-                  if (item.kind === "recall-references") {
-                    // The "referenced N time slices" bar — trails the reply.
-                    return (
-                      <RecallReferencesBar
-                        key={key}
-                        references={item.references}
-                      />
-                    );
-                  }
+              if (item.kind === "text") {
+                return (
+                  <motion.div
+                    key={key}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.15 }}
+                    className="conversation-prose"
+                  >
+                    <MarkdownRenderer
+                      content={item.content}
+                      isStreaming={isStreaming && i === streamItems.length - 1}
+                    />
+                  </motion.div>
+                );
+              }
+              return null;
+            })}
+          </AnimatePresence>
+        </div>
+      )}
 
-                  if (item.kind === "text") {
-                    return (
-                      <motion.div
-                        key={key}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ duration: 0.15 }}
-                        className="px-3 font-serif font-light [&:not(:last-child)]:mb-3"
-                      >
-                        <MarkdownRenderer
-                          content={item.content}
-                          isStreaming={isStreaming && i === streamItems.length - 1}
-                        />
-                      </motion.div>
-                    );
-                  }
-                  return null;
-                })}
-              </AnimatePresence>
-            </div>
-          )}
+      {/* Loading tips are retired for now (content refresh pending) — the
+          streaming turn shows no bottom indicator. */}
 
-          {/* Loading tips are retired for now (content refresh pending) — the
-              streaming bubble shows no bottom indicator. */}
+      {/* Silence heartbeat — only when the stream has gone quiet mid-turn */}
+      {isStreaming && silent && (
+        <div className="conversation-heartbeat">
+          <span className="size-1.5 animate-pulse rounded-full bg-brand-500/70" />
+          {t("stillWorking")}
+        </div>
+      )}
 
-          {/* Silence heartbeat — only when the stream has gone quiet mid-turn */}
-          {isStreaming && silent && (
-            <div className="flex items-center gap-1.5 pt-1.5 text-xs text-muted-foreground/70">
-              <span className="size-1.5 animate-pulse rounded-full bg-brand-500/70" />
-              {t("stillWorking")}
-            </div>
-          )}
-
-          {/* Footer — actions only */}
-          {isAssistant && textContent && !isStreaming && onRegenerate && (
-            <MessageFooter>
-              <MessageActions content={textContent} onRegenerate={onRegenerate} />
-            </MessageFooter>
-          )}
-        </MessageContent>
-      </Message>
-    </div>
+      {/* Footer — actions only */}
+      {isAssistant && textContent && !isStreaming && onRegenerate && (
+        <MessageActions content={textContent} onRegenerate={onRegenerate} />
+      )}
+    </ConversationTurn>
   );
 });

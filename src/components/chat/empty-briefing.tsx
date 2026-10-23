@@ -8,6 +8,7 @@ import type { BriefingIdentity, SliceSummary } from "@/lib/episodic/actions";
 import { MarkdownRenderer } from "./markdown";
 import { PersonaDialog } from "@/components/persona/persona-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import "./writing.css";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -228,19 +229,14 @@ export function EmptyBriefing({
     <div
       className={
         variant === "card"
-          ? "relative flex flex-col items-center px-4 py-10"
-          : "relative flex min-h-full flex-col items-center justify-center pl-0 pr-4"
+          ? "conversation-stream-row relative flex flex-col items-center py-10"
+          : "conversation-stream-row relative flex min-h-full flex-col items-center justify-center"
       }
     >
       {/* The slice-card face — ring + soft shadow + top light falloff, the
           same language as the timeline's FrameCard. */}
-      <div className="relative w-full max-w-xl overflow-hidden rounded-xl bg-card text-left ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]">
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-        />
-
-        <div className="relative px-5 py-5 sm:px-6">
+      <div className="relative w-full max-w-xl text-left">
+        <div className="relative py-5">
           {/* ── Eyebrow row — marker square + mono eyebrow, the active
                slice's timecode on the right. ── */}
           <div className="flex items-center gap-2 text-[0.65rem] leading-none tracking-[0.08em] text-muted-foreground">

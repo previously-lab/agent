@@ -58,6 +58,7 @@ test("a completed answer survives reload while summary is pending, then a receip
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("previously:pending-persistence:v1") ?? "{}").runIds)).toEqual([]);
   await expect(page.getByText(record.replyText, { exact: true })).toHaveCount(1);
   await page.getByRole("textbox", { name: "Send a message..." }).press("Escape");
+  await page.getByRole("button", { name: "Manuscripts", exact: true }).click();
   await expect(page.locator('[data-archive-pile="events/receipt-created-case"]')).toBeVisible();
   await page.reload();
   await riseConversation(page);

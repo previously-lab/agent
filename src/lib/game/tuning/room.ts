@@ -21,7 +21,9 @@ import { VIVID_PALETTES } from "../space-types";
  *  definition — it lives here, in the leaf tuning module, so the pure
  *  game chain (room-doors above all) never has to import the renderer
  *  tuning lane (tuning/render re-exports it for the render side). */
-export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
+// Repo north is +Z: southeast (+X, −Z) → northwest, 43.3° above the floor.
+// Room cutaways, camera-relative input and fixture placement share this offset.
+export const CAM_OFFSET = { x: 12, y: 16, z: -12 };
 
 /* ------------------------------------------------------------------ */
 /* Room orientation (the door-side rule — ONE derivation, every        */
@@ -52,8 +54,8 @@ export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
  * its door or is a relabeling of the same world map.
  *
  * CONSEQUENCE (the felt flip). With the camera fixed at CAM_OFFSET, a
- * north-door room presents with its entrance on the far screen edge and
- * its interior opening toward the camera, a south-door room mirrored —
+ * north-door room presents with its entrance on the near screen edge,
+ * with the south-door room mirrored —
  * the two sides are 180° apart ON SCREEN and that difference is forced
  * by the corridor having two door walls, not by anything in the room's
  * construction. The arrival itself is continuous: the doorway is
@@ -131,10 +133,10 @@ export const WALL_CLEARANCE = 1;
  *  50%-opacity "translucent veil" walls (which made every room read as a
  *  milk-glass box and, writing no depth, never occluded anything). Which
  *  walls face the camera is computed once per room in world space from the
- *  constant CAM_OFFSET (tuning/render.ts); the entrance wall is never cut
- *  (the door handoff depends on it). 1.1m is chest height — a low wall you
- *  could see over, not a curb. */
-export const WALL_SILL_HEIGHT = 1.1;
+ *  constant CAM_OFFSET. Camera-facing entrance flanks are cut too; door
+ *  slabs retain their own height. The low boundary leaves furniture and
+ *  loose papers legible from the fixed RTS view. */
+export const WALL_SILL_HEIGHT = 0.6;
 /** No props within this distance of the door axis near the doorway. */
 export const ENTRANCE_CLEAR_RADIUS = 1.5;
 /** Depth outward from the wall that counts as "the doorway". Shared with

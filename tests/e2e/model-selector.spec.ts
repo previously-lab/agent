@@ -20,14 +20,10 @@ test("chat uses the fixed model and carries verified native steps into the next 
     await route.fulfill({ contentType: "text/event-stream", body: chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n" });
   });
   await page.goto("/en/app");
-  const expand = page.getByRole("button", { name: "Expand to full screen" });
   const retry = page.getByRole("button", { name: "Retry", exact: true });
-  const exit = page.getByRole("button", { name: "Exit full screen" }).first();
-  await expect(expand.or(retry).or(exit).first()).toBeVisible({ timeout: 30_000 });
-  if (await retry.isVisible()) await retry.click();
-  await expect(expand.or(exit).first()).toBeVisible({ timeout: 30_000 });
-  if (await expand.isVisible()) await expand.click();
   const input = page.getByRole("textbox", { name: "Send a message..." });
+  await expect(input.or(retry).first()).toBeVisible({ timeout: 30_000 });
+  if (await retry.isVisible()) await retry.click();
   await expect(input).toBeVisible();
   const composer = page.locator(".composer-bar", { has: input });
   await expect(composer.getByRole("combobox")).toHaveCount(0);
@@ -47,8 +43,7 @@ test("chat uses the fixed model and carries verified native steps into the next 
   ];
   await seedSlices([saved]);
   await page.reload();
-  await expect(expand.or(exit).first()).toBeVisible({ timeout: 30_000 });
-  if (await expand.isVisible()) await expand.click();
+  await expect(input).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Native fixture answer", { exact: true })).toHaveCount(1);
   await input.fill("Second offline fixture question");
   await input.press("Enter");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
+import { useState, useRef, useLayoutEffect, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUp, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
+import "./writing.css";
 
 /** The textarea's floor and ceiling, in px. The floor is what an empty
  *  composer reports so the box does not collapse while it is being typed
@@ -21,10 +22,7 @@ interface ChatInputProps {
   onSubmit: (message: string, images: File[]) => void;
   isLoading: boolean;
   onStop?: () => void;
-  // Model selection — owned by ChatPage so the request body and the toolbar
-  // stay in sync. ChatInput renders the control, ChatPage persists.
-  // Thinking is always ON at low effort (pinned server-side in start-turn.ts);
-  // there is no thinking/effort UI anymore.
+  // The fixed model and thinking profile are owned by the server.
   /**
    * The COMPACT form: one row of controls, no textarea, no attachments.
    *
@@ -98,12 +96,14 @@ export function ChatInput({
   const [hovered, setHovered] = useState(false);
   const { images, removeImage, clearImages, handlePaste, handleDrop, handleDragOver } = useImageAttachments();
 
-  const resizeTextarea = () => {
+  // Expanding the pill mounts a new textarea with the existing draft. Measure
+  // after that DOM update as well as after typing, so wrapped text is visible.
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = `${TEXTAREA_MIN_PX}px`;
     el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_PX) + "px";
-  };
+  }, [value, tier?.mode]);
 
   const handleSubmit = (e?: FormEvent) => {
     e?.preventDefault();
@@ -121,7 +121,6 @@ export function ChatInput({
 
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
-    resizeTextarea();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -210,8 +209,7 @@ export function ChatInput({
   // two entries that lead away from the row — attach, and the evolution
   // stream's HQ panel; the single-line input takes the middle (no box of its
   // own; the pill's chrome is the container); the RIGHT end walks towards
-  // the act — the model picker (md and up; the phone's width belongs to the
-  // input), the fullscreen verb, and send/stop as the RIGHTMOST control,
+  // the act — the fullscreen verb, and send/stop as the RIGHTMOST control,
   // the outer corner "do the thing" owns in every form. Attach reuses the
   // same `useImageAttachments` state as the full form (one component, early
   // returns — a draft or a staged image survives expanding to fullscreen
@@ -225,18 +223,13 @@ export function ChatInput({
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        // flex-1: the row FILLS the ledge — it is a flex item of the bar,
-        // and without a grow rule it shrank to its content width (buttons
-        // bunched left, a gutter on the right). items-stretch lets each
-        // compartment's hairline run the bar's full height; min-w-0 lets
-        // the input's own flex-1 take the slack and truncate honestly.
-        className="flex h-full min-w-0 flex-1 items-stretch"
+        // Fill the floating pill while allowing its text field to shrink
+        // between the fixed controls on narrow screens.
+        className="flex h-full min-w-0 flex-1 items-center gap-0.5"
       >
         {/* Attach — the full form's channel, nothing new: the hidden input
             below feeds the shared `handlePaste`, and the images reappear as
-            previews the moment the reader expands. A compartment of the
-            ledge: hairline divider, ink glyph, hover turns the divider to
-            ink (§3). */}
+            previews the moment the reader expands. */}
         <button
           type="button"
           data-attach
@@ -263,22 +256,15 @@ export function ChatInput({
         />
         {/* The single line — a real one-line input, not a resized textarea.
             Enter sends, as in the full form. Serif (the reader writes in
-            their own documents' voice); the placeholder is INK at light
-            weight — weight, not grey, says "not yet your sentence" (P3). */}
+            their own documents' voice), with a quieter placeholder. */}
         <input
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           aria-label={t("placeholder")}
-          className="min-w-0 flex-1 bg-transparent px-3 font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-foreground"
+          className="min-w-0 flex-1 bg-transparent px-2 outline-none"
         />
-        {/* The model picker joins the rightward walk on md and up — on the
-            phone the input keeps the width. `contents` lets the selector's
-            own trigger sit in the row as if the wrapper were not there (and
-            the selector itself renders nothing when there is ≤1 model). */}
-        <div className="hidden md:contents">
-        </div>
         {/* Expand — the ledge's one way up, through the panel's own
             transition table. */}
         <button
@@ -328,7 +314,7 @@ export function ChatInput({
 
   return (
     <div
-      className={`composer-bar relative overflow-hidden ${isDragOver ? "is-dragover" : ""}`}
+      className={`conversation-composer composer-bar relative overflow-hidden ${isDragOver ? "is-dragover" : ""}`}
       onPaste={handlePaste}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -342,12 +328,13 @@ export function ChatInput({
               <img
                 src={URL.createObjectURL(file)}
                 alt={file.name}
-                className="h-16 w-16 border border-border object-cover"
+                className="h-16 w-16 rounded-lg border border-border object-cover"
               />
               <button
                 type="button"
                 onClick={() => removeImage(i)}
-                className="absolute -top-1.5 -right-1.5 h-5 w-5 bg-muted-foreground/80 text-background flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label={t("removeAttachment", { name: file.name })}
+                className="conversation-attachment-remove absolute -top-1.5 -right-1.5 h-6 w-6 bg-foreground text-background flex items-center justify-center"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -356,11 +343,8 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Row 1 — the writing surface. It is the taller of the two rows on
-          purpose: the fullscreen composer is still a floating card, and a
-          card whose only generous dimension is its toolbar reads as a menu.
-          Same material as the pill tier — the ledge at full height: solid
-          paper, hairline, one contact shadow. */}
+      {/* The draft grows naturally above the controls. Both forms share
+          the same translucent surface and persistent draft state. */}
       <div className="px-4 pb-2 pt-3">
         <textarea
           ref={textareaRef}
@@ -368,18 +352,14 @@ export function ChatInput({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
+          aria-label={t("placeholder")}
           rows={1}
-          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:font-light placeholder:text-foreground focus:outline-none"
+          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent focus:outline-none"
         />
       </div>
 
-      {/* Row 2 — everything you do AROUND the writing: what to attach, what
-          to read, which model, and send. The zoom lens is deliberately NOT
-          here; it moved to the shell's board bar, where it is mounted at
-          every rung and can be reached without opening the composer at
-          all. The row is compartmented from the writing surface by the
-          same hairline the pill tier's cells use. */}
-      <div className="flex items-center justify-between gap-2 border-t border-paper-line px-3 py-2">
+      {/* Attachments, companion activity and sending stay below the draft. */}
+      <div className="conversation-composer-toolbar">
         {/* Left side */}
         <div className="flex min-w-0 items-center gap-2">
           {/* Attach — always available. Present in the full form only; see the
@@ -402,7 +382,7 @@ export function ChatInput({
                   // A tooltip is not an accessible name — it is a description
                   // that appears on hover, which a screen reader never does.
                   aria-label={t("attach")}
-                  className="flex h-7 w-7 items-center justify-center border border-paper-line text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+                  className="conversation-control"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                 </button>
@@ -423,12 +403,12 @@ export function ChatInput({
               field↔HQ activity face). One panel, two doors: this button and
               the pod's floating one. */}
           <HQStreamButton
-            className="flex h-7 w-7 items-center justify-center border border-paper-line text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
+            className="conversation-control"
             iconClassName="h-3.5 w-3.5"
           />
         </div>
 
-        {/* Right side — model, then send: the walk towards the act, so the
+        {/* Right side — stop, then send: the walk towards the act, so the
             send button keeps the outer corner it owns in every form. The
             tier verbs are NOT here: the pill form carries the expand (above)
             and the panel's slim bar carries the exit — a third mounted copy
@@ -443,7 +423,7 @@ export function ChatInput({
               type="button"
               onClick={onStop}
               aria-label={t("stopTooltip")}
-              className="flex h-8 w-8 items-center justify-center border border-paper-line text-destructive transition-colors hover:border-destructive hover:opacity-90"
+              className="conversation-control conversation-control--stop"
               title={t("stopTooltip")}
             >
               <Square className="h-3 w-3 fill-current" />
@@ -454,11 +434,7 @@ export function ChatInput({
             onClick={(e) => handleSubmit(e as unknown as FormEvent)}
             disabled={!hasContent}
             aria-label={t("sendTooltip")}
-            className={`flex h-8 w-8 items-center justify-center border border-paper-line transition-colors disabled:pointer-events-none disabled:opacity-30 ${
-              hasContent
-                ? "border-foreground bg-foreground text-paper hover:opacity-90"
-                : "text-muted-foreground hover:border-foreground hover:text-foreground"
-            }`}
+            className={`conversation-control ${hasContent ? "conversation-send" : ""}`}
             title={t("sendTooltip")}
           >
             <ArrowUp className="h-4 w-4" />

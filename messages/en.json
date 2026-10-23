@@ -81,7 +81,8 @@
       "byokHint": "Your own API key (recommended) — direct API connection: streaming, fast, no local CLI needed.",
       "bridgeNotInstalled": "not installed",
       "bridgeConfigure": "Configure",
-      "hqStream": "Evolution stream (Reflection)"
+      "hqStream": "Evolution stream (Reflection)",
+      "removeAttachment": "Remove attachment: {name}"
     },
     "attachment": "Attachment",
     "actions": {
@@ -499,7 +500,10 @@
     "loading": "Preparing the corridor…",
     "exit": "Exit",
     "enter": "Enter",
-    "readDoc": "Read"
+    "readDoc": "Read",
+    "manuscripts": "Manuscripts",
+    "scenario": "Scenario",
+    "lobby": "Lobby"
   },
   "memory": {
     "emptyTitle": "No memories yet",
@@ -698,7 +702,8 @@
     "zoomIn": "Zoom in",
     "zoomReset": "Fit the whole page",
     "recordUser": "You",
-    "recordAgent": "Previously"
+    "recordAgent": "Previously",
+    "close": "Put down paper"
   },
   "library": {
     "title": "Library",
@@ -733,5 +738,11 @@
       "tasks": "Tasks",
       "self": "Self"
     }
+  },
+  "sceneReading": {
+    "resume": "Continue",
+    "paused": "The scene is waiting",
+    "relatedRoom": "Related scenario",
+    "goToRoom": "Go to this record’s room"
   }
 }

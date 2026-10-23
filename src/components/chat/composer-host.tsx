@@ -38,6 +38,7 @@
  */
 import { useLayoutEffect, useRef } from "react";
 import { usePanelTier } from "./conversation-panel";
+import "./writing.css";
 
 /** The gap between the bottom edge the composer hangs from and the bottom of
  *  the viewport — the same number the container's `bottom-*` carries. Named
@@ -122,15 +123,9 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
       <div
         className={
           onPill
-            ? // The writing ledge itself (v0.29 §4.3) — a square bar of solid
-              // PAPER (paper's extension, no grain on chrome), one hairline
-              // all round, one contact shadow. THE interactive surface at
-              // this tier: the only box on the bottom edge that takes
-              // pointer events — the row around it is transparent, so the
-              // world keeps every click outside the ledge itself. The
-              // compartments and their dividers are drawn by ChatInput's
-              // pill form (`composer-cell`s).
-              "pointer-events-auto pill-box composer-bar flex h-12 min-w-0 w-full items-center overflow-hidden"
+            ? // Only the floating glass pill takes pointer events; the
+              // surrounding row lets the reader interact with the world.
+              "conversation-composer conversation-composer--pill pointer-events-auto pill-box composer-bar flex h-12 min-w-0 w-full items-center overflow-hidden"
             : "w-[min(44rem,100%)]"
         }
       >

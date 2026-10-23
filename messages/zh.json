@@ -81,7 +81,8 @@
       "byokHint": "使用你自己的 API key(推荐)——直连 API:流式、快、无需本地 CLI。",
       "bridgeNotInstalled": "未安装",
       "bridgeConfigure": "去配置",
-      "hqStream": "进化流（反思）"
+      "hqStream": "进化流（反思）",
+      "removeAttachment": "移除附件：{name}"
     },
     "attachment": "附件",
     "actions": {
@@ -499,7 +500,10 @@
     "loading": "正在布置长廊……",
     "exit": "离开",
     "enter": "进入",
-    "readDoc": "阅读"
+    "readDoc": "阅读",
+    "manuscripts": "文稿",
+    "scenario": "情景",
+    "lobby": "门厅"
   },
   "memory": {
     "emptyTitle": "暂无记忆",
@@ -698,7 +702,8 @@
     "zoomIn": "放大",
     "zoomReset": "整页显示",
     "recordUser": "你",
-    "recordAgent": "Previously"
+    "recordAgent": "Previously",
+    "close": "放回文稿"
   },
   "library": {
     "title": "文库",
@@ -733,5 +738,11 @@
       "tasks": "任务",
       "self": "自我"
     }
+  },
+  "sceneReading": {
+    "resume": "继续",
+    "paused": "情景停在原处",
+    "relatedRoom": "文稿关联的情景",
+    "goToRoom": "前往这份记录的房间"
   }
 }

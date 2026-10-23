@@ -8,7 +8,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 interface TimeDisplayProps {
   /** ISO 8601 timestamp. If invalid, renders nothing (null). */
   timestamp: string;
-  /** "full" = date + time, "date" = month/day only, "time" = HH:MM only */
+  /** "full" = date + time, "date" = year/month/day, "time" = HH:MM only */
   mode?: "full" | "date" | "time";
   /** "sm" = compact timestamp (default). "md" = subtitle (time-travel readout).
    *  "xl" = near-H1. */
@@ -31,10 +31,8 @@ const ROLL_HOLD_MS = 1200;
 // ─── Component ──────────────────────────────────────────────────────────
 
 /**
- * Animated monospace time display.
- *
- * Uses NumberTicker for each digit — numbers animate in when they enter the
- * viewport. Falls back to rendering nothing if the timestamp is invalid.
+ * Ordinary timestamps render their exact local date/time from the first frame.
+ * Falls back to rendering nothing if the timestamp is invalid.
  *
  * With `from`, each field rolls from that time's value to `timestamp`'s value
  * (forward or reverse automatically), and `onRollComplete` fires once settled
@@ -74,15 +72,6 @@ export function TimeDisplay({
   const month = d.getMonth() + 1;
   const day = d.getDate();
 
-  // Start each digit's roll: from the `from` time when rolling, else a short
-  // offset below the value (the entrance animation) so we never scroll through
-  // thousands of numbers for a 4-digit year.
-  const yearStart = rollFrom ? rollFrom.getFullYear() : Math.max(0, year - 30);
-  const monthStart = rollFrom ? rollFrom.getMonth() + 1 : Math.max(1, month - 3);
-  const dayStart = rollFrom ? rollFrom.getDate() : Math.max(1, day - 10);
-  const hourStart = rollFrom ? rollFrom.getHours() : Math.max(0, hours - 6);
-  const minuteStart = rollFrom ? rollFrom.getMinutes() : Math.max(0, minutes - 10);
-
   const sizeClass =
     size === "xl"
       ? "text-3xl sm:text-4xl lg:text-5xl"
@@ -94,11 +83,29 @@ export function TimeDisplay({
 
   const showDate = mode === "full" || mode === "date";
   const showTime = mode === "full" || mode === "time";
+  const classes = `inline-flex items-baseline gap-px font-mono tabular-nums ${sizeClass} text-inherit ${className}`;
+
+  // Historical metadata must remain truthful even before hydration, offscreen,
+  // or in a background tab where animation frames may be heavily throttled.
+  if (!rollFrom) {
+    return (
+      <time dateTime={timestamp} className={classes}>
+        {showDate && <span>{year}/{month}/{String(day).padStart(2, "0")}</span>}
+        {showDate && showTime && <span className={dateTimeGap}> </span>}
+        {showTime && <span>{String(hours).padStart(2, "0")}:{String(minutes).padStart(2, "0")}</span>}
+      </time>
+    );
+  }
+
+  // Only an explicit, valid origin opts into the time-travel transition.
+  const yearStart = rollFrom.getFullYear();
+  const monthStart = rollFrom.getMonth() + 1;
+  const dayStart = rollFrom.getDate();
+  const hourStart = rollFrom.getHours();
+  const minuteStart = rollFrom.getMinutes();
 
   return (
-    <span
-      className={`inline-flex items-baseline gap-px font-mono tabular-nums ${sizeClass} text-inherit ${className}`}
-    >
+    <time dateTime={timestamp} className={classes}>
       {showDate && (
         <>
           <NumberTicker value={year} startValue={yearStart} className="![color:inherit]" />
@@ -116,7 +123,7 @@ export function TimeDisplay({
           <NumberTicker value={minutes} startValue={minuteStart} minIntegerDigits={2} className="![color:inherit]" />
         </>
       )}
-    </span>
+    </time>
   );
 }
 

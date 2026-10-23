@@ -65,10 +65,13 @@ export interface RoomPaperSpotsInput {
   count: number;
 }
 
-/** Footprint margin: an A4's half-diagonal at floor scale, plus a finger. */
-export const PAPER_MARGIN = 0.22;
+/** A modestly enlarged manuscript remains legible from the RTS camera. The
+ * placement margin derives from the same footprint the renderer draws. */
+export const ROOM_PAPER_WIDTH = 0.28;
+export const ROOM_PAPER_HEIGHT = ROOM_PAPER_WIDTH * Math.SQRT2;
+export const PAPER_MARGIN = Math.hypot(ROOM_PAPER_WIDTH, ROOM_PAPER_HEIGHT) / 2 + 0.04;
 /** Two sheets never touch — center distance, meters. */
-export const PAPER_SPACING = 0.5;
+export const PAPER_SPACING = 0.64;
 /** How close the reader must stand before a sheet answers the interact key
  *  (the terminal's own reach discipline — anchor.ts TERMINAL_REACH_*). */
 export const PAPER_REACH = 1.1;
@@ -168,8 +171,8 @@ export function roomPaperSpotsFor(input: RoomPaperSpotsInput): RoomPaperSpot[] {
 
   // The degenerate-room fallback: a fan just outside the doorway clearing —
   // placeable in any plan that contains the door at all. The gates still
-  // apply (a sheet never lands in the water); the arc's adjacent chord
-  // (≥ 2·r·sin(9°) ≈ 0.58) keeps the spacing by construction.
+  // apply (a sheet never lands in the water), including the same spacing
+  // check used by the scan above.
   const r = PAPER_DOOR_CLEAR + 0.05;
   for (let i = 0; spots.length < count && i < 8; i++) {
     const side = i % 2 === 0 ? 1 : -1;

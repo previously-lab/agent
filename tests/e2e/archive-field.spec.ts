@@ -72,7 +72,7 @@ function pile(page: Page, ref: string) {
 async function openField(page: Page): Promise<void> {
   await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
   await seedCases(fieldCases());
-  await page.goto("/en/app");
+  await page.goto("/en/app?view=field");
   await expect(pile(page, "people/field-alpha")).toBeVisible({ timeout: 30_000 });
 }
 
@@ -100,7 +100,7 @@ test.describe("Archive field", () => {
   test("hydrates a case's opened date after the light index has painted", async ({ page }) => {
     await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
     await seedCases([{ category: "people", name: "hydrated-date", opened: localIso(0), pieces: [] }]);
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
     await expect(pile(page, "people/hydrated-date")).toContainText(`opened ${localIso(0)}`);
   });
 

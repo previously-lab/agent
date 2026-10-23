@@ -160,7 +160,7 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
         // instrument radius — the overrides merge over the dialog/command
         // primitives' rounded defaults through the same tailwind-merge the
         // primitives use.
-        className="overflow-hidden rounded-lg! border border-tool-line bg-tool p-0 text-foreground shadow-paper-contact ring-0"
+        className="overflow-hidden rounded-2xl! border border-tool-line bg-tool p-0 text-foreground shadow-[var(--shadow-panel)] ring-0"
       >
         {/* The server does the matching — cmdk's own filter must stay off. */}
         <Command shouldFilter={false} className="rounded-lg bg-tool text-foreground">

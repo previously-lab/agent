@@ -132,6 +132,7 @@ describe("desk locale keys", () => {
     const en = read("en.json").desk as Record<string, unknown>;
     const zh = read("zh.json").desk as Record<string, unknown>;
     expect(Object.keys(en).sort()).toEqual([
+      "close",
       "loading",
       "nextPage",
       "notFoundBody",

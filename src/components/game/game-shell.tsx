@@ -22,6 +22,8 @@ import {
   DEBUG_SKIN_PARAM,
 } from "@/lib/game/debug-slice";
 import type { CorridorDoor } from "./corridor";
+import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
+import { Link } from "@/i18n/navigation";
 
 /**
  * v1 door cap. Corridor streaming can present far more, but the first version
@@ -30,19 +32,11 @@ import type { CorridorDoor } from "./corridor";
  */
 const MAX_DOORS = HOTEL_WINDOW_DOORS;
 
-/**
- * Empty-state fallback (fresh user / unwoven demo env): a static corridor so
- * the hotel still opens on an empty timeline. The pinned archetypes double as
- * a showcase of the four space types.
- */
-const FALLBACK_DOORS: readonly CorridorDoor[] = [
-  { sliceId: "2026-09-12-0941", label: "Sep 12 · 09:41", archetype: "meadow" },
-  { sliceId: "2026-09-13-1530", label: "Sep 13 · 15:30", archetype: "plains" },
-  { sliceId: "2026-09-14-2207", label: "Sep 14 · 22:07", archetype: "pool" },
-  { sliceId: "2026-09-15-1401", label: "Sep 15 · 14:01", archetype: "forest" },
-];
+/** A fresh archive opens in the real lobby. Demonstration rooms belong only
+ * to the explicit debug gallery; they never impersonate conversation records. */
+const EMPTY_DOORS: readonly CorridorDoor[] = [];
 
-/** The fetch-failure warning logs once per session — the fallback is already up. */
+/** The fetch-failure warning logs once per session; the lobby remains usable. */
 let warnedCatalogFailure = false;
 /** Same once-per-session treatment for the strand read; empty doors are the fallback. */
 let warnedStrandFailure = false;
@@ -141,6 +135,7 @@ export function GameShell({
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
+  const [activeScenario, setActiveScenario] = useState<string | null>(null);
 
   // THE GALLERY (the standard-room review pass): `?view=game&debug=rooms
   // &page=modules|templates|archetypes` swaps the corridor's doors for one
@@ -242,9 +237,9 @@ export function GameShell({
         const skeleton = await getTimelineSkeleton();
         if (cancelled) return;
         if (skeleton.length === 0) {
-          setDoors(FALLBACK_DOORS);
+          setDoors(EMPTY_DOORS);
           writeHotelData(locale, {
-            doors: FALLBACK_DOORS,
+            doors: EMPTY_DOORS,
             roomDoors: NO_ROOM_DOORS,
             timelines: NO_TIMELINES,
           });
@@ -371,11 +366,11 @@ export function GameShell({
         if (!warnedCatalogFailure) {
           warnedCatalogFailure = true;
           console.warn(
-            "[game] getTimelineSkeleton failed; showing fallback doors",
+            "[game] getTimelineSkeleton failed; keeping the lobby open",
             err,
           );
         }
-        setDoors(FALLBACK_DOORS);
+        setDoors(EMPTY_DOORS);
       }
     })();
     return () => {
@@ -390,26 +385,33 @@ export function GameShell({
           events. Exit is a WORLD SWITCH now (§14), not a navigation. Hidden
           with the simulation while the document tier sits over the world. */}
       {!suspended && (
-      <div className="pointer-events-none absolute left-4 top-4 z-10 sm:left-6 sm:top-6">
-        <p className="text-sm font-semibold tracking-tight text-neutral-100">
-          {t("title")}
-        </p>
-        <button
-          type="button"
-          onClick={onExit}
-          className="pointer-events-auto text-xs text-neutral-400 transition-colors hover:text-neutral-200"
-        >
-          {t("exit")}
-        </button>
-      </div>
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 px-4 py-4 sm:px-8 sm:py-6">
+        <Link href="/" className="scene-wordmark pointer-events-auto inline-flex h-9 items-center">Previously.</Link>
+        <div className="flex items-center gap-2">
+          <p className="mr-2 hidden max-w-56 truncate text-right text-xs text-muted-foreground sm:block" data-game-scenario>
+            {activeScenario
+              ? `${t("scenario")} · ${doors?.find((door) => door.sliceId === activeScenario)?.label ?? activeScenario}`
+              : t("lobby")}
+          </p>
+          <button
+            type="button"
+            data-game-manuscripts
+            onClick={onExit}
+            className="pointer-events-auto h-9 rounded-full border border-tool-line bg-tool/85 px-4 text-xs text-foreground shadow-float backdrop-blur-md transition hover:bg-tool"
+          >
+            {t("manuscripts")}
+          </button>
+          <div className="pointer-events-auto"><NavOverflowMenu /></div>
+        </div>
+      </header>
       )}
-      {/* DEV: the gallery switcher (temporary) — bottom-left, clear of the
-          conversation pill (bottom-right) and the door HUD (bottom-centre).
+      {/* DEV: the gallery switcher — below the right-hand chrome, clear of
+          the conversation pill and the door HUD (bottom-centre).
           It rewrites the query the gallery mode is read from, so the pages
           are one tap away instead of a typed URL, and the hotel is one tap
           back. */}
-      {!suspended && (
-      <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-1 sm:right-6 sm:top-6">
+      {!suspended && galleryDoors !== null && (
+      <div className="absolute right-4 top-20 z-20 flex flex-col items-end gap-1 sm:right-6">
         <button
           type="button"
           onClick={() => setGallery(galleryDoors ? null : galleryPage)}
@@ -448,10 +450,10 @@ export function GameShell({
           timelines={timelines}
           focusSlice={focusSlice}
           onOpenDoc={onOpenDoc}
+          onActiveSliceChange={setActiveScenario}
           suspended={suspended}
-          // THE RIG SWITCH (v0.28): `&camera=top` keeps the legacy fixed
-          // 45° dollhouse for in-place comparison — a debug flag on the
-          // same URL idiom as the gallery, not product UI.
+          // The product uses a fixed RTS camera. Only an explicit debug
+          // query can compare the former chase view.
           cameraMode={cameraModeFor(searchParams.get(CAMERA_PARAM))}
         />
       ) : (

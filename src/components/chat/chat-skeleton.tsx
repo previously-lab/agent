@@ -6,13 +6,8 @@
  * THE ONE RULE: A SKELETON MUST OCCUPY THE SPACE IT IS STANDING IN FOR. A
  * loading face that is merely "the same kind of thing" still makes the page
  * jump when the real content lands, and the jump is the part a reader notices.
- * So every number here is taken from the same source the real tree takes it
- * from — the reading column comes from `columnFor` (`@/lib/layout/tiers`) and
- * the paddings are copied from the field's own face inset — rather than being
- * re-derived by hand. That was the previous version's actual bug: it hard-coded
- * `pr-4 sm:pr-6 lg:pr-8` and `md:max-w-2xl`, which agreed with the real tree
- * until the column became responsive, and then quietly disagreed with it at
- * every viewport below the laptop tier.
+ * The shared conversation-stream-shell and conversation-stream-row classes
+ * supply the same reading width and gutters as the measured live list.
  *
  * TWO SEATS, ONE IDENTITY:
  * - `ChatPageSkeleton` fills the right pane BEFORE the mount-time arrival
@@ -26,8 +21,8 @@
  * instead of as loading. Everything carries `motion-reduce:animate-none`.
  */
 
-import { useTier } from "@/hooks/use-tier";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
+import "./writing.css";
 
 /** A pulsing bar. `delay` staggers it against its neighbours — see MOTION. */
 function Bar({
@@ -90,15 +85,13 @@ function ResumeBannerSkeleton({ delay = 0 }: { delay?: number }) {
   );
 }
 
-const BUBBLE_HEIGHT = {
+const PROSE_HEIGHT = {
   1: "h-[2.25rem]",
   2: "h-[3.5rem]",
   3: "h-[4.75rem]",
 } as const;
 
-/** One user/agent round — right-aligned user bar + left agent bar, the same
- *  widths and line counts real turns produce (frame-card's TurnBubbles
- *  skeleton is the precedent for the em heights). */
+/** Both voices share a prose column, with room for the desktop byline. */
 function RoundSkeleton({
   userLines = 1,
   userWidth = "w-[42%]",
@@ -113,7 +106,7 @@ function RoundSkeleton({
   delay?: number;
 }) {
   return (
-    <div aria-hidden className="space-y-1.5 py-1.5">
+    <div aria-hidden className="space-y-6 py-5 md:pl-30">
       <div
         // Stagger delays from the round's position — CSS owns them via
         // .pulse-delay.
@@ -122,31 +115,25 @@ function RoundSkeleton({
             ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
             : undefined
         }
-        className={`pulse-delay ml-auto rounded-2xl rounded-br-md bg-secondary animate-pulse motion-reduce:animate-none ${BUBBLE_HEIGHT[userLines]} ${userWidth}`}
+        className={`pulse-delay rounded-sm bg-foreground/6 animate-pulse motion-reduce:animate-none ${PROSE_HEIGHT[userLines]} ${userWidth}`}
       />
       <div
         style={
           { "--pulse-delay": `${delay + 90}ms` } as React.CSSProperties
         }
-        className={`pulse-delay rounded-2xl rounded-bl-md animate-pulse motion-reduce:animate-none bg-foreground/8 ${BUBBLE_HEIGHT[agentLines]} ${agentWidth}`}
+        className={`pulse-delay rounded-sm animate-pulse motion-reduce:animate-none bg-foreground/8 ${PROSE_HEIGHT[agentLines]} ${agentWidth}`}
       />
     </div>
   );
 }
 
 /**
- * The briefing card's skeleton face — identical chrome to EmptyBriefing's
- * slice card (ring + soft shadow + top light falloff), with the eyebrow
- * row, serif title, ledger rows and suggestion chips as bars.
+ * EmptyBriefing's introduction, with its eyebrow, title, ledger and actions.
  */
 export function BriefingCardSkeleton() {
   return (
     <div aria-hidden className="flex flex-col items-center px-4 py-10">
-      <div className="relative w-full max-w-xl overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]">
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-        />
+      <div className="relative w-full max-w-xl overflow-hidden">
         <div className="relative px-5 py-5 sm:px-6">
           {/* Eyebrow row — marker square + label bar + timecode bar. */}
           <div className="flex items-center gap-2">
@@ -196,15 +183,13 @@ export function BriefingCardSkeleton() {
 export type ChatSkeletonTail = "briefing" | "resume" | "rounds";
 
 /**
- * The stream-area skeleton: a bottom-anchored column of seam + bubble rounds,
+ * The stream-area skeleton: a bottom-anchored column of seam + prose rounds,
  * with the tail matching the arrival mode — the briefing card (briefing mode),
  * the resume banner + rounds (resume mode), or plain rounds while the verdict
  * itself is still pending.
  *
- * The column width is `columnFor` — the SAME function the real field uses — so
- * the rows land exactly where the turns will. Anchored to the BOTTOM, because
- * the field is: it lands on the live edge, and a skeleton that fills from the
- * top would jump the moment the first real block measured.
+ * Shared writing.css classes place the rows where the real turns land.
+ * The bottom anchor matches the live edge of the measured conversation list.
  */
 export function ChatStreamSkeleton({
   tail = "rounds",
@@ -213,19 +198,14 @@ export function ChatStreamSkeleton({
   tail?: ChatSkeletonTail;
   className?: string;
 }) {
-  const { column } = useTier();
   return (
     <div
       aria-hidden
       className={`flex h-full flex-col justify-end overflow-hidden ${className}`}
     >
-      {/* The tier's reading column, px — the SAME columnFor value the real
-          field renders at, so the skeleton's rows land where the turns
-          will. */}
-      <div className="mx-auto w-full" style={{ maxWidth: column }}>
-        {/* The field's face inset — the SAME string SliceConversation pads with,
-            so the placeholder's rows land where the real turns will. */}
-        <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+      {/* Same responsive manuscript column as DomChatList. */}
+      <div className="conversation-stream-shell mx-auto">
+        <div className="conversation-stream-row">
           <SeamSkeleton />
           <RoundSkeleton userWidth="w-[38%]" agentWidth="w-[58%]" delay={0} />
           <RoundSkeleton
@@ -264,18 +244,13 @@ export function ChatStreamSkeleton({
   );
 }
 
-/** The input bar's skeleton — the ChatInput chrome (card ring, light
- *  falloff, textarea line, toolbar pills, send button) as inert bars. */
+/** The translucent composer, textarea and controls as inert bars. */
 export function ChatInputSkeleton() {
   return (
     <div
       aria-hidden
-      className="relative overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]"
+      className="conversation-composer composer-bar relative overflow-hidden"
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-      />
       {/* Textarea line */}
       <div className="px-4 pb-2 pt-3">
         <Bar className="h-[24px] w-2/5" />
@@ -324,7 +299,7 @@ export function ChatPageSkeleton({
         <ChatStreamSkeleton tail={tail} />
       </div>
       <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
-        <div className="mx-auto w-full max-w-5xl xl:max-w-7xl px-3 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-[44rem] px-3">
           <ChatInputSkeleton />
         </div>
       </div>

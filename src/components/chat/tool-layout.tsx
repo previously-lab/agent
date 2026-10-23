@@ -7,7 +7,6 @@ import type React from "react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
-import { Card, CardContent } from "@/components/ui/card";
 
 export type ToolLayoutProps = {
   name: string;
@@ -101,7 +100,7 @@ export function ToolLayout({
     setIsExpanded(!isExpanded);
   }, [hasExpandedDetails, isExpanded]);
 
-  // Delay unmount of the card DOM until the collapse animation finishes.
+  // Delay unmount of the detail DOM until the collapse animation finishes.
   useEffect(() => {
     if (!hasExpandedDetails) {
       setShouldRenderExpandedContent(false);
@@ -282,25 +281,19 @@ export function ToolLayout({
             <div className="min-h-0">
               {shouldRenderExpandedContent && (
                 <div className="pt-1.5 pb-1">
-                  {/* ring-inset: the Card's ring is a box-shadow that the grid's
-                      overflow-hidden would otherwise clip on the left/right (the
-                      card is flush with the clip container). Drawing it inset
-                      keeps the border visible. */}
-                  <Card size="sm" className="ring-inset">
-                    <CardContent className="max-h-80 overflow-auto text-xs">
-                      {hasError && !hasRenderableContent(expandedContent) && (
-                        <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-red-400">
-                          {errorMessage}
-                        </pre>
-                      )}
-                      {isInterrupted && (
-                        <p className="text-xs font-light leading-relaxed text-yellow-500">
-                          {t("interrupted")}
-                        </p>
-                      )}
-                      {expandedContent}
-                    </CardContent>
-                  </Card>
+                  <div className="conversation-detail max-h-80 overflow-auto text-xs">
+                    {hasError && !hasRenderableContent(expandedContent) && (
+                      <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-red-400">
+                        {errorMessage}
+                      </pre>
+                    )}
+                    {isInterrupted && (
+                      <p className="text-xs font-light leading-relaxed text-yellow-500">
+                        {t("interrupted")}
+                      </p>
+                    )}
+                    {expandedContent}
+                  </div>
                 </div>
               )}
             </div>

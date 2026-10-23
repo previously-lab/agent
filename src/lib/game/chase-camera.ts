@@ -16,10 +16,9 @@
  * DRAWN HEIGHT, NOT FULL HEIGHT. A wall the renderer cut to the dollhouse
  * sill (WALL_SILL_HEIGHT — wallFacesCamera) or the lobby's cutaway parapet
  * is solid only up to its DRAWN height: the sight line from the pivot
- * (1.35 m) to the camera (1.9 m) clears a 1.1 m sill, so a sill must never
+ * (1.35 m) to the camera (1.9 m) clears the low sill, so a sill must never
  * pull the boom in — exactly like the lobby parapet the player can see
- * over. Full-height walls (and the never-cut entrance wall) are solid to
- * the room's drawn wall height.
+ * over. Full-height walls are solid to the room's drawn wall height.
  */
 
 import { WALL_Z, type SeamWall } from "./clamps";
@@ -41,6 +40,7 @@ import {
   LOBBY_CUTAWAY_HEIGHT,
 } from "./tuning/hotel";
 import {
+  CAM_OFFSET,
   DOOR_GAP_HALF,
   WALL_SILL_HEIGHT,
 } from "./tuning/room";
@@ -49,15 +49,14 @@ import {
 /* The debug flag (game-shell reads it; the rig consumes it)           */
 /* ------------------------------------------------------------------ */
 
-/** Query param switching the rig: `?view=game&camera=top` keeps the old
- *  fixed 45° orthographic dollhouse for in-place comparison. Any other
- *  value (or none) is the chase rig. */
+/** Product default: the fixed RTS view. The previous chase rig remains an
+ * explicit debug comparison; no product control changes camera direction. */
 export const CAMERA_PARAM = "camera";
 export const CAMERA_TOP_VALUE = "top";
 export type GameCameraMode = "chase" | "top";
 
 export function cameraModeFor(param: string | null): GameCameraMode {
-  return param === CAMERA_TOP_VALUE ? "top" : "chase";
+  return param === "chase" ? "chase" : "top";
 }
 
 /* ------------------------------------------------------------------ */
@@ -92,10 +91,9 @@ export const CHASE_PROBE_RADIUS = 0.35;
 export const CHASE_MIN_DIST = 0.9;
 /** Avatar opacity at/under CHASE_MIN_DIST (lerped, never a pop). */
 export const CHASE_AVATAR_FADE = 0.25;
-/** The fixed camera's yaw — the chase basis at this value reproduces the
- *  legacy KEY_DIRS diagonals exactly (forward (√2/2, −√2/2), right
- *  (√2/2, √2/2)), so top-down mode keeps byte-identical movement. */
-export const TOPDOWN_YAW = (Math.PI * 3) / 4;
+/** The fixed camera's horizontal forward. Derive it from the same offset
+ *  as the renderer and cutaways so keyboard and touch stay screen-relative. */
+export const TOPDOWN_YAW = Math.atan2(-CAM_OFFSET.x, -CAM_OFFSET.z);
 
 /* ------------------------------------------------------------------ */
 /* Movement basis — screen-relative from the camera's yaw              */
@@ -110,8 +108,7 @@ export interface MoveBasis {
   rz: number;
 }
 
-/** The basis for one yaw: forward (sinθ, cosθ), right (−cosθ, sinθ). At
- *  TOPDOWN_YAW this is exactly the legacy KEY_DIRS table. */
+/** The basis for one yaw: forward (sinθ, cosθ), right (−cosθ, sinθ). */
 export function moveBasisFor(yaw: number): MoveBasis {
   const fx = Math.sin(yaw);
   const fz = Math.cos(yaw);
@@ -396,7 +393,7 @@ export function roomSolids({
     const hx = wall.sizeX / 2;
     const hz = wall.sizeZ / 2;
     const y1 =
-      wall.entrance || !wallFacesCamera(plan, wall, dir)
+      !wallFacesCamera(plan, wall, dir)
         ? wallHeight
         : WALL_SILL_HEIGHT;
     out.push(wallBox(cx - hx, cx + hx, cz - hz, cz + hz, y1));

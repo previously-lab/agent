@@ -44,8 +44,10 @@ interface DebugHandle {
   z: number;
   windowDoors: { sliceId: string; x: number; z: number; side: string }[];
   papers: { ref: string; x: number; z: number }[];
+  camera?: {
+    projectPoint?: (x: number, y: number, z: number) => { sx: number; sy: number } | null;
+  };
   teleport?: (x: number, z: number) => void;
-  interact?: () => void;
 }
 
 function dbg(page: Page) {
@@ -58,9 +60,11 @@ function dbg(page: Page) {
           (window as unknown as { __gameDebug?: DebugHandle }).__gameDebug?.teleport?.(px, pz),
         [x, z] as const,
       ),
-    interact: () =>
-      page.evaluate(() =>
-        (window as unknown as { __gameDebug?: DebugHandle }).__gameDebug?.interact?.(),
+    project: (x: number, z: number) =>
+      page.evaluate(
+        ([px, pz]) =>
+          (window as unknown as { __gameDebug?: DebugHandle }).__gameDebug?.camera?.projectPoint?.(px, 0, pz) ?? null,
+        [x, z] as const,
       ),
   };
 }
@@ -86,7 +90,7 @@ async function openSourceCase(page: Page): Promise<{ sliceId: string }> {
       pieces: [],
     },
   ]);
-  await page.goto("/en/app");
+  await page.goto("/en/app?view=field");
   const pile = page.locator('[data-archive-pile="research/source-case"]');
   await expect(pile).toBeVisible({ timeout: 30_000 });
   await pile.click();
@@ -139,11 +143,24 @@ test.describe("In-paper reference links", () => {
     // The hotel left the paper (v0.28): no scene line prints anywhere on
     // the sheet — the room belongs to the scene viewer, not the document.
     await expect(page.locator("[data-desk-place]")).toHaveCount(0);
+    // Related travel follows the open record even when the world cursor has
+    // never been set. Reading alone must not silently move that cursor.
+    await page.getByRole("button", { name: "Related scenario" }).click();
+    await page.getByRole("menuitem", { name: "Go to this record’s room" }).click();
+    await expect(page.locator('[data-app-world="game"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("[data-desk-field]")).toHaveCount(0);
+    await expect.poll(() => dbg(page).read().then((d) => {
+      const door = d?.windowDoors.find((entry) => entry.sliceId === sliceId);
+      return door && d ? Math.abs(d.x - door.x) : 999;
+    }), { timeout: 30_000 }).toBeLessThan(1);
   });
 
   test("the room carries its papers and a sheet opens in the manuscript", async ({
     page,
   }) => {
+    // Three pickups and resumes share one real WebGL world. Software-rendered
+    // browser runs need room for each transition; assertion limits stay local.
+    test.setTimeout(120_000);
     const scene = makeSlice(daysAgoIso(1, 9), { tag: "SCN" });
     await seedSlices([scene]);
     await seedCases([
@@ -202,7 +219,8 @@ test.describe("In-paper reference links", () => {
         { timeout: 30_000 },
       )
       .toBeLessThan(0.5);
-    await dbg(page).interact();
+    await expect(page.locator('[data-game-interact="paper"]')).toBeVisible();
+    await page.keyboard.press("Enter");
 
     await expect(page.locator("[data-desk-stack]")).toBeVisible({
       timeout: 30_000,
@@ -210,5 +228,52 @@ test.describe("In-paper reference links", () => {
     await expect(
       page.getByText("TURN SCN user question", { exact: false }).first(),
     ).toBeVisible({ timeout: 30_000 });
+    const paused = await dbg(page).read();
+    await page.keyboard.down("w");
+    // Give the input/frame loops time to observe W while reading is open.
+    await page.waitForTimeout(350);
+    await page.keyboard.up("w");
+    const stillPaused = await dbg(page).read();
+    expect(stillPaused?.x).toBe(paused?.x);
+    expect(stillPaused?.z).toBe(paused?.z);
+    expect(stillPaused?.space).toBe(scene.id);
+    await page.locator("[data-scene-resume]").click();
+    await expect(page.locator('[data-game-interact="paper"]')).toBeVisible();
+    const resumed = await dbg(page).read();
+    expect(resumed?.x).toBe(paused?.x);
+    expect(resumed?.z).toBe(paused?.z);
+    expect(resumed?.space).toBe(scene.id);
+    // The same nearby sheet can be picked up with E after resuming.
+    await page.keyboard.press("e");
+    await expect(page.locator("[data-desk-stack]")).toBeVisible();
+    await page.locator("[data-desk-close]").click();
+    await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+    await expect(page.locator('[data-game-interact="paper"]')).toBeVisible();
+    const putDown = await dbg(page).read();
+    expect(putDown?.x).toBe(paused?.x);
+    expect(putDown?.z).toBe(paused?.z);
+
+    // Real mouse gestures on the rendered sheet: debug only supplies the
+    // projection, never dispatches pickup. Dragging out and back is not a click.
+    const projected = await dbg(page).project(paper.x, paper.z);
+    expect(projected).not.toBeNull();
+    const { sx, sy } = projected!;
+    expect(await page.evaluate(([x, y]) =>
+      Boolean(document.elementFromPoint(x, y)?.closest("[data-game-pointer-surface]")),
+    [sx, sy] as const)).toBe(true);
+    await page.mouse.move(sx, sy);
+    await page.mouse.down();
+    await page.mouse.move(sx + 35, sy);
+    await page.mouse.move(sx, sy);
+    await page.mouse.up();
+    await page.waitForTimeout(550);
+    await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+    await expect(page.locator("[data-desk-stack]")).not.toBeVisible();
+
+    const clickPoint = await dbg(page).project(paper.x, paper.z);
+    expect(clickPoint).not.toBeNull();
+    await page.mouse.click(clickPoint!.sx, clickPoint!.sy);
+    await expect(page.locator("[data-desk-stack]")).toBeVisible();
+    await expect(page.getByText("TURN SCN user question", { exact: false }).first()).toBeVisible();
   });
 });

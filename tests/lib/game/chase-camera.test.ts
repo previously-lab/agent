@@ -1,7 +1,7 @@
 /**
  * Tests for the chase camera's pure half (src/lib/game/chase-camera.ts):
- * the movement basis (the legacy KEY_DIRS diagonals must reproduce exactly
- * at TOPDOWN_YAW), the sphere cast (slab test vs the analytic solids),
+ * the screen-relative movement basis at TOPDOWN_YAW, the sphere cast
+ * (slab test vs the analytic solids),
  * and the solid builders (door gaps stay open, drawn heights respected,
  * the room mirror lands the boxes in world space for both door sides).
  */
@@ -23,14 +23,13 @@ import { TERMINAL_H } from "@/lib/game/anchor";
 const SQ = Math.SQRT1_2;
 
 describe("moveBasisFor", () => {
-  it("reproduces the legacy KEY_DIRS diagonals at TOPDOWN_YAW", () => {
+  it("keeps movement screen-relative to the fixed southeast camera", () => {
     const b = moveBasisFor(TOPDOWN_YAW);
-    // screen-up (W): world (+x, −z)/√2 — the fixed camera's forward.
-    expect(b.fx).toBeCloseTo(SQ, 10);
-    expect(b.fz).toBeCloseTo(-SQ, 10);
-    // screen-right (D): world (+x, +z)/√2.
-    expect(b.rx).toBeCloseTo(SQ, 10);
-    expect(b.rz).toBeCloseTo(SQ, 10);
+    // Repo north is +Z. Screen-up moves northwest; right moves southwest.
+    expect(b.fx).toBeCloseTo(-SQ, 10);
+    expect(b.fz).toBeCloseTo(SQ, 10);
+    expect(b.rx).toBeCloseTo(-SQ, 10);
+    expect(b.rz).toBeCloseTo(-SQ, 10);
   });
 
   it("is orthonormal at every yaw", () => {

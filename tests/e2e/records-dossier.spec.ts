@@ -67,7 +67,7 @@ async function openRecordField(page: Page): Promise<{ newestA: string }> {
       pieces: [],
     },
   ]);
-  await page.goto("/en/app");
+  await page.goto("/en/app?view=field");
   await expect(recordPiles(page)).toHaveCount(2, { timeout: 30_000 });
   return { newestA: a2.id };
 }
@@ -134,7 +134,7 @@ test.describe("Records are papers", () => {
   }) => {
     await seedSlices([makeSlice(daysAgoIso(40), { tag: "OLD" })]);
     await seedDossier();
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
     await page.locator("[data-library-toggle]").click();
 
     const dossier = page.locator("[data-dossier]");
@@ -155,7 +155,7 @@ test.describe("Records are papers", () => {
     page,
   }) => {
     await seedSlices([makeSlice(daysAgoIso(40), { tag: "OLD" })]);
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
     await page.locator("[data-library-toggle]").click();
     await expect(
       page.locator("[data-library-panel]"),
@@ -170,7 +170,7 @@ test.describe("Records are papers", () => {
     await seedCases([
       { category: "research", name: "remember-me", opened: daysAgoIso(1).slice(0, 10), pieces: [] },
     ]);
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
     const pile = page.locator('[data-archive-pile="research/remember-me"]');
     await expect(pile).toBeVisible({ timeout: 30_000 });
     await pile.click();
@@ -219,7 +219,7 @@ test.describe("Records are papers", () => {
     await seedCases([
       { category: "research", name: "pointer-case", opened: daysAgoIso(1).slice(0, 10), pieces: [] },
     ]);
-    await page.goto("/en/app");
+    await page.goto("/en/app?view=field");
     const pile = page.locator('[data-archive-pile="research/pointer-case"]');
     await expect(pile).toBeVisible({ timeout: 30_000 });
     await pile.click();

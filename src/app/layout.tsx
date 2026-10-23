@@ -3,6 +3,7 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 import "./instrument.css";
+import "./visual-language.css";
 
 const raleway = Raleway({
   variable: "--font-raleway",
