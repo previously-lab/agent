@@ -4,8 +4,9 @@
  *
  *  - placeKit is pure placement math: deterministic, offsets rotated with
  *    the renderer's three.js Y convention, scales multiplied through.
- *  - The sixteen interior kits match the doc's enumeration (N1's eight
- *    plus the abundance pass's eight): 3–6 pieces each, every offset
+ *  - The interior kits match the doc’s enumeration (N1’s eight
+ *    plus the abundance pass’s eight, the craft pass’s nine and the
+ *    v0.12 new-props pass’s six): 3–6 pieces each, every offset
  *    inside the declared footprint disc, wall-anchored kits declaring
  *    their back offset, and a function with something to face (the
  *    pool hall's kits face the water).
@@ -18,8 +19,9 @@
  *  - stageInteriorKits is a deterministic pure function of its seeded
  *    stream (A6), keeps the walk path ≥ its cleared half-width, keeps
  *    the doorway strip clear, keeps every piece inside the walkable
- *    footprint and out of the water, and never covers more than 65% of
- *    the floor with kit footprint discs (≥35% stays empty, §4.5).
+ *    footprint and out of the water, and never covers more than 42% of
+ *    the floor with kit footprint discs (≥58% stays empty, §4.5 — the
+ *    2026-10-25 breathing-floor pass, was 65%/35%).
  *  - Strand doors (v0.11-hotel-rooms B.11): every strand door's approach
  *    strip stays exactly as clear as the entrance's — no kit piece may
  *    land in the rectangle extending inward from a door's wall plane
@@ -69,6 +71,7 @@ import {
   KIT_COUNT_MAX,
   KIT_EMPTY_FLOOR_MIN,
   KIT_PATH_CLEAR,
+  OPEN_FIELD_PIECE_MAX,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
   ROOM_DOOR_CLEAR_DEPTH,
@@ -507,8 +510,11 @@ describe("stageInteriorKits", () => {
 
   it("reads as several different scenes, never one kit many times (§6)", () => {
     // The "eight identical luggage carts in one yellow room" failure: with
-    // sixteen kits in the deck, a furnished room must host a spread of kit
-    // types, and no type may account for half the room's placements.
+    // thirty-one kits in the deck, a furnished room must host a spread of kit
+    // types, and no type may account for half the room's placements. Sparser
+    // staging may echo a kit twice: six distinct types among eight placements
+    // is valid, while the 55% floor keeps repeats from becoming the majority
+    // in larger rooms (the pure sweep's current minimum is 11/19 ≈ 58%).
     for (const extent of [32, 64, 96]) {
       for (const sliceId of SLICE_IDS.slice(0, 24)) {
         const { pieces } = stageFor(sliceId, extent);
@@ -516,7 +522,10 @@ describe("stageInteriorKits", () => {
         for (const p of pieces) byIndex.set(p.kitIndex, p.kitId);
         const ids = [...byIndex.values()];
         if (ids.length < 8) continue; // sparse small rooms are exempt
-        expect(new Set(ids).size).toBeGreaterThanOrEqual(7);
+        const distinct = new Set(ids).size;
+        expect(distinct).toBeGreaterThanOrEqual(
+          Math.max(6, Math.ceil(ids.length * 0.55)),
+        );
         const counts = new Map<string, number>();
         for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
         for (const n of counts.values()) {
@@ -588,7 +597,7 @@ describe("stageInteriorKits", () => {
     }
   });
 
-  it("never covers more than 65% of the floor (≥35% stays empty)", () => {
+  it("never covers more than 42% of the floor (≥58% stays empty, post-overhaul)", () => {
     for (const extent of TIERS) {
       for (const sliceId of SLICE_IDS) {
         const staged = stageFor(sliceId, extent);
@@ -1199,7 +1208,7 @@ describe("strand-door approach clearances (B.11)", () => {
             );
           }
         }
-        // The ≥35%-empty-floor rule still holds (scaled coverage).
+        // The ≥58%-empty-floor rule still holds (scaled coverage).
         expect(coverageOf({ pieces, plan, comp })).toBeLessThanOrEqual(
           1 - KIT_EMPTY_FLOOR_MIN + 1e-9,
         );
@@ -1316,13 +1325,21 @@ describe("template zones parameter (§7) — additive", () => {
    *  outermost edge. Only the rooms whose staging actually touched the
    *  resized kit move (the library pins and the ballroom no-door pin,
    *  where the wider disc re-seats a later kit); every other pin is
-   *  byte-identical. */
+   *  byte-identical.
+   *  Recaptured an eighth time 2026-10-25 for the breathing-floor pass:
+   *  KIT_AREA_PER_KIT / KIT_COUNT_MAX / KIT_EMPTY_FLOOR_MIN / KIT_GAP /
+   *  KIT_ROOM_CAP / OPEN_FIELD_PIECE_MAX changed, and the bookshelf-run
+   *  lost its third case. These values come from the CURRENT pure synthetic
+   *  staging chain, with and without strand doors; the focused survival
+   *  draw leaves these already-furnished fixtures byte-identical. The
+   *  byte-for-byte discipline is unchanged: this capture pins the current
+   *  staging against future accidental drift. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6060:535184652", "5986:3747424891"],
-    ["2026-10-12", 32, "library", 1.5, "17843:1387805396", "17322:3965025760"],
-    ["2026-10-13", 64, "ballroom", 0.66, "30202:995717662", "29165:4262870438"],
-    ["2026-10-14", 96, "hotel-room", 1, "31847:1835721113", "30879:1633728112"],
-    ["2026-10-15", 32, "pool-hall", 1, "16558:2811097141", "16370:1042149808"],
+    ["2026-10-11", 16, "hotel-room", 1, "3455:938319018", "2684:3438524752"],
+    ["2026-10-12", 32, "library", 1.5, "5140:3659768260", "5042:4059886873"],
+    ["2026-10-13", 64, "ballroom", 0.66, "7904:3558551460", "7904:3558551460"],
+    ["2026-10-14", 96, "hotel-room", 1, "12074:1592388535", "12074:1592388535"],
+    ["2026-10-15", 32, "pool-hall", 1, "5114:1222151879", "4738:1789267020"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {
@@ -1570,7 +1587,7 @@ describe("openFields channel (§8.2 随机区域 — the sparse dressing)", () =
         perField.set(f, (perField.get(f) ?? 0) + 1);
       }
       for (const n of perField.values()) {
-        expect(n).toBeLessThanOrEqual(3);
+        expect(n).toBeLessThanOrEqual(OPEN_FIELD_PIECE_MAX);
       }
     }
   });
@@ -1627,7 +1644,7 @@ describe("openFields channel (§8.2 随机区域 — the sparse dressing)", () =
           );
         }
       }
-      // And the global 65% coverage cap still binds with fields dressed.
+      // And the global 42% coverage cap still binds with fields dressed.
       expect(coverageOf(staged)).toBeLessThanOrEqual(1 - KIT_EMPTY_FLOOR_MIN + 1e-9);
     }
   });
@@ -1660,10 +1677,12 @@ describe("openFields channel (§8.2 随机区域 — the sparse dressing)", () =
 
 
 /* ------------------------------------------------------------------ */
-/* bookshelf-run real geometry (2026-10 realism lane): the kit's three  */
-/* shelves ride the BookshelfProp's TRUE 1.84m width — the old 1.6m     */
-/* center spacing interleaved the 1.84m bodies. These tests measure the */
-/* placed OBBs (prop-geometry.ts), not snapshots.                       */
+/* bookshelf-run real geometry (2026-10 realism lane; composition pass  */
+/* 2026-10-25): the kit's TWO shelves ride the BookshelfProp's TRUE     */
+/* 1.84m width at ±half the run spacing — the third case and one        */
+/* bookpile were dropped in the art overhaul's sparser reading corner.  */
+/* These tests measure the placed OBBs (prop-geometry.ts), not          */
+/* snapshots.                                                           */
 /* ------------------------------------------------------------------ */
 
 describe("bookshelf-run real geometry (prop-geometry.ts)", () => {
@@ -1673,17 +1692,16 @@ describe("bookshelf-run real geometry (prop-geometry.ts)", () => {
       .filter((p) => p.kind === "bookshelf")
       .map((p) => propObbFor({ kind: p.kind, x: p.x, z: p.z, rotY: p.rotY, scale: p.scale }));
 
-  it("spaces the three shelves at the real run spacing", () => {
+  it("spaces the two shelves at half the real run spacing", () => {
     const shelves = kit.pieces.filter((p) => p.kind === "bookshelf");
     expect(shelves.map((p) => p.dx)).toEqual([
-      -BOOKSHELF_RUN_SPACING,
-      0,
-      BOOKSHELF_RUN_SPACING,
+      -BOOKSHELF_RUN_SPACING / 2,
+      BOOKSHELF_RUN_SPACING / 2,
     ]);
     expect(BOOKSHELF_RUN_SPACING).toBeCloseTo(1.92, 9);
   });
 
-  it("the three placed shelves never overlap, straight or rotated", () => {
+  it("the two placed shelves never overlap, straight or rotated", () => {
     for (const t of [
       { x: 0, z: 0, rotY: 0, scale: 1 },
       { x: 2, z: 3, rotY: Math.PI / 2, scale: 1 },
@@ -1691,15 +1709,8 @@ describe("bookshelf-run real geometry (prop-geometry.ts)", () => {
       { x: 0, z: 0, rotY: 0, scale: 1.35 },
     ]) {
       const obbs = runObbs(t);
-      expect(obbs).toHaveLength(3);
-      for (let i = 0; i < 3; i++) {
-        for (let j = i + 1; j < 3; j++) {
-          expect(
-            obbsIntersect(obbs[i], obbs[j]),
-            `shelves ${i}/${j} overlap at rotY ${t.rotY}`,
-          ).toBe(false);
-        }
-      }
+      expect(obbs).toHaveLength(2);
+      expect(obbsIntersect(obbs[0], obbs[1])).toBe(false);
       // …and the minimum edge-to-edge gap along the center line is the
       // authored 8cm: project each half-extent onto the axis joining the
       // centers (width axis at rotY 0, depth axis at π/2).
@@ -1717,7 +1728,7 @@ describe("bookshelf-run real geometry (prop-geometry.ts)", () => {
   });
 
   it("the footprint disc covers the true outermost edge", () => {
-    const reach = BOOKSHELF_RUN_SPACING + BOOKSHELF_DIMENSIONS.width / 2; // 2.84
+    const reach = BOOKSHELF_RUN_SPACING / 2 + BOOKSHELF_DIMENSIONS.width / 2; // 1.88
     expect(reach).toBeLessThanOrEqual(kit.footprint + 1e-9);
     // Every piece center sits inside the disc…
     for (const p of kit.pieces) {

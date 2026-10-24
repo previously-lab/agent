@@ -1,10 +1,10 @@
 /* Kit variety (§6 anti-warehouse rule, 2026-10 XL repetition audit) — the
  * checkable half of "sets must not repeat": ONE room never hosts more than
  * KIT_ROOM_CAP (+ the saturated-fallback slack of one) placements of any
- * single kit id, and the cure never costs the B.12 density it exists to
- * protect. The XL sweep replays space.tsx's interior staging chain (the
- * same pure modules, no renderer) over a fixed slice matrix so the numbers
- * are reproducible, and pins the zones' "strict widening" contract: the
+ * single kit id, and the sparser art direction never stages an empty room.
+ * The XL sweep replays space.tsx's interior staging chain (the same pure
+ * modules, no renderer) over a fixed slice matrix so the numbers are
+ * reproducible, and pins the zones' "strict widening" contract: the
  * module-attributed zones (compositionKitZonesFor) claim the SAME rects as
  * the plain template fold, plus each module's whitelist on its clusters.
  */
@@ -37,10 +37,8 @@ const ARCHETYPES: ArchetypeId[] = ["hotel-room", "library", "ballroom"];
 interface SweepRow {
   placements: number;
   maxRepeat: number;
-  /** Room scale factor (scaleNotationFor) — B.12's density law was
-   *  ratified on normal-scale rooms; miniature dollhouses (×0.2–0.35) are
-   *  deliberate spectacles whose floor physically cannot hold a kit per
-   *  the density table, so the per-room floor binds only at f = 1. */
+  /** Room scale factor (scaleNotationFor) — retained for the normal-room
+   *  mean if scale tiers ever return; the current scale law is always ×1. */
   factor: number;
 }
 
@@ -109,14 +107,8 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
   const rows: SweepRow[] = [];
   for (const archetype of archetypes) {
     for (let i = 0; i < 30; i++) {
-      // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
-      // The two halls' removal re-rolled every composition draw; the
-      // ballroom-15 stream now composes a 24×6 shallow row
-      // (sunroom+storage+study) that stages 2 pieces — under the B.12
-      // per-room floor of 3 pinned below. The floor is a contract and
-      // stays exactly where it is; the cell's stream key is re-rolled
-      // instead (cross:dining-hall+reading-room+bedroom+living, 14
-      // placements).
+      // Keep the historical ballroom-15 stream key so this fixed sweep
+      // remains comparable across the intentional art-density passes.
       const id =
         archetype === "ballroom" && i === 15
           ? "variety-xl-ballroom-15r"
@@ -127,7 +119,7 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
 
   it("no kit id repeats past the cap plus one anywhere in the sweep", () => {
     // CAP normally binds hard; the +1 is the deliberate slack for a room
-    // whose ENTIRE deck is capped, where the B.12 density promise
+    // whose ENTIRE deck is capped, where the non-empty-room promise
     // rightfully outranks the cap (kits.ts drawKit's precedence).
     for (const [i, r] of rows.entries()) {
       expect(r.maxRepeat, `room #${i}`).toBeLessThanOrEqual(KIT_ROOM_CAP + 1);
@@ -143,19 +135,19 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
     expect(slack).toBeLessThanOrEqual(12);
   });
 
-  it("the cure never costs the density it protects (B.12)", () => {
-    // Measured 2026-10 on NORMAL-scale rooms, BEFORE the fix: mean 12.14
-    // placements/room at 18% floor coverage. The cap must not collapse
-    // that: a generous floor at ~60% of the legacy mean (7) catches a
-    // real regression while leaving the cap's own ~4% mix-shift slack
-    // well alone. v0.13 retired the tier draw, so every swept room is
-    // ×1 — the `normal` filter below is the whole sweep now (kept so the
-    // test still pins the per-room floor if a tier ever returns).
+  it("stays sparse but nonempty after the breathing-floor pass", () => {
+    // The pure 90-room sweep now measures mean 4.422 placements, with
+    // legitimate one- and two-kit rooms. A 3.5 floor catches a collapse
+    // toward empty staging without restoring the retired abundance law;
+    // the upper bound rejects a return to warehouse-density staging. The
+    // repetition caps above and the geometric coverage checks in kits.test
+    // remain independent constraints, not casualties of the sparser look.
     const normal = rows.filter((r) => r.factor === 1);
     const mean = normal.reduce((a, r) => a + r.placements, 0) / normal.length;
-    expect(mean).toBeGreaterThan(7);
+    expect(mean).toBeGreaterThan(3.5);
+    expect(mean).toBeLessThan(7);
     for (const [i, r] of normal.entries()) {
-      expect(r.placements, `normal room #${i}`).toBeGreaterThanOrEqual(3);
+      expect(r.placements, `normal room #${i}`).toBeGreaterThanOrEqual(1);
     }
     for (const [i, r] of rows.entries()) {
       expect(r.placements, `room #${i}`).toBeGreaterThanOrEqual(1);

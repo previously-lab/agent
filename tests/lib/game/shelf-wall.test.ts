@@ -30,8 +30,9 @@ const K = 1;
 const LEN = 6;
 const HEIGHT = 4;
 
-/** The standard build: 6m run, 4m wall, scale 1 → 2.6m case, 5 bays,
- *  4 shelf rows. No openings. */
+/** The standard build: 6m run, 4m wall, scale 1 → 2.6m case, 4 bays
+ *  (SHELF_WALL_BAY 1.6 since the 2026-10-25 art overhaul), 4 shelf rows. No
+ *  openings. */
 function build(openings: readonly WallOpening[] = []) {
   const b = shelfWallBuild({ len: LEN, height: HEIGHT, wallScale: K }, openings);
   expect(b).not.toBeNull();
@@ -126,28 +127,28 @@ describe("rectangle subtraction", () => {
 describe("the uncut shelf wall", () => {
   const b = build();
 
-  it("resolves the 2.6m case on a 4m wall with 5 bays", () => {
+  it("resolves the 2.6m case on a 4m wall with 4 bays", () => {
     expect(b.bookH).toBeCloseTo(2.6, 6);
-    expect(b.bayCount).toBe(5);
-    expect(b.bayWidth).toBeCloseTo(1.2, 6);
+    expect(b.bayCount).toBe(4);
+    expect(b.bayWidth).toBeCloseTo(1.5, 6);
   });
 
   it("emits n+1 stiles, plinth + top + 4 shelves, one back panel", () => {
-    expect(b.stiles).toHaveLength(6);
+    expect(b.stiles).toHaveLength(5);
     expect(b.boards).toHaveLength(6); // plinth + 4 shelves + top
     expect(b.backs).toHaveLength(1);
     expect(b.backs[0].along0).toBeCloseTo(-3, 6);
     expect(b.backs[0].along1).toBeCloseTo(3, 6);
     expect(b.backs[0].y0).toBeCloseTo(0.14, 6);
-    expect(b.backs[0].y1).toBeCloseTo(2.55, 6);
+    expect(b.backs[0].y1).toBeCloseTo(2.56, 6);
   });
 
   it("emits a book row per bay per shelf, inside the bay and above its shelf", () => {
-    expect(b.books).toHaveLength(5 * 4);
+    expect(b.books).toHaveLength(4 * 4);
     for (const book of b.books) {
       expect(book.kind).toBe("books");
-      const bayLo = -3 + (book.bay ?? 0) * 1.2 + 0.05;
-      const bayHi = -3 + ((book.bay ?? 0) + 1) * 1.2 - 0.05;
+      const bayLo = -3 + (book.bay ?? 0) * 1.5 + 0.025 + 0.02;
+      const bayHi = -3 + ((book.bay ?? 0) + 1) * 1.5 - 0.025 - 0.02;
       expect(book.along0).toBeGreaterThanOrEqual(bayLo - 1e-6);
       expect(book.along1).toBeLessThanOrEqual(bayHi + 1e-6);
       const shelfY = b.shelfYs[book.row ?? 0];
@@ -156,9 +157,9 @@ describe("the uncut shelf wall", () => {
   });
 
   it("stiles stand full height at the bay boundaries", () => {
-    for (let i = 0; i <= 5; i++) {
+    for (let i = 0; i <= 4; i++) {
       const st = b.stiles[i];
-      expect(st.along0).toBeCloseTo(-3 + i * 1.2 - b.stile / 2, 6);
+      expect(st.along0).toBeCloseTo(-3 + i * 1.5 - b.stile / 2, 6);
       expect(st.y0).toBe(0);
       expect(st.y1).toBeCloseTo(b.bookH, 6);
     }
@@ -174,25 +175,25 @@ describe("cutting around openings", () => {
   });
 
   it("a window centered ON a stile cuts the stile below the sill and stops there", () => {
-    // along 0.6 is exactly a bay boundary (stile #3).
-    const openings: WallOpening[] = [{ along: 0.6, width: 1.5, bottom: 1.0, top: 2.9 }];
+    // along 0 is exactly a bay boundary (stile #2, midway along the run).
+    const openings: WallOpening[] = [{ along: 0, width: 1.5, bottom: 1.0, top: 2.9 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
     const cutStile = b.stiles.filter(
-      (s) => s.along0 < 0.6 && s.along1 > 0.6,
+      (s) => s.along0 < 0 && s.along1 > 0,
     );
     expect(cutStile).toHaveLength(1);
     expect(cutStile[0].y1).toBeLessThanOrEqual(1.0 + 1e-6);
     expect(cutStile[0].y0).toBe(0);
     // Its untouched neighbors still run full height.
-    expect(b.stiles.filter((s) => s.y1 > 2.5)).toHaveLength(5);
+    expect(b.stiles.filter((s) => s.y1 > 2.5)).toHaveLength(4);
   });
 
   it("boards crossing the opening break at its frame; the plinth and low shelves run on", () => {
-    const openings: WallOpening[] = [{ along: 0.6, width: 1.5, bottom: 1.0, top: 2.9 }];
+    const openings: WallOpening[] = [{ along: 0, width: 1.5, bottom: 1.0, top: 2.9 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
-    // Plinth (row -1) and shelf 0 (y 0.62) are below the sill: uncut.
+    // Plinth (row -1) and shelf 0 (y 0.72) are below the sill: uncut.
     const uncut = b.boards.filter((x) => (x.row ?? 0) < 1);
     for (const r of uncut) {
       expect(r.along0).toBeCloseTo(-3, 6);
@@ -204,18 +205,18 @@ describe("cutting around openings", () => {
     for (const r of cut) {
       // Every surviving segment lies fully on ONE side of the frame.
       expect(
-        r.along1 <= -0.15 + 1e-6 || r.along0 >= 1.35 - 1e-6,
+        r.along1 <= -0.75 + 1e-6 || r.along0 >= 0.75 - 1e-6,
         `board [${r.along0},${r.along1}] crosses the frame`,
       ).toBe(true);
     }
   });
 
   it("the back panel is holed: sides survive, the strip below the glass survives", () => {
-    const openings: WallOpening[] = [{ along: 0.6, width: 1.5, bottom: 1.0, top: 2.9 }];
+    const openings: WallOpening[] = [{ along: 0, width: 1.5, bottom: 1.0, top: 2.9 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
     expect(b.backs).toHaveLength(3);
-    const strip = b.backs.find((r) => r.along0 >= -0.15 - 1e-6 && r.along1 <= 1.35 + 1e-6);
+    const strip = b.backs.find((r) => r.along0 >= -0.75 - 1e-6 && r.along1 <= 0.75 + 1e-6);
     expect(strip).toBeDefined();
     expect(strip!.y1).toBeLessThanOrEqual(1.0 + 1e-6);
   });
@@ -224,7 +225,7 @@ describe("cutting around openings", () => {
     const openings: WallOpening[] = [{ along: 0, width: 1.6, bottom: 0.2, top: 0.5 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
-    expect(b.books).toHaveLength(5 * 4); // all rows stand — the sill is above them
+    expect(b.books).toHaveLength(4 * 4); // all rows stand — the sill is above them
     const plinth = b.boards.find((x) => x.row === -1)!;
     expect(plinth.along0).toBeCloseTo(-3, 6); // below the window: untouched
     // Stiles crossing the opening's band are cut at 0.5.
@@ -244,22 +245,27 @@ describe("cutting around openings", () => {
     const openings: WallOpening[] = [{ along: 0, width: 2.0, bottom: 0, top: 4 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
-    // Stiles inside the span (at -0.6 and 0.6) are gone entirely.
-    expect(b.stiles.some((s) => s.along0 < 0.6 && s.along1 > 0.6)).toBe(false);
-    // Bays 2 and 3 lose every book row touching the span…
-    expect(b.books.some((r) => (r.bay ?? 0) === 2)).toBe(false);
-    // …while the flanking bays keep all of theirs.
+    // The stile inside the span (at 0) is gone entirely.
+    expect(b.stiles.some((s) => s.along0 < 0 && s.along1 > 0)).toBe(false);
+    // No book row touches the span…
+    for (const r of b.books) {
+      expect(r.along1 <= -1 + 1e-6 || r.along0 >= 1 - 1e-6).toBe(true);
+    }
+    // …the flanking bays keep all four of theirs…
     expect(b.books.filter((r) => (r.bay ?? 0) === 0)).toHaveLength(4);
-    expect(b.books.filter((r) => (r.bay ?? 0) === 4)).toHaveLength(4);
-    // Bay 3's surviving sliver (along 1.0..1.75) is a real row.
-    const sliver = b.books.filter((r) => (r.bay ?? 0) === 3);
-    expect(sliver).toHaveLength(4);
-    expect(sliver[0].along0).toBeGreaterThanOrEqual(1.0 - 1e-6);
+    expect(b.books.filter((r) => (r.bay ?? 0) === 3)).toHaveLength(4);
+    // …and the two crossed bays survive as real segments outside the frame.
+    const west = b.books.filter((r) => (r.bay ?? 0) === 1);
+    const east = b.books.filter((r) => (r.bay ?? 0) === 2);
+    expect(west).toHaveLength(4);
+    expect(east).toHaveLength(4);
+    expect(west[0].along1).toBeLessThanOrEqual(-1 + 1e-6);
+    expect(east[0].along0).toBeGreaterThanOrEqual(1 - 1e-6);
   });
 
   it("an opening on the negative along side cuts symmetrically", () => {
-    const west: WallOpening[] = [{ along: -0.6, width: 1.5, bottom: 1.0, top: 2.9 }];
-    const east: WallOpening[] = [{ along: 0.6, width: 1.5, bottom: 1.0, top: 2.9 }];
+    const west: WallOpening[] = [{ along: -1.5, width: 1.5, bottom: 1.0, top: 2.9 }];
+    const east: WallOpening[] = [{ along: 1.5, width: 1.5, bottom: 1.0, top: 2.9 }];
     const bw = build(west);
     const be = build(east);
     expectDisjointFromOpenings(bw, west);
@@ -296,8 +302,8 @@ describe("cutting around openings", () => {
     ];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
-    // All six bay boundaries survive in some form…
-    expect(b.stiles).toHaveLength(6);
+    // All five bay boundaries survive in some form…
+    expect(b.stiles).toHaveLength(5);
     // …but the two the openings swallow are shortened, not full height.
     const shortened = b.stiles.filter(
       (s) => s.y1 < b.bookH - 1e-6 || s.y0 > 1e-6,
@@ -320,34 +326,37 @@ describe("cutting around openings", () => {
     );
   });
 
-  it("a real 1.0m sill keeps the row below it and splits the rows it crosses", () => {
-    // Window along 0.1, width 0.5: cut band [−0.15, 0.35] × [1.0, 2.9].
-    const openings: WallOpening[] = [{ along: 0.1, width: 0.5, bottom: 1.0, top: 2.9 }];
+  it("a real 1.2m sill keeps the row below it and splits the rows it crosses", () => {
+    // Window along 0.1, width 0.5: cut band [−0.15, 0.35] × [1.2, 2.9].
+    const openings: WallOpening[] = [{ along: 0.1, width: 0.5, bottom: 1.2, top: 2.9 }];
     const b = build(openings);
     expectDisjointFromOpenings(b, openings);
-    // Bay 2 spans along [−0.55, 0.55] — the window crosses it.
+    // The cut straddles the bay-1/bay-2 boundary at along 0.
+    const bay1 = b.books.filter((r) => (r.bay ?? 0) === 1);
     const bay2 = b.books.filter((r) => (r.bay ?? 0) === 2);
-    // Row 0 (y ≈ 0.645..0.975) stands entirely UNDER the sill: one
+    // Row 0 (y ≈ 0.74..1.18) stands entirely UNDER the sill: one
     // uncut segment per bay, full bay width.
-    const row0 = bay2.filter((r) => r.row === 0);
-    expect(row0).toHaveLength(1);
-    expect(row0[0].along1 - row0[0].along0).toBeCloseTo(1.1, 6);
-    // Rows 1..3 (y ≥ 1.125) cross the glass: each is SEGMENTED around
-    // the frame — a surviving book run on each side, not a wholesale
-    // bay deletion.
+    const row1_0 = bay1.filter((r) => r.row === 0);
+    const row2_0 = bay2.filter((r) => r.row === 0);
+    expect(row1_0).toHaveLength(1);
+    expect(row2_0).toHaveLength(1);
+    expect(row1_0[0].along1 - row1_0[0].along0).toBeCloseTo(1.41, 6);
+    expect(row2_0[0].along1 - row2_0[0].along0).toBeCloseTo(1.41, 6);
+    // Rows 1..3 (y ≥ 1.32) cross the glass: each bay's row is SEGMENTED
+    // around the frame — a surviving book run on the outer side only.
     for (let row = 1; row <= 3; row++) {
-      const segs = bay2
-        .filter((r) => r.row === row)
-        .sort((a, c) => a.along0 - c.along0);
-      expect(segs).toHaveLength(2);
-      expect(segs[0].along1).toBeLessThanOrEqual(-0.15 + 1e-6);
-      expect(segs[1].along0).toBeGreaterThanOrEqual(0.35 - 1e-6);
-      for (const s of segs) {
+      const segs1 = bay1.filter((r) => r.row === row);
+      const segs2 = bay2.filter((r) => r.row === row);
+      expect(segs1).toHaveLength(1);
+      expect(segs2).toHaveLength(1);
+      expect(segs1[0].along1).toBeLessThanOrEqual(-0.15 + 1e-6);
+      expect(segs2[0].along0).toBeGreaterThanOrEqual(0.35 - 1e-6);
+      for (const s of [...segs1, ...segs2]) {
         expect(s.along1 - s.along0).toBeGreaterThanOrEqual(0.16 - 1e-6);
       }
     }
     // The flanking bays keep all four full rows.
-    expect(b.books.filter((r) => (r.bay ?? 0) === 1)).toHaveLength(4);
+    expect(b.books.filter((r) => (r.bay ?? 0) === 0)).toHaveLength(4);
     expect(b.books.filter((r) => (r.bay ?? 0) === 3)).toHaveLength(4);
     // The cut's board is split too: the shelf at row 1's foot breaks at
     // the frame, while the plinth and row-0 shelf run straight through.

@@ -2,7 +2,7 @@
  * identity, geometry, links or stored record. No browser or renderer imports. */
 import type { Palette } from "./space-types";
 import type { BiomeSkin, SkinFloorKind, SkinWallKind } from "./skins";
-import { CAM_OFFSET } from "./tuning/room";
+import { CAM_OFFSET, MODULE_LIGHT_FIXTURES } from "./tuning/room";
 
 type ScenarioPalette = Palette & Required<Pick<Palette, "wall" | "fabric" | "wood">>;
 
@@ -11,18 +11,19 @@ type ScenarioPalette = Palette & Required<Pick<Palette, "wall" | "fabric" | "woo
 export function scenarioPalette(source: Palette, night: boolean): ScenarioPalette {
   return {
     ...source,
-    sky: night ? "#899981" : "#d8deca",
-    fog: night ? "#7d8d77" : "#becbb2",
-    ground: night ? "#9aa68d" : "#bcc6aa",
-    wall: night ? "#b1bda4" : "#dedfca",
-    fabric: night ? "#7c9074" : "#9eaf91",
-    wood: night ? "#a89676" : "#c8b28d",
+    sky: night ? "#b7c1a9" : "#d9ddc7",
+    fog: night ? "#c3cbb4" : "#dce1cd",
+    ground: night ? "#b7bfa6" : "#c0c5ad",
+    wall: night ? "#cbd1b8" : "#d1d6bf",
+    fabric: night ? "#9dab8e" : "#a0af91",
+    wood: night ? "#c5b797" : "#d0c1a2",
     accent: "#b78b60",
     sunColor: night ? "#e2ddbb" : "#fff3d5",
     sunIntensity: night ? 0.62 : 0.92,
-    // Lifted (room-polish pass, visual study 02): interiors read soft and
-    // diffuse — the sun fill + IBL do the shaping — while the contact
-    // shadows under furniture carry the grounding instead of hard pools.
+    // Matte broad-surface pass (v0.11-streams art overhaul): interiors read
+    // soft and diffuse — the lifted sun fill + ambient do the shaping —
+    // while the contact shadows under furniture carry the grounding
+    // instead of hard pools.
     ambient: night ? 0.44 : 0.56,
   };
 }
@@ -40,10 +41,15 @@ const WALL_SLOT: Record<SkinWallKind, MaterialSlot> = {
   shelf: "fabric", hedge: "fabric", "water-wall": "ground",
 };
 
-/** Adapt catalogue colors at the render boundary. Real records always draw a
- * skin, including temperate; its authored colors must not override the scene's
- * art direction. Material kinds, movement, silhouettes and staging stay intact.
- * A skinless debug room keeps using scenarioPalette directly. */
+/** Adapt catalogue colors AND light levels at the render boundary. Real
+ * records always draw a skin, including temperate; its authored colors and
+ * catalogue light intensity/pool overrides must not override the scene's
+ * art direction — the matte pass runs every fixture at the quiet
+ * MODULE_LIGHT_FIXTURES levels regardless of how hot the catalogue entry
+ * was authored. Material kinds, movement, silhouettes, light register,
+ * furnishing and staging stay intact; only the render copy's tint, level
+ * and pool join the shared art direction. A skinless debug room keeps
+ * using scenarioPalette directly. */
 export function scenarioSkin(source: BiomeSkin | null, palette: Palette): BiomeSkin | null {
   if (source === null) return null;
   const day = scenarioPalette(palette, false);
@@ -52,11 +58,22 @@ export function scenarioSkin(source: BiomeSkin | null, palette: Palette): BiomeS
   const windowColors = (p: ScenarioPalette) => ({
     sky: p.sky, fog: p.fog, ground: p.ground, sun: p.sunColor,
   });
+  // The render copy answers to the CURRENT fixture table (fallback quiet):
+  // the catalogue's intensity/pool overrides are render-boundary values,
+  // not identity — real-record rooms get the same quiet levels as the
+  // skinless debug rooms.
+  const fixture =
+    MODULE_LIGHT_FIXTURES[source.light.register] ?? MODULE_LIGHT_FIXTURES.quiet;
   return {
     ...source,
     floor: { ...source.floor, colors: colors(FLOOR_SLOT[source.floor.kind]) },
     wall: { ...source.wall, colors: colors(WALL_SLOT[source.wall.kind]) },
-    light: { ...source.light, tint: day.sunColor },
+    light: {
+      ...source.light,
+      tint: day.sunColor,
+      intensity: fixture.intensity,
+      pool: fixture.pool,
+    },
     window: { ...source.window, day: windowColors(day), night: windowColors(night) },
     fog: { ...source.fog, day: day.fog, night: night.fog },
   };

@@ -1,7 +1,7 @@
 /**
  * Tests for the material wiring layer: the shared texture cache
- * (src/lib/game/materials/shared.ts), the tile/concrete surface factory
- * (surface.ts), and the shallow-water material (water-surface.ts).
+ * (src/lib/game/materials/shared.ts), the matte tile/concrete surface
+ * factory (surface.ts), and the shallow-water material (water-surface.ts).
  * Node-safe — DataTexture and MeshStandardMaterial need no DOM, and the
  * shader patches are driven with stub shader objects so the exact
  * ShaderChunk strings they rewrite stay pinned against the installed three.
@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import {
   LinearFilter,
   LinearMipmapLinearFilter,
+  MeshStandardMaterial,
   RepeatWrapping,
 } from "three";
 import type { WebGLProgramParametersWithUniforms } from "three";
@@ -20,11 +21,6 @@ import {
 } from "@/lib/game/materials/shared";
 import { createSurfaceMaterial } from "@/lib/game/materials/surface";
 import { createWaterSurfaceMaterial } from "@/lib/game/materials/water-surface";
-import { CONCRETE_ALBEDO_MEAN, TILE_ALBEDO_MEAN } from "@/lib/game/materials";
-import {
-  CONCRETE_SPAN_METERS,
-  TILE_SPAN_METERS,
-} from "@/lib/game/tuning/room";
 import { POOL_DEPTH } from "@/lib/game/terrain";
 
 /** The tangent-space packed sample the patch must eliminate (the dead
@@ -81,65 +77,71 @@ describe("shared texture cache", () => {
 });
 
 describe("createSurfaceMaterial", () => {
-  it("samples the shared tile maps and tiles them physically via uTiling", () => {
+  it("returns a matte map-less material: no albedo/roughness/normal maps", () => {
     const material = createSurfaceMaterial({
       kind: "tile",
       color: "#ffffff",
       spanX: 10,
       spanY: 4,
     });
-    expect(material.map).toBe(sharedTileTextures().albedo);
-    expect(material.roughnessMap).toBe(sharedTileTextures().roughness);
-    expect(material.normalMap).toBe(sharedTileTextures().normal);
-
-    const shader = stubShader();
-    material.onBeforeCompile(shader, null as never);
-    const tiling = shader.uniforms.uTiling.value as { x: number; y: number };
-    // One texture cell = one physical 0.3m tile: 10m / 2.4m span ≈ 4.17.
-    expect(tiling.x).toBeCloseTo(10 / TILE_SPAN_METERS, 6);
-    expect(tiling.y).toBeCloseTo(4 / TILE_SPAN_METERS, 6);
-    expect(shader.vertexShader).toContain("* uTiling");
-    // Raw [-1,1] normal maps: three's tangent-space unpack must be gone.
-    expect(shader.fragmentShader).not.toContain(PACKED_MAPN_LINE);
+    expect(material.map).toBeNull();
+    expect(material.roughnessMap).toBeNull();
+    expect(material.normalMap).toBeNull();
+    // No custom shader patch: the factory leaves the stock program alone.
+    expect(material.onBeforeCompile).toHaveLength(0);
+    const stock = new MeshStandardMaterial();
+    expect(material.customProgramCacheKey()).toBe(stock.customProgramCacheKey());
+    stock.dispose();
     material.dispose();
   });
 
-  it("uses the concrete span constant for concrete surfaces", () => {
-    const material = createSurfaceMaterial({
-      kind: "concrete",
-      color: "#ffffff",
-      spanX: 10,
-      spanY: 4,
-    });
-    expect(material.map).toBe(sharedConcreteTextures().albedo);
-    const shader = stubShader();
-    material.onBeforeCompile(shader, null as never);
-    const tiling = shader.uniforms.uTiling.value as { x: number; y: number };
-    expect(tiling.x).toBeCloseTo(10 / CONCRETE_SPAN_METERS, 6);
-    material.dispose();
-  });
-
-  it("compensates each map's albedo mean so the palette stays the average", () => {
+  it("roughness .9 for tile and .98 for concrete, metalness 0", () => {
     const tile = createSurfaceMaterial({
       kind: "tile",
-      color: "#808080",
-      spanX: 5,
-      spanY: 5,
+      color: "#ffffff",
+      spanX: 10,
+      spanY: 4,
     });
     const concrete = createSurfaceMaterial({
       kind: "concrete",
-      color: "#808080",
-      spanX: 5,
-      spanY: 5,
+      color: "#ffffff",
+      spanX: 10,
+      spanY: 4,
     });
-    const base = tile.color.r; // whatever the color space conversion did
-    expect(base).toBeGreaterThan(0);
-    expect(tile.color.r / concrete.color.r).toBeCloseTo(
-      CONCRETE_ALBEDO_MEAN / TILE_ALBEDO_MEAN,
-      4,
-    );
+    expect(tile.roughness).toBe(0.9);
+    expect(concrete.roughness).toBe(0.98);
+    expect(tile.metalness).toBe(0);
+    expect(concrete.metalness).toBe(0);
     tile.dispose();
     concrete.dispose();
+  });
+
+  it("keeps the palette color exactly (no albedo compensation)", () => {
+    const color = "#d0c1a2";
+    const tile = createSurfaceMaterial({ kind: "tile", color, spanX: 5, spanY: 5 });
+    const concrete = createSurfaceMaterial({ kind: "concrete", color, spanX: 5, spanY: 5 });
+    // Both kinds render the input color as-is: surface.ts no longer
+    // pre-divides by any map mean.
+    expect(tile.color.getHexString()).toBe(concrete.color.getHexString());
+    expect(`#${tile.color.getHexString()}`).toBe(color);
+    tile.dispose();
+    concrete.dispose();
+  });
+
+  it("preserves transparency, opacity and flatShading options", () => {
+    const material = createSurfaceMaterial({
+      kind: "tile",
+      color: "#ffffff",
+      spanX: 10,
+      spanY: 4,
+      transparent: true,
+      opacity: 0.6,
+      flatShading: true,
+    });
+    expect(material.transparent).toBe(true);
+    expect(material.opacity).toBe(0.6);
+    expect(material.flatShading).toBe(true);
+    material.dispose();
   });
 });
 

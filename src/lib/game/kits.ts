@@ -252,7 +252,7 @@ export interface Kit {
   /** Footprint disc radius (m, human scale). Every piece offset sits
    *  inside it, and placement keeps the whole disc clear of other kits —
    *  the disc is the kit's breathing room, and the sum of discs is how
-   *  the ≥35%-empty-floor budget (§4.5) is accounted. */
+   *  the ≥58%-empty-floor budget (§4.5) is accounted. */
   footprint: number;
   pieces: readonly KitPiece[];
 }
@@ -476,13 +476,13 @@ export const KITS: readonly Kit[] = [
     ],
   },
   {
-    // 三联书架 + 书堆 + 面向书墙的扶手椅 — the shelf wall: three shelves
-    // in a run, loose piles at their feet, one chair turned toward the
-    // spines. The library's signature wall. Centers ride the REAL case
-    // width (BOOKSHELF_RUN_SPACING = 1.84 + 0.08 finger gap — the old
-    // 1.6 interleaved the 1.84-wide bodies), the back sits flush to the
-    // 0.44-deep case, and the footprint disc covers the true outermost
-    // edge (1.92 + 0.92 = 2.84) with margin.
+    // 双联书架 + 面向书墙的扶手椅 — the shelf wall: TWO shelves in a run
+    // (the 2026-10-25 art overhaul dropped the third case and one bookpile —
+    // a sparser, clearer reading corner), one loose pile at their feet, one
+    // chair turned toward the spines. The library's signature wall. Centers
+    // ride the REAL case width (BOOKSHELF_RUN_SPACING = 1.84 + 0.08 finger
+    // gap), the back sits flush to the 0.44-deep case, and the footprint
+    // disc covers the true outermost edge (0.96 + 0.92 = 1.88) with margin.
     id: "bookshelf-run",
     worldClasses: ["interior"],
     archetypes: ["library", "ballroom"],
@@ -491,12 +491,10 @@ export const KITS: readonly Kit[] = [
     facing: "center",
     footprint: 2.95,
     pieces: [
-      { kind: "bookshelf", dx: -BOOKSHELF_RUN_SPACING, dz: 0, rotY: 0 },
-      { kind: "bookshelf", dx: 0, dz: 0, rotY: 0 },
-      { kind: "bookshelf", dx: BOOKSHELF_RUN_SPACING, dz: 0, rotY: 0 },
-      { kind: "bookpile", dx: -0.8, dz: 0.7, rotY: 0.2 },
-      { kind: "bookpile", dx: 0.85, dz: 0.75, rotY: -0.3 },
-      { kind: "readingchair", dx: 0, dz: 1.15, rotY: Math.PI },
+      { kind: "bookshelf", dx: -BOOKSHELF_RUN_SPACING / 2, dz: 0, rotY: 0 },
+      { kind: "bookshelf", dx: BOOKSHELF_RUN_SPACING / 2, dz: 0, rotY: 0 },
+      { kind: "bookpile", dx: -0.7, dz: 0.7, rotY: 0.2 },
+      { kind: "readingchair", dx: 0.15, dz: 1.2, rotY: Math.PI },
     ],
   },
   {
@@ -1304,7 +1302,7 @@ export interface KitStaging {
    *  Omitted / null = the default path, byte-for-byte. */
   skin?: BiomeSkin | null;
   /** The 随机区域 open fields (§8.2) of a COMPOSED room, in the scaled
-   *  plan's coordinates: each field dresses with 0–3 seeded pieces drawn
+   *  plan's coordinates: each field dresses with 0–1 seeded pieces drawn
    *  from the same (module-filtered) deck — sparse by construction, never
    *  equidistant (uniform draws inside the rect), under the same
    *  clearance, coverage, and path promises as every other piece. The
@@ -1590,7 +1588,7 @@ function drawKitTransform(
  *     per kit, never touching each other (KIT_GAP), and hard-capped so at
  *     least KIT_EMPTY_FLOOR_MIN of the scaled floor stays empty.
  *  3. OPEN FIELDS (§8.2 随机区域): a composed room's module-scale voids
- *     dress with 0–3 seeded pieces each — from the same deck, under the
+ *     dress with 0–1 seeded pieces each — from the same deck, under the
  *     same clearances and coverage budget; most fields stay empty.
  *  4. CLEARANCES: every piece stays inside the walkable footprint, out of
  *     the doorway strip AND out of every strand door's approach strip
@@ -1904,7 +1902,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   }
 
   // 2. Side kits, area-driven. The coverage budget is checked against the
-  //    smallest remaining kit: when even that would break the 35%-empty
+  //    smallest remaining kit: when even that would break the 58%-empty
   //    floor, the room is done, whatever the raw target says.
   const perKit = KIT_AREA_PER_KIT[o.baseExtent] ?? 18;
   const countMax = KIT_COUNT_MAX[o.baseExtent] ?? 12;
@@ -1923,13 +1921,13 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   //      several reading corners), never sprawls across the whole room
   //      (§8.1.4). The re-deal happens AFTER the transform draw and keeps
   //      the transform — the position/rng economy (and so the placement hit
-  //      rate, i.e. B.12's density) is exactly the legacy flow's; only the
+  //      rate, i.e. the density) is exactly the legacy flow's; only the
   //      kit's identity is steered. Rooms whose zones carry no decks (the
   //      legacy templates) keep the union deal byte-for-byte.
-  //  (b) A ROOM-WIDE CAP (KIT_ROOM_CAP = 3). No kit id more than three
+  //  (b) A ROOM-WIDE CAP (KIT_ROOM_CAP = 2). No kit id more than two
   //      times per room: the draw re-rolls onto an uncapped kit — the
   //      zone's own deck first, then any room kit, then the zone deck's
-  //      least-used, where the B.12 density promise outranks the cap; a
+  //      least-used, where the density promise outranks the cap; a
   //      deck that cannot honour both is a deck-size problem, and the
   //      whitelists own that.
   // v0.12 §2: cluster zones OWNED by a succeeded schematic stand down —
@@ -1955,8 +1953,8 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
     // Precedence: (1) an uncapped kit OF THE ZONE'S DECK — the module's
     // own vocabulary first; (2) any uncapped kit of the ROOM — the cap is
     // room-wide even when one module's short list is exhausted (a borrowed
-    // sibling beats a 4th repeat); (3) the zone deck's LEAST-USED kit —
-    // only a fully saturated room lands here, and then the B.12 density
+    // sibling beats a 3rd repeat); (3) the zone deck's LEAST-USED kit —
+    // only a fully saturated room lands here, and then the density
     // promise outranks the cap: a deck that cannot honour both is a
     // deck-size problem, and the whitelists own that.
     const uncapped = deck.filter((k) => countOf(k) < KIT_ROOM_CAP);
@@ -1983,9 +1981,8 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   };
   // The side-kit pass as a CLOSURE over the draw deck: the normal pass runs
   // with the room's chosen deck (the skin's REPLACE deck when one is
-  // declared, else the room deck); the SURVIVAL DRAW below re-runs the
-  // IDENTICAL pass on the baseline room deck when nothing at all staged.
-  // Same machinery, same clearances — only the vocabulary differs.
+  // declared, else the room deck). The focused survival draw below runs
+  // only when this pass and every earlier placement channel staged nothing.
   const stageSideKits = (deck: readonly Kit[]): void => {
     const minCovDeck =
       Math.min(...deck.map((k) => k.footprint * propScale)) ** 2 * Math.PI;
@@ -2032,15 +2029,16 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   stageSideKits(kits);
 
   // 3. Open fields (§8.2 随机区域): each module-scale void inside a composed
-  //    room draws 0–3 seeded pieces — sparse by construction (most fields
-  //    draw none), never a grid (positions are uniform draws inside the
+  //    room draws 0–1 seeded pieces (the 2026-10-25 breathing-floor pass —
+  //    was 0–3) — sparse by construction (most fields draw none), never a
+  //    grid (positions are uniform draws inside the
   //    rect, never equidistant §6), never a warehouse (the deck is the
   //    room's module-filtered whitelist, with the same variety of small
   //    "trace" pieces as the module floors). Every piece rides the SAME
   //    pushKit clearance machinery as the side kits — walkable footprint,
   //    doorway and strand-door approaches, the cleared path, the water,
   //    the authored keep-empty zones, the kit-gap discs — and counts
-  //    against the SAME 65% coverage budget, so §6's bans bind in the
+  //    against the SAME 42% coverage budget, so §6's bans bind in the
   //    fields exactly as on the module floors. A field too small for the
   //    margins, or a draw that finds no legal spot, simply dresses lighter:
   //    少而准 beats 塞满.
@@ -2092,20 +2090,46 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
     }
   }
   // 3½. THE SURVIVAL DRAW — 空房是硬缺陷: when every pass above staged
-  //     NOTHING (a skin deck that fits no authored slot on this floor — an
-  //     outdoor shore kit on a 2×2 indoor basin; a blueprint rolled back on
-  //     a floor blanket-covered by strand-door approaches), the room gets
-  //     ONE more side-kit pass from ITS OWN baseline deck (the module
-  //     whitelist ∩ gating — the same 牌堆非空回退 chain, so a skin may
-  //     REPLACE the draw vocabulary but is never its SOLE OWNER). Every
-  //     clearance of the normal pass still binds — walkable footprint,
-  //     doorway and strand-door strips, the path fringe, water, keep-empty
-  //     zones, disc gaps, the 35%-empty budget; only the vocabulary
-  //     changes. A room that staged anything at all never runs this, so
-  //     every previously-furnished room keeps byte-for-byte staging.
+  //     NOTHING (a skin deck that fits no authored slot on this floor, or a
+  //     required blueprint rolled back under strand-door approaches), try
+  //     the room's baseline deck first, then the active skin deck, smallest
+  //     footprint first. The old retry repeated the same random side-kit
+  //     pass and could miss every legal small kit on a heavily cleared
+  //     floor. Each focused draw still uses drawKitTransform (including
+  //     wall/shore semantics), the active cluster gates and pushKit: every
+  //     doorway, path, water, keep-empty, gap and coverage rule still binds.
+  //     A room that staged anything never runs this, so furnished rooms
+  //     keep byte-for-byte staging.
   if (out.length === 0) {
-    const survival = roomDeck();
-    if (survival.length > 0) stageSideKits(survival);
+    const baseline = roomDeck();
+    const survival = [
+      ...baseline,
+      ...kits.filter((k) => !baseline.includes(k)),
+    ].sort((a, b) => a.footprint - b.footprint);
+    for (const kit of survival) {
+      const cov = Math.PI * (kit.footprint * propScale) ** 2;
+      if (covered + cov > coverageCap) continue;
+      for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
+        const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
+        if (!t) continue;
+        if (o.zones?.clusters && o.zones.clusters.length > 0) {
+          const hit = activeClusters?.find((r) => inZoneRect(t.x, t.z, r));
+          if (!hit) continue;
+          if (hit.kitIds && hit.kitIds.length > 0 && !hit.kitIds.includes(kit.id)) {
+            continue;
+          }
+        }
+        const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
+        if (!pieces) continue;
+        nextKitIndex += 1;
+        out.push(...pieces);
+        discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
+        covered += cov;
+        counts.set(kit.id, (counts.get(kit.id) ?? 0) + 1);
+        break;
+      }
+      if (out.length > 0) break;
+    }
   }
 
   // 4. THE TRACE (§4.4) — the room's exactly-one calm trace, chosen, not

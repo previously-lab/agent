@@ -1,8 +1,8 @@
 /**
  * Hotel visual tuning — every visual constant the corridor renderer
  * (src/components/game/corridor.tsx) consumes: wall
- * thickness, theme/void palettes, per-role PBR finishes and the shared
- * grunge map, sconce/lamp colors, the dimming tables and lerp rates,
+ * thickness, theme/void palettes, per-role matte finishes,
+ * sconce/lamp colors, the dimming tables and lerp rates,
  * signage palettes, painting palette and dimensions, the corridor-form
  * constants (cornice, wainscot, portal), the
  * sconce light pools, the fixture-light layout constants (B.13 灯廊: real
@@ -26,59 +26,48 @@ import { WALL_HEIGHT } from "../hotel";
  * snapping. Exported: the integrator keeps the scene background/fog on
  * VOID_COLORS so the corridor's end-fade planes always match.
  */
-export const VOID_COLORS = { night: "#7d8d77", day: "#becbb2" } as const;
+export const VOID_COLORS = { night: "#8a9886", day: "#bdc8b2" } as const;
 
-/** Surface palette per theme — warm neutrals, day lifted from the night set. */
+/** Surface palette per theme — the sage/cream/pale-wood family of the
+ * matte architectural-illustration reference; day lifted from the night
+ * set. */
 export const THEME_COLORS = {
-  floor: { night: "#a59478", day: "#c8b38f" }, // warm wood
-  wall: { night: "#b0bca3", day: "#dedfca" }, // sage plaster / ivory
-  trim: { night: "#463f36", day: "#8f867a" }, // baseboards, frames, brackets
-  slab: { night: "#7b6d5c", day: "#cbbfa9" }, // door slabs
-  desk: { night: "#7a6a58", day: "#c4b49b" },
-  cushion: { night: "#9c8b76", day: "#ded4c3" },
-  pot: { night: "#5f5648", day: "#a79d8c" },
-  foliage: { night: "#7d8a66", day: "#9cae87" },
-  carpet: { night: "#75896c", day: "#9dad8e" }, // restrained sage runner
-  carpetEdge: { night: "#62765d", day: "#809472" },
-  wainscot: { night: "#6e6252", day: "#cfc3ae" }, // wainscot band — a shade darker than the wall
+  floor: { night: "#b4aa8c", day: "#d0c1a2" }, // pale wood
+  wall: { night: "#bfc4ab", day: "#d1d6bf" }, // sage plaster
+  trim: { night: "#9da88f", day: "#aebba1" }, // baseboards, frames, brackets — thin light trim
+  slab: { night: "#aa987c", day: "#c8b38e" }, // door slabs
+  desk: { night: "#c8b38e", day: "#d6c09d" },
+  cushion: { night: "#a3ae91", day: "#b3bca2" },
+  pot: { night: "#a9ad92", day: "#b9bba0" },
+  foliage: { night: "#7e946c", day: "#8aa278" },
+  carpet: { night: "#899a7e", day: "#a0af91" }, // restrained sage runner
+  carpetEdge: { night: "#718267", day: "#8e9d80" },
+  wainscot: { night: "#b7c3a6", day: "#c3cbb2" }, // wainscot band — a shade darker than the wall
 } as const;
 
 /**
- * Physical finish per surface role — the PBR half of "looks simple, light
- * is real". Values are real-material registers (waxed wood sheen, glazed
- * ceramic, matte plaster/fabric), deliberately NOT uniform: a flat
- * roughness=1/metalness=0 everywhere is what made the hotel read as a
- * cardboard model. The day/night lerp in Corridor only moves color; these
- * stays constant per role.
+ * Physical finish per surface role — the art direction is a clean matte
+ * architectural illustration, so every role is non-metal and near-rough:
+ * nothing glossy, nothing that stacks specular highlights under the
+ * fixture lights. The day/night lerp in Corridor only moves color; these
+ * stay constant per role.
  */
 export const MATERIAL_FINISH: Record<
   keyof typeof THEME_COLORS,
   { roughness: number; metalness: number }
 > = {
-  floor: { roughness: 0.55, metalness: 0 }, // waxed wood — soft sheen under the lamps
-  wall: { roughness: 0.92, metalness: 0 }, // painted plaster — near-matte
-  trim: { roughness: 0.45, metalness: 0.35 }, // darkened metal/brass fixtures
-  slab: { roughness: 0.5, metalness: 0 }, // lacquered door leaf
-  desk: { roughness: 0.5, metalness: 0.05 }, // polished wood counter
-  cushion: { roughness: 0.95, metalness: 0 }, // fabric
-  pot: { roughness: 0.35, metalness: 0 }, // glazed ceramic
-  foliage: { roughness: 0.9, metalness: 0 }, // matte leaves (keeps flatShading)
-  carpet: { roughness: 1, metalness: 0 }, // deep-pile runner — fully matte
-  carpetEdge: { roughness: 0.9, metalness: 0 }, // runner binding
-  wainscot: { roughness: 0.7, metalness: 0 }, // satin-painted wood paneling
+  floor: { roughness: 0.95, metalness: 0 }, // matte pale wood
+  wall: { roughness: 0.96, metalness: 0 }, // matte plaster
+  trim: { roughness: 0.9, metalness: 0 }, // painted trim — no metal sheen
+  slab: { roughness: 0.92, metalness: 0 }, // matte door leaf
+  desk: { roughness: 0.9, metalness: 0 }, // matte wood counter
+  cushion: { roughness: 0.97, metalness: 0 }, // fabric
+  pot: { roughness: 0.85, metalness: 0 }, // unglazed ceramic
+  foliage: { roughness: 0.95, metalness: 0 }, // matte leaves — reads quiet, never glittery
+  carpet: { roughness: 0.98, metalness: 0 }, // deep-pile runner — fully matte
+  carpetEdge: { roughness: 0.95, metalness: 0 }, // runner binding
+  wainscot: { roughness: 0.92, metalness: 0 }, // painted paneling, quiet under the palette
 };
-
-/**
- * Shared mottled roughnessMap — a seeded grayscale noise canvas multiplied
- * into material.roughness so reflections "breathe" instead of reading as
- * one uniform value (spec §2 hard requirement 2). The map itself (and the
- * GRUNGE_MAP_* shape constants) lives in the procedural material library:
- * src/lib/game/materials/grunge.ts. GRUNGE_ROLES stays here because which
- * corridor roles receive the map is a corridor material decision.
- */
-/** Roles that receive the mottled roughnessMap (soft-sheen surfaces; matte
- *  fabric/foliage stay untextured). */
-export const GRUNGE_ROLES = ["floor", "wall", "trim", "slab", "desk", "pot", "wainscot"] as const;
 
 /** Corridor sconce glow — warm constant, architecture rather than memory. */
 export const SCONCE_COLOR = "#ffd9a0";
@@ -194,10 +183,11 @@ export const CORRIDOR_WALL_THICKNESS = 0.2;
  * Full vs dimmed levels for every light and glow material in the scene.
  * Single source of truth: the JSX initial values read `.full` from here
  * and the dimming lerp targets `.dimmed`, so the two can never drift
- * apart. Dimmed emissive/opacity levels are ~30% of full (a ~70% cut);
- * real lights dim to the task-specified levels. Entries with a `day`
- * override use it instead of `full` while the app is in light mode
- * (the fake-glow decals — sconce pools, wall washes, the light line's
+ * apart. Every source is subdued — the art direction is a matte
+ * illustration, so no fixture may pool hot light or glare; dimmed levels
+ * are a deep cut so the hotel goes quiet behind the player. Entries with
+ * a `day` override use it instead of `full` while the app is in light
+ * mode (the fake-glow decals — sconce pools, wall washes, the light line's
  * wash and floor glow — switch off: daylight needs no fake glow; the
  * fixtures' real lights stay on, lamps burning in a bright hotel — and
  * the hemisphere opens up).
@@ -208,27 +198,27 @@ export const CORRIDOR_WALL_THICKNESS = 0.2;
  * no abstract mid-hall chunk light any more.
  */
 export const LIGHT_LEVELS = {
-  hemisphere: { full: 0.4, dimmed: 0.04, day: 0.85 },
-  sconceLight: { full: 4.5, dimmed: 0.25 },
-  stripLight: { full: 3.5, dimmed: 0.2 },
-  corridorLamp: { full: 4, dimmed: 0.4 },
-  lobbyLamp: { full: 5, dimmed: 0.5 },
-  lampShade: { full: 1.4, dimmed: 0.42 },
-  sconceShade: { full: 1.2, dimmed: 0.36 },
+  hemisphere: { full: 0.32, dimmed: 0.04, day: 0.55 },
+  sconceLight: { full: 1.1, dimmed: 0.08 },
+  stripLight: { full: 0.7, dimmed: 0.05 },
+  corridorLamp: { full: 1.2, dimmed: 0.12 },
+  lobbyLamp: { full: 1.5, dimmed: 0.15 },
+  lampShade: { full: 0.25, dimmed: 0.08 },
+  sconceShade: { full: 0.22, dimmed: 0.07 },
   // Gradient-textured pools: peak opacity at the pool center — the radial
-  // alpha texture does the falloff, so these can run far hotter than the
-  // old bare-circle pair (0.07/0.15) that read as nothing.
-  sconcePool: { full: 0.5, dimmed: 0.15, day: 0 },
-  sconceWash: { full: 0.35, dimmed: 0.1, day: 0 },
+  // alpha texture does the falloff. All subdued so pools read as gentle
+  // washes, not stacked hot lamp circles.
+  sconcePool: { full: 0.08, dimmed: 0.02, day: 0 },
+  sconceWash: { full: 0.05, dimmed: 0.015, day: 0 },
   // The light line: the strip itself is the visible fixture, so it only
   // tones down in day (a cove line burning in a bright hotel); its wash
   // and floor glow are fake-glow decals and switch off like the sconce's.
-  stripGlow: { full: 1.6, dimmed: 0.48, day: 0.4 },
-  stripWash: { full: 0.3, dimmed: 0.09, day: 0 },
-  stripPool: { full: 0.22, dimmed: 0.07, day: 0 },
-  doorGlow: { full: 1.6, dimmed: 0.48 },
-  doorHalo: { full: 0.14, dimmed: 0.042 },
-  doorStrip: { full: 2.2, dimmed: 0.66 },
+  stripGlow: { full: 0.3, dimmed: 0.09, day: 0.12 },
+  stripWash: { full: 0.04, dimmed: 0.01, day: 0 },
+  stripPool: { full: 0.035, dimmed: 0.01, day: 0 },
+  doorGlow: { full: 0.35, dimmed: 0.1 },
+  doorHalo: { full: 0, dimmed: 0 },
+  doorStrip: { full: 0.3, dimmed: 0.09 },
   plaque: { full: 1, dimmed: 0.15 },
 } as const;
 
@@ -260,8 +250,8 @@ export const HIDE_DELAY_MS = 500;
 /** Day/night color & level transitions ease at the atmosphere rate. */
 export const THEME_LERP_RATE = 2.5;
 
-export const PLATE_BG = "#17130f";
-export const PLATE_INK = "#ece2cc";
+export const PLATE_BG = "#59634f"; // muted deep sage — plates sit quiet in the matte palette
+export const PLATE_INK = "#ece2cc"; // cream ink, readable on the sage ground
 
 /**
  * Muted abstract-art palette for the corridor paintings. A fixed pool —
@@ -286,17 +276,17 @@ export const PAINTING_H = 1.3;
 /* ------------------------------------------------------------------ */
 
 /** Cornice band crowning every wall, slightly proud of the inner face. */
-export const CORNICE_HEIGHT = 0.16;
-export const CORNICE_DEPTH = 0.16;
+export const CORNICE_HEIGHT = 0.12;
+export const CORNICE_DEPTH = 0.08;
 /** Wainscot band + chair rail along the walls (broken at door gaps). */
 export const WAINSCOT_HEIGHT = 1.05;
 export const WAINSCOT_DEPTH = 0.04;
-export const CHAIR_RAIL_HEIGHT = 0.06;
-export const CHAIR_RAIL_DEPTH = 0.06;
+export const CHAIR_RAIL_HEIGHT = 0.05;
+export const CHAIR_RAIL_DEPTH = 0.04;
 
 /** Portal posts at the lobby/corridor seam (x = 0) — the threshold you can
  *  recognise from far down the hall. */
-export const PORTAL_POST_SIZE = 0.3; // square cross-section, m
+export const PORTAL_POST_SIZE = 0.22; // square cross-section, m
 
 /** The lobby's west leg wall (x = 0, south of the corridor band) faces the
  *  camera (−x side), so it stays a low parapet — the dollhouse cutaway that

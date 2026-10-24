@@ -1,12 +1,20 @@
 /**
  * Renderer tuning — every visual constant the integrator
  * (src/components/game/game-canvas.tsx) consumes: the fixed camera, scene
- * mood colors, the key/fill/ambient lighting hierarchy (sun base levels,
- * shadow rig, IBL environment cards), the post-processing chain (bloom,
- * N8AO, vignette), atmosphere lerp, player avatar colors and motion
- * rates, wade depth, interaction distances, and spawn. The water plane
- * height itself is shared with the room renderer and lives in ./room
- * (WATER_Y). Pure data — no three.js, no React.
+ * mood colors, the key/ambient lighting hierarchy (sun base levels and the
+ * shadow rig), the post-processing chain (N8AO), atmosphere lerp, player
+ * avatar colors and motion rates, wade depth, interaction distances, and
+ * spawn. The water plane height itself is shared with the room renderer and
+ * lives in ./room (WATER_Y). Pure data — no three.js, no React.
+ *
+ * The matte art overhaul (v0.11-streams) removed the game's IBL environment,
+ * stage backdrop, Bloom and Vignette: broad matte surfaces are shaped by the
+ * single directional sun plus a lifted ambient alone, and depth is carried
+ * by N8AO + the background color. The ENV, BLOOM and VIGNETTE families and the
+ * remaining STAGE_BACKDROP_* constants below are STILL consumed by
+ * src/components/playground/playground-scene.tsx (the material testbed),
+ * which is outside this pass's ownership — they stay until that scene is
+ * migrated; the game canvas imports none of them.
  */
 
 import { VOID_COLORS } from "./hotel";
@@ -64,50 +72,42 @@ export const GROUND_LERP_RATE = 10;
 
 export const PLAYER_BODY = "#c9875b"; // a small, warm focal point
 export const PLAYER_HEAD = "#f4d3ae";
-export const SUN_BASE_COLOR = "#fff4e0";
+/** Legs and hair stay quiet so the warm torso reads as the focal point
+ *  (sage/dark family, per the reference illustration's figure). */
+export const PLAYER_LEG = "#5f6a52";
+export const PLAYER_HAIR = "#657053";
+export const SUN_BASE_COLOR = "#fff3d5";
 /** Key-light base level. The sun is the ONE strong, shadow-casting light
- *  that pools (doc §1 A3). 2.5 (measured, v0.11 shadow fix): with the fill
- *  levels below (ENV_INTENSITY 0.12, ambient floors ~0.04–0.09), a sunlit
- *  interior floor lands at ~135/255 display luminance while its shadowed
- *  floor sits at ~20–90 — a cast shadow reads clearly at every palette.
- *  History: 0.65 under the old ambient-dominant model; 1.5 in the first
- *  key/fill/ambient pass, which measured as INVISIBLE shadows — ambient +
- *  IBL fill alone lit floors to ~112/255 and AgX's shoulder compressed the
- *  sun's added term to a ~13/255 step, so removing it (a shadow) was a ~5%
- *  dip. The key must dominate the fill by a wide margin for shadows to
- *  exist perceptually, not just mathematically. Inside a space this is
+ *  (doc §1 A3). The matte overhaul runs it at a moderate 1.35 — broad
+ *  even daylight with the ambient lifted to match (CORRIDOR_AMBIENT 0.52),
+ *  so shadows stay visible as gentle direction separation, never the hard
+ *  black pools the old strong-sun model produced. Inside a space this is
  *  multiplied by palette.sunIntensity — and, per B.13, by
  *  ROOM_INTERIOR_SUN_FILL in interior rooms, where the key moves to the
- *  room's own fixtures and this light is only the fill/studio overall. */
-export const SUN_BASE_INTENSITY = 2.5;
+ *  room's own fixtures and this light is only the soft overall. */
+export const SUN_BASE_INTENSITY = 1.35;
 /** Ambient floor in the corridor; inside a space the palette's own
- *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Kept very low on
- *  purpose: fill is the IBL environment's job, and a high ambient is
- *  exactly the directionless flat light the doc forbids — and the fill
- *  level is what a cast shadow drops to, so every point of ambient
- *  directly erases shadow contrast (measured: ambient 0.15 + env 0.45 put
- *  the corridor's no-sun floor at ~84/255, swallowing the sun's ~13-unit
- *  contribution). */
-export const CORRIDOR_AMBIENT = 0.06;
+ *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Lifted to 0.52 in
+ *  the matte overhaul: with the IBL environment gone, the ambient IS the
+ *  diffuse fill — the reference look is broad soft daylight, not
+ *  directional drama. It stays below the sun's effective level so face
+ *  separation survives. */
+export const CORRIDOR_AMBIENT = 0.52;
 /** In-room directional level for INTERIOR rooms, as a fraction of the
  *  palette-authored sun term (doc B.13, user 2026-09-18 — "everything is
  *  indoors": an interior's key must come from its own fixtures, so the
  *  sun drops to a FILL here; outdoor-class sets keep it at 1 as the
  *  soundstage's overall key, justified by the clerestory band). It stays
- *  shadow-casting at the reduced level — the fill still grounds furniture
- *  with a soft shadow everywhere, while the window's spot is the room's
- *  true key with the strong motivated shadows. The lifted fill keeps
- *  furniture and scattered documents readable from the RTS view while
- *  preserving shadows beneath them. */
-export const ROOM_INTERIOR_SUN_FILL = 0.65;
+ *  shadow-casting at 0.55: enough to separate faces and ground furniture,
+ *  but not enough to own the room's tonal range. The window spot remains
+ *  a motivated accent under the same quiet budget. */
+export const ROOM_INTERIOR_SUN_FILL = 0.55;
 /** Broad bounced light preserves the room's material colors from the RTS
- *  view. Directional and fixture lights still provide the shaped shadows;
- *  walls facing away from them must not fall into near-black. 0.45 →
- *  0.65 in the room-polish pass (round 2): with the lamp/window hot pools
- *  cut, the ambient fill carries the walls' readability (the after
- *  captures read darker than the reference). A targeted starting value,
- *  pending the A/B captures — not a measured optimum. */
-export const SPACE_AMBIENT_SCALE = 0.65;
+ *  view. At 2.0 the palette's ambient becomes 1.12 by day and 0.88 at
+ *  night: a stable diffuse floor that lifts unlit faces into the light
+ *  sage/cream family while the reduced directional key keeps their
+ *  separation modest. This changes no exposure, tone mapping or fog. */
+export const SPACE_AMBIENT_SCALE = 2;
 /** Background/fog/sun lerp rate when a space opens or closes. */
 export const ATMOSPHERE_LERP_RATE = 2.5;
 /** Wade depth below the water plane inside a pool basin. */
@@ -144,13 +144,16 @@ export const SUN_SHADOW_NORMAL_BIAS = 0.02;
 
 /* ------------------------------------------------------------------ */
 /* IBL — one scene-wide Environment of Lightformer cards (no HDRI)      */
+/*                                                                      */
+/* RETIRED from the game in the matte overhaul: game-canvas no longer   */
+/* mounts an <Environment>; the sun + lifted ambient shape everything.  */
+/* Kept here ONLY because playground-scene.tsx (the material testbed,   */
+/* outside this pass) still builds its own Environment from these.      */
 /* ------------------------------------------------------------------ */
 
 /** Soft environment fill and the reflection budget every PBR material
- *  shares. 0.20 → 0.24 in the room-polish pass (visual study 02): the
- *  interior reads as soft bright diffuse — walls keep their hue with no
- *  hard hot pool — while the furniture's own contact shadows carry the
- *  grounding. Directional and fixture lights still define cast shadows. */
+ *  shares. Game-unused since the matte overhaul (no live <Environment> in
+ *  game-canvas); the playground testbed still reads it. */
 export const ENV_INTENSITY = 0.24;
 /** Env cube-map resolution; the map is a few broad emissive cards, so
  *  256 px is plenty and cheap. */
@@ -215,57 +218,45 @@ export const ENV_FORMERS: readonly EnvFormerSpec[] = [
 ];
 
 /* ------------------------------------------------------------------ */
-/* Stage backdrop — the diorama sits on a pool, not in a void           */
+/* Stage backdrop — RETIRED from the game (matte overhaul)              */
+/*                                                                      */
+/* The game no longer renders the radial pool disc (it was an all-over  */
+/* opacity veil); the void/background color lerp is the only mood       */
+/* driver. Only the three constants the playground testbed still        */
+/* consumes remain here.                                                */
 /* ------------------------------------------------------------------ */
 
-/** Master switch: set to false to revert to the flat void background
- *  (game-canvas.tsx mounts the stage plane only while this is true). */
-export const STAGE_BACKDROP_ENABLED = true;
-/** Vertical drop (m) of the stage plane below the corridor floor. Deep
- *  enough to stay clear of every room's displaced terrain (rolling
- *  amplitude is ~1.2 m; pool basins wade, never dig), far enough that the
- *  radial falloff reads as depth rather than as a floor at the model's
- *  feet. */
+/** Vertical drop (m) of the stage plane below the floor (playground
+ *  testbed only — the game canvas mounts no stage). */
 export const STAGE_BACKDROP_Y = -30;
-/** Radial falloff (m): the pool is at full strength inside POOL_RADIUS
- *  around the player and fades to fully transparent at BACKDROP_RADIUS,
- *  so the model reads as sitting on a soft pool of its own atmosphere —
- *  never on a hard-edged disc. */
-export const STAGE_POOL_RADIUS = 26;
 export const STAGE_BACKDROP_RADIUS = 150;
-/** Peak opacity at the pool's center. Kept well under 1: the void color
- *  keeps lerping through underneath, so the background lerp stays the
- *  single driver of the mood. */
-export const STAGE_BACKDROP_OPACITY = 0.6;
-/** How far the pool color lifts the CURRENT lerped background color
- *  toward white (0 = background, 1 = white). Derived per frame from the
- *  same resolveAtmosphere target as the scene background, so entering a
- *  room re-tints the stage with the room's palette exactly like the
- *  void — a shadow of the room's own hue, never a fixed gray. */
+/** How far the pool color lifts the background toward white (playground
+ *  testbed only). */
 export const STAGE_BACKDROP_LIFT = 0.08;
 
 /* ------------------------------------------------------------------ */
-/* Post-processing chain                                                */
+/* Post-processing chain (game: N8AO only)                              */
 /* ------------------------------------------------------------------ */
 
 /** MSAA samples for the composer's render target (WebGL2); the package
  *  default of 8 is wasted at dpr 2 on a mid-range laptop. */
 export const POST_MSAA_SAMPLES = 4;
-/** Bloom — the highest-impact effect for this look. Threshold 1.0 keeps
- *  it on emissive fixtures and the sun's hot pools, off lit walls, so the
- *  frame does not turn milky. */
+/** N8AO (half-res, performance quality) — screen-space contact shading,
+ *  the game's only live post effect in the matte overhaul: it grounds
+ *  furniture and walls gently (intensity 0.45, radius 0.7) without any
+ *  veil or frame-edge darkening. Unlike distance fog it is
+ *  camera-distance independent, so it cannot wash the whole room into a
+ *  veil from the 45° camera 23 m up. */
+export const AO_INTENSITY = 0.45;
+export const AO_RADIUS = 0.7;
+export const AO_DISTANCE_FALLOFF = 0.8;
+
+/** Bloom + Vignette — RETIRED from the game in the matte overhaul (no
+ *  blown light blobs, no frame-edge darkening). Kept ONLY because
+ *  playground-scene.tsx still wires them into its own composer. */
 export const BLOOM_INTENSITY = 0.22;
 export const BLOOM_LUMINANCE_THRESHOLD = 1.0;
 export const BLOOM_LUMINANCE_SMOOTHING = 0.25;
-/** N8AO (half-res, performance quality) — screen-space contact shading;
- *  the first half of the depth cue that replaced scene fog. Unlike
- *  distance fog it is camera-distance independent, so it cannot wash the
- *  whole room into a veil from the 45° camera 23 m up. */
-export const AO_INTENSITY = 0.9;
-export const AO_RADIUS = 1.0;
-export const AO_DISTANCE_FALLOFF = 1.0;
-/** Vignette — mild frame-edge falloff; the second half of the depth cue.
- *  Screen-space like AO, so it shares the same safety argument. */
 export const VIGNETTE_OFFSET = 0.35;
 export const VIGNETTE_DARKNESS = 0.18;
 

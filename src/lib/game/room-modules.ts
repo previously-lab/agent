@@ -66,7 +66,8 @@
  *
  * OPEN FIELDS (随机区域, §8.2): resolved as the bounding rect's voids and
  * DRESSED SPARSELY at staging time — kits.ts's stageInteriorKits takes the
- * fields as an optional channel (0–3 seeded pieces per field, drawn from
+ * fields as an optional channel (0–1 seeded pieces per field since the
+ * 2026-10-25 breathing-floor pass, drawn from
  * the room's module-filtered deck, riding the same clearance and 留白
  * machinery). Placement must clear the walk path and the door approaches,
  * which exist only on the SCALED plan — so the dressing lives in staging,
@@ -317,8 +318,8 @@ export interface RoomComposition {
   seams: readonly ModuleSeam[];
   /** The 随机区域: module-scale open fields inside the bounding rect that
    *  no module claims — room-frame rects, dressed only sparsely by the
-   *  staging channel (kits.ts's openFields input: 0–3 seeded pieces per
-   *  field from the room's module-filtered deck, same clearances and 留白
+   *  staging channel (kits.ts's openFields input: 0–1 seeded pieces per
+   *  field since the 2026-10-25 breathing-floor pass, from the room's module-filtered deck, same clearances and 留白
    *  budget as the module floors). */
   openFields: readonly { x0: number; z0: number; x1: number; z1: number }[];
   /** Declared door ceiling of the whole composition: the sum of the
@@ -1334,7 +1335,8 @@ function edgeToWallRole(edge: ModuleEdge): "left" | "right" | "far" | null {
  * rect into room-normalized coordinates; the PRIMARY module's hero zone
  * and heroKit become the room's hero (every other module's hero zone
  * demotes to a cluster rect); a full-width entrance apron joins the
- * keep-empty set, so the ≥35%-empty-floor rule (§4.5) holds at the module
+ * keep-empty set, so the ≥58%-empty-floor rule (§4.5, breathing-floor
+ * pass 2026-10-25) holds at the module
  * level by construction, not by scatter luck. The open fields stay OUT of
  * the zone set — they are dressed sparsely by the staging channel instead
  * (see the openFields note in the function body).
@@ -1390,7 +1392,8 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
   });
   // The open fields are NOT keep-empty zones: they are dressed — sparsely —
   // by the staging channel (kits.ts's openFields input, fed straight from
-  // comp.openFields). The ≥35%-empty-floor rule (§4.5) still binds there:
+  // comp.openFields). The ≥58%-empty-floor rule (§4.5, breathing-floor pass
+  // 2026-10-25) still binds there:
   // field pieces draw from the same seeded deck and count against the same
   // global coverage budget as every other kit.
 

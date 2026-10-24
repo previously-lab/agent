@@ -32,6 +32,9 @@ import { TILE_SPAN_METERS } from "@/lib/game/tuning/room";
 
 const RECT = { cx: 0, cz: 8, halfX: 4, halfZ: 3 };
 const SPAN = { spanX: 12, spanY: 16 };
+/** The anchor the wave slope block is injected ahead of (kept as text —
+ *  the fake shader never expands real chunks). */
+const MAP_FRAGMENT_ANCHOR = "#include <map_fragment>";
 
 /** A minimal stand-in for the linked program's pre-include shader text. */
 function fakeShader() {
@@ -43,10 +46,9 @@ function fakeShader() {
   } as unknown as WebGLProgramParametersWithUniforms;
 }
 
-function mappedMaterial(): MeshStandardMaterial {
-  const material = new MeshStandardMaterial();
-  material.map = new DataTexture(new Uint8Array(4), 1, 1);
-  return material;
+function matteMaterial(): MeshStandardMaterial {
+  // The matte floor surface.ts now hands out: no maps at all.
+  return new MeshStandardMaterial();
 }
 
 /** The half-float height texture the wave driver hands out (128² here). */
@@ -89,14 +91,17 @@ describe("sharedCausticsTextures", () => {
 });
 
 describe("applyPoolCaustics", () => {
-  it("refuses a material without a map (vMapUv is the coordinate carrier)", () => {
+  it("accepts the map-less matte floor and sets USE_UV so vUv exists", () => {
+    const material = matteMaterial();
+    expect(material.map).toBeNull();
     expect(() =>
-      applyPoolCaustics(new MeshStandardMaterial(), { rect: RECT, ...SPAN }),
-    ).toThrow(/vMapUv/);
+      applyPoolCaustics(material, { rect: RECT, ...SPAN }),
+    ).not.toThrow();
+    expect(material.defines).toMatchObject({ USE_UV: "" });
   });
 
   it("injects the additive web after emissivemap_fragment, masked and tinted", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     applyPoolCaustics(material, { rect: RECT, ...SPAN, intensity: 1.5 });
     const shader = fakeShader();
     material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
@@ -105,6 +110,11 @@ describe("applyPoolCaustics", () => {
     expect(shader.fragmentShader).toContain("uCausticsB");
     expect(shader.fragmentShader).toContain("totalEmissiveRadiance +=");
     expect(shader.fragmentShader).toContain("smoothstep");
+    // The matte-floor convention: ordinary vUv carries the coordinates,
+    // and the old map varying is gone.
+    expect(shader.fragmentShader).toContain("vUv");
+    expect(shader.fragmentShader).not.toContain("vMapUv");
+    expect(shader.uniforms.uCausticsUvFromMap).toBeUndefined();
     // The include survives exactly once (the injection replaces it with
     // itself plus the web code).
     expect(
@@ -127,7 +137,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("throws loud when the fragment shader lacks the expected include", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     applyPoolCaustics(material, { rect: RECT, ...SPAN });
     const shader = fakeShader();
     shader.fragmentShader = "void main() { }";
@@ -137,7 +147,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("chains onto an existing onBeforeCompile instead of replacing it", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     let previousRan = false;
     material.onBeforeCompile = () => {
       previousRan = true;
@@ -148,8 +158,8 @@ describe("applyPoolCaustics", () => {
   });
 
   it("forks the program cache key so patched and unpatched floors never share a program", () => {
-    const base = mappedMaterial();
-    const patched = mappedMaterial();
+    const base = matteMaterial();
+    const patched = matteMaterial();
     applyPoolCaustics(patched, { rect: RECT, ...SPAN });
     expect(patched.customProgramCacheKey()).not.toBe(
       base.customProgramCacheKey(),
@@ -158,7 +168,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("update(elapsed) counter-scrolls the two layers, deterministically", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     const caustics = applyPoolCaustics(material, { rect: RECT, ...SPAN });
     const shader = fakeShader();
     material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
@@ -185,7 +195,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("is idempotent: re-applying to the same material returns the original driver and injects nothing twice", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     const first = applyPoolCaustics(material, { rect: RECT, ...SPAN });
     const chainedOnBeforeCompile = material.onBeforeCompile;
     const second = applyPoolCaustics(material, {
@@ -215,7 +225,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("never re-injects a shader that already carries the declarations (double-injection guard)", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     applyPoolCaustics(material, { rect: RECT, ...SPAN });
     const shader = fakeShader();
     material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
@@ -230,7 +240,7 @@ describe("applyPoolCaustics", () => {
   });
 
   it("without the wave option the shader stays free of wave uniforms and offsets", () => {
-    const material = mappedMaterial();
+    const material = matteMaterial();
     applyPoolCaustics(material, { rect: RECT, ...SPAN });
     const shader = fakeShader();
     material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
@@ -238,11 +248,11 @@ describe("applyPoolCaustics", () => {
     expect(shader.uniforms.uWaveTexel).toBeUndefined();
     expect(shader.fragmentShader).not.toContain("uWaveHeight");
     expect(shader.fragmentShader).not.toContain("refrOffset");
-    expect(shader.fragmentShader).not.toContain("texture2D( map, vMapUv + ");
+    expect(shader.fragmentShader).not.toContain("texture2D( map");
   });
 
-  it("with the wave option the floor refracts: slope block, displaced map sample, wobbling web", () => {
-    const material = mappedMaterial();
+  it("with the wave option the web wobbles: slope block, no map displacement, amplified web UV", () => {
+    const material = matteMaterial();
     const wave = WAVE();
     applyPoolCaustics(material, { rect: RECT, ...SPAN, wave });
     const shader = fakeShader();
@@ -260,13 +270,16 @@ describe("applyPoolCaustics", () => {
     expect([texel.z, texel.w]).toEqual([0.05, 0.04]);
 
     const fs = shader.fragmentShader;
-    // The slope/mask block lands ahead of the map lookup…
-    expect(fs.indexOf("refrSlope")).toBeLessThan(fs.indexOf("sampledDiffuseColor"));
-    // …the map sample carries the refraction offset (meters → map repeats)…
-    expect(fs).toContain("texture2D( map, vMapUv + vec2( refrOffset.x, -refrOffset.y )");
-    // …and the caustics web rides the same offset, amplified.
+    // The slope/mask block lands ahead of the map_fragment anchor…
+    expect(fs.indexOf("refrSlope")).toBeLessThan(fs.indexOf(MAP_FRAGMENT_ANCHOR));
+    // …nothing displaces a base map sample — the matte floor has no map…
+    expect(fs).not.toContain("texture2D( map");
+    // …and the caustics web rides the slope offset, amplified.
     expect(fs).toContain(`refrOffset * 2.5`);
     expect(fs).toContain(`${WATER_REFRACT_GAIN}`);
+    // The slope block reads the ordinary vUv, not a map varying.
+    expect(fs).toContain("refr01 = vUv;");
+    expect(fs).not.toContain("vMapUv");
     // The wave uniforms are declared exactly once.
     expect(fs.split("uniform sampler2D uWaveHeight;").length).toBe(2);
     // Program cache key forks so wave and plain floors never share one.

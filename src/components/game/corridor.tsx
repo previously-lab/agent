@@ -121,14 +121,14 @@
  * next-older hotel or — at the oldest window — a plain wall (see
  * CorridorEnd).
  *
- * MATERIALS. Every shared surface material carries a real physical finish
- * (MATERIAL_FINISH — waxed-wood floor sheen, satin wainscot, matte
- * plaster/fabric, darkened-metal trim) plus a seeded mottled roughnessMap
- * (GRUNGE_*) so reflections vary subtly instead of reading as one uniform
- * value. No per-material ambient hacks; the finishes are built to come
- * alive under the scene-wide environment map and shadows. The grunge map
- * and the sconce/end-glow gradient textures come from the shared procedural
- * material library (src/lib/game/materials — grunge.ts / glow.ts).
+ * MATERIALS. Every shared surface material is matte (MATERIAL_FINISH —
+ * near-rough, non-metal across all roles) in the sage/cream/pale-wood
+ * palette; the art direction is a clean architectural illustration, so
+ * there is no grunge/roughness texture and nothing glossy to stack
+ * specular highlights under the fixture lights. No per-material ambient
+ * hacks; the flat finishes read as printed planes under the soft light.
+ * The sconce/end-glow gradient textures come from the shared procedural
+ * material library (src/lib/game/materials — glow.ts).
  *
  * CORRIDOR DRESSING. The hall is dressed per chunk, all seeded:
  * a carpet runner with dark binding stripes down the floor's spine,
@@ -173,7 +173,6 @@ import type {
   PointLight,
 } from "three";
 import {
-  createGrungeRoughnessMap,
   sharedRadialGlowTexture,
   sharedWallWashTexture,
 } from "@/lib/game/materials";
@@ -217,7 +216,6 @@ import {
   FLOOR_LAMP_LIGHT_DISTANCE,
   FLOOR_LAMP_SPACING,
   FLOOR_LAMP_Z,
-  GRUNGE_ROLES,
   HIDE_DELAY_MS,
   LAMP_COLOR,
   LIGHT_LEVELS,
@@ -317,21 +315,13 @@ const FLOOR_THICKNESS = 0.2;
  */
 type HotelMaterials = Record<HotelRole, MeshStandardMaterial>;
 
-function createHotelMaterials(night: boolean): {
-  materials: HotelMaterials;
-  grungeMap: CanvasTexture;
-} {
-  const grungeMap = createGrungeRoughnessMap();
+function createHotelMaterials(night: boolean): HotelMaterials {
   const make = (role: HotelRole) => {
-    const material = new MeshStandardMaterial({
+    return new MeshStandardMaterial({
       color: THEME_COLORS[role][night ? "night" : "day"],
       roughness: MATERIAL_FINISH[role].roughness,
       metalness: MATERIAL_FINISH[role].metalness,
     });
-    if ((GRUNGE_ROLES as readonly string[]).includes(role)) {
-      material.roughnessMap = grungeMap;
-    }
-    return material;
   };
   const materials: HotelMaterials = {
     floor: make("floor"),
@@ -344,15 +334,14 @@ function createHotelMaterials(night: boolean): {
     carpet: make("carpet"),
     carpetEdge: make("carpetEdge"),
     wainscot: make("wainscot"),
-    // Icosahedron foliage keeps its faceted low-poly read.
+    // Foliage crown is a smooth flattened sphere — no flat shading.
     foliage: new MeshStandardMaterial({
       color: THEME_COLORS.foliage[night ? "night" : "day"],
       roughness: MATERIAL_FINISH.foliage.roughness,
       metalness: MATERIAL_FINISH.foliage.metalness,
-      flatShading: true,
     }),
   };
-  return { materials, grungeMap };
+  return materials;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1006,23 +995,24 @@ function DoorAssembly({
 
   return (
     <group>
-      {/* Frame posts + header, proud of the wall face. */}
+      {/* Frame posts + header, proud of the wall face. Slim matte trim —
+          inner faces stay flush with the door gap. */}
       <mesh
-        position={[door.x - DOOR_WIDTH / 2 - 0.05, DOOR_HEIGHT / 2 + 0.05, frameZ]}
+        position={[door.x - DOOR_WIDTH / 2 - 0.035, DOOR_HEIGHT / 2 + 0.035, frameZ]}
         material={mats.trim}
         castShadow
       >
-        <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
+        <boxGeometry args={[0.07, DOOR_HEIGHT + 0.07, 0.14]} />
       </mesh>
       <mesh
-        position={[door.x + DOOR_WIDTH / 2 + 0.05, DOOR_HEIGHT / 2 + 0.05, frameZ]}
+        position={[door.x + DOOR_WIDTH / 2 + 0.035, DOOR_HEIGHT / 2 + 0.035, frameZ]}
         material={mats.trim}
         castShadow
       >
-        <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
+        <boxGeometry args={[0.07, DOOR_HEIGHT + 0.07, 0.14]} />
       </mesh>
-      <mesh position={[door.x, DOOR_HEIGHT + 0.11, frameZ]} material={mats.trim} castShadow>
-        <boxGeometry args={[DOOR_WIDTH + 0.2, 0.12, 0.24]} />
+      <mesh position={[door.x, DOOR_HEIGHT + 0.03, frameZ]} material={mats.trim} castShadow>
+        <boxGeometry args={[DOOR_WIDTH + 0.14, 0.08, 0.14]} />
       </mesh>
       {/* Hinged slab — a real door, opaque, swinging on its left jamb. */}
       <group ref={hingeRef} position={[door.x - DOOR_WIDTH / 2 + 0.02, 0, door.z]}>
@@ -1167,12 +1157,13 @@ function WallSconce({
       <mesh position={[x, 2.69, faceZ - 0.06]} material={mats.trim}>
         <boxGeometry args={[0.1, 0.16, 0.12]} />
       </mesh>
-      {/* Shade — low-poly cone, apex up like an uplight bowl. */}
+      {/* Shade — low-poly cone, apex up like an uplight bowl. Pale cream
+          base so a low emissive never reads as a black fixture. */}
       <mesh position={[x, 2.55, faceZ - 0.12]}>
         <coneGeometry args={[0.15, 0.2, 8]} />
         <meshStandardMaterial
           ref={shadeMatRef}
-          color="#000000"
+          color="#f3e9d2"
           emissive={SCONCE_COLOR}
           emissiveIntensity={LIGHT_LEVELS.sconceShade.full}
           roughness={1}
@@ -1324,12 +1315,13 @@ function LightLine({
 
   return (
     <group>
-      {/* The strip itself — the visible fixture, proud of the wainscot. */}
+      {/* The strip itself — the visible fixture, proud of the wainscot.
+          Pale cream base so a low emissive never reads as a black cove. */}
       <mesh position={[centerX, STRIP_HEIGHT, faceZ + 0.07]}>
         <boxGeometry args={[length, 0.05, 0.04]} />
         <meshStandardMaterial
           ref={stripMatRef}
-          color="#000000"
+          color="#f3e9d2"
           emissive={STRIP_COLOR}
           emissiveIntensity={LIGHT_LEVELS.stripGlow.full}
           roughness={1}
@@ -1895,8 +1887,10 @@ function PottedPlant({
       <mesh position={[0, 0.18, 0]} material={mats.pot} castShadow>
         <cylinderGeometry args={[0.24, 0.19, 0.36, 10]} />
       </mesh>
-      <mesh position={[0, 0.82, 0]} material={mats.foliage} castShadow>
-        <icosahedronGeometry args={[0.4, 0]} />
+      {/* Foliage crown — a smooth sphere squashed into a flattened leaf
+          mass, replacing the old faceted ball. */}
+      <mesh position={[0, 0.8, 0]} scale={[1, 0.82, 1]} material={mats.foliage} castShadow>
+        <sphereGeometry args={[0.4, 12, 10]} />
       </mesh>
     </group>
   );
@@ -1967,12 +1961,13 @@ function FloorLamp({
       <mesh position={[0, 0.78, 0]} material={mats.trim} castShadow>
         <cylinderGeometry args={[0.03, 0.03, 1.52, 8]} />
       </mesh>
-      {/* Shade glows — reads as the bulb. */}
+      {/* Shade glows — reads as the bulb. Pale cream base so a low
+          emissive never reads as a black fixture. */}
       <mesh position={[0, 1.58, 0]} castShadow>
         <cylinderGeometry args={[0.16, 0.22, 0.3, 10]} />
         <meshStandardMaterial
           ref={shadeMatRef}
-          color="#000000"
+          color="#f3e9d2"
           emissive={LAMP_COLOR}
           emissiveIntensity={LIGHT_LEVELS.lampShade.full}
           roughness={1}
@@ -3171,15 +3166,14 @@ export function Corridor({
 
   // Shared themed materials, created once with the theme at mount and
   // disposed with Corridor (R3F only auto-disposes JSX-created materials;
-  // these are passed in by reference). One useGameFrame below eases all eight
-  // toward the active theme's targets.
-  const [{ materials: mats, grungeMap }] = useState(() => createHotelMaterials(dark));
+  // these are passed in by reference). One useGameFrame below eases all
+  // roles toward the active theme's targets.
+  const [mats] = useState(() => createHotelMaterials(dark));
   useEffect(() => {
     return () => {
       for (const m of Object.values(mats)) m.dispose();
-      grungeMap.dispose();
     };
-  }, [mats, grungeMap]);
+  }, [mats]);
   useGameFrame((_state, meta) => {
     const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(meta.delta, DIM_MAX_DT));
     const night = darkRef.current;

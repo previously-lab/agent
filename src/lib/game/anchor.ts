@@ -235,7 +235,8 @@ export function heroClearCeilingFor(
  * rewards standing away from them. The hard filters cover what the
  * modules' entrance aprons and hall spines protect — those zones sit on
  * the walk path's corridor, and the path filter is stricter than any of
- * them. Sparse open-field dressing (§8.2, 0–3 pieces per field, itself
+ * them. Sparse open-field dressing (§8.2, 0–1 pieces per field since the
+ * 2026-10-25 breathing-floor pass, itself
  * path-avoiding) may still rarely graze the machine — accepted as
  * best-effort at this layer.
  *

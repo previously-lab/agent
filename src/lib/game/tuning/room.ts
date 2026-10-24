@@ -114,12 +114,16 @@ export const DOOR_GAP_HALF = 1.2;
 export const DOOR_WIDTH = 1.4;
 export const DOOR_HEIGHT = 3.0;
 export const PORTAL_HEIGHT = 3.2;
-export const DOOR_TRIM_COLOR = "#463f36";
-export const DOOR_GLOW_INTENSITY = 1.6;
-export const DOOR_HALO_OPACITY = 0.14;
+/** The door's trim/seam/glow family — quieted into the wall family (the
+ *  art overhaul's selective-detail pass): the trim is a pale green-grey
+ *  plaster-adjacent tone, the glow is a faint cue, and the halo is gone
+ *  entirely (a door is found by its seams and trim, not a light blob). */
+export const DOOR_TRIM_COLOR = "#8f9a82";
+export const DOOR_GLOW_INTENSITY = 0.35;
+export const DOOR_HALO_OPACITY = 0;
 /** Jamb/head light-leak seams around the closed slab (the exit landmark
- *  from deep inside a space). */
-export const DOOR_SEAM_INTENSITY = 2.8;
+ *  from deep inside a space) — a faint leak, not a beacon. */
+export const DOOR_SEAM_INTENSITY = 0.4;
 /** Slab swing, mirroring the corridor face: open within this distance of
  *  the door center, ~100°, always rotating away from the player. */
 export const DOOR_OPEN_DIST = 2.2;
@@ -391,38 +395,38 @@ export const PET_NEAR_RADIUS_MAX = 24;
 /* ------------------------------------------------------------------ */
 
 /** Floor area (m² of the UNSCALED tier) per kit — the I3 density target.
- *  B.12 (user, 2026-09-18): strong cast shadows amplify emptiness and the
- *  closer camera sees less floor, so density rose ~+43% (areas ÷ ~1.43
- *  from 15/20/32/48). S/M tiers now sit past the doc's old 12–18 m²/kit
- *  band; L/XL keep the upward taper so a great hall keeps its sweep
- *  instead of becoming a furniture warehouse (§6 塞满). The area law's
- *  demand sits above KIT_COUNT_MAX at every tier, so the cap below is
- *  what actually binds — the same regime as before this change. */
+ *  2026-10-25 art overhaul (breathing-floor pass): the densities were
+ *  divided ~3× (was 10/14/22/34 — B.12's +43% rise from 2026-09-18) so a
+ *  room reads as a few composed scenes on real floor instead of a
+ *  furnished warehouse: 16m rooms want one kit per 48 m², 96m halls one
+ *  per 144 m². The area law's demand still sits above KIT_COUNT_MAX at
+ *  every tier, so the cap below remains what actually binds. */
 export const KIT_AREA_PER_KIT: Record<number, number> = {
-  16: 10,
-  32: 14,
-  64: 22,
-  96: 34,
+  16: 48,
+  32: 64,
+  64: 96,
+  96: 144,
 };
 /** Absolute kit-count ceiling per tier — the taper's hard backstop, and a
  *  draw-call budget: kit pieces are real meshes, not instanced scatter.
  *  This cap is the operative density constraint at every tier (the area
- *  law above always demands more), so B.12's +40% density rise lands
- *  here: 10/20/40/60 → 14/28/56/84. */
+ *  law above always demands more). 2026-10-25 art overhaul: 14/28/56/84 →
+ *  4/7/12/18 — fewer, more meaningful groups per room. */
 export const KIT_COUNT_MAX: Record<number, number> = {
-  16: 14,
-  32: 28,
-  64: 56,
-  96: 84,
+  16: 4,
+  32: 7,
+  64: 12,
+  96: 18,
 };
 /** The 留白 hard floor (I1 / §4.5): kit footprint discs may cover at most
- *  (1 − this) of the actual scaled floor — at least 35% stays empty. */
-export const KIT_EMPTY_FLOOR_MIN = 0.35;
+ *  (1 − this) of the actual scaled floor — at least 58% stays empty (the
+ *  2026-10-25 breathing-floor pass, was 35%). */
+export const KIT_EMPTY_FLOOR_MIN = 0.58;
 /** Gap kept between two kits' footprint discs (m, ×prop scale) — every kit
- *  owns its breathing room; kits never touch. 0.4 (was 0.6): B.12's density
- *  rise needs small rooms to fit closer to their target, and 0.4 m still
- *  reads as deliberate spacing at the closer camera. */
-export const KIT_GAP = 0.4;
+ *  owns its breathing room; kits never touch. 0.8 (was 0.4): the art
+ *  overhaul's sparser rooms can afford real air between groups, and at the
+ *  closer camera 0.8 m reads as deliberate spacing, not a clearance. */
+export const KIT_GAP = 0.8;
 /** Per-piece clearance from the cleared walk path (m, ×prop scale): the
  *  path's ≥1.4 m promise is measured to kit GEOMETRY, not kit centers. */
 export const KIT_PATH_CLEAR = 0.5;
@@ -436,21 +440,23 @@ export const KIT_WALL_CLEAR = 0.35;
 export const KIT_PLACE_ATTEMPTS = 120;
 /** §6's anti-warehouse rule as a CHECKABLE number (2026-10 XL repetition
  *  audit): one kit id may be set down at most this many times in ONE room.
- *  3 = "several settings of one meal, never a warehouse" (the dining
- *  hall's own comment): three reads as an arrangement, four reads as a
- *  pattern. kits.ts's draw re-rolls onto an uncapped kit — the zone's own
- *  deck first, then any room kit, then the zone deck's least-used — so
- *  the cap binds room-wide in every realistic pool, and only a fully
- *  saturated room falls through, where the B.12 density promise
- *  rightfully outranks it (a deck that cannot honour both is a deck-size
- *  problem, and the module whitelists own that). */
-export const KIT_ROOM_CAP = 3;
+ *  2 (was 3) since the 2026-10-25 breathing-floor pass — a sparser room
+ *  reads a repeat immediately, so the cap tightens with the density:
+ *  two settings of one kit is an echo, three is a warehouse. kits.ts's
+ *  draw re-rolls onto an uncapped kit — the zone's own deck first, then
+ *  any room kit, then the zone deck's least-used — so the cap binds
+ *  room-wide in every realistic pool, and only a fully saturated room
+ *  falls through, where the density promise rightfully outranks it (a
+ *  deck that cannot honour both is a deck-size problem, and the module
+ *  whitelists own that). */
+export const KIT_ROOM_CAP = 2;
 /** The 随机区域 sparse-dressing ceiling (§8.2): each open field grows at
- *  most this many kit pieces — 0–3 seeded, sparse by construction (most
- *  fields draw none), never a grid (positions are uniform draws, never
- *  equidistant), and every piece still counts against the 留白 floor
- *  above (§6's bans bind in the fields exactly as on the module floors). */
-export const OPEN_FIELD_PIECE_MAX = 3;
+ *  most this many kit pieces — 0–1 seeded since the 2026-10-25 breathing-
+ *  floor pass (was 0–3), sparse by construction (most fields draw none),
+ *  never a grid (positions are uniform draws, never equidistant), and
+ *  every piece still counts against the 留白 floor above (§6's bans bind
+ *  in the fields exactly as on the module floors). */
+export const OPEN_FIELD_PIECE_MAX = 1;
 /** Nature hero redraw budget (§3.1 N4): a water biome's composed focal
  *  point can land inside the basin, where no dry furniture may stand.
  *  The nature hero redraws along the far-third band, seeded, until it
@@ -485,14 +491,17 @@ export const DADO_BASE_PROJECT = 0.06;
 /** Top of the wainscot (the chair-rail line, m ×wall scale) — classic
  *  dado height, safely below the 1.1 m cutaway sill at normal scale. */
 export const DADO_TOP = 0.9;
-/** Chair-rail strip height / projection (m, ×wall scale). */
-export const DADO_RAIL_HEIGHT = 0.07;
-export const DADO_RAIL_PROJECT = 0.05;
+/** Chair-rail strip height / projection (m, ×wall scale). 0.05/0.02 since
+ *  the 2026-10-25 art overhaul: the rail reads as a line, not a ledge. */
+export const DADO_RAIL_HEIGHT = 0.05;
+export const DADO_RAIL_PROJECT = 0.02;
 /** Panel stile width / projection (m, ×wall scale) and the target bay
- *  width between stiles. */
-export const DADO_STILE_WIDTH = 0.09;
-export const DADO_STILE_PROJECT = 0.035;
-export const DADO_PANEL_SPAN = 1.2;
+ *  width between stiles — slimmer and wider-spaced since the 2026-10-25
+ *  art overhaul (was 0.09/0.035/1.2): the panel rhythm stays present but
+ *  stops competing with the furniture. */
+export const DADO_STILE_WIDTH = 0.05;
+export const DADO_STILE_PROJECT = 0.02;
+export const DADO_PANEL_SPAN = 1.8;
 /** Stiles per wall run capped — past this the bays widen instead of
  *  emitting hundreds of boxes down a colossal XL wall. */
 export const DADO_PANEL_MAX = 24;
@@ -577,21 +586,31 @@ export const PILASTER_MIN_STRIP = 0.6;
 export const SHELF_WALL_HEIGHT = 2.6;
 /** Projection off the inner face (m, ×wall scale) — the case depth. */
 export const SHELF_WALL_DEPTH = 0.3;
-/** Target bay width / per-run bay cap (m, ×wall scale / bays). */
-export const SHELF_WALL_BAY = 1.2;
+/** Target bay width / per-run bay cap (m, ×wall scale / bays). 1.6 since
+ *  the 2026-10-25 art overhaul (was 1.2) — broader, calmer bays. */
+export const SHELF_WALL_BAY = 1.6;
 export const SHELF_WALL_BAY_MAX = 24;
 /** A run shorter than this bookcase height (m, ×wall scale) keeps its
  *  plain wall — a case you could not shelve reads as a crate. */
 export const SHELF_WALL_MIN_H = 1.0;
-export const SHELF_WALL_STILE = 0.06;
-export const SHELF_WALL_BOARD = 0.05;
+/** Bay stile / shelf board thickness (m, ×wall scale) — slimmed 0.06/0.05 →
+ *  0.05/0.04 in the 2026-10-25 art overhaul so the case reads as furniture,
+ *  not cabinetry. */
+export const SHELF_WALL_STILE = 0.05;
+export const SHELF_WALL_BOARD = 0.04;
 export const SHELF_WALL_PLINTH = 0.14;
-/** Shelf pitch (m, ×wall scale) — four to five rows under the 2.6m case. */
-export const SHELF_WALL_SHELF_GAP = 0.48;
-/** The bookshelf prop's own palette (space.tsx's "bookshelf" case). */
-export const SHELF_WALL_WOOD = "#6b4f3a";
-export const SHELF_WALL_BOARD_COLOR = "#7a6a55";
-export const SHELF_WALL_ROW_COLORS = ["#c4553f", "#5a7a44", "#e8c95a"] as const;
+/** Shelf pitch (m, ×wall scale) — four rows under the 2.6m case since the
+ *  2026-10-25 art overhaul (was 0.48/five rows): taller, airier shelves. */
+export const SHELF_WALL_SHELF_GAP = 0.58;
+/** The shelf wall's own palette — pale timbers since the 2026-10-25 art
+ *  overhaul (was #6b4f3a/#7a6a55): the case joins the room's quiet wood
+ *  family instead of reading as dark cabinetry. */
+export const SHELF_WALL_WOOD = "#c8b38e";
+export const SHELF_WALL_BOARD_COLOR = "#d6c09d";
+/** The row-band colours the renderer may still draw — muted cream / sage /
+ *  clay since the 2026-10-25 art overhaul (was #c4553f/#5a7a44/#e8c95a,
+ *  the old loud row bands). */
+export const SHELF_WALL_ROW_COLORS = ["#d9c9a8", "#a9b49a", "#c2a189"] as const;
 
 /** Floor inlay (地面镶边): a border band in a contrasting stone, flat on
  *  the floor. Lifted 14mm — above the parquet's 6mm dressing plane so
@@ -743,30 +762,20 @@ export const RILL_MIN_LENGTH = 2.4;
 export const LAMP_POLE_HEIGHT = 1.8;
 export const LAMP_SHADE_Y = 2.0;
 export const LAMP_BULB_Y = 1.82;
-/** Tungsten warm — the hotel's architecture color (the corridor sconce's
- *  constant), not palette-bound: a lamp reads as hotel property. */
-export const LAMP_COLOR = "#ffd9a0";
-/** Point-light level at human scale (×propScale² in the renderer so a
- *  colossal room's giant lamp actually reaches its giant floor). 7 → 4.5
- *  in the room-polish pass (round 2): the lamp's floor pool read as a
- *  blown hot spot in the after captures. 4.5 is a targeted STARTING value
- *  for the A/B captures, not a measured optimum. */
-export const LAMP_LIGHT_INTENSITY = 4.5;
-/** Hard cutoff (m, ×propScale) — bounds the light's influence like the
- *  corridor chunk light's distance term. */
-export const LAMP_LIGHT_DISTANCE = 9;
-/** Shade shell emissive (the shade glows as a surface, the bulb's light
- *  does the lighting). 1.6 → 0.65 in the room-polish pass: at 1.6 the
- *  shade was a white-hot disc. Starting value, pending the A/B captures. */
-export const LAMP_SHADE_EMISSIVE = 0.65;
-/** Just above the bloom threshold (1.0): the bulb still reads lit without
- *  blooming into a halo (2.2 → 1.15, same pass). */
-export const LAMP_BULB_EMISSIVE = 1.15;
-/** Additive floor pool under the lamp (m / peak opacity, ×propScale). The
- *  opacity was cut hard (0.42 → 0.16): the painted pool, not the point
- *  light, was the visible hot spot. Starting value, pending the captures. */
-export const LAMP_POOL_RADIUS = 2.3;
-export const LAMP_POOL_OPACITY = 0.16;
+/** One quiet cream family for the fixture surface and its light. The small
+ *  shade must never become the highest-contrast object in the room. */
+export const LAMP_COLOR = "#e7ddc0";
+/** Point-light level at human scale (×propScale² in the renderer). The
+ *  stable room fill owns readability; this only supplies a local cue. */
+export const LAMP_LIGHT_INTENSITY = 0.55;
+/** Hard cutoff (m, ×propScale), shared by room lamps and module sconces. */
+export const LAMP_LIGHT_DISTANCE = 5;
+/** Low emissive levels keep shades and bulbs cream, not white ovals. */
+export const LAMP_SHADE_EMISSIVE = 0.06;
+export const LAMP_BULB_EMISSIVE = 0.1;
+/** Soft normal-alpha floor cue (m / peak opacity, ×propScale). */
+export const LAMP_POOL_RADIUS = 2;
+export const LAMP_POOL_OPACITY = 0.025;
 
 /** Window: pane size and sill height (m, ×wall scale — a window is
  *  architecture, scaled like the dado band). */
@@ -775,48 +784,36 @@ export const WINDOW_HEIGHT = 1.9;
 export const WINDOW_SILL_Y = 1.0;
 /** The pane is a VIEW, not a glowing plate (§11.2): a layered outside —
  *  sky gradient + sun halo + far/near silhouettes, all palette-driven —
- *  baked by materials/window-view.ts and shown on an unlit plane. These
- *  gains are the plane's color multiplier: a small daylight lift (1.35 →
- *  1.12 in the room-polish pass — the pane no longer clears the bloom
- *  threshold, it is a VIEW, not a light plate), a cool half-strength wash
- *  at night (the window goes dark and cold, never black). */
-export const WINDOW_VIEW_DAY_GAIN = 1.12;
-export const WINDOW_VIEW_NIGHT_GAIN = 0.5;
-export const WINDOW_VIEW_NIGHT_TINT = "#8ea0c8";
+ *  baked by materials/window-view.ts and shown on an unlit plane. Night
+ *  stays in the same sage family and only gently lowers the view. */
+export const WINDOW_VIEW_DAY_GAIN = 1;
+export const WINDOW_VIEW_NIGHT_GAIN = 0.78;
+export const WINDOW_VIEW_NIGHT_TINT = "#b6c0aa";
 /** Cross bars over the view (m, ×wall scale) — what makes it a window
  *  and not a screen. */
 export const WINDOW_MULLION = 0.07;
 /** Faint glass sheen over the view (opacity; glass is one of the two
- *  sanctioned alpha materials). */
-export const WINDOW_SHEEN_OPACITY = 0.1;
-/** The interior KEY light: a spot just inside the pane, aimed down into
- *  the room (×wall scale²). 42 candela lands ≈1.7 at the spill pool's
- *  center (~5 m out) — still the room's motivated key with strong
- *  shadows, but the old 68 (≈2.7 there) blew the floor into a white
- *  patch in the after captures. 42 is a targeted STARTING value for the
- *  A/B captures, not a measured optimum. At night the spot cools and
- *  dims (×WINDOW_NIGHT_SPOT_SCALE) and the lamp takes over as the room's
- *  primary. */
-export const WINDOW_SPOT_INTENSITY = 42;
-export const WINDOW_NIGHT_SPOT_SCALE = 0.5;
+ *  sanctioned alpha materials) — a breath on the glass, not a film. */
+export const WINDOW_SHEEN_OPACITY = 0.04;
+/** A quiet motivated window accent, not a competing key light. The broad
+ *  diffuse fill and the directional shadow rig carry the room's faces. */
+export const WINDOW_SPOT_INTENSITY = 7;
+export const WINDOW_NIGHT_SPOT_SCALE = 0.35;
 /** The lamp burns a little brighter after dark (×LAMP_NIGHT_BOOST) so
  *  the room's readability never depends on the window. */
-export const LAMP_NIGHT_BOOST = 1.2;
+export const LAMP_NIGHT_BOOST = 1.15;
 export const WINDOW_SPOT_ANGLE = 0.62;
-/** Soft edge (0–1): 0.5 → 0.72 in the room-polish pass — the pool's rim
- *  was a hard ring; this keeps the key motivated but feathers it. */
-export const WINDOW_SPOT_PENUMBRA = 0.72;
-/** Spot shadow rig (interior key): one 1024² map per mounted room. */
+/** Soft edge (0–1): the accent's rim dissolves into the diffuse floor. */
+export const WINDOW_SPOT_PENUMBRA = 0.9;
+/** Spot shadow rig: one 1024² map per mounted room. */
 export const WINDOW_SPOT_SHADOW_MAP = 1024;
 export const WINDOW_SPOT_SHADOW_NEAR = 0.4;
 /** Shadow far plane (×wall scale): must reach the floor across the cone. */
 export const WINDOW_SPOT_SHADOW_FAR = 26;
-/** Additive spill quad on the floor in front of the pane (m / peak
- *  opacity; length ×wall scale) — the visible "light spilling inward".
- *  The opacity was cut hard (0.3 → 0.14): painted as a hot sheet in the
- *  after captures. Starting value, pending the A/B captures. */
+/** Normal-alpha spill on the floor in front of the pane (m / peak opacity;
+ *  length ×wall scale) — a faint wash, never a painted hot sheet. */
 export const WINDOW_SPILL_LENGTH = 4.2;
-export const WINDOW_SPILL_OPACITY = 0.14;
+export const WINDOW_SPILL_OPACITY = 0.05;
 /** Clearance between the window frame and any door on the same wall (m). */
 export const WINDOW_DOOR_CLEAR = 1.0;
 
@@ -828,31 +825,25 @@ export const CLERESTORY_HEIGHT = 1.05;
 export const CLERESTORY_DROP = 0.45;
 export const CLERESTORY_END_PAD = 0.8;
 export const CLERESTORY_UNIT = 2.3;
-/** The spot through the band (×wall scale²): ~80 candela from a 3.5 m
- *  sill throws a broad warm wash across the floor — the outdoor set's
- *  "soundstage sky" with a source you can point at (walk to the wall and
- *  the sun was a row of high windows all along). Never casts (the sun
- *  owns the outdoor shadows; two near-coincident casters double-print). */
-export const CLERESTORY_SPOT_INTENSITY = 80;
+/** The band uses the same restrained light budget as the window accent.
+ *  It never casts, avoiding a second coincident shadow printer. */
+export const CLERESTORY_SPOT_INTENSITY = 9;
 export const CLERESTORY_SPOT_ANGLE = 0.72;
 export const CLERESTORY_SPOT_PENUMBRA = 0.7;
 /** How far into the room the band's light is aimed (m, ×wall scale). */
 export const CLERESTORY_SPOT_THROW = 5.5;
-/** Additive floor wash below the band (m / peak opacity, ×wall scale). */
+/** Normal-alpha floor wash below the band (m / peak opacity, ×wall scale). */
 export const CLERESTORY_SPILL_LENGTH = 4.6;
-export const CLERESTORY_SPILL_OPACITY = 0.26;
+export const CLERESTORY_SPILL_OPACITY = 0.03;
 
 /** Light registers (v0.11-hotel-rooms §3, design §11.2 item 4): one
  *  room, one light mood, derived deterministically from the recipe's
- *  lightSeed. The register TINTS the window/clerestory light so it never
- *  fights the room's mood; the lamp stays hotel-tungsten (architecture,
- *  not palette). Ember is kept warm-soft — a late-evening glow, never a
- *  horror red (the anti-pattern list). */
+ *  lightSeed. Every register stays inside the quiet cream/sage family. */
 export const LIGHT_REGISTER_TINTS = {
-  tungsten: "#ffd9a8",
-  fluorescent: "#cfe2ff",
-  daylight: "#fff4dc",
-  ember: "#ffb08a",
+  tungsten: "#e7ddc0",
+  fluorescent: "#d5e3c9",
+  daylight: "#eee8d4",
+  ember: "#e0c39f",
 } as const;
 export type LightRegister = keyof typeof LIGHT_REGISTER_TINTS;
 /** Draw weights: tungsten 40 / fluorescent 25 / daylight 25 / ember 10. */
@@ -867,22 +858,16 @@ export const LIGHT_REGISTER_WEIGHTS: readonly {
 ];
 
 /** Module light registers → sconce fixture (v0.11-room-interiors §8.2):
- *  each composed-room module carries its own register — HOW it is lit,
- *  not with what colour — and the renderer grows one small wall sconce
- *  per module in that register, so neighbouring modules read as
- *  differently lit (a warm task pool over the desk, a cool wash over the
- *  shelf walls, pale daylight, the pool deck's bounced aqua, a dim quiet
- *  corner). Colours come from the same family as LIGHT_REGISTER_TINTS
- *  (pool-bounce is the water's own bounce — pale aqua, never saturated);
- *  intensity is the sconce's point-light level at human scale (×scale² in
- *  the renderer, the lamp's law), pool the additive floor quad's peak. */
+ *  one small cream fixture per module, with only enough real light and
+ *  normal-alpha pool to register its source. The room's objects, not the
+ *  sconces, own the contrast budget. */
 export const MODULE_LIGHT_FIXTURES: Record<
   string,
   { color: string; intensity: number; pool: number }
 > = {
-  task: { color: "#ffd9a8", intensity: 4.5, pool: 0.34 },
-  wash: { color: "#cfe2ff", intensity: 4.5, pool: 0.3 },
-  daylight: { color: "#fff4dc", intensity: 5.5, pool: 0.36 },
-  "pool-bounce": { color: "#bfeadb", intensity: 4.5, pool: 0.32 },
-  quiet: { color: "#e6d3b3", intensity: 2.2, pool: 0.22 },
+  task: { color: "#e7ddc0", intensity: 0.55, pool: 0.025 },
+  wash: { color: "#d5e3c9", intensity: 0.45, pool: 0.02 },
+  daylight: { color: "#eee8d4", intensity: 0.6, pool: 0.025 },
+  "pool-bounce": { color: "#c2d8c2", intensity: 0.4, pool: 0.018 },
+  quiet: { color: "#d7d0b5", intensity: 0.3, pool: 0.015 },
 };

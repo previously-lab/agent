@@ -4,29 +4,30 @@
  * drei's Caustics as the pool's signature, but that costs two extra scene
  * renders plus two fullscreen passes per frame — this is the zero-pass fake).
  *
- * HOW IT WORKS. This module PATCHES the existing ground material (the tile
- * basin floor from surface.ts) with an additive emissive term: the two
- * seamless caustics layers (caustics.ts) sampled at counter-scrolling UV
- * offsets and multiplied — where both webs' filaments cross, the product
- * flares, which reads as the slow boiling drift of real refracted light.
- * The web is masked to the water rectangle with a soft edge, so the deck
- * stays dark and the pattern fades at the waterline instead of clipping.
+ * HOW IT WORKS. This module PATCHES the existing ground material (the
+ * matte basin floor from surface.ts) with an additive emissive term: the
+ * two seamless caustics layers (caustics.ts) sampled at counter-scrolling
+ * UV offsets and multiplied — where both webs' filaments cross, the
+ * product flares, which reads as the slow boiling drift of real refracted
+ * light. The web is masked to the water rectangle with a soft edge, so
+ * the deck stays dark and the pattern fades at the waterline instead of
+ * clipping.
  *
- * UV RECOVERY. The ground plane's local coords are recoverable from the
- * tile map's varying: vMapUv = uv · (span / TILE_SPAN_METERS), and
+ * UV COORDINATES. The matte floor carries no map, so three defines no
+ * map varying for it — the patch sets the material's `USE_UV` define
+ * (the same convention as water-surface.ts) and reads the ordinary vUv.
  * space.tsx's ground mesh maps uv → local meters as
  *   lx = (uv.x - 0.5) · spanX,  lz = (1 - uv.y) · spanY
- * (plane rotated -π/2 about X, spanning z ∈ [0, extent]). The patch bakes
- * TILE_SPAN_METERS / span into uCausticsUvFromMap, so the mask and the
- * web sampling work in METERS — isotropic on non-square pools.
+ * (plane rotated -π/2 about X, spanning z ∈ [0, extent]), so vUv IS the
+ * ground plane's local coordinate system and the mask and the web
+ * sampling work in METERS — isotropic on non-square pools.
  *
- * PATCHING DISCIPLINE (same as surface.ts / water-surface.ts): the shared
- * textures stay at repeat 1 (scrolling lives in uniforms), onBeforeCompile
- * and customProgramCacheKey are CHAINED onto whatever the material already
- * has (surface.ts's tiling patch must keep working), and the shader text is
- * validated so a three upgrade that drops the expected include fails loud.
- * The material must carry a map (vMapUv is the coordinate carrier) — the
- * tile ground material always does.
+ * PATCHING DISCIPLINE (same as water-surface.ts): the shared textures
+ * stay at repeat 1 (scrolling lives in uniforms), onBeforeCompile and
+ * customProgramCacheKey are CHAINED onto whatever the material already
+ * has, and the shader text is validated so a three upgrade that drops
+ * the expected include fails loud. The target material does NOT need a
+ * map — the matte floor has none.
  *
  * IDEMPOTENT. The patch is recorded in a WeakMap: applying it twice to the
  * SAME material returns the original driver without chaining another
@@ -45,26 +46,25 @@
  * are a pure function of the elapsed clock (visual motion may read the
  * clock). Nothing here allocates per frame.
  *
- * WAVE-DRIVEN REFRACTION (optional `wave` option). True Snell refraction
- * of the pool floor would need a scene grab pass (render the world minus
+ * WAVE-DRIVEN WOBBLE (optional `wave` option). True Snell refraction of
+ * the pool floor would need a scene grab pass (render the world minus
  * water to a target, distort its UVs by the surface normal) — a full
  * extra render per frame, rejected in water-surface.ts's documented
- * budget. The stylized approximation instead offsets the FLOOR's own
- * lookups by the live wave field's slope, which costs one 128² texture
+ * budget. The stylized approximation instead offsets the caustics web's
+ * own UVs by the live wave field's slope, which costs one 128² texture
  * sample in the floor shader and no pass at all:
- *   - the tile map's UV is displaced ∝ slope — the bricks under the water
- *     visibly bend with the waves ("池底的砖透过水变形", §12.2);
- *   - the caustics web's UV is displaced by the same slope (× a wobble
- *     factor) — refracted light dances further than the floor it lands
- *     on, which is how real pools behave.
- * A calm pool has slope 0 everywhere, so the offsets vanish and the floor
+ *   - the caustics web's UV is displaced ∝ slope (× a wobble factor) —
+ *     refracted light dances with the surface, which is how real pools
+ *     behave;
+ *   - the matte floor has no albedo pattern to bend (the old textured
+ *     tile map is gone), so the offset drives ONLY the light web.
+ * A calm pool has slope 0 everywhere, so the offset vanishes and the floor
  * is pixel-identical to an unpatched one; dynamics keep their single
  * source (the wave field) and a sleeping driver costs nothing here.
  */
 
 import {
   Color,
-  ShaderChunk,
   Vector2,
   Vector4,
   type ColorRepresentation,
@@ -83,10 +83,11 @@ export interface PoolCausticsOptions {
   spanX: number;
   spanY: number;
   /**
-   * Live wave height field (wave-driver.ts). When given, the pool floor
-   * REFRACTS: the tile map's UV and the caustics web's UV are displaced by
-   * the wave field's slope, masked to the water rectangle (see module
-   * doc). When omitted the patch behaves exactly as before.
+   * Live wave height field (wave-driver.ts). When given, the caustics web
+   * WOBBLES: its UV is displaced by the wave field's slope, masked to the
+   * water rectangle (see module doc). The matte floor itself has no
+   * pattern to refract — only the light web rides the slope. When omitted
+   * the patch behaves exactly as before.
    */
   wave?: {
     /** The driver's half-float height texture (R channel, meters). */
@@ -165,12 +166,11 @@ const LAYER_B_SCALE = 1.37;
 const MASK_FEATHER_START = 0.92;
 
 /**
- * Floor-tile refraction gain: meters of apparent tile shift per unit of
- * wave slope. A wading footstep peaks at slope ≈ 0.27 (water-surface.ts's
- * gain doc), so the tiles under a ring bend ≈ 3 cm — about a tenth of a
- * tile width: clearly alive, never swimming. A calm field has slope 0, so
- * the offset is exactly 0 and the floor is pixel-identical to an
- * unpatched one.
+ * Wave-slope → caustics-web wobble gain: meters of apparent light shift
+ * per unit of wave slope. A wading footstep peaks at slope ≈ 0.27
+ * (water-surface.ts's gain doc), so the web under a ring sweeps ≈ 3 cm —
+ * clearly alive, never swimming. A calm field has slope 0, so the offset
+ * is exactly 0 and the floor is pixel-identical to an unpatched one.
  */
 export const WATER_REFRACT_GAIN = 0.12;
 
@@ -182,11 +182,13 @@ export const WATER_REFRACT_GAIN = 0.12;
 const CAUSTICS_WOBBLE_FACTOR = 2.5;
 
 /**
- * Pure mirror of the shader's meters → tile-map-UV conversion, so tests
- * can lock the refraction UV math without compiling GLSL: the ground
- * plane maps local meters to vMapUv at TILE_SPAN_METERS per repeat, with
- * the plane's v axis running AGAINST +z (rotated −π/2 about X — the same
- * flip the caustics doc documents).
+ * Pure mirror of the OLD shader's meters → tile-map-UV conversion, kept
+ * exported for API/test compatibility even though the matte floor no
+ * longer consumes it: the current GLSL reads vUv directly (the ground
+ * plane maps local meters to vUv 1:1 over its span). The conversion is
+ * still the exact inverse of the plane's local↔uv mapping, with the v
+ * axis running AGAINST +z (rotated −π/2 about X — the same flip the
+ * caustics doc documents).
  */
 export function refractUvDeltaFromMeters(
   offsetX: number,
@@ -204,7 +206,6 @@ uniform sampler2D uCausticsB;
 uniform vec4 uCausticsScroll;
 uniform vec4 uCausticsRect;
 uniform vec2 uCausticsPlane;
-uniform vec2 uCausticsUvFromMap;
 uniform vec2 uCausticsCell;
 uniform vec3 uCausticsColor;
 uniform float uCausticsIntensity;
@@ -217,18 +218,19 @@ uniform vec4 uWaveTexel;
 `;
 
 /**
- * Wave-slope sample + water-rect mask, injected ahead of map_fragment so
- * both the tile map's UV and (later, in the emissive chunk) the caustics
- * web's UV can displace by refrOffset. The u/v mapping mirrors
- * waveUvForLocal (v flipped against +z); the slope is the same
- * central-difference quotient the water surface's normal uses. Declared
- * at main() scope WITHOUT a wrapping block: refrOffset must stay visible
- * to the map lookup and the emissive chunk below. The patched material
- * is guaranteed to carry a map (applyPoolCaustics throws without one),
- * so vMapUv exists here; the refr* names are unique to this patch.
+ * Wave-slope sample + water-rect mask, injected ahead of map_fragment as
+ * the early main-scope computation whose only product is refrOffset: the
+ * caustics web's UV (later, in the emissive chunk) displaces by it. The
+ * u/v mapping mirrors waveUvForLocal (v flipped against +z); the slope is
+ * the same central-difference quotient the water surface's normal uses.
+ * Declared at main() scope WITHOUT a wrapping block: refrOffset must stay
+ * visible to the emissive chunk below. Coordinates come from vUv — the
+ * patch sets USE_UV on the material (the matte floor has no map to define
+ * it); the refr* names are unique to this patch. map_fragment stays in
+ * place purely as the injection anchor — nothing displaces its sample.
  */
 const WAVE_REFRACT_BLOCK = `
-vec2 refr01 = vMapUv * uCausticsUvFromMap;
+vec2 refr01 = vUv;
 vec2 refrLocal = vec2(
 	( refr01.x - 0.5 ) * uCausticsPlane.x,
 	( 1.0 - refr01.y ) * uCausticsPlane.y );
@@ -245,24 +247,21 @@ float refrMask = 1.0 - smoothstep( ${MASK_FEATHER_START}, 1.0, max( refrEdge.x, 
 vec2 refrOffset = refrSlope * ( refrMask * ${WATER_REFRACT_GAIN} );
 `;
 
-/** The map sample three's map_fragment takes (r185) — the UV is displaced
- *  by the wave refraction offset (converted meters → map repeats). */
-const MAP_SAMPLE = "texture2D( map, vMapUv )";
-
 const EMISSIVE_INCLUDE = "#include <emissivemap_fragment>";
 const MAP_INCLUDE = "#include <map_fragment>";
 
 function buildCausticsEmissive(hasWave: boolean): string {
-  // With the wave option the web's UV rides the same refrOffset the tile
-  // map uses, amplified — refracted light sweeps further than the floor
-  // shift beneath it. refrOffset is declared by WAVE_REFRACT_BLOCK, which
-  // is injected ahead of map_fragment (earlier in main()).
+  // With the wave option the web's UV rides the wave slope, amplified —
+  // refracted light sweeps further than the apparent floor shift beneath
+  // it. refrOffset is declared by WAVE_REFRACT_BLOCK, which is injected
+  // ahead of map_fragment (earlier in main()). vUv is the ground plane's
+  // local coordinate system (USE_UV is set on the material).
   const webUv = hasWave
     ? `( causticsLocal + refrOffset * ${CAUSTICS_WOBBLE_FACTOR} ) / uCausticsCell`
     : "causticsLocal / uCausticsCell";
   return `${EMISSIVE_INCLUDE}
 	{
-		vec2 caustics01 = vMapUv * uCausticsUvFromMap;
+		vec2 caustics01 = vUv;
 		vec2 causticsLocal = vec2(
 			( caustics01.x - 0.5 ) * uCausticsPlane.x,
 			( 1.0 - caustics01.y ) * uCausticsPlane.y );
@@ -276,27 +275,9 @@ function buildCausticsEmissive(hasWave: boolean): string {
 	}`;
 }
 
-/**
- * Displaced map lookup for the wave option: three's map_fragment sample
- * moves by the refraction offset, converted meters → map repeats exactly
- * as refractUvDeltaFromMeters mirrors (pure twin of this GLSL).
- */
-function buildWaveMapFragment(): string {
-  const chunk = ShaderChunk.map_fragment;
-  if (!chunk.includes(MAP_SAMPLE)) {
-    throw new Error(
-      "materials/caustics-surface: three's map_fragment no longer contains the diffuse map sample — the refraction patch needs updating for this three version",
-    );
-  }
-  return chunk.replace(
-    MAP_SAMPLE,
-    `texture2D( map, vMapUv + vec2( refrOffset.x, -refrOffset.y ) / ${TILE_SPAN_METERS} )`,
-  );
-}
-
 const CAUSTICS_PROGRAM_CACHE_TAG = ":caustics-v1";
 /** Appended when the wave option is present: the program differs (extra
- *  uniforms + the displaced map sample), so the key must too. */
+ *  uniforms + the refract block), so the key must too. */
 const CAUSTICS_WAVE_CACHE_TAG = ":wave";
 
 /** The declarations the patch prepends — the idempotency probe below keys
@@ -313,24 +294,21 @@ const CAUSTICS_DECLS_PROBE = "uniform sampler2D uCausticsA;";
 const patchedMaterials = new WeakMap<MeshStandardMaterial, PoolCaustics>();
 
 /**
- * Patch `material` (the tile basin floor) with the additive caustics web.
- * Chains onto the material's existing onBeforeCompile / cache key, so it
- * composes with surface.ts's tiling patch in either order. Idempotent:
- * calling it again on the SAME material returns the original driver
- * untouched — no second onBeforeCompile layer, no re-injection. Returns
- * the per-frame driver; call `update(elapsed)` from the room's useFrame.
- * The shared caustics textures must NOT be disposed; the material stays
- * owned by its creator.
+ * Patch `material` (the matte basin floor) with the additive caustics
+ * web. Chains onto the material's existing onBeforeCompile / cache key.
+ * The matte floor has no map, so the patch sets the `USE_UV` define
+ * itself (three only emits vUv when a map/uv-consuming feature asks for
+ * it — same convention as water-surface.ts). Idempotent: calling it
+ * again on the SAME material returns the original driver untouched — no
+ * second onBeforeCompile layer, no re-injection. Returns the per-frame
+ * driver; call `update(elapsed)` from the room's useFrame. The shared
+ * caustics textures must NOT be disposed; the material stays owned by
+ * its creator.
  */
 export function applyPoolCaustics(
   material: MeshStandardMaterial,
   opts: PoolCausticsOptions,
 ): PoolCaustics {
-  if (!material.map) {
-    throw new Error(
-      "materials/caustics-surface: the caustics patch needs vMapUv — the target material must carry a map (the tile ground material does)",
-    );
-  }
   const existing = patchedMaterials.get(material);
   if (existing) return existing;
   const layers = sharedCausticsTextures();
@@ -339,6 +317,10 @@ export function applyPoolCaustics(
       `materials/caustics-surface: ${layers.length} caustics layers for 2 scroll slots`,
     );
   }
+
+  // The caustics math reads vUv; the matte floor has no map slot to
+  // define USE_UV on its own. Preserve any existing defines.
+  material.defines = { ...material.defines, USE_UV: "" };
 
   const scroll = new Vector4(0, 0, 0, 0);
   const cell = opts.cellMeters ?? CAUSTICS_CELL_METERS;
@@ -363,12 +345,6 @@ export function applyPoolCaustics(
         ),
       },
       uCausticsPlane: { value: new Vector2(opts.spanX, opts.spanY) },
-      uCausticsUvFromMap: {
-        value: new Vector2(
-          TILE_SPAN_METERS / opts.spanX,
-          TILE_SPAN_METERS / opts.spanY,
-        ),
-      },
       uCausticsCell: { value: new Vector2(cell, cell) },
       uCausticsColor: { value: new Color(opts.color ?? 0xffffff) },
       uCausticsIntensity: {
@@ -401,12 +377,11 @@ export function applyPoolCaustics(
       if (hasWave) {
         if (!next.includes(MAP_INCLUDE)) {
           throw new Error(
-            "materials/caustics-surface: fragment shader has no map_fragment include for the refraction offset",
+            "materials/caustics-surface: fragment shader has no map_fragment include for the wave slope block's injection anchor",
           );
         }
         next = WAVE_FRAGMENT_DECLS + next;
         next = next.replace(MAP_INCLUDE, `${WAVE_REFRACT_BLOCK}\n${MAP_INCLUDE}`);
-        next = next.replace(MAP_INCLUDE, buildWaveMapFragment());
       }
       shader.fragmentShader = FRAGMENT_DECLS + next;
     }

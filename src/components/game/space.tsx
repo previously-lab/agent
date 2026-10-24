@@ -72,7 +72,8 @@
  * declared feature slots (niche / pilaster-rhythm / floor-inlay) are built
  * HERE, after the door split, as opaque architecture lit only by the
  * room's own fixtures (buildRoomFeatures — never on cutaway sills, never
- * across a doorway or a strand-door approach, never fighting the parquet).
+ * across a doorway or a strand-door approach, never fighting the floor
+ * seams).
  *
  * Everything rendered here is a pure function of the resolved recipe plus
  * the door position — rebuilding a space from the same recipe yields the
@@ -318,7 +319,6 @@ import {
   NICHE_PEDESTAL_HEIGHT,
   NICHE_WIDTH,
   PARQUET_CELL,
-  PARQUET_TONE_LIFT,
   PATH_HALF,
   PET_COUNT,
   PET_NEAR_RADIUS_MAX,
@@ -693,7 +693,7 @@ interface RoomFeatures {
  *  - INLAY: flat floors only (rolling terrain would clip through); the
  *    whole band is shrunk inside the walkable footprint (an l-shape's
  *    abandoned quadrant takes no stone), and the figure lifts 14mm —
- *    above the parquet's 6mm plane, so the two never z-fight.
+ *    above the seam plane's 12mm, so the two never z-fight.
  *  - RAISED-PLATFORM / MEZZANINE / ARCH-FRAME: single figures, each
  *    resolved to ONE door-split run of the declared role (a figure that
  *    fits its run never crosses a doorway by construction); the span
@@ -1386,10 +1386,11 @@ function NicheWallRun({
       <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
     </mesh>,
   );
-  // Cap rail along the run top, identical to a plain run's.
+  // Cap rail along the run top, identical to a plain run's — slim light
+  // trim (art pass), not a heavy dark rail.
   parts.push(
-    <mesh key="cap" position={[wall.x, height - 0.05, wall.z]} castShadow receiveShadow>
-      <boxGeometry args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]} />
+    <mesh key="cap" position={[wall.x, height - 0.03, wall.z]} castShadow receiveShadow>
+      <boxGeometry args={[wall.sizeX + 0.06, 0.06, wall.sizeZ + 0.06]} />
       <meshStandardMaterial color={capColor} roughness={1} flatShading />
     </mesh>,
   );
@@ -1636,7 +1637,7 @@ function ShelfWallRun({
 /**
  * Floor inlay: a border band of contrasting stone, flat on the floor —
  * a ShapeGeometry ring (outer rect minus the band-inset inner rect),
- * lifted INLAY_LIFT so it floats above the parquet's dressing plane with
+ * lifted INLAY_LIFT so it floats above the seam dressing plane with
  * no z-fight and reads as flush. Opaque, receiveShadow; the room's own
  * fixtures light it (A3: the band is stone, not a light effect).
  */
@@ -2553,39 +2554,59 @@ function Fireflies({
   );
 }
 
-/** Near-tone-on-tone checkerboard parquet for interior/wonder floors: a
- *  code-generated 2×2 canvas texture (no asset files), repeated at
- *  PARQUET_CELL meters. The light cell lifts the base color by only
- *  PARQUET_TONE_LIFT — visual review found a stronger contrast was the
- *  loudest thing in frame; at this level the floor reads as material and
- *  the furniture reads first. Only flat-floor interior/wonder rooms get
- *  it — nature ground stays untouched. Sits a hair above the ground plane. */
-function FloorParquet({
+/** Sparse floor seams for interior/wonder floors (the art-pass successor
+ *  to the old 2×2 checker parquet): one code-generated TRANSPARENT canvas
+ *  (no asset files) carrying only a few long quiet wood marks per
+ *  PARQUET_CELL board period — one deliberate long seam and at most two
+ *  short faint strokes, no checker, noise, or stains (the reference
+ *  drawing's floor is broad matte boards with a handful of low-contrast
+ *  grain lines). The repeat math keeps the period at PARQUET_CELL meters
+ *  so the marks read as long boards, not tiles. The plane is unlit basic
+ *  material a hair above BOTH the base floor and the module floor tint
+ *  planes, so the same marks read over either surface while the opaque
+ *  floor planes beneath stay the ones that receive light and shadow.
+ *  Only flat-floor interior/wonder rooms get it — nature ground stays
+ *  untouched. */
+function FloorSeams({
   width,
   extent,
-  base,
 }: {
   width: number;
   extent: number;
-  base: string;
 }) {
   const texture = useMemo(() => {
-    const light = new THREE.Color(base)
-      .lerp(new THREE.Color("#ffffff"), PARQUET_TONE_LIFT)
-      .getStyle();
     const canvas = document.createElement("canvas");
-    canvas.width = 2;
-    canvas.height = 2;
+    // One 4m board period at 64px/m — enough resolution for soft thin
+    // lines without a texture-noise blanket.
+    canvas.width = 256;
+    canvas.height = 256;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.fillStyle = base;
-    ctx.fillRect(0, 0, 2, 2);
-    ctx.fillStyle = light;
-    ctx.fillRect(0, 0, 1, 1);
-    ctx.fillRect(1, 1, 1, 1);
+    // The one long seam, a touch off the period's midline so the repeat
+    // never grids into a checker.
+    ctx.strokeStyle = "rgba(96, 88, 66, 0.16)";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(0, 131);
+    ctx.lineTo(256, 134);
+    ctx.stroke();
+    // Two short faint wood marks — one dark, one a pale catch-light —
+    // kept well inside the period so adjacent cells never join them.
+    ctx.strokeStyle = "rgba(96, 88, 66, 0.10)";
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(52, 58);
+    ctx.lineTo(138, 60);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(244, 236, 208, 0.18)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(150, 198);
+    ctx.lineTo(224, 197);
+    ctx.stroke();
     const tex = new THREE.CanvasTexture(canvas);
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(
@@ -2593,17 +2614,16 @@ function FloorParquet({
       Math.max(1, Math.round(extent / PARQUET_CELL)),
     );
     return tex;
-  }, [width, extent, base]);
+  }, [width, extent]);
   useEffect(() => () => texture?.dispose(), [texture]);
   if (!texture) return null;
   return (
     <mesh
-      position={[0, GROUND_Y + 0.006, extent / 2]}
+      position={[0, GROUND_Y + 0.012, extent / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
-      receiveShadow
     >
       <planeGeometry args={[width, extent]} />
-      <meshStandardMaterial map={texture} roughness={1} />
+      <meshBasicMaterial map={texture} transparent depthWrite={false} />
     </mesh>
   );
 }
@@ -3005,18 +3025,15 @@ function MotifGeometry({
       return (
         <group>
           {[-0.66, 0.66].map((x) => (
-            <mesh key={x} position={[x, 0.21, 0]}>
+            <mesh key={x} position={[x, 0.21, 0]} material={mats.woodDark}>
               <boxGeometry args={[0.08, 0.42, 0.5]} />
-              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
             </mesh>
           ))}
-          <mesh position={[0, 0.46, 0]}>
+          <mesh position={[0, 0.46, 0]} material={mats.woodTop}>
             <boxGeometry args={[1.6, 0.08, 0.55]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 0.82, -0.26]} rotation={[-0.14, 0, 0]}>
+          <mesh position={[0, 0.82, -0.26]} rotation={[-0.14, 0, 0]} material={mats.woodTop}>
             <boxGeometry args={[1.6, 0.45, 0.07]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
         </group>
       );
@@ -3424,23 +3441,16 @@ function MotifGeometry({
     case "nightstand":
       return (
         <group>
-          <mesh position={[0, 0.28, 0]}>
+          <mesh position={[0, 0.28, 0]} material={mats.woodBase}>
             <boxGeometry args={[0.5, 0.56, 0.45]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 0.62, 0]}>
+          <mesh position={[0, 0.62, 0]} material={mats.metal}>
             <cylinderGeometry args={[0.05, 0.08, 0.2, 6]} />
-            <meshStandardMaterial color="#9aa0a6" roughness={0.6} flatShading />
           </mesh>
-          <mesh position={[0, 0.8, 0]}>
+          {/* The shade wears the shared quiet-emissive paper role — the
+              old .7 hot emissive sphere is gone. */}
+          <mesh position={[0, 0.8, 0]} material={mats.shade}>
             <sphereGeometry args={[0.13, 8, 6]} />
-            <meshStandardMaterial
-              color="#f2e6c8"
-              emissive="#f2e6c8"
-              emissiveIntensity={0.7}
-              roughness={1}
-              flatShading
-            />
           </mesh>
         </group>
       );
@@ -4002,31 +4012,26 @@ function MotifGeometry({
         <group>
           {[-0.95, 0.95].flatMap((x) =>
             [-0.35, 0.35].map((z) => (
-              <mesh key={`${x}${z}`} position={[x, 0.36, z]}>
+              <mesh key={`${x}${z}`} position={[x, 0.36, z]} material={mats.woodDark}>
                 <boxGeometry args={[0.08, 0.72, 0.08]} />
-                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
               </mesh>
             )),
           )}
-          <mesh position={[0, 0.73, 0]}>
+          <mesh position={[0, 0.73, 0]} material={mats.woodTop}>
             <boxGeometry args={[2.2, 0.06, 0.95]} />
-            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
           </mesh>
           {/* The cloth: a slightly oversized slab plus a hanging skirt. */}
-          <mesh position={[0, 0.775, 0]}>
+          <mesh position={[0, 0.775, 0]} material={mats.fabricLight}>
             <boxGeometry args={[2.3, 0.025, 1.05]} />
-            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
           </mesh>
           {[-1, 1].map((s) => (
-            <mesh key={`sk${s}`} position={[0, 0.65, s * 0.52]}>
+            <mesh key={`sk${s}`} position={[0, 0.65, s * 0.52]} material={mats.fabricLight}>
               <boxGeometry args={[2.3, 0.24, 0.02]} />
-              <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
             </mesh>
           ))}
           {[-1, 1].map((s) => (
-            <mesh key={`ske${s}`} position={[s * 1.14, 0.65, 0]}>
+            <mesh key={`ske${s}`} position={[s * 1.14, 0.65, 0]} material={mats.fabricLight}>
               <boxGeometry args={[0.02, 0.24, 1.05]} />
-              <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
             </mesh>
           ))}
           {/* Four settings. */}
@@ -4039,46 +4044,30 @@ function MotifGeometry({
             ] as const
           ).map(([x, z], i) => (
             <group key={i} position={[x, 0, z]}>
-              <mesh position={[0, 0.8, 0]}>
+              <mesh position={[0, 0.8, 0]} material={mats.ceramic}>
                 <cylinderGeometry args={[0.11, 0.09, 0.025, 12]} />
-                <meshStandardMaterial color="#f2ede2" roughness={0.6} flatShading />
               </mesh>
-              <mesh position={[0.14, 0.83, 0.05]}>
+              <mesh position={[0.14, 0.83, 0.05]} material={mats.ceramic}>
                 <cylinderGeometry args={[0.035, 0.03, 0.07, 8]} />
-                <meshStandardMaterial color="#e8e4da" roughness={0.6} flatShading />
               </mesh>
             </group>
           ))}
           {/* Candlesticks (unlit — the room's fixtures own the light, B.13). */}
           {[-0.25, 0.25].map((x) => (
             <group key={x} position={[x, 0, 0]}>
-              <mesh position={[0, 0.8, 0]}>
+              <mesh position={[0, 0.8, 0]} material={mats.metal}>
                 <cylinderGeometry args={[0.05, 0.06, 0.02, 8]} />
-                <meshStandardMaterial
-                  color="#c8b06a"
-                  roughness={0.4}
-                  metalness={0.6}
-                  flatShading
-                />
               </mesh>
-              <mesh position={[0, 0.87, 0]}>
+              <mesh position={[0, 0.87, 0]} material={mats.metal}>
                 <cylinderGeometry args={[0.015, 0.03, 0.13, 6]} />
-                <meshStandardMaterial
-                  color="#c8b06a"
-                  roughness={0.4}
-                  metalness={0.6}
-                  flatShading
-                />
               </mesh>
-              <mesh position={[0, 0.99, 0]}>
+              <mesh position={[0, 0.99, 0]} material={mats.paper}>
                 <cylinderGeometry args={[0.018, 0.018, 0.12, 6]} />
-                <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
               </mesh>
             </group>
           ))}
-          <mesh position={[0, 0.81, 0]} scale={[1, 0.5, 1]}>
+          <mesh position={[0, 0.81, 0]} scale={[1, 0.5, 1]} material={mats.ceramic}>
             <sphereGeometry args={[0.14, 10, 6]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
         </group>
       );
@@ -4196,15 +4185,13 @@ function MotifGeometry({
       return (
         <group>
           {[-0.6, 0.6].map((x) => (
-            <mesh key={x} position={[x, 0.18, 0]}>
+            <mesh key={x} position={[x, 0.18, 0]} material={mats.ceramic}>
               <boxGeometry args={[0.14, 0.36, 0.5]} />
-              <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading />
             </mesh>
           ))}
           {[-0.17, 0, 0.17].map((z) => (
-            <mesh key={z} position={[0, 0.385, z]}>
+            <mesh key={z} position={[0, 0.385, z]} material={mats.woodTop}>
               <boxGeometry args={[1.6, 0.045, 0.14]} />
-              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
             </mesh>
           ))}
         </group>
@@ -4678,76 +4665,57 @@ function MotifGeometry({
       );
     case "wardrobe":
       // 双门衣柜 (附录 A): plinth, the 2.0m body, two door fronts with
-      // brass knobs meeting at the centre, the stepped cornice 顶线 —
+      // pale knobs meeting at the centre, the stepped cornice 顶线 —
       // 2.16m tall, floor-standing, the bedroom's vertical (never hung).
       return (
         <group>
-          <mesh position={[0, 0.04, 0.28]}>
+          <mesh position={[0, 0.04, 0.28]} material={mats.woodDark}>
             <boxGeometry args={[1.24, 0.08, 0.56]} />
-            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 1.06, 0.28]}>
+          <mesh position={[0, 1.06, 0.28]} material={mats.woodBase}>
             <boxGeometry args={[1.2, 1.96, 0.52]} />
-            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
           </mesh>
           {[-0.295, 0.295].map((x) => (
             <group key={x}>
-              <mesh position={[x, 1.06, 0.555]}>
+              <mesh position={[x, 1.06, 0.555]} material={mats.woodDark}>
                 <boxGeometry args={[0.55, 1.84, 0.03]} />
-                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
               </mesh>
-              <mesh position={[x - 0.19 * Math.sign(x), 1.06, 0.58]}>
+              <mesh position={[x - 0.19 * Math.sign(x), 1.06, 0.58]} material={mats.metal}>
                 <sphereGeometry args={[0.025, 7, 5]} />
-                <meshStandardMaterial
-                  color="#c8b06a"
-                  roughness={0.4}
-                  metalness={0.6}
-                  flatShading
-                />
               </mesh>
             </group>
           ))}
           {/* The cornice 顶线: a two-step cap. */}
-          <mesh position={[0, 2.07, 0.28]}>
+          <mesh position={[0, 2.07, 0.28]} material={mats.woodDark}>
             <boxGeometry args={[1.3, 0.06, 0.58]} />
-            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 2.13, 0.28]}>
+          <mesh position={[0, 2.13, 0.28]} material={mats.woodBase}>
             <boxGeometry args={[1.2, 0.06, 0.5]} />
-            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
           </mesh>
         </group>
       );
     case "storagerack":
-      // 开放层板架 (附录 A): four steel posts, four timber shelves at
+      // 开放层板架 (附录 A): four pale matte posts, four timber shelves at
       // 0.14/0.64/1.14/1.64 (the kit's dy lifts suitcases and trays ONTO
       // these boards — the shelves carry real loads, 1.8m tall).
       return (
         <group>
           {[-0.72, 0.72].flatMap((x) =>
             [-0.27, 0.27].map((z) => (
-              <mesh key={`${x}${z}`} position={[x, 0.92, z]}>
+              <mesh key={`${x}${z}`} position={[x, 0.92, z]} material={mats.metal}>
                 <boxGeometry args={[0.05, 1.8, 0.05]} />
-                <meshStandardMaterial
-                  color="#9aa0a6"
-                  roughness={0.5}
-                  metalness={0.3}
-                  flatShading
-                />
               </mesh>
             )),
           )}
           {[0.12, 0.62, 1.12, 1.62].map((y) => (
-            <mesh key={y} position={[0, y, 0]}>
+            <mesh key={y} position={[0, y, 0]} material={mats.woodTop}>
               <boxGeometry args={[1.44, 0.04, 0.56]} />
-              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
             </mesh>
           ))}
           {[-0.72, 0.72].flatMap((x) =>
             [-0.27, 0.27].map((z) => (
-              <mesh key={`f${x}${z}`} position={[x, 0.02, z]}>
+              <mesh key={`f${x}${z}`} position={[x, 0.02, z]} material={mats.metal}>
                 <boxGeometry args={[0.09, 0.04, 0.09]} />
-                <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
               </mesh>
             )),
           )}
@@ -4756,67 +4724,44 @@ function MotifGeometry({
     case "workbench":
       // 工作台 (附录 A): the thick 0.9m timber slab on four square legs,
       // the under-top stretcher shelf (台下横撑), apron rails, and the
-      // steel vise screwed to the slab's right end (台钳).
+      // pale matte vise screwed to the slab's right end (台钳).
       return (
         <group>
           {[-0.82, 0.82].flatMap((x) =>
             [-0.33, 0.33].map((z) => (
-              <mesh key={`${x}${z}`} position={[x, 0.4, z]}>
+              <mesh key={`${x}${z}`} position={[x, 0.4, z]} material={mats.woodBase}>
                 <boxGeometry args={[0.09, 0.8, 0.09]} />
-                <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
               </mesh>
             )),
           )}
           {/* Apron rails under the slab. */}
           {[-0.355, 0.355].map((z) => (
-            <mesh key={z} position={[0, 0.74, z]}>
+            <mesh key={z} position={[0, 0.74, z]} material={mats.woodDark}>
               <boxGeometry args={[1.66, 0.12, 0.05]} />
-              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
             </mesh>
           ))}
           {[-0.845, 0.845].map((x) => (
-            <mesh key={x} position={[x, 0.74, 0]}>
+            <mesh key={x} position={[x, 0.74, 0]} material={mats.woodDark}>
               <boxGeometry args={[0.05, 0.12, 0.62]} />
-              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
             </mesh>
           ))}
           {/* The under-top stretcher shelf. */}
-          <mesh position={[0, 0.25, 0]}>
+          <mesh position={[0, 0.25, 0]} material={mats.woodBase}>
             <boxGeometry args={[1.6, 0.05, 0.6]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
           {/* The thick slab — top at 0.9m. */}
-          <mesh position={[0, 0.85, 0]}>
+          <mesh position={[0, 0.85, 0]} material={mats.woodTop}>
             <boxGeometry args={[1.8, 0.1, 0.8]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
           {/* The vise at the right end. */}
-          <mesh position={[0.72, 0.94, 0.18]}>
+          <mesh position={[0.72, 0.94, 0.18]} material={mats.metal}>
             <boxGeometry args={[0.18, 0.08, 0.24]} />
-            <meshStandardMaterial
-              color="#3a3a3e"
-              roughness={0.6}
-              metalness={0.3}
-              flatShading
-            />
           </mesh>
-          <mesh position={[0.82, 1.0, 0.18]}>
+          <mesh position={[0.82, 1.0, 0.18]} material={mats.metal}>
             <boxGeometry args={[0.07, 0.14, 0.26]} />
-            <meshStandardMaterial
-              color="#9aa0a6"
-              roughness={0.5}
-              metalness={0.4}
-              flatShading
-            />
           </mesh>
-          <mesh position={[0.7, 0.96, 0.18]} rotation={[0, 0, Math.PI / 2]}>
+          <mesh position={[0.7, 0.96, 0.18]} rotation={[0, 0, Math.PI / 2]} material={mats.metal}>
             <cylinderGeometry args={[0.02, 0.02, 0.24, 6]} />
-            <meshStandardMaterial
-              color="#9aa0a6"
-              roughness={0.5}
-              metalness={0.4}
-              flatShading
-            />
           </mesh>
         </group>
       );
@@ -6816,7 +6761,8 @@ function RoomLampLight({
         distance={LAMP_LIGHT_DISTANCE * scale}
         decay={2}
       />
-      {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
+      {/* Light pool on the floor: one radial-gradient quad, soft edge,
+          normal alpha blending (additive read as a hot blob). */}
       <mesh position={[x, y + 0.035, z]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[LAMP_POOL_RADIUS * 2, LAMP_POOL_RADIUS * 2]} />
         <meshBasicMaterial
@@ -6824,7 +6770,6 @@ function RoomLampLight({
           color={LAMP_COLOR}
           transparent
           opacity={LAMP_POOL_OPACITY * boost}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
@@ -6833,15 +6778,14 @@ function RoomLampLight({
 }
 
 /**
- * The room's lamp: base, pole, an emissive shade over a hot bulb, the ONE
- * real point light, and an additive floor pool (the corridor sconce idiom —
+ * The room's lamp: base, pole, a quiet cream shade and bulb, one restrained
+ * point light, and a soft alpha floor pool (the corridor sconce idiom —
  * the painted gradient does the falloff). Everything scales with the room's
  * prop scale, light included: with decay 2, a pool radius grown by k needs
  * intensity ×k² to land the same brightness, so a colossal room's giant
  * lamp actually reaches its giant floor. Calm incandescent — never
  * flickering (the anti-pattern list). After dark it burns a little
- * brighter (`boost`): the window cools and dims, and the lamp becomes the
- * room's primary so no corner ever goes unreadable.
+ * brighter (`boost`), while the ambient fill keeps the whole room readable.
  */
 function RoomLamp({
   x,
@@ -6861,17 +6805,19 @@ function RoomLamp({
     <group position={[x, y, z]} scale={scale}>
       <mesh position={[0, 0.03, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[0.2, 0.26, 0.06, 10]} />
-        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={0.9} metalness={0} flatShading />
       </mesh>
       <mesh position={[0, LAMP_POLE_HEIGHT / 2, 0]} castShadow>
         <cylinderGeometry args={[0.03, 0.045, LAMP_POLE_HEIGHT, 7]} />
-        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={0.9} metalness={0} flatShading />
       </mesh>
-      {/* Shade — emissive cone, apex up over the bulb like the sconce's. */}
+      {/* Shade — emissive cone, apex up over the bulb like the sconce's.
+        Warm pale base (never pure black) so the lowered emissive still
+        leaves the shade readable. */}
       <mesh position={[0, LAMP_SHADE_Y, 0]} castShadow>
         <coneGeometry args={[0.42, 0.5, 9]} />
         <meshStandardMaterial
-          color="#000000"
+          color={LAMP_COLOR}
           emissive={LAMP_COLOR}
           emissiveIntensity={LAMP_SHADE_EMISSIVE}
           roughness={1}
@@ -6882,7 +6828,7 @@ function RoomLamp({
       <mesh position={[0, LAMP_BULB_Y, 0]}>
         <sphereGeometry args={[0.09, 8, 6]} />
         <meshStandardMaterial
-          color="#000000"
+          color={LAMP_COLOR}
           emissive={LAMP_COLOR}
           emissiveIntensity={LAMP_BULB_EMISSIVE}
           roughness={1}
@@ -6898,7 +6844,8 @@ function RoomLamp({
         distance={LAMP_LIGHT_DISTANCE * scale}
         decay={2}
       />
-      {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
+      {/* Light pool on the floor: one radial-gradient quad, soft edge,
+          normal alpha blending. */}
       <mesh position={[0, 0.035, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[LAMP_POOL_RADIUS * 2, LAMP_POOL_RADIUS * 2]} />
         <meshBasicMaterial
@@ -6906,7 +6853,6 @@ function RoomLamp({
           color={LAMP_COLOR}
           transparent
           opacity={LAMP_POOL_OPACITY * boost}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
@@ -6917,9 +6863,9 @@ function RoomLamp({
 /**
  * The glass wall span (v0.12 附录 A `glasswall`, the sunroom module's
  * north edge): the solid run is split away behind it, so the assembly is
- * self-contained — a dark backing box (the reveal you would see through
- * the glass at a raking angle), the room's own baked outside on an unlit
- * plane, the sanctioned glass sheen, then a curtain-wall grid in the
+ * self-contained — a pale trim backing box (the reveal you would see
+ * through the glass at a raking angle), the room's own baked outside on
+ * an unlit plane, the sanctioned glass sheen, then a curtain-wall grid in the
  * door-trim material: bottom and head rails, end stiles, and vertical
  * mullions one bay per ~1.8m — the WHOLE wall as one window, not a dozen
  * small ones. The daylight pours through: the same motivated key spot as
@@ -6960,11 +6906,12 @@ function GlassWallSpan({
   const [spotTarget] = useState(() => new THREE.Object3D());
   return (
     <group position={[cx, 0, z]} rotation={[0, Math.atan2(nx, nz), 0]}>
-      {/* The dark reveal behind the glass — backs the view plane where
-          the split run no longer does. */}
+      {/* The pale reveal behind the glass — backs the view plane where
+          the split run no longer does (art pass: light trim, not a dark
+          slot). */}
       <mesh position={[0, height / 2, thick / 2 - 0.045]}>
         <boxGeometry args={[width, height, 0.08]} />
-        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {/* The outside: the room's own baked view, wall to wall. */}
       <mesh position={[0, height / 2, thick / 2 + 0.005]}>
@@ -7010,7 +6957,8 @@ function GlassWallSpan({
           <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
         </mesh>
       ))}
-      {/* Daylight spilling inward: the wall-wash gradient laid flat. */}
+      {/* Daylight spilling inward: the wall-wash gradient laid flat,
+          normal alpha blending. */}
       <mesh
         position={[0, 0.05, thick / 2 + spillL / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -7021,12 +6969,11 @@ function GlassWallSpan({
           color={paneColor}
           transparent
           opacity={WINDOW_SPILL_OPACITY}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
-      {/* The daylight key: a real spot just inside the glass, casting the
-          room's strong shadows — the window idiom at wall scale. */}
+      {/* The quiet daylight accent: a real spot just inside the glass,
+          casting a soft local shadow under the ambient-led room light. */}
       <primitive object={spotTarget} position={[0, 0, thick / 2 + spillL * 0.8]} />
       <spotLight
         position={[0, height * 0.6, thick / 2 + 0.3]}
@@ -7052,7 +6999,7 @@ function GlassWallSpan({
 /**
  * One module's light-register sconce (§8.2): a small backplate and an
  * emissive dome on the module's own wall, the register's real point
- * light, and an additive floor pool beneath — the corridor sconce idiom
+ * light, and an alpha floor pool beneath — the corridor sconce idiom
  * scaled to a module, the findable source for that module's light mood
  * (warm task pool, cool shelf wash, pale daylight, the pool deck's aqua
  * bounce, a dim quiet corner). The register owns HOW the module is lit;
@@ -7082,14 +7029,14 @@ function ModuleSconce({
     <group position={[anchor.x, 0, anchor.z]} rotation={[0, rotY, 0]}>
       <mesh position={[0, y, 0.02]} castShadow>
         <boxGeometry args={[0.22 * wallScale, 0.34 * wallScale, 0.06]} />
-        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={0.9} metalness={0} flatShading />
       </mesh>
       <mesh position={[0, y + 0.06 * wallScale, 0.09]}>
         <sphereGeometry args={[0.085 * wallScale, 8, 6]} />
         <meshStandardMaterial
-          color="#000000"
+          color={LAMP_COLOR}
           emissive={fixture.color}
-          emissiveIntensity={2.0}
+          emissiveIntensity={LAMP_SHADE_EMISSIVE}
           roughness={1}
         />
       </mesh>
@@ -7097,10 +7044,11 @@ function ModuleSconce({
         position={[0, y, 0.4 * wallScale]}
         color={fixture.color}
         intensity={fixture.intensity * wallScale * wallScale}
-        distance={8 * wallScale}
+        distance={LAMP_LIGHT_DISTANCE * wallScale}
         decay={2}
       />
-      {/* The register's pool on the module's floor. */}
+      {/* The register's pool on the module's floor — normal alpha
+          blending. */}
       <mesh
         position={[0, 0.036, 0.95 * wallScale]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -7111,7 +7059,6 @@ function ModuleSconce({
           color={fixture.color}
           transparent
           opacity={fixture.pool}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
@@ -7120,17 +7067,17 @@ function ModuleSconce({
 }
 
 /**
- * The room's window: a dark reveal sunk into the wall face, then a VIEW —
- * the layered outside baked by materials/window-view.ts (sky gradient +
+ * The room's window: a pale trim reveal sunk into the wall face, then a
+ * VIEW — the layered outside baked by materials/window-view.ts (sky gradient +
  * sun halo + far/near silhouettes, all palette-driven) on an unlit plane,
  * crossed by mullions under a faint glass sheen — an architrave frame and
- * sill in the door-trim material, and an additive spill quad on the floor
+ * sill in the door-trim material, and an alpha spill quad on the floor
  * in front — brightest at the wall, dissolving into the room (the wall-
- * wash gradient, laid flat). In INTERIOR rooms the window is also the
- * key light: a real spot just inside the pane, aimed down into the room,
- * carrying the room's strong motivated shadows (the sun has dropped to a
- * fill — B.13 rule 2). Outdoor-class sets keep the window view-only:
- * their real light comes from the clerestory band and the overall key.
+ * wash gradient, laid flat). In INTERIOR rooms the window also carries a
+ * quiet motivated spot just inside the pane, aimed down into the room;
+ * the stable ambient fill owns the broad tones while the spot adds a soft
+ * local accent. Outdoor-class sets keep the window view-only: their real
+ * light comes from the clerestory band and the overall key.
  * `paneColor` is the light color (register- and theme-modulated, computed
  * by the scene); `viewColor` is the view plane's day/night multiplier.
  */
@@ -7167,10 +7114,11 @@ function RoomWindow({
       position={[fixture.x, 0, fixture.z]}
       rotation={[0, Math.atan2(fixture.nx, fixture.nz), 0]}
     >
-      {/* Dark reveal — the opening reads as a hole in the wall. */}
+      {/* Pale reveal — the opening's light trim surround (art pass: the
+          reveal is no longer a dark hole). */}
       <mesh position={[0, sill + h / 2, fixture.thick / 2 - 0.02]}>
         <boxGeometry args={[w + 0.24, h + 0.24, 0.05]} />
-        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {/* The outside: sky, sun halo, and two silhouette strata — unlit,
           so it never goes black in a shadowed corner; the scene's
@@ -7221,7 +7169,9 @@ function RoomWindow({
         <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {/* Light spilling inward: the wall-wash gradient laid flat, bright
-          edge at the wall (texture up maps to -z = the wall side). */}
+          edge at the wall (texture up maps to -z = the wall side), normal
+          alpha blending — with the lowered constants it stays a soft
+          patch, never a hot sheet. */}
       <mesh
         position={[0, 0.05, fixture.thick / 2 + spillL / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -7232,7 +7182,6 @@ function RoomWindow({
           color={paneColor}
           transparent
           opacity={WINDOW_SPILL_OPACITY}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
@@ -7270,8 +7219,8 @@ function RoomWindow({
 
 /**
  * The outdoor set's clerestory: a window BAND hung just under the top of
- * a full-height wall — a dark reveal, the same layered outside view as
- * the window (tiled one bay per mullion), mullions and rails, an additive
+ * a full-height wall — a pale trim reveal, the same layered outside view
+ * as the window (tiled one bay per mullion), mullions and rails, an alpha
  * floor wash along the wall, and a real spot aimed from the band down
  * into the room. This is what justifies the set's overall key (B.13
  * rule 3): light arrives from one side and above, and walking to the wall
@@ -7313,10 +7262,10 @@ function RoomClerestory({
       position={[fixture.x, 0, fixture.z]}
       rotation={[0, Math.atan2(fixture.nx, fixture.nz), 0]}
     >
-      {/* Dark reveal behind the band. */}
+      {/* Pale reveal behind the band — light trim, not a dark slot. */}
       <mesh position={[0, bandY, fixture.thick / 2 - 0.02]}>
         <boxGeometry args={[span + 0.24, bandH + 0.24, 0.05]} />
-        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {/* The outside, tiled one view per bay (the texture's repeat was
           set by the scene to match the bay count). */}
@@ -7345,7 +7294,7 @@ function RoomClerestory({
         </mesh>
       ))}
       {/* The floor wash below the band: the wall-wash gradient laid flat,
-          bright edge at the wall. */}
+          bright edge at the wall, normal alpha blending. */}
       <mesh
         position={[0, 0.05, fixture.thick / 2 + spillL / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -7356,7 +7305,6 @@ function RoomClerestory({
           color={paneColor}
           transparent
           opacity={CLERESTORY_SPILL_OPACITY}
-          blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
@@ -7604,8 +7552,8 @@ function RoomEnvelope({
             >
               <boxGeometry args={[wall.sizeX, fill, wall.sizeZ]} />
             </mesh>
-            <mesh position={[wall.x, wallHeight - 0.05, wall.z]}>
-              <boxGeometry args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]} />
+            <mesh position={[wall.x, wallHeight - 0.03, wall.z]}>
+              <boxGeometry args={[wall.sizeX + 0.06, 0.06, wall.sizeZ + 0.06]} />
               <meshStandardMaterial color={capColor} roughness={1} flatShading />
             </mesh>
           </group>
@@ -8851,7 +8799,7 @@ export function SpaceScene({
     [recipe, wallHex],
   );
   // Dado panel stiles sit a touch lighter than the wall they panel (the
-  // baseboard and rail reuse the dark cap-rail trim color).
+  // baseboard and rail reuse the light cap-rail trim color).
   const dadoPanelColor = useMemo(
     () => wallColor.clone().multiplyScalar(1.12),
     [wallColor],
@@ -8860,7 +8808,7 @@ export function SpaceScene({
   // its own shadow (darker, never emissive — B.13); the inlay is a
   // contrasting stone pulled from the room's existing stone register
   // (the column order's #9a938a) toward the floor's tone, so it reads as
-  // the same quarry in a different cut and never fights the parquet (A5).
+  // the same quarry in a different cut and never fights the seams (A5).
   const alcoveColor = useMemo(
     () => wallColor.clone().multiplyScalar(0.85),
     [wallColor],
@@ -9222,18 +9170,19 @@ export function SpaceScene({
   const fireflies =
     (recipe.archetype === "forest" || recipe.archetype === "lake") &&
     (recipe.palette.id === "dusk" || recipe.palette.id === "night");
-  // Parquet checkerboard for interior/wonder rooms with a flat floor
+  // Sparse board seams for interior/wonder rooms with a flat floor
   // (sunken-basin rooms keep bare deck).
-  const parquet =
+  const seamedFloor =
     (recipe.worldClass === "interior" || recipe.worldClass === "wonder") &&
     spec.ground === "flat";
   // Per-module floor roles (§8.2/A5): each module's floor MATERIAL role
   // tints its own footprint — timber/carpet/tile read off the palette's
   // four-layer slots (wood/fabric/wall), so the joined modules read as
-  // different rooms underfoot. Translucent veils over the parquet, one
-  // plane per module, flush-abutting (no overlap, no double blend).
+  // different rooms underfoot. Opaque matte planes, one per module,
+  // flush-abutting (no overlap); the transparent seam plane above them
+  // carries the only floor detail.
   const moduleFloors = useMemo(() => {
-    if (!roomComposition || !parquet) return [];
+    if (!roomComposition || !seamedFloor) return [];
     const p = recipe.palette;
     const slotFor = { timber: p.wood, carpet: p.fabric, tile: p.wall, deck: p.wood };
     return roomComposition.modules.map((placed) => ({
@@ -9242,10 +9191,12 @@ export function SpaceScene({
       // one floor material; null keeps the per-role palette slots.
       color: new THREE.Color(floorHex ?? slotFor[placed.module.floor] ?? p.ground),
     }));
-  }, [roomComposition, parquet, recipe, floorHex]);
+  }, [roomComposition, seamedFloor, recipe, floorHex]);
+  // Wall cap rail: the wall color lifted toward cream so the rail reads
+  // as light trim against the wall face — not the old dark ground*.45.
   const capColor = useMemo(
-    () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.45),
-    [recipe],
+    () => wallColor.clone().lerp(new THREE.Color("#f4efe2"), 0.35),
+    [wallColor],
   );
   // Terrain tessellation rides the prop scale (S^0.75) so colossal rolling
   // ground doesn't alias against its human-scale noise, capped so the
@@ -9374,20 +9325,21 @@ export function SpaceScene({
         )}
       </mesh>
 
-      {/* Parquet dressing: low-contrast checkerboard so big interior/
-          wonder floors never read as one solid slab of color. */}
-      {parquet && (
-        <FloorParquet
+      {/* Sparse seam dressing: a transparent plane of long quiet board
+          marks so big interior/wonder floors never read as one solid
+          slab of color, while staying matte and broad like the reference
+          drawing. Sits above the base floor and the module tints. */}
+      {seamedFloor && (
+        <FloorSeams
           width={width}
           extent={extent}
-          base={floorHex ?? recipe.palette.ground}
         />
       )}
 
       {/* Per-module floor tint (§8.2): each joined module's footprint
           takes its floor role's palette slot — the composition reads as
-          rooms-within-rooms underfoot. Sits between the parquet and the
-          inlay planes; translucent, so the checker still textures it. */}
+          rooms-within-rooms underfoot. Opaque matte, below the seam
+          plane; the seam marks above carry the detail. */}
       {moduleFloors.map((mf, i) => {
         const w = (mf.rect.x1 - mf.rect.x0) * scaleFactor;
         const d = (mf.rect.z1 - mf.rect.z0) * scaleFactor;
@@ -9406,16 +9358,14 @@ export function SpaceScene({
             <meshStandardMaterial
               color={mf.color}
               roughness={1}
-              transparent
-              opacity={0.5}
             />
           </mesh>
         );
       })}
 
       {/* Floor inlay (template feature, §7.2): a calm stone border band
-          flat on the floor — lifted above the parquet's plane, never
-          fighting its checker (A3). Flat-floor rooms only. */}
+          flat on the floor — lifted above the seam plane, never fighting
+          its marks (A3). Flat-floor rooms only. */}
       {roomFeatures.inlay && (
         <FloorInlay
           inlay={roomFeatures.inlay}
@@ -9524,12 +9474,12 @@ export function SpaceScene({
                   )}
                 </mesh>
                 <mesh
-                  position={[segCenter, wallHeight - 0.05, structure.z]}
+                  position={[segCenter, wallHeight - 0.03, structure.z]}
                   castShadow
                   receiveShadow
                 >
                   <boxGeometry
-                    args={[segLength + 0.06, 0.1, wallThick + 0.06]}
+                    args={[segLength + 0.06, 0.06, wallThick + 0.06]}
                   />
                   <meshStandardMaterial
                     color={capColor}
@@ -9660,11 +9610,11 @@ export function SpaceScene({
                     <boxGeometry args={[b - a, h, wall.sizeZ]} />
                   </mesh>
                   <mesh
-                    position={[(a + b) / 2, h - 0.05, wall.z]}
+                    position={[(a + b) / 2, h - 0.03, wall.z]}
                     castShadow
                     receiveShadow
                   >
-                    <boxGeometry args={[b - a + 0.06, 0.1, wall.sizeZ + 0.06]} />
+                    <boxGeometry args={[b - a + 0.06, 0.06, wall.sizeZ + 0.06]} />
                     <meshStandardMaterial color={capColor} roughness={1} flatShading />
                   </mesh>
                 </group>
@@ -9698,16 +9648,16 @@ export function SpaceScene({
             >
               <boxGeometry args={[wall.sizeX, h, wall.sizeZ]} />
             </mesh>
-            {/* Dark cap rail along the wall top: rides the drawn height, so
-                a cut sill keeps its rail and the room boundary stays
+            {/* Light cap rail along the wall top: rides the drawn height,
+                so a cut sill keeps its rail and the room boundary stays
                 readable from inside. */}
             <mesh
-              position={[wall.x, h - 0.05, wall.z]}
+              position={[wall.x, h - 0.03, wall.z]}
               castShadow
               receiveShadow
             >
               <boxGeometry
-                args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]}
+                args={[wall.sizeX + 0.06, 0.06, wall.sizeZ + 0.06]}
               />
               <meshStandardMaterial color={capColor} roughness={1} flatShading />
             </mesh>
@@ -9885,12 +9835,12 @@ export function SpaceScene({
               <boxGeometry args={[wall.sizeX, h, wall.sizeZ]} />
             </mesh>
             <mesh
-              position={[wall.x, h - 0.05, wall.z]}
+              position={[wall.x, h - 0.03, wall.z]}
               castShadow
               receiveShadow
             >
               <boxGeometry
-                args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]}
+                args={[wall.sizeX + 0.06, 0.06, wall.sizeZ + 0.06]}
               />
               <meshStandardMaterial color={capColor} roughness={1} flatShading />
             </mesh>
@@ -9920,12 +9870,12 @@ export function SpaceScene({
                   <boxGeometry args={[seg.sizeX, wallHeight, seg.sizeZ]} />
                 </mesh>
                 <mesh
-                  position={[seg.x, wallHeight - 0.05, seg.z]}
+                  position={[seg.x, wallHeight - 0.03, seg.z]}
                   castShadow
                   receiveShadow
                 >
                   <boxGeometry
-                    args={[seg.sizeX + 0.06, 0.1, seg.sizeZ + 0.06]}
+                    args={[seg.sizeX + 0.06, 0.06, seg.sizeZ + 0.06]}
                   />
                   <meshStandardMaterial color={capColor} roughness={1} flatShading />
                 </mesh>
@@ -10039,7 +9989,7 @@ export function SpaceScene({
       )}
       {/* Module register sconces (§8.2): one per composed-room module, the
           register's findable source — wall plate, lit dome, real point
-          light, additive pool. Non-composed rooms grow none. */}
+          light, alpha pool. Non-composed rooms grow none. */}
       {moduleSconces.map((anchor, i) => (
         <ModuleSconce
           key={`sconce${i}`}

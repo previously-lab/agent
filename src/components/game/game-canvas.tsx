@@ -62,32 +62,27 @@
  * the corridor (the void color) and the active space's palette — inside a
  * space the background becomes the room's own shadow (the palette's
  * atmosphere fog), so its far edge melts seamlessly. The lighting model is
- * a key/fill/ambient hierarchy (v0.11 P2), re-anchored by B.13 「摄影棚论」
- * (this world has no outdoors): the directional "sun" is the STUDIO key —
- * full strength in the corridor and in outdoor-class sets (nature/wonder/
- * hybrid, where the room's skylight is its visible source), dropped to
- * ROOM_INTERIOR_SUN_FILL inside interior rooms, whose key is the window
- * spot mounted by space.tsx. It is always the one broad shadow caster (its
- * shadow camera follows the player so the whole streaming corridor and
- * every space stay inside the frustum); soft FILL comes from one scene-wide
- * <Environment> of Lightformer cards (IBL, no HDRI) that also gives every
- * PBR material something to reflect; the AMBIENT term is a deliberately low
- * floor so light pools instead of filling evenly (doc §1 A3). The active
- * EffectComposer uses NoToneMapping, pinned by the shared world transition.
+ * an ambient-led illustration hierarchy (matte overhaul, v0.11-streams):
+ * the directional "sun" is the STUDIO key in the corridor and outdoor-class
+ * sets, and a controlled shadow-casting face light at ROOM_INTERIOR_SUN_FILL
+ * inside interior rooms. The lifted AMBIENT term owns the stable sage/cream
+ * diffuse floor; window and lamp fixtures add only quiet local accents. The
+ * sun's shadow camera follows the player so the whole streaming corridor
+ * and every space stay inside the frustum. No exposure or tone-mapping
+ * compensation is applied: the active EffectComposer uses NoToneMapping,
+ * pinned by the shared world transition.
  *
  * DEPTH CUE. There is NO scene fog
  * anywhere: with the camera ~23m above the player, every fog band that
  * could sell depth also washed the whole visible room into the fog color
  * (commits 9116243/09c757b/d9edf93 — do not re-add). Depth is carried by
  * things that are camera-distance INDEPENDENT instead: the background
- * color, the stage backdrop disc the diorama sits on (plain geometry at a
- * fixed depth — no distance term), and
- * the post chain — N8AO
- * (screen-space contact shading) plus a mild Vignette (frame-edge
- * falloff), both of which darken by geometry and screen position, never
- * by distance from the camera, so they cannot reproduce the
- * translucent-room bug. Bloom (threshold 1.0) glows only emissive
- * fixtures and the sun's hot pools.
+ * color and the post chain — N8AO (screen-space contact shading), the
+ * game's only live effect, which darkens by geometry, never by distance
+ * from the camera, so it cannot reproduce the translucent-room bug. The
+ * stage backdrop disc, Bloom and Vignette were removed in the matte
+ * overhaul (no all-over veil, no blown light blobs, no frame-edge
+ * darkening).
  *
  * HOTELS (HD2/HD3/HD4). The world is a chain of HOTELS: one per timeline
  * (the core timeline plus one per strand), each hotel showing ONE window
@@ -128,8 +123,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Environment, Lightformer, OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
-import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
+import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
+import { EffectComposer, N8AO } from "@react-three/postprocessing";
 import { useTranslations, useLocale } from "next-intl";
 import { useReducedMotion } from "motion/react";
 import { useTheme } from "@teispace/next-themes";
@@ -297,21 +292,17 @@ import {
   ATMOSPHERE_LERP_RATE,
   BOB_HEIGHT,
   BOB_RATE,
-  BLOOM_INTENSITY,
-  BLOOM_LUMINANCE_SMOOTHING,
-  BLOOM_LUMINANCE_THRESHOLD,
   CAMERA_LERP_RATE,
   CAMERA_ZOOM,
   CAM_OFFSET,
   CORRIDOR_AMBIENT,
   DOOR_GRAB_DIST,
-  ENV_FORMERS,
-  ENV_INTENSITY,
-  ENV_RESOLUTION,
   GROUND_LERP_RATE,
   HUD_DIST,
   PLAYER_BODY,
+  PLAYER_HAIR,
   PLAYER_HEAD,
+  PLAYER_LEG,
   PLAYER_SPEED,
   POST_MSAA_SAMPLES,
   ROOM_INTERIOR_SUN_FILL,
@@ -322,12 +313,6 @@ import {
   SCENE_COLORS,
   SPACE_AMBIENT_SCALE,
   SPAWN,
-  STAGE_BACKDROP_ENABLED,
-  STAGE_BACKDROP_LIFT,
-  STAGE_BACKDROP_OPACITY,
-  STAGE_BACKDROP_RADIUS,
-  STAGE_BACKDROP_Y,
-  STAGE_POOL_RADIUS,
   STRAND_DOOR_ARRIVAL_INSET,
   STRAND_TELEPORT_CAMERA_SNAP,
   SUN_BASE_COLOR,
@@ -340,8 +325,6 @@ import {
   SUN_SHADOW_NEAR,
   SUN_SHADOW_NORMAL_BIAS,
   TURN_LERP_RATE,
-  VIGNETTE_DARKNESS,
-  VIGNETTE_OFFSET,
   WADE_DEPTH,
   skinWalkSpeedScale,
 } from "@/lib/game/tuning/render";
@@ -628,10 +611,9 @@ interface AtmosphereTargets {
  * per-frame allocation): the corridor mood in the active theme's void
  * color, or the active space's palette — background becomes the room's own
  * shadow, the sun tints to palette.sunColor, and the ambient floor uses
- * the palette's own value scaled down into the key/fill/ambient hierarchy
- * (SPACE_AMBIENT_SCALE; the palette values were authored for the old
- * ambient-dominant model, and a space's lighting is seed-fixed, not part
- * of the app dark mode). No fog targets exist: scene fog has been removed
+ * the palette's own value (scaled by SPACE_AMBIENT_SCALE; a space's
+ * lighting is seed-fixed, not part of the app dark mode). No fog targets
+ * exist: scene fog has been removed
  * entirely (the camera geometry made any usable band wash the whole room).
  */
 function resolveAtmosphere(
@@ -645,13 +627,11 @@ function resolveAtmosphere(
     // scene fog to target (removed — see Atmosphere).
     out.background.set(palette.fog);
     out.sunColor.set(palette.sunColor);
-    // B.13 摄影棚论 (user 2026-09-18): nothing here is lit by a sun
-    // overhead. INTERIOR rooms get the directional at FILL level only —
-    // the key moves to the room's own fixtures (the window's spot carries
-    // the strong shadows) — while outdoor-class sets keep it at full
-    // strength as the soundstage's overall key, justified by the visible
-    // skylight. The fill keeps casting: furniture stays grounded by a
-    // soft shadow everywhere the key's pool does not reach.
+    // INTERIOR rooms get the directional at FILL level only, while
+    // outdoor-class sets keep it at full strength as the soundstage's
+    // overall key. The interior fill keeps casting so furniture stays
+    // grounded; the lifted ambient owns the broad tonal floor and the
+    // fixtures add only local accents.
     out.sunIntensity =
       SUN_BASE_INTENSITY *
       palette.sunIntensity *
@@ -1575,7 +1555,7 @@ function Atmosphere({
           player, any fog band wide enough to matter covered the whole
           visible room and washed it into the fog color (the 'translucent
           room'). Depth is sold by the background color, the corridor's
-          end-fade planes, and the post chain (N8AO + vignette) instead. */}
+          end-fade planes, and N8AO instead. */}
       <ambientLight ref={ambientRef} intensity={CORRIDOR_AMBIENT} />
       <primitive object={sunTarget} />
       <directionalLight
@@ -1604,118 +1584,10 @@ function Atmosphere({
 }
 
 /**
- * Radial gradient texture for the stage pool: white with alpha 1 at the
- * center, smoothstep-fading to 0 at the rim — the mesh's material color
- * supplies the hue per frame. Generated in code (DataTexture, no assets)
- * exactly like the material library's maps (lib/game/materials/three.ts).
- */
-function createStageGradientTexture(): THREE.DataTexture {
-  const size = 256;
-  const data = new Uint8Array(size * size * 4);
-  const inner = STAGE_POOL_RADIUS / STAGE_BACKDROP_RADIUS;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx = (x + 0.5) / size - 0.5;
-      const dy = (y + 0.5) / size - 0.5;
-      const r = Math.hypot(dx, dy) * 2; // 0 at center → 1 at the circle rim
-      const t = Math.min(1, Math.max(0, (r - inner) / (1 - inner)));
-      const a = 1 - t * t * (3 - 2 * t); // smoothstep falloff
-      const i = (y * size + x) * 4;
-      data[i] = 255;
-      data[i + 1] = 255;
-      data[i + 2] = 255;
-      data[i + 3] = Math.round(a * 255);
-    }
-  }
-  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  texture.needsUpdate = true;
-  return texture;
-}
-
-/**
- * The stage the diorama sits on: a huge unlit disc parked STAGE_BACKDROP_Y
- * below the floor, following the player in XZ exactly like the sun rig
- * does, textured with the radial gradient above. Its color is the SAME
- * lerped background target the scene background uses (resolveAtmosphere
- * stays the single source), lifted a touch toward white — so the pool is
- * always a faint glow of the current mood: the corridor void by default,
- * the room's own palette shadow while a space is active, easing between
- * the two on the shared ATMOSPHERE_LERP_RATE.
- *
- * Deliberately NOT scene fog and never to be "fixed" back into it: fog
- * blends by camera distance, and from this 45° camera parked ~23 m up,
- * every usable fog band washed the whole visible room into the fog color
- * (the translucent-room bug, commits 9116243/09c757b/d9edf93). This disc
- * is plain geometry at a fixed depth — its shading has no camera-distance
- * term, so it structurally cannot reproduce that failure. The disc and lit
- * surfaces share the active post chain; EffectComposer currently forces
- * NoToneMapping (there is no separate ToneMapping effect). Its transparent
- * rim converges to the scene's clear background at opacity 0.
- */
-function StageBackdrop({
-  space,
-  dark,
-  playerRef,
-}: {
-  space: ActiveSpace | null;
-  dark: boolean;
-  playerRef: PlayerRef;
-}): JSX.Element {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const matRef = useRef<THREE.MeshBasicMaterial>(null);
-  const gradient = useMemo(() => createStageGradientTexture(), []);
-  useEffect(() => () => gradient.dispose(), [gradient]);
-  const [targets] = useState<AtmosphereTargets>(() => ({
-    background: new THREE.Color(SCENE_COLORS.night),
-    sunColor: new THREE.Color(SUN_BASE_COLOR),
-    sunIntensity: SUN_BASE_INTENSITY,
-    ambient: CORRIDOR_AMBIENT,
-  }));
-  const [scratch] = useState(() => new THREE.Color());
-  const [white] = useState(() => new THREE.Color("#ffffff"));
-  const initializedRef = useRef(false);
-
-  useGameFrame((_, { delta: dt, initialize }) => {
-    const mesh = meshRef.current;
-    const mat = matRef.current;
-    if (!mesh || !mat) return;
-    if (GAME_SIM_FREEZE.frozen && !initialize) return;
-    const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
-    resolveAtmosphere(space, dark, targets);
-    scratch.copy(targets.background).lerp(white, STAGE_BACKDROP_LIFT);
-    // Snap on the first frame — the material constructs white, and lerping
-    // down from there would flash a bright disc at mount.
-    if (initializedRef.current) {
-      mat.color.lerp(scratch, k);
-    } else {
-      mat.color.copy(scratch);
-      initializedRef.current = true;
-    }
-    const p = playerRef.current;
-    mesh.position.set(p.x, STAGE_BACKDROP_Y, p.z);
-  });
-
-  return (
-    <mesh
-      ref={meshRef}
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[playerRef.current.x, STAGE_BACKDROP_Y, playerRef.current.z]}
-    >
-      <circleGeometry args={[STAGE_BACKDROP_RADIUS, 64]} />
-      <meshBasicMaterial
-        ref={matRef}
-        map={gradient}
-        transparent
-        opacity={STAGE_BACKDROP_OPACITY}
-        depthWrite={false}
-      />
-    </mesh>
-  );
-}
-
-/**
- * The walkable avatar: capsule body + sphere head + a small visor cone so
- * the facing direction reads at distance. Position/rotation are driven
+ * The walkable avatar: a simple expressive figure in smooth low-poly shapes
+ * (legs, warm torso and arms, separate skin head under a sage-dark hair
+ * cap, and a tiny facing cue) — the matte overhaul replaced the old
+ * faceted wooden-peg look. Position/rotation are driven
  * imperatively from playerRef/motionRef in useFrame — no React re-render
  * per frame. Bob is a gentle y sine while moving; facing lerps toward the
  * travel heading. Y snaps to the active space's terrain (wading pools) and
@@ -1774,7 +1646,7 @@ function PlayerAvatar({
     for (const mat of matsRef.current) mat.opacity = CHASE_LIVE.fade;
   });
 
-  /** Stable slot assignment for the three shared materials (mount order). */
+  /** Stable slot assignment for the shared materials (mount order). */
   const matRefAt = (i: number) => (mat: THREE.MeshStandardMaterial | null) => {
     if (mat) matsRef.current[i] = mat;
   };
@@ -1782,35 +1654,81 @@ function PlayerAvatar({
   return (
     <group ref={rootRef}>
       <group ref={bodyRef}>
-        {/* Capsule body — total height 0.9 m. */}
-        <mesh castShadow position={[0, 0.45, 0]}>
-          <capsuleGeometry args={[0.26, 0.38, 4, 10]} />
+        {/* Legs — two quiet cylinders, understated against the warm torso.
+            Total height ~1.2 m, feet at y = 0. */}
+        <mesh castShadow position={[-0.1, 0.22, 0]}>
+          <cylinderGeometry args={[0.07, 0.075, 0.44, 10]} />
           <meshStandardMaterial
             ref={matRefAt(0)}
-            color={PLAYER_BODY}
+            color={PLAYER_LEG}
             roughness={1}
-            flatShading
             transparent
           />
         </mesh>
-        <mesh castShadow position={[0, 1.04, 0.02]}>
-          <sphereGeometry args={[0.19, 12, 10]} />
+        <mesh castShadow position={[0.1, 0.22, 0]}>
+          <cylinderGeometry args={[0.07, 0.075, 0.44, 10]} />
           <meshStandardMaterial
             ref={matRefAt(1)}
-            color={PLAYER_HEAD}
+            color={PLAYER_LEG}
             roughness={1}
-            flatShading
             transparent
           />
         </mesh>
-        {/* Visor nub — marks the facing direction (+z local). */}
-        <mesh castShadow position={[0, 1.04, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
-          <coneGeometry args={[0.06, 0.14, 6]} />
+        {/* Warm torso capsule. */}
+        <mesh castShadow position={[0, 0.62, 0]}>
+          <capsuleGeometry args={[0.2, 0.32, 4, 12]} />
           <meshStandardMaterial
             ref={matRefAt(2)}
             color={PLAYER_BODY}
             roughness={1}
-            flatShading
+            transparent
+          />
+        </mesh>
+        {/* Arms — slim cylinders resting at the torso's sides. */}
+        <mesh castShadow position={[-0.27, 0.6, 0]} rotation={[0, 0, 0.12]}>
+          <cylinderGeometry args={[0.05, 0.055, 0.36, 8]} />
+          <meshStandardMaterial
+            ref={matRefAt(3)}
+            color={PLAYER_BODY}
+            roughness={1}
+            transparent
+          />
+        </mesh>
+        <mesh castShadow position={[0.27, 0.6, 0]} rotation={[0, 0, -0.12]}>
+          <cylinderGeometry args={[0.05, 0.055, 0.36, 8]} />
+          <meshStandardMaterial
+            ref={matRefAt(4)}
+            color={PLAYER_BODY}
+            roughness={1}
+            transparent
+          />
+        </mesh>
+        {/* Skin head under a sage-dark hair cap. */}
+        <mesh castShadow position={[0, 1.06, 0.02]}>
+          <sphereGeometry args={[0.17, 14, 12]} />
+          <meshStandardMaterial
+            ref={matRefAt(5)}
+            color={PLAYER_HEAD}
+            roughness={1}
+            transparent
+          />
+        </mesh>
+        <mesh castShadow position={[0, 1.1, -0.02]} scale={[1, 0.82, 1]}>
+          <sphereGeometry args={[0.175, 14, 12]} />
+          <meshStandardMaterial
+            ref={matRefAt(6)}
+            color={PLAYER_HAIR}
+            roughness={1}
+            transparent
+          />
+        </mesh>
+        {/* Facing cue — tiny nub toward +z local, marks the travel heading. */}
+        <mesh castShadow position={[0, 1.05, 0.18]} rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.045, 0.1, 8]} />
+          <meshStandardMaterial
+            ref={matRefAt(7)}
+            color={PLAYER_HAIR}
+            roughness={1}
             transparent
           />
         </mesh>
@@ -2944,9 +2862,17 @@ export default function GameCanvas({
     onRoomSnapshotChange?.(suspended ? null : activeSpace?.snapshot ?? null);
     return () => onRoomSnapshotChange?.(null);
   }, [activeSpace, suspended, onRoomSnapshotChange]);
+  // Keep the explicit choice for the whole visit: the canvas portal can
+  // still run an older frame after this DOM root commits entry. Clearing
+  // here on entry would let that frame re-gate against a late profile.
+  const activeSliceId = activeSpace?.door.sliceId ?? null;
   useEffect(() => {
-    if (activeSpace) visitFallback.current = null;
-  }, [activeSpace]);
+    return () => {
+      if (activeSliceId !== null && visitFallback.current?.request.sliceId === activeSliceId) {
+        visitFallback.current = null;
+      }
+    };
+  }, [activeSliceId]);
   // ONE CURSOR (v0.13 §6): walking IS moving the shared slice cursor — the
   // room the reader stands in is the slice the cursor names. A QUIET write
   // through the module hook (lib/timeline3d/cursor.ts, the
@@ -3755,7 +3681,7 @@ export default function GameCanvas({
   // above) can drive it while the wrapper's own useFrame is disabled. The
   // wrapper's `enabled={!suspended}` only gates its useFrame — it never
   // disposes the composer — so a manual `setSize(CSS size) + render(0)`
-  // reproduces the paused frame exactly (N8AO/Bloom/Vignette included,
+  // reproduces the paused frame exactly (N8AO included,
   // delta 0, no clock advanced). State (not a bare ref) so the composer's
   // arrival re-runs the repaint effect and a repaint deferred while the
   // composer was unready still lands.
@@ -3793,29 +3719,6 @@ export default function GameCanvas({
       <CorridorHideDelay hidden={corridorHidden} onHidden={setCorridorGone} />
       <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
         <RenderTrace />
-        {/* The stage pool under the diorama — kills the featureless void
-            around the model. One named constant reverts it:
-            STAGE_BACKDROP_ENABLED (tuning/render.ts). */}
-        {STAGE_BACKDROP_ENABLED && (
-          <StageBackdrop space={activeSpace} dark={dark} playerRef={playerRef} />
-        )}
-        {/* One scene-wide IBL: a few broad Lightformer cards baked into an
-            env map (no HDRI, no assets). This is the soft fill of the
-            key/fill/ambient hierarchy and the shared reflection source for
-            every PBR material the material lanes author. */}
-        <Environment resolution={ENV_RESOLUTION} environmentIntensity={ENV_INTENSITY}>
-          {ENV_FORMERS.map((f, i) => (
-            <Lightformer
-              key={i}
-              form={f.form}
-              color={f.color}
-              intensity={f.intensity}
-              position={[f.position[0], f.position[1], f.position[2]]}
-              rotation={[f.rotation[0], f.rotation[1], f.rotation[2]]}
-              scale={[f.scale[0], f.scale[1], f.scale[2]]}
-            />
-          ))}
-        </Environment>
         <CameraRig
           playerRef={playerRef}
           motionRef={motionRef}
@@ -3932,13 +3835,13 @@ export default function GameCanvas({
           anchorHudRef={anchorHudRef}
           setHudAnchor={setHudAnchor}
         />
-        {/* Post chain — deliberately conservative. N8AO (half-res) adds
-            screen-space contact shading, Bloom (threshold 1.0) glows only
-            what is genuinely hot (emissive fixtures, sun pools), and a mild
-            Vignette closes the frame. AO + vignette are the depth cue that
-            replaced scene fog: both are camera-distance INDEPENDENT, so
-            neither can wash the whole room into a veil the way distance fog
-            did from this camera (commits 9116243/09c757b). Export names
+        {/* Post chain — deliberately minimal. N8AO (half-res) is the only
+            live effect: gentle screen-space contact shading that grounds
+            furniture and walls without a veil. It is camera-distance
+            INDEPENDENT, so it cannot wash the whole room into one color
+            the way distance fog did from this camera (commits
+            9116243/09c757b). Bloom, Vignette and the stage backdrop were
+            removed in the matte overhaul. Export names
             verified against @react-three/postprocessing v3 dist .d.ts.
             `enabled={!suspended}` freezes the chain's automatic render
             under the document tier — the one-shot frozen-frame repainter
@@ -3956,13 +3859,6 @@ export default function GameCanvas({
             aoRadius={AO_RADIUS}
             distanceFalloff={AO_DISTANCE_FALLOFF}
           />
-          <Bloom
-            mipmapBlur
-            intensity={BLOOM_INTENSITY}
-            luminanceThreshold={BLOOM_LUMINANCE_THRESHOLD}
-            luminanceSmoothing={BLOOM_LUMINANCE_SMOOTHING}
-          />
-          <Vignette offset={VIGNETTE_OFFSET} darkness={VIGNETTE_DARKNESS} />
         </EffectComposer>
         {/* Suspended one-shot repaint: repaints the frozen hotel frame
             exactly once when a mid-pause resize/DPR change cleared the

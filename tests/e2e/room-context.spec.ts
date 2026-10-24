@@ -1,5 +1,6 @@
 import { test, expect } from "./test";
 import type { Page } from "@playwright/test";
+import path from "node:path";
 import { clearCases, clearEpisodic, makeSlice, seedCases, seedSlices } from "./memory-fixture";
 
 // Only isolated, fictional records are read. The shared test fixture blocks
@@ -16,6 +17,7 @@ interface DebugHandle {
   x: number;
   z: number;
   elapsed: number;
+  fadeT: number;
   space: string | null;
   snapshot: RoomSnapshot | null;
   windowDoors: Door[];
@@ -27,7 +29,7 @@ const read = (page: Page) => page.evaluate(() => {
   const d = (window as unknown as { __gameDebug?: DebugHandle }).__gameDebug;
   if (!d) return null;
   return { x: d.x, z: d.z, elapsed: d.elapsed, space: d.space,
-    snapshot: d.snapshot, windowDoors: d.windowDoors, room: d.room };
+    snapshot: d.snapshot, windowDoors: d.windowDoors, room: d.room, fadeT: d.fadeT };
 });
 
 const teleport = (page: Page, x: number, z: number) => page.evaluate(([px, pz]) => {
@@ -40,21 +42,32 @@ async function doorFor(page: Page, id: string): Promise<Door> {
   return (await read(page))!.windowDoors.find((d) => d.sliceId === id)!;
 }
 
-async function enter(page: Page, door: Door) {
+async function enter(page: Page, door: Door): Promise<DebugHandle> {
+  let entered: DebugHandle | null = null;
   // A pending profile clamps the approach. Retry the physical crossing once
   // it becomes ready, exactly as continuing to walk towards the door does.
   await expect.poll(async () => {
     const state = await read(page);
-    if (state?.space === door.sliceId && state.room?.sliceId === door.sliceId) return true;
+    if (state?.space === door.sliceId && state.room?.sliceId === door.sliceId &&
+      state.snapshot?.sliceId === door.sliceId) {
+      entered = state;
+      return true;
+    }
     await teleport(page, door.x, door.z + Math.sign(door.z) * 0.4);
     return false;
   }, { timeout: 60_000, intervals: [300] }).toBe(true);
-  return (await read(page))!;
+  return entered!;
 }
 
 async function leave(page: Page, door: Door) {
+  // The DOM owner and canvas portal commit separately. Finish the visible
+  // visit, then wait for the actual fade-out handshake before a new crossing.
+  await expect.poll(async () => (await read(page))?.fadeT).toBe(1);
   await teleport(page, door.x, 0);
-  await expect.poll(async () => (await read(page))?.space).toBeNull();
+  await expect.poll(async () => {
+    const state = await read(page);
+    return state?.space === null && state.fadeT === 0;
+  }).toBe(true);
 }
 
 async function settledPaper(page: Page) {
@@ -113,6 +126,14 @@ test.describe("Room context from real records", () => {
       const first = await enter(page, door);
       expect(first.snapshot?.profile.activity).toBe(fixture.activity);
       expect(first.room?.modules).toContain(fixture.module);
+      if (process.env.E2E_ROOM_ART_OUTPUT) {
+        await expect.poll(async () => (await read(page))?.elapsed ?? 0)
+          .toBeGreaterThan(first.elapsed + 1);
+        await page.screenshot({
+          path: path.join(process.env.E2E_ROOM_ART_OUTPUT, `illustrated-${fixture.activity}.png`),
+          style: "nextjs-portal { visibility: hidden !important; }",
+        });
+      }
       await leave(page, door);
       const second = await enter(page, door);
       expect(second.snapshot).toEqual(first.snapshot);
@@ -166,6 +187,11 @@ test.describe("Room context from real records", () => {
       const after = await read(page);
       expect(after?.snapshot).toEqual(basic.snapshot);
       expect(after?.room?.pieces).toEqual(basic.room?.pieces);
+      expect(after?.x).toBeCloseTo(basic.x, 4);
+      expect(after?.z).toBeCloseTo(basic.z, 4);
+      await leave(page, door);
+      const research = await enter(page, door);
+      expect(research.snapshot?.profile.activity).toBe("research");
     } finally {
       release();
       await page.unrouteAll({ behavior: "wait" });

@@ -1,10 +1,12 @@
 /**
  * Tests for the room-props pure layout helpers
- * (src/components/game/room-props.tsx): the per-book row layout and the
- * bookpile stack are deterministic, fit their width, respect the height
- * budget, and draw colors only from the muted palette's index range. The
- * module imports react/three/fiber but these helpers never touch the DOM
- * or the renderer — safe under the node test environment.
+ * (src/components/game/room-props.tsx): the per-book row layout is
+ * deterministic, grouped, gapped and budgeted (the 2026-10-25 art overhaul's
+ * clustered shelf rhythm — ≤10 books per ordinary row, real gaps between
+ * groups), the bookpile stack keeps its shape, and the plant leaves stay
+ * finite and seeded. The module imports react/three/fiber but these helpers
+ * never touch the DOM or the renderer — safe under the node test
+ * environment.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -21,10 +23,27 @@ describe("layoutBookRow", () => {
     expect(a).toEqual(b);
   });
 
+  it("groups the row: ≤10 books per ordinary row, with real gaps between groups", () => {
+    for (const key of ["a", "b", "c", "d", "e"]) {
+      const specs = layoutBookRow(key, 1.4, 0.3, 0.25);
+      expect(specs.length).toBeGreaterThanOrEqual(3);
+      expect(specs.length).toBeLessThanOrEqual(10);
+      // Sorted spine edges; adjacent books from DIFFERENT groups leave a
+      // real empty span (≥ 6 cm — the authored gap, wider than any lean).
+      const edges = specs
+        .map((s) => [s.x - s.sx / 2, s.x + s.sx / 2] as const)
+        .sort((p, q) => p[0] - q[0]);
+      let maxGap = 0;
+      for (let i = 1; i < edges.length; i++) {
+        maxGap = Math.max(maxGap, edges[i][0] - edges[i - 1][1]);
+      }
+      expect(maxGap).toBeGreaterThanOrEqual(0.06);
+    }
+  });
+
   it("fills the row within its width budget and never exceeds the height", () => {
     for (const key of ["a", "b", "c"]) {
       const specs = layoutBookRow(key, 1.4, 0.3, 0.25);
-      expect(specs.length).toBeGreaterThan(8);
       for (const s of specs) {
         // A leaning spine's rotated silhouette extends past sx/2 by
         // |sin(lean)| · sy/2 — budget for the rotation, not just the box.
@@ -143,7 +162,9 @@ describe("bookshelf instance identity (via layoutBookRow keys)", () => {
     ]) {
       for (let i = 0; i < 3; i++) {
         const specs = layoutBookRow(`${key}:row:${i}`, 1.58, 0.31, 0.3);
-        expect(specs.length).toBeGreaterThan(8);
+        // The clustered rhythm: a 1.58 m row holds no more than 10 books.
+        expect(specs.length).toBeGreaterThanOrEqual(3);
+        expect(specs.length).toBeLessThanOrEqual(10);
         for (const s of specs) {
           const halfExtent = s.sx / 2 + Math.abs(Math.sin(s.rotZ)) * (s.sy / 2);
           expect(Math.abs(s.x) + halfExtent).toBeLessThanOrEqual(1.58 / 2 + 0.02);

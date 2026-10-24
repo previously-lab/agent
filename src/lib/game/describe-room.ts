@@ -484,8 +484,8 @@ export function describeRoom(
       doors: doorClearanceSet(placedLayout?.doors ?? []),
       ...(kitIds ? { kitIds } : {}),
       ...(schematicPlacements.length > 0 ? { schematics: schematicPlacements } : {}),
-      // §8.2 随机区域: the composition's open fields dress sparsely (0–3
-      // seeded pieces) — the same scaled plan coordinates the renderer
+      // §8.2 随机区域: the composition's open fields dress sparsely (0–1
+      // seeded pieces since the 2026-10-25 breathing-floor pass) — the same scaled plan coordinates the renderer
       // passes, so the outline lists exactly what the room grows.
       ...(composition && composition.openFields.length > 0
         ? {

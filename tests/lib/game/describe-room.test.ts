@@ -231,7 +231,7 @@ describe("describeRoom", () => {
  *  module — the shape the drift report cited (dining-hall + bath). */
 const DIVERGENT_COMPOSED_SLICES: { sliceId: string; modules: string }[] = [
   { sliceId: "2026-02-01-1530", modules: "storage+foyer" },
-  { sliceId: "2026-04-01-1530", modules: "sunroom+bath+workshop" },
+  { sliceId: "2026-02-15-2207", modules: "storage+bedroom" },
   { sliceId: "2026-07-01-1401", modules: "bath+reading-room" },
   { sliceId: "2026-08-01-0941", modules: "living+bath+study+reading-room" },
   { sliceId: "2026-11-01-0941", modules: "sunroom+dining-hall" },

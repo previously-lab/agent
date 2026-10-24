@@ -4,7 +4,7 @@ import { rtsRoomZoom, scenarioPalette, scenarioSkin, shouldInteractWithScene } f
 import { SKINS, skinForSlice } from "@/lib/game/skins";
 import { PALETTES } from "@/lib/game/space-types";
 import { skinFloorHex, skinFogHex, skinWallHex, skinWindowBake } from "@/lib/game/tuning/render";
-import { CAM_OFFSET } from "@/lib/game/tuning/room";
+import { CAM_OFFSET, MODULE_LIGHT_FIXTURES } from "@/lib/game/tuning/room";
 
 describe("scenario material colors", () => {
   const sourcePalette = PALETTES[0];
@@ -30,9 +30,24 @@ describe("scenario material colors", () => {
   it("keeps temperate timber warm and plaster light instead of restoring the catalogue's dark brown", () => {
     const catalogueSkin = skinForSlice("dbg-skin:temperate+dbg-m:living");
     const skin = scenarioSkin(catalogueSkin, sourcePalette);
-    expect(skin?.floor.colors).toEqual({ day: "#c8b28d", night: "#a89676" });
-    expect(skin?.wall.colors).toEqual({ day: "#dedfca", night: "#b1bda4" });
+    expect(skin?.floor.colors).toEqual({ day: "#d0c1a2", night: "#c5b797" });
+    expect(skin?.wall.colors).toEqual({ day: "#d1d6bf", night: "#cbd1b8" });
     expect(catalogueSkin?.floor.colors).toEqual({ day: "#9a7a58", night: "#5e4b38" });
+  });
+
+  it("subdues the catalogue's hot light overrides (dune-sun) to the current fixture levels", () => {
+    // Dune is authored as the daylight register pushed hot and bright
+    // (intensity 6) — the art direction runs every real-record room at
+    // the quiet MODULE_LIGHT_FIXTURES levels instead.
+    const catalogueSkin = skinForSlice("dbg-skin:dune+dbg-m:living");
+    expect(catalogueSkin?.light.intensity).toBe(6);
+    const skin = scenarioSkin(catalogueSkin, sourcePalette);
+    const fixture = MODULE_LIGHT_FIXTURES.daylight;
+    expect(skin?.light.register).toBe("daylight");
+    expect(skin?.light.intensity).toBe(fixture.intensity);
+    expect(skin?.light.pool).toBe(fixture.pool);
+    expect(skin?.light.intensity).not.toBe(catalogueSkin?.light.intensity);
+    expect(skin?.light.tint).toBe(scenarioPalette(sourcePalette, false).sunColor);
   });
 
   it.each(SKINS.map((skin) => [skin.id, skin] as const))("preserves %s identity and physical behavior without mutating the catalogue", (_, source) => {
@@ -49,14 +64,20 @@ describe("scenario material colors", () => {
       fog: { density: source.fog.density, horizon: source.fog.horizon },
     });
     expect(skin.wall.opacity).toBe(source.wall.opacity);
-    expect(skin.light.intensity).toBe(source.light.intensity);
-    expect(skin.light.pool).toBe(source.light.pool);
+    // The catalogue's hot intensity/pool overrides are render-boundary
+    // values, not identity: the render copy answers to the CURRENT
+    // MODULE_LIGHT_FIXTURES table (fallback quiet), same as skinless
+    // debug rooms.
+    const fixture =
+      MODULE_LIGHT_FIXTURES[skin.light.register] ?? MODULE_LIGHT_FIXTURES.quiet;
+    expect(skin.light.intensity).toBe(fixture.intensity);
+    expect(skin.light.pool).toBe(fixture.pool);
     expect(skin.furnishing).toBe(source.furnishing);
     expect(skin.slotOverrides).toBe(source.slotOverrides);
     // The exterior's old blue/brown haze cannot re-enter through the apron
-    // or the baked window view while the stage itself uses the new fog.
-    expect(skin.fog.day).toBe("#becbb2");
-    expect(skin.fog.night).toBe("#7d8d77");
+    // or the baked window view while the scene itself uses the new fog.
+    expect(skin.fog.day).toBe("#dce1cd");
+    expect(skin.fog.night).toBe("#c3cbb4");
     expect(skinWindowBake(skin)?.fog).toBe(skin.fog.day);
     expect(skin.window.night.fog).toBe(skin.fog.night);
   });
