@@ -425,6 +425,8 @@ export interface SpaceRecipe {
   layoutSeed: number;
   /** Raw sub-seed driving light variation (sun angle, flicker, intensity jitter). */
   lightSeed: number;
+  /** Semantic activity evidence. Omitted for the legacy/neutral fallback. */
+  profile?: import("./room-profile").RoomProfile;
 }
 
 /** Per-archetype generation parameters consumed by the renderer/scatterer. */

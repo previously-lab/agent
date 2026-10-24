@@ -107,7 +107,8 @@ import {
   type ReactNode,
 } from "react";
 import * as THREE from "three";
-import { useFrame } from "@react-three/fiber";
+import { useGameFrame } from "./use-game-frame";
+import { GAME_SIM_FREEZE } from "./sim-freeze";
 import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
@@ -125,10 +126,18 @@ import {
   SofaProp,
   BookshelfProp,
   TvProp,
+  ActivityTraceProp,
   useRoomPropMaterials,
   type RoomPropMaterials,
 } from "./room-props";
 import { smoothstep } from "@/lib/game/math";
+import { resolveActivityDressing } from "@/lib/game/activity-traces";
+import {
+  applyFadeMaterials,
+  collectFadeMaterials,
+  restoreFadeMaterials,
+  type FadeMaterialEntry,
+} from "@/lib/game/fade-materials";
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import { scenarioPalette, scenarioSkin } from "@/lib/game/scenario-art";
@@ -190,6 +199,17 @@ import {
   wallFacesCamera,
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
+import {
+  resolveRoomFixtures,
+  type ClerestoryResolution,
+  type ExistingLight,
+  type FixtureOpenings,
+  type LampResolution,
+  type WindowResolution,
+} from "@/lib/game/room-fixtures";
+import { shelfWallBuild, type WallOpening } from "@/lib/game/shelf-wall";
+import type { PropObb } from "@/lib/game/prop-geometry";
+import { propObbsForPieces } from "@/lib/game/prop-geometry";
 import {
   applyPoolCaustics,
   buildWindowViewImage,
@@ -330,15 +350,7 @@ import {
   RILL_RIM_HEIGHT,
   RILL_WATER_DEPTH,
   RILL_WIDTH,
-  SHELF_WALL_BAY,
-  SHELF_WALL_BAY_MAX,
-  SHELF_WALL_BOARD,
   SHELF_WALL_DEPTH,
-  SHELF_WALL_HEIGHT,
-  SHELF_WALL_MIN_H,
-  SHELF_WALL_PLINTH,
-  SHELF_WALL_SHELF_GAP,
-  SHELF_WALL_STILE,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
@@ -1464,30 +1476,46 @@ function PilasterRun({
  * material language as the bookshelf prop (the room's shared wood roles
  * and the muted palette-derived spine palette — no color bands).
  * Only FULL-HEIGHT runs host it (a bookcase rising out of a 1.1m cutaway
- * sill is the niche's "hole in nothing" failure); bays overlapping the
- * window's frame are left open. Where a pilaster rhythm shares the run,
- * the strips render proud of the shelves (PilasterRun's `front`) and
- * read as the bays' vertical divisions.
+ * sill is the niche's "hole in nothing" failure).
+ *
+ * GEOMETRY. The pure builder (lib/game/shelf-wall.ts shelfWallBuild) owns
+ * every rectangle — bay stiles, plinth/top/shelf boards, the back panel,
+ * and per-bay per-row book segments — CUT AROUND the run's real openings
+ * (the generic window, the clerestory band, a glass wall span, any
+ * authored opening): a case is never built through a hole, and the back
+ * plate is holed by the same cuts. The renderer draws every emitted
+ * segment; a segment too narrow for a book was already omitted by the
+ * builder. Where a pilaster rhythm shares the run, the strips render
+ * proud of the shelves (PilasterRun's `front`) and read as the bays'
+ * vertical divisions.
  */
 function ShelfWallRun({
   wall,
   height,
   plan,
   wallScale,
-  window,
+  openings,
   mats,
+  roomId,
+  instanceId,
 }: {
   wall: WallSegment;
   height: number;
   plan: RoomPlan;
   wallScale: number;
+  /** The real openings on THIS run — the generic window, the clerestory
+   *  band, a glass wall span, any authored opening — in run-local
+   *  (along, y) coordinates with frame-inclusive widths. The builder
+   *  cuts every emitted rectangle around them. Empty = the full run. */
+  openings: readonly WallOpening[];
   /** The room's shared prop roles — the same woods and spine palette as
    *  the bookshelf prop (one material set per room). */
   mats: RoomPropMaterials;
-  /** The room's one window — bays under its frame stay empty (the window
-   *  never hangs on a feature host run by construction, but a host pool
-   *  fallback can still land it beside one; the skip is the backstop). */
-  window: WindowFixture;
+  /** Stable instance identity (the room's seed id + the wall-run index):
+   *  every book segment's seedKey carries it so two rooms — or two shelf
+   *  walls in one room — never lay out the same book rows. */
+  roomId: string;
+  instanceId: string | number;
 }) {
   const horizontal = wall.sizeZ <= wall.sizeX;
   const thick = horizontal ? wall.sizeZ : wall.sizeX;
@@ -1500,103 +1528,107 @@ function ShelfWallRun({
   }
   const k = wallScale;
   const len = horizontal ? wall.sizeX : wall.sizeZ;
-  const bookH = Math.min(height - 0.06, SHELF_WALL_HEIGHT * k);
-  if (bookH < SHELF_WALL_MIN_H * k) return null;
-  const depth = SHELF_WALL_DEPTH * k;
-  // The window's along-range on this wall (frame margin as built).
-  const onThisWall = horizontal
-    ? Math.abs(window.z - wall.z) < 0.2 && Math.abs(window.x - wall.x) <= len / 2
-    : Math.abs(window.x - wall.x) < 0.2 && Math.abs(window.z - wall.z) <= len / 2;
-  const winAlong = horizontal ? window.x - wall.x : window.z - wall.z;
-  const winHalf = WINDOW_WIDTH * k;
-  const n = Math.max(
-    1,
-    Math.min(SHELF_WALL_BAY_MAX, Math.round(len / (SHELF_WALL_BAY * k))),
-  );
-  const bayW = len / n;
-  const stile = SHELF_WALL_STILE * k;
-  const board = SHELF_WALL_BOARD * k;
-  const plinth = SHELF_WALL_PLINTH * k;
-  const gap = SHELF_WALL_SHELF_GAP * k;
+  // The pure builder owns the cut geometry — every emitted rectangle is
+  // guaranteed disjoint from every opening it truly intersects. A host
+  // too short to shelve (the SHELF_WALL_MIN_H discipline) grows none.
+  const build = shelfWallBuild({ len, height, wallScale: k }, openings);
+  if (!build) return null;
+  const { depth, shelfYs } = build;
+  // The case body sits on the wall's inner face (2mm sink, the dado
+  // convention); `perp` overrides the offset for the thin back plate.
   const off = thick / 2 + depth / 2 - 0.002;
-  const pos = (along: number, y: number): [number, number, number] =>
+  const pos = (
+    along: number,
+    y: number,
+    perp: number = off,
+  ): [number, number, number] =>
     horizontal
-      ? [wall.x + along, y, wall.z + nz * off]
-      : [wall.x + nx * off, y, wall.z + along];
-  const shelfYs: number[] = [];
-  for (let y = plinth + gap; y <= bookH - board - 0.04; y += gap) {
-    shelfYs.push(y);
-  }
+      ? [wall.x + along, y, wall.z + nz * perp]
+      : [wall.x + nx * perp, y, wall.z + along];
+  const box = (
+    sizeAlong: number,
+    h: number,
+    sizePerp: number,
+  ): [number, number, number] =>
+    horizontal ? [sizeAlong, h, sizePerp] : [sizePerp, h, sizeAlong];
   const parts: ReactNode[] = [];
-  // Bay-boundary stiles (n bays share n+1 boundaries — no doubled boxes).
-  for (let i = 0; i <= n; i++) {
-    const a = -len / 2 + i * bayW;
+  // Bay-boundary stiles — a cut may split one into below/above segments;
+  // every segment renders.
+  for (const s of build.stiles) {
     parts.push(
       <mesh
-        key={`st${i}`}
-        position={pos(a, bookH / 2)}
+        key={`st${s.index}`}
+        position={pos((s.along0 + s.along1) / 2, (s.y0 + s.y1) / 2)}
         castShadow
         receiveShadow
         material={mats.woodBase}
       >
-        <boxGeometry
-          args={horizontal ? [stile, bookH, depth] : [depth, bookH, stile]}
-        />
+        <boxGeometry args={box(s.along1 - s.along0, s.y1 - s.y0, depth)} />
       </mesh>,
     );
   }
-  // Run-length boards: plinth, top, and every shelf.
-  const boards: { key: string; y: number; t: number; material: THREE.MeshStandardMaterial }[] = [
-    { key: "plinth", y: plinth / 2, t: plinth, material: mats.woodDark },
-    { key: "top", y: bookH - board / 2, t: board, material: mats.woodDark },
-    ...shelfYs.map((y, i) => ({ key: `sh${i}`, y, t: board, material: mats.woodTop })),
-  ];
-  for (const b of boards) {
+  // Run-length boards: plinth and top in the dark wood, every shelf in
+  // the top material — each cut segment renders with its row's own
+  // material, so a window never has a shelf running through its frame.
+  for (const b of build.boards) {
+    const material =
+      b.row !== undefined && b.row >= 0 && b.row < shelfYs.length
+        ? mats.woodTop
+        : mats.woodDark;
     parts.push(
       <mesh
-        key={b.key}
-        position={pos(0, b.y)}
+        key={`bd${b.index}`}
+        position={pos((b.along0 + b.along1) / 2, (b.y0 + b.y1) / 2)}
         castShadow
         receiveShadow
-        material={b.material}
+        material={material}
       >
-        <boxGeometry
-          args={horizontal ? [len, b.t, depth] : [depth, b.t, len]}
-        />
+        <boxGeometry args={box(b.along1 - b.along0, b.y1 - b.y0, depth)} />
       </mesh>,
     );
   }
-  // Book rows: PER-BOOK instanced spines (the bookshelf prop's language —
-  // variable widths/heights, muted palette-derived colors), laid per bay
-  // per shelf gap in a k-scaled group rotated to hug the wall. Books never
-  // cast (they would only thicken the shelf's own shadow).
+  // The back panel: a thin plate at the case's rear face (the
+  // BookshelfProp idiom — mats.woodDark), holed by the same cuts — the
+  // books never expose the bare wall through the window opening.
+  const backT = 0.04 * k;
+  const backOff = thick / 2 - 0.002 + backT / 2 + 0.004;
+  for (const bp of build.backs) {
+    parts.push(
+      <mesh
+        key={`ba${bp.index}`}
+        position={pos((bp.along0 + bp.along1) / 2, (bp.y0 + bp.y1) / 2, backOff)}
+        castShadow
+        receiveShadow
+        material={mats.woodDark}
+      >
+        <boxGeometry args={box(bp.along1 - bp.along0, bp.y1 - bp.y0, backT)} />
+      </mesh>,
+    );
+  }
+  // Book rows: PER-BOOK instanced spines per cut segment — the segment's
+  // real along-center and y0, width/height divided back out of the
+  // k-scaled group. The seedKey carries room/instance/bay/row/segment so
+  // a rebuild (or a second shelf wall in one room) never replays another
+  // row's layout. Books never cast (they would only thicken the shelf's
+  // own shadow).
   const bookDepth = SHELF_WALL_DEPTH * 0.72;
-  for (let i = 0; i < n; i++) {
-    const a = -len / 2 + (i + 0.5) * bayW;
-    if (onThisWall && Math.abs(a - winAlong) < winHalf / 2 + bayW / 2 + 0.35) {
-      continue;
-    }
-    for (let s = 0; s < shelfYs.length; s++) {
-      const shelfY = shelfYs[s];
-      const rowH = gap - board - 0.1 * k - 0.04 * k * (s % 2);
-      if (rowH <= 0.05) continue;
-      parts.push(
-        <group
-          key={`bk${i}-${s}`}
-          position={pos(a, shelfY + board / 2)}
-          rotation={[0, horizontal ? 0 : Math.PI / 2, 0]}
-          scale={k}
-        >
-          <BookSpines
-            seedKey={`shelf-wall:${wall.x.toFixed(1)}:${wall.z.toFixed(1)}:${i}:${s}`}
-            width={(bayW - stile * 2 - 0.04) / k}
-            height={SHELF_WALL_SHELF_GAP - SHELF_WALL_BOARD - 0.1 - 0.04 * (s % 2)}
-            depth={bookDepth}
-            materials={mats}
-          />
-        </group>,
-      );
-    }
+  for (const r of build.books) {
+    parts.push(
+      <group
+        key={`bk${r.index}`}
+        position={pos((r.along0 + r.along1) / 2, r.y0)}
+        rotation={[0, horizontal ? 0 : Math.PI / 2, 0]}
+        scale={k}
+      >
+        <BookSpines
+          seedKey={`shelf-wall:${roomId}:${instanceId}:${r.bay}:${r.row}:${r.index}`}
+          width={(r.along1 - r.along0) / k}
+          height={(r.y1 - r.y0) / k}
+          depth={bookDepth}
+          materials={mats}
+        />
+      </group>,
+    );
   }
   return <group>{parts}</group>;
 }
@@ -2082,7 +2114,8 @@ function RillWater({
   // mirror (the pool owns GAME_DEBUG.water) and no bob (a runnel's
   // water sits still; its life is the ripple, not the tide).
   const wadeRef = useRef({ x: 0, z: 0, acc: 0, inside: false });
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
+    if (delta <= 0) return;
     const p = playerRef.current;
     const lx = (p.x - door.x) * dir;
     const lz = (p.z - door.z) * dir;
@@ -2344,11 +2377,12 @@ function WaterSurface({
       GAME_DEBUG.water = null;
     };
   }, []);
-  useFrame(({ clock }, delta) => {
-    const t = clock.elapsedTime;
+  useGameFrame((_, { delta, elapsed: t }) => {
     water.update(t);
     const mesh = meshRef.current;
     if (mesh) mesh.position.y = WATER_Y + Math.sin(t * 0.6) * 0.02;
+
+    if (delta <= 0) return;
 
     const p = playerRef.current;
     const lx = (p.x - door.x) * dir;
@@ -2432,7 +2466,8 @@ function Snowfall({
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     return { geometry, speeds };
   }, [seed, width, extent, count]);
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
+    if (delta <= 0) return;
     const attr = geometry.attributes.position as THREE.BufferAttribute;
     const arr = attr.array as Float32Array;
     const dt = Math.min(delta, 0.05);
@@ -2490,8 +2525,7 @@ function Fireflies({
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     return { geometry, centers };
   }, [seed, width, extent]);
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
+  useGameFrame((_, { elapsed: t }) => {
     const attr = geometry.attributes.position as THREE.BufferAttribute;
     const arr = attr.array as Float32Array;
     for (let i = 0; i < COUNT; i++) {
@@ -2706,6 +2740,13 @@ interface PropPlacement {
   z: number;
   rotY: number;
   scale: number;
+  /** Stable instance identity for the detail-seeded props (bookshelf rows,
+   *  plant leaves, book piles) — the kit path composes
+   *  kitId:kitIndex:pieceIndex; legacy placements fall back at render to
+   *  `legacy:<kind>:<index>`. Rebuilding the same room replays the identical
+   *  detail layout; two pieces never share one. */
+  instanceId?: string;
+  kitIndex?: number;
   /** §4.4: this piece is the room's one trace — a small calm kind set
    *  ON a host piece (same x/z, lifted to the host's top). Carried to the
    *  probe mirror so probes can count traces without the scene graph. */
@@ -2727,6 +2768,8 @@ function MotifGeometry({
   accent,
   canopyColor,
   mats,
+  roomId,
+  instanceId,
 }: {
   kind: MotifKind;
   accent: string;
@@ -2734,6 +2777,11 @@ function MotifGeometry({
   /** The room's shared prop materials — the polished furniture cases
    *  consume these; the remaining cases ignore them. */
   mats: RoomPropMaterials;
+  /** Stable instance identity, forwarded to the detail-seeded furniture
+   *  (bookshelf/plant/bookpile) so identical pieces lay out different
+   *  books/leaves. Undefined renders the module's stable default. */
+  roomId?: string;
+  instanceId?: string | number;
 }): JSX.Element {
   switch (kind) {
     case "ladder":
@@ -3417,7 +3465,7 @@ function MotifGeometry({
     case "rug":
       return <RugProp mats={mats} />;
     case "bookshelf":
-      return <BookshelfProp mats={mats} />;
+      return <BookshelfProp mats={mats} roomId={roomId} instanceId={instanceId} />;
     case "readingchair":
       return <ReadingChairProp mats={mats} />;
     case "desklamp":
@@ -3832,7 +3880,7 @@ function MotifGeometry({
     case "bookpile":
       // A loose stack of books, one leaning against the pile — the
       // bookshelf's muted spine language, off the shelf (room-props).
-      return <BookpileProp mats={mats} />;
+      return <BookpileProp mats={mats} roomId={roomId} instanceId={instanceId} />;
     /* ------------------------------------------------------------ */
     /* The craft pass (2026-10): finer room dressing. Every piece is  */
     /* real geometry at human scale (the avatar is 1.7m), in the      */
@@ -3912,7 +3960,7 @@ function MotifGeometry({
     case "plant":
       // Potted floor plant — ceramic pot (muted clay), soil, wood stems,
       // instanced leaves in the canopy color (room-props); no ball crown.
-      return <PlantProp mats={mats} />;
+      return <PlantProp mats={mats} roomId={roomId} instanceId={instanceId} />;
     case "pedestal":
       // Display pedestal: stepped base, a slight-entasis shaft, a cap —
       // and the little amphora it exists to show (accent-glazed, the
@@ -5336,7 +5384,7 @@ function ChandelierGeometry({ accent }: { accent: string }) {
 /** Animated chandelier: slow spin around its chain. */
 function ChandelierProp({ accent }: { accent: string }) {
   const ref = useRef<THREE.Group>(null);
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
     const g = ref.current;
     if (g) g.rotation.y += Math.min(delta, 0.05) * 0.15;
   });
@@ -5353,12 +5401,17 @@ function MotifProp({
   accent,
   canopyColor,
   mats,
+  roomId,
+  instanceId,
 }: {
   kind: MotifKind;
   accent: string;
   canopyColor: THREE.Color;
   /** The room's shared prop materials (room-props.tsx). */
   mats: RoomPropMaterials;
+  /** Stable instance identity — see MotifGeometry. */
+  roomId?: string;
+  instanceId?: string | number;
 }): JSX.Element {
   switch (kind) {
     case "tv":
@@ -5367,7 +5420,7 @@ function MotifProp({
       return <ChandelierProp accent={accent} />;
     default:
       return (
-        <MotifGeometry kind={kind} accent={accent} canopyColor={canopyColor} mats={mats} />
+        <MotifGeometry kind={kind} accent={accent} canopyColor={canopyColor} mats={mats} roomId={roomId} instanceId={instanceId} />
       );
   }
 }
@@ -5633,8 +5686,7 @@ function Ducks({
     if (beak) beak.geometry.rotateX(Math.PI / 2);
   }, []);
 
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
+  useGameFrame((_, { delta, elapsed: t }) => {
     const body = bodyRef.current;
     const head = headRef.current;
     const beak = beakRef.current;
@@ -5667,7 +5719,7 @@ function Ducks({
       // ~0.35 m — small, low, and rect-guarded (a drifting duck never
       // splats outside the water it floats on).
       if (driver && rect) {
-        if (swim.init) {
+        if (swim.init && delta > 0) {
           swim.acc[i] += Math.hypot(x - swim.px[i], z - swim.pz[i]);
           if (swim.acc[i] >= SWIM_RIPPLE_EVERY) {
             if (waveRectContains(x, z, rect)) {
@@ -5811,8 +5863,7 @@ function PetAnimals({ kind, pets }: { kind: "cat" | "dog"; pets: Pet[] }) {
     })),
   );
 
-  useFrame(({ clock }, delta) => {
-    const t = clock.elapsedTime;
+  useGameFrame((_, { delta, elapsed: t }) => {
     const dt = Math.min(delta, 0.05);
     pets.forEach((pet, i) => {
       const g = groupRefs.current[i];
@@ -5823,7 +5874,11 @@ function PetAnimals({ kind, pets }: { kind: "cat" | "dog"; pets: Pet[] }) {
         s.px = target[0];
         s.pz = target[1];
         s.ready = true;
+        g.position.set(s.px, GROUND_Y, s.pz);
       }
+      // A cold suspended mount still places the pet; subsequent archive
+      // demand frames cannot advance its waypoint or sit/pause state.
+      if (delta <= 0) return;
       let y = GROUND_Y;
       if (s.mode === "walk") {
         const dx = target[0] - s.px;
@@ -5850,7 +5905,7 @@ function PetAnimals({ kind, pets }: { kind: "cat" | "dog"; pets: Pet[] }) {
         }
       }
       g.position.set(s.px, y, s.pz);
-      const targetScaleY = s.mode === "sit" ? 0.82 : 1;
+      const targetScaleY = pet.scale * (s.mode === "sit" ? 0.82 : 1);
       g.scale.y += (targetScaleY - g.scale.y) * Math.min(1, dt * 8);
     });
   });
@@ -5887,10 +5942,9 @@ interface BalloonData {
 
 function BalloonBunch({ data, scale }: { data: BalloonData; scale: number }) {
   const floatRef = useRef<THREE.Group>(null);
-  useFrame(({ clock }) => {
+  useGameFrame((_, { elapsed: t }) => {
     const g = floatRef.current;
     if (!g) return;
-    const t = clock.elapsedTime;
     g.position.y = Math.sin(t * 0.35 + data.phase) * 0.25 * scale;
     g.rotation.y = Math.sin(t * 0.12 + data.phase) * 0.2;
   });
@@ -6128,7 +6182,7 @@ function SpaceDoorway({
   const hingeRef = useRef<THREE.Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
     const hinge = hingeRef.current;
     if (!hinge) return;
     const p = playerRef.current;
@@ -6399,7 +6453,7 @@ function RoomDoorAssembly({
   const hingeRef = useRef<THREE.Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
     if (!lit) return; // an unlit door never opens — the seam stays dark
     const hinge = hingeRef.current;
     if (!hinge) return;
@@ -6623,67 +6677,64 @@ function RoomDoorAssembly({
 /* full-height wall — that justifies their overall key.                */
 /* ------------------------------------------------------------------ */
 
-/** Where one window hangs: center on the host wall's line, the probed
- *  inward normal, and the host's drawn dimensions. */
-interface WindowFixture {
+/** Where one window hangs: the resolver's WindowResolution plus the world
+ *  anchor the renderer needs (the resolver speaks run-local `along`). */
+interface WindowFixture extends WindowResolution {
   x: number;
   z: number;
-  nx: number;
-  nz: number;
-  thick: number;
-  /** The host wall's DRAWN height (sill height on a cutaway wall). */
-  drawnHeight: number;
 }
 
-/** The clerestory is the same wall anchoring plus the host wall's run
- *  length — the band spans most of it. */
-interface ClerestoryFixture extends WindowFixture {
-  len: number;
+/** The clerestory is the same anchoring plus the host run's real span —
+ *  `len` is the ACTUAL band length the resolver guaranteed ≥ one unit
+ *  (never the host run minus end pads — the resolver already subtracted
+ *  them). */
+interface ClerestoryFixture extends ClerestoryResolution {
+  x: number;
+  z: number;
 }
 
 interface RoomFixtures {
-  lamp: { x: number; z: number };
-  window: WindowFixture;
+  lamp: LampResolution;
+  window: WindowFixture | null;
   clerestory: ClerestoryFixture | null;
 }
 
 /**
- * Seeded fixture placement — a dedicated stream (`…:fixtures`, the
- * room-plan.ts facet convention) so adding fixtures never perturbs the
- * layout/prop/furniture draws around them (A6: same slice, same room,
- * fixtures included).
+ * Fixture resolution through lib/game/room-fixtures.ts — the PURE
+ * replacement for the old point-sampling builder: the lamp clears every
+ * staged prop's REAL oriented box (never landing inside a staged sofa), the
+ * window fills the gap an authored glass span leaves (never stacking a
+ * second opening), and a candidate with no legal spot resolves to NONE /
+ * null — the old illegal midpoint fallback is gone.
  *
- * LAMP: a piece of furniture — drawn inside the footprint, out of the
- * entrance strip, the strand-door approaches, the water, and (first pass)
- * the cleared path; it may stand near the hero (a lit set piece reads
- * well). WINDOW: wall dressing — prefers a FULL-HEIGHT non-entrance wall
- * (a window punched in a 1.1m dollhouse sill would float), falls back to
- * the entrance wall beside the door (architecturally natural, never cut),
- * and keeps clear of every door sharing the host wall. CLERESTORY: the
- * same anchoring rules, preferring a DIFFERENT full-height wall than the
- * window's so the room's two sources read from two directions.
+ * The fixtures keep their own dedicated stream (`…:fixtures`, the
+ * room-plan.ts facet convention): the resolver consumes ONLY this stream,
+ * so adding fixtures never perturbs the layout/prop/furniture draws (A6).
+ * The inputs are the FINAL furniture's OBBs (the legacy ladder included —
+ * nothing physical is filtered out), the authored openings mapped to their
+ * ORIGINAL source wall with run-local frame-inclusive intervals, and the
+ * lights already standing in the room (a staged floorlamp/desk lamp, a
+ * module sconce) for the REUSE resolution.
  */
 function buildRoomFixtures(
   recipe: SpaceRecipe,
-  scaled: SpaceRecipe,
   plan: RoomPlan,
   comp: Composition,
-  walls: WallSegment[],
+  walls: readonly WallSegment[],
   wallHeight: number,
-  dir: number,
+  dir: 1 | -1,
   water: WaterRect | null,
   doors: readonly RoomDoorPlacement[],
   propScale: number,
   wallScale: number,
   hasClerestory: boolean,
-  /** Source wall indices whose run hosts a WALL FEATURE (niche, pilaster
-   *  rhythm, arch, column order, platform, mezzanine) — the window never
-   *  hangs there. The niche rebuilds its run into a recessed alcove (a
-   *  view plane on the same run would z-fight the alcove back), and the
-   *  pilaster strips project past the wall face (a pane behind a strip
-   *  would clip through it); §7.2 moved the reading hall's niche onto a
-   *  flank wall, exactly where the window prefers to hang, so the pool
-   *  filter is what keeps the two apart. */
+  /** The staged furniture's real OBBs (propObbsForPieces). */
+  props: readonly PropObb[],
+  /** Authored building openings (frame-inclusive, source-wall indexed). */
+  openings: FixtureOpenings,
+  /** Lights already standing in the furniture/module layer. */
+  lights: readonly ExistingLight[],
+  /** Source wall indices hosting a wall feature (closed to fixtures). */
   featureSources: ReadonlySet<number>,
 ): RoomFixtures {
   // P3-b1: the fixtures' stream rides the skin-stripped id — a forced
@@ -6691,146 +6742,94 @@ function buildRoomFixtures(
   const rng = createRng(
     hashString(`${WORLD_SEED}:${debugSliceIdWithoutSkin(recipe.sliceId)}:fixtures`),
   );
-  const { extent } = scaled.size;
-  const width = scaled.width;
-
-  // --- Lamp -------------------------------------------------------------
-  const lampEdge = ROOM_WALL_THICKNESS + 0.9 * propScale;
-  let lamp: RoomFixtures["lamp"] | null = null;
-  for (let pass = 0; pass < 2 && lamp === null; pass++) {
-    for (let tries = 0; tries < 24 && lamp === null; tries++) {
-      const x = (rng() * 2 - 1) * Math.max(0.5, width / 2 - lampEdge);
-      const z = lampEdge + rng() * Math.max(0.5, extent - lampEdge * 2);
-      if (!planContains(plan, x, z, lampEdge)) continue;
-      if (Math.abs(x) < ENTRANCE_CLEAR_RADIUS && z < ENTRANCE_DEPTH) continue;
-      if (doors.length > 0 && inDoorApproach(x, z, doors)) continue;
-      if (water && insideRect(x, z, water, 0.6 * propScale)) continue;
-      if (pass === 0 && distToPath(comp, x, z) < comp.pathHalf + 0.3 * propScale) {
-        continue;
-      }
-      lamp = { x, z };
-    }
-  }
-  // Footprint-safe fallback: beside the path bend, mid-depth.
-  if (lamp === null) {
-    lamp = {
-      x: comp.path.bx <= 0 ? lampEdge + 0.6 * propScale : -(lampEdge + 0.6 * propScale),
-      z: Math.min(Math.max(extent * 0.45, lampEdge + 0.5), extent - lampEdge),
+  const resolved = resolveRoomFixtures({
+    plan,
+    comp,
+    walls,
+    wallHeight,
+    dir,
+    water,
+    doors,
+    propScale,
+    wallScale,
+    hasClerestory,
+    props,
+    openings,
+    lights,
+    featureSources,
+    rng,
+  });
+  // The resolver speaks run-local `along`; the renderers anchor on world
+  // x/z — the host segment's own center converts between them.
+  const worldAnchor = <T extends WindowResolution | ClerestoryResolution>(
+    r: T,
+  ): T & { x: number; z: number } => {
+    const host = walls[r.wall];
+    const horizontal = host.sizeZ <= host.sizeX;
+    return {
+      ...r,
+      x: horizontal ? host.x + r.along : host.x,
+      z: horizontal ? host.z : host.z + r.along,
     };
-  }
-
-  // --- Window -----------------------------------------------------------
-  const winHalf = (WINDOW_WIDTH * wallScale) / 2 + 0.35; // frame margin
-  const endPad = 1;
-  const fits = (w: WallSegment) =>
-    Math.max(w.sizeX, w.sizeZ) >= (winHalf + endPad) * 2;
-  const fullHeight = walls.filter(
-    (w) =>
-      !w.entrance &&
-      !wallFacesCamera(plan, w, dir) &&
-      !featureSources.has(walls.indexOf(w)),
-  );
-  const fitsFull = fullHeight.filter(fits);
-  // AXIAL SEMANTICS (§10.5): the east/west (vertical) walls belong to
-  // windows and light — the strand doors took the north/south
-  // (horizontal) ones. Try vertical hosts first, then degrade through
-  // the same ladder as before (any full-height fit, then the entrance
-  // pair, then the longest wall).
-  const verticalHosts = fitsFull.filter((w) => w.sizeZ > w.sizeX);
-  let hostPool = verticalHosts.length > 0 ? verticalHosts : fitsFull;
-  if (hostPool.length === 0) hostPool = walls.filter((w) => w.entrance && fits(w));
-  if (hostPool.length === 0) {
-    // Pathological miniature: hang it on the longest wall regardless.
-    hostPool = [...walls].sort(
-      (a, b) => Math.max(b.sizeX, b.sizeZ) - Math.max(a.sizeX, a.sizeZ),
-    ).slice(0, 1);
-  }
-  const host = hostPool[Math.floor(rng() * hostPool.length)];
-  const hostIndex = walls.indexOf(host);
-  const horizontal = host.sizeZ <= host.sizeX;
-  const len = horizontal ? host.sizeX : host.sizeZ;
-  let nx = 0;
-  let nz = 0;
-  if (horizontal) {
-    nz = planContains(plan, host.x, host.z + 0.5, 0) ? 1 : -1;
-  } else {
-    nx = planContains(plan, host.x + 0.5, host.z, 0) ? 1 : -1;
-  }
-  const drawnHeight =
-    host.entrance || !wallFacesCamera(plan, host, dir)
-      ? wallHeight
-      : Math.min(wallHeight, WALL_SILL_HEIGHT);
-  // Offset along the run, clear of the entrance gap and of every strand
-  // door sharing this wall.
-  const doorClear = winHalf + DOOR_WIDTH / 2 + WINDOW_DOOR_CLEAR;
-  const hostDoors = doors.filter((d) => d.wall === hostIndex);
-  const lo = -len / 2 + winHalf + endPad;
-  const hi = len / 2 - winHalf - endPad;
-  let along = 0;
-  for (let tries = 0; tries < 16; tries++) {
-    const a = lo >= hi ? 0 : lo + rng() * (hi - lo);
-    const cx = host.x + (horizontal ? a : 0);
-    if (host.entrance && Math.abs(cx) < DOOR_GAP_HALF + winHalf + 0.6) continue;
-    if (hostDoors.some((d) => Math.abs(a - d.along) < doorClear)) continue;
-    along = a;
-    break;
-  }
-  const window: WindowFixture = {
-    x: host.x + (horizontal ? along : 0),
-    z: host.z + (horizontal ? 0 : along),
-    nx,
-    nz,
-    thick: horizontal ? host.sizeZ : host.sizeX,
-    drawnHeight,
   };
+  return {
+    lamp: resolved.lamp,
+    window: resolved.window ? worldAnchor(resolved.window) : null,
+    clerestory: resolved.clerestory ? worldAnchor(resolved.clerestory) : null,
+  };
+}
 
-  // --- Clerestory -------------------------------------------------------
-  // A high window BAND, not an overhead opening: it hangs just under the
-  // top of a full-height wall, so the set's overall key arrives from one
-  // side and above — a source you can walk up to and point at.
-  let clerestory: RoomFixtures["clerestory"] = null;
-  if (hasClerestory) {
-    const minRun = (CLERESTORY_END_PAD * 2 + CLERESTORY_UNIT) * wallScale;
-    const runFits = (w: WallSegment) =>
-      Math.max(w.sizeX, w.sizeZ) >= minRun;
-    // Prefer a full-height wall that is NOT the window's host (two
-    // sources, two directions); degrade gracefully to any run that fits.
-    let bandPool = fullHeight.filter((w) => w !== host && runFits(w));
-    if (bandPool.length === 0) bandPool = fullHeight.filter(runFits);
-    if (bandPool.length === 0) {
-      bandPool = walls.filter((w) => w.entrance && runFits(w));
-    }
-    if (bandPool.length > 0) {
-      const bandHost = bandPool[Math.floor(rng() * bandPool.length)];
-      const bandHorizontal = bandHost.sizeZ <= bandHost.sizeX;
-      const bandLen = bandHorizontal ? bandHost.sizeX : bandHost.sizeZ;
-      let bnx = 0;
-      let bnz = 0;
-      if (bandHorizontal) {
-        bnz = planContains(plan, bandHost.x, bandHost.z + 0.5, 0) ? 1 : -1;
-      } else {
-        bnx = planContains(plan, bandHost.x + 0.5, bandHost.z, 0) ? 1 : -1;
-      }
-      // The band spans the host's run minus the end pads, centered — a
-      // transom over the doorway reads naturally when the entrance wall
-      // is the only host, and centering keeps the span inside the run
-      // by construction.
-      clerestory = {
-        x: bandHost.x,
-        z: bandHost.z,
-        nx: bnx,
-        nz: bnz,
-        thick: bandHorizontal ? bandHost.sizeZ : bandHost.sizeX,
-        drawnHeight:
-          bandHost.entrance || !wallFacesCamera(plan, bandHost, dir)
-            ? wallHeight
-            : Math.min(wallHeight, WALL_SILL_HEIGHT),
-        len: bandLen,
-      };
-    }
-  }
-
-  return { lamp, window, clerestory };
+/**
+ * The real light + floor pool the generic RoomLamp carries — the SAME
+ * parameters (color, the ×scale² intensity law, the ×scale reach, the
+ * radial pool), extracted so a REUSE resolution can bolt the light onto
+ * an existing floorlamp or desk lamp WITHOUT growing a second lamp model
+ * (the staged props are emissive-only geometry). `bulbLift` is the
+ * source prop's own bulb height in its local frame, scaled explicitly
+ * here (this component renders OUTSIDE any scaling group): the
+ * floorlamp's 1.9, the desk lamp's 0.6. The pool lands on the floor at
+ * the source's base (`y` — 0 for a floor lamp, a host top for a desk
+ * lamp).
+ */
+function RoomLampLight({
+  x,
+  y,
+  z,
+  scale,
+  bulbLift,
+  boost = 1,
+}: {
+  x: number;
+  y: number;
+  z: number;
+  scale: number;
+  bulbLift: number;
+  /** Night multiplier on the light and pool (geometry never changes). */
+  boost?: number;
+}): JSX.Element {
+  return (
+    <group>
+      <pointLight
+        position={[x, y + bulbLift * scale, z]}
+        color={LAMP_COLOR}
+        intensity={LAMP_LIGHT_INTENSITY * scale * scale * boost}
+        distance={LAMP_LIGHT_DISTANCE * scale}
+        decay={2}
+      />
+      {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
+      <mesh position={[x, y + 0.035, z]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[LAMP_POOL_RADIUS * 2, LAMP_POOL_RADIUS * 2]} />
+        <meshBasicMaterial
+          map={sharedRadialGlowTexture()}
+          color={LAMP_COLOR}
+          transparent
+          opacity={LAMP_POOL_OPACITY * boost}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
 }
 
 /**
@@ -7154,10 +7153,12 @@ function RoomWindow({
 }): JSX.Element {
   const ws = wallScale;
   const w = WINDOW_WIDTH * ws;
-  // Clamp the pane into the host wall's DRAWN height (a relaxed fallback
-  // host may be a cutaway sill wall — the window then sits low and short).
-  const h = Math.min(WINDOW_HEIGHT * ws, Math.max(0.6, fixture.drawnHeight - 0.4));
-  const sill = Math.min(WINDOW_SILL_Y * ws, Math.max(0.15, fixture.drawnHeight - h - 0.15));
+  // The glass's REAL span comes from the resolver (windowVerticalSpan —
+  // one shared formula for the resolver, the renderer, and the shelf
+  // wall's cut, never recomputed here): h = top − bottom, the sill IS
+  // bottom.
+  const h = fixture.top - fixture.bottom;
+  const sill = fixture.bottom;
   const spillL = WINDOW_SPILL_LENGTH * ws;
   const mullion = WINDOW_MULLION * ws;
   const [spotTarget] = useState(() => new THREE.Object3D());
@@ -7295,14 +7296,14 @@ function RoomClerestory({
   night: boolean;
 }): JSX.Element {
   const ws = wallScale;
-  // Clamp the band into the host wall's DRAWN height (a relaxed fallback
-  // host may be a cutaway sill — the band then shrinks to what fits).
-  const bandH = Math.min(CLERESTORY_HEIGHT * ws, Math.max(0.4, fixture.drawnHeight * 0.5));
-  const bandY = Math.max(
-    bandH / 2 + 0.1,
-    fixture.drawnHeight - CLERESTORY_DROP * ws - bandH / 2,
-  );
-  const span = Math.max(CLERESTORY_UNIT * ws, fixture.len - 2 * CLERESTORY_END_PAD * ws);
+  // The band's REAL span comes from the resolver (clerestoryVerticalSpan
+  // — one shared formula for the resolver and the renderer): bandH =
+  // top − bottom, bandY = the span's center. `len` is the ACTUAL band
+  // length — the resolver guarantees ≥ one unit and already subtracted
+  // the end pads, so never len − 2·END_PAD here.
+  const bandH = fixture.top - fixture.bottom;
+  const bandY = (fixture.top + fixture.bottom) / 2;
+  const span = fixture.len;
   const bays = Math.max(1, Math.round(span / (CLERESTORY_UNIT * ws)));
   const spillL = CLERESTORY_SPILL_LENGTH * ws;
   const mullion = WINDOW_MULLION * 1.4 * ws;
@@ -7379,26 +7380,11 @@ function RoomClerestory({
   );
 }
 
-/**
- * Authored material state, recorded ONCE per material instance, keyed on the
- * material itself. The crossfade below mutates opacity/transparent in place,
- * and React may RE-RUN the capture layout effect on the same fiber with refs
- * intact — R3F mounts the whole scene under a Suspense boundary (react-three-
- * fiber.esm.js: `jsx(React.Suspense, …)`), so a sibling suspension hides and
- * re-reveals committed content and replays layout effects; measured live:
- * the effect fired twice, 1.6 s apart, the second run mid-fade. Without this
- * map the second run records the fade machinery's own mutations as
- * "authored" and the hand-back then faithfully restores the corrupted values
- * (every material stuck in the transparent pass — the "veil"). First capture
- * is always pristine because it runs before this file has touched the
- * material. Do NOT "simplify" this back to reading mat.opacity at capture.
- */
-const AUTHORED_MATERIAL_STATE = new WeakMap<
-  THREE.Material,
-  { opacity: number; transparent: boolean }
->();
-
-/**
+/** Authored-material capture (first-pristine-capture-wins WeakMap, the
+ *  mid-fade Suspense-replay "veil" it prevents, the never-dispose rule) now
+ *  lives in lib/game/fade-materials.ts — the pure module SpaceScene's
+ *  crossfade below collects/applies/restores through.
+ *
  * Mount-cost trace (responsiveness probe): one record per room mount.
  * SpaceScene writes its own spans (render body = plan/scatter/material
  * creation, fade capture = the mount layout effect's full-tree traverse,
@@ -7429,18 +7415,6 @@ export const MOUNT_TRACE = {
   frames: [] as [number, number, number][],
 };
 
-function authoredMaterialState(mat: THREE.Material): {
-  opacity: number;
-  transparent: boolean;
-} {
-  let authored = AUTHORED_MATERIAL_STATE.get(mat);
-  if (!authored) {
-    authored = { opacity: mat.opacity, transparent: mat.transparent };
-    AUTHORED_MATERIAL_STATE.set(mat, authored);
-  }
-  return authored;
-}
-
 /**
  * The mounted room's root group (at most one SpaceScene exists — the
  * integrator's single room slot), exported so the integrator's
@@ -7458,9 +7432,9 @@ export const ROOM_ROOT: { current: THREE.Group | null } = { current: null };
  * fog, background, or lights (the integrator's canvas owns those).
  *
  * FADE. The room never pops: every material under the root is captured on
- * mount (authored opacity + transparency — see AUTHORED_MATERIAL_STATE) and
- * crossfaded over SPACE_FADE_S — `fade="in"` condenses the room out of its
- * shadow on entry, `fade="out"` dissolves it on exit and fires `onFadedOut`
+ * mount (authored opacity + transparency — see lib/game/fade-materials.ts)
+ * and crossfaded over SPACE_FADE_S — `fade="in"` condenses the room out of
+ * its shadow on entry, `fade="out"` dissolves it on exit and fires `onFadedOut`
  * so the integrator can unmount. Once the fade-in completes, materials are
  * restored to their authored transparency so steady-state rendering is
  * untouched.
@@ -7594,17 +7568,15 @@ function RoomEnvelope({
   const groupRef = useRef<THREE.Group>(null);
   const scratch = useRef(new THREE.Vector3());
   const hiddenRef = useRef(true);
-  useFrame(({ camera }) => {
+  useGameFrame(({ camera }) => {
     const g = groupRef.current;
     if (!g) return;
     const topY = g.getWorldPosition(scratch.current).y + wallHeight;
     const hide = hiddenRef.current
       ? camera.position.y > topY - 0.2
       : camera.position.y > topY + 0.1;
-    if (hide !== hiddenRef.current) {
-      hiddenRef.current = hide;
-      g.visible = !hide;
-    }
+    hiddenRef.current = hide;
+    g.visible = !hide;
   });
   const ceilingMaterial = useMemo(
     () =>
@@ -7774,6 +7746,17 @@ export function SpaceScene({
     () => scenarioSkin(skinForSlice(door.sliceId), sourceRecipe.palette),
     [door.sliceId, sourceRecipe.palette],
   );
+  // A FUNCTIONAL semantic profile (activity ≠ neutral) owns the room's
+  // furniture semantics — the composition pins its primary module and
+  // only activity-compatible companions, and the module schematics stage
+  // their authored slots. The forced biome skin is then MATERIALS-AND-
+  // OUTSIDE ONLY: it may recolor floor/walls and re-bake the window
+  // view, but it must never replace the semantic draw deck or a
+  // schematic slot kind. Neutral / absent profiles (and the debug
+  // gallery, which pins by slice id, not by profile) keep the legacy
+  // skin-through staging path byte-for-byte.
+  const furnishingSkin =
+    recipe.profile && recipe.profile.activity !== "neutral" ? null : skin;
   // P3-b1: the skin rides the VIEW, never the SEEDS. Every seeded
   // derivation in this render runs on the skin-stripped id
   // (debug-slice.ts debugSliceIdWithoutSkin — the same strip
@@ -7846,57 +7829,77 @@ export function SpaceScene({
     () => composeRoom(seedId, plan, scaleFactor),
     [seedId, plan, scaleFactor],
   );
-  // Crossfade machinery: capture every material once (the tree is static
-  // per recipe), then scale opacity each frame toward the fade target.
+  // Crossfade machinery: capture every material under the root with the
+  // pure collector (lib/game/fade-materials.ts — first pristine capture
+  // wins, per-material dedupe, never disposes), then scale opacity each
+  // frame toward the fade target. The collection runs on mount and re-runs
+  // only when the room's shared prop materials are REPLACED (a theme/night
+  // swap — useRoomPropMaterials disposes the old set and mounts a new one,
+  // so a stale entry list would fade nothing); the frame loop never
+  // traverses.
+  const canopyColor = useMemo(
+    () =>
+      new THREE.Color("#4e7a3a").lerp(
+        new THREE.Color(recipe.palette.ground),
+        0.3,
+      ),
+    [recipe],
+  );
+  // The room's ONE shared prop-material set (room-props.tsx): created per
+  // mount, disposed on unmount; the fade collector dedups it across every
+  // mesh and instanced fill that references it.
+  const propMaterials = useRoomPropMaterials(recipe.palette, canopyColor);
   const rootRef = useRef<THREE.Group>(null);
-  const fadeMatsRef = useRef<{ mat: THREE.Material; base: number; transparent: boolean }[]>([]);
-  const fadeTRef = useRef(fade === "in" ? 0 : 1);
+  const fadeMatsRef = useRef<FadeMaterialEntry[]>([]);
+  const fadeTRef = useRef(fade === "in" && !(GAME_SIM_FREEZE.frozen && !prewarm) ? 0 : 1);
   const fadeDoneRef = useRef(false);
   const restoredRef = useRef(false);
+  const fadeCaptureTracedRef = useRef(false);
+  // Root registration stays mount-scoped: the integrator's LightConfig-
+  // Compiler stages around ROOM_ROOT for the life of the mount.
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     ROOM_ROOT.current = root;
-    const captureT0 = performance.now();
-    const mats: { mat: THREE.Material; base: number; transparent: boolean }[] = [];
-    root.traverse((obj) => {
-      const material = (obj as { material?: THREE.Material | THREE.Material[] }).material;
-      if (material === undefined) return;
-      for (const mat of Array.isArray(material) ? material : [material]) {
-        // Idempotent capture: the authored state comes from the WeakMap
-        // (first, pristine capture wins), NEVER from the material's current
-        // — possibly already fade-mutated — fields. See the WeakMap comment.
-        const authored = authoredMaterialState(mat);
-        mats.push({ mat, base: authored.opacity, transparent: authored.transparent });
-      }
-    });
-    fadeMatsRef.current = mats;
-    // A re-run of this effect re-corrupts the materials below, so the
-    // frame loop must re-run the hand-back when it next sees the end state.
-    restoredRef.current = false;
-    const k0 = fadeTRef.current;
-    for (const { mat, base } of mats) {
-      mat.transparent = true;
-      // Multiply the AUTHORED base, not mat.opacity: on a mid-fade effect
-      // replay mat.opacity is already faded and multiplying it again would
-      // double-dim.
-      mat.opacity = base * k0;
-    }
-    MOUNT_TRACE.captureMs = performance.now() - captureT0;
     return () => {
       if (ROOM_ROOT.current === root) ROOM_ROOT.current = null;
     };
   }, []);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const captureT0 = performance.now();
+    const entries = collectFadeMaterials(root);
+    // captureMs is a MOUNT metric: a theme/night re-registration re-runs
+    // this effect and must not move it.
+    if (!fadeCaptureTracedRef.current) {
+      fadeCaptureTracedRef.current = true;
+      MOUNT_TRACE.captureMs = performance.now() - captureT0;
+    }
+    fadeMatsRef.current = entries;
+    // A re-run of this effect re-corrupts the materials below, so the
+    // frame loop must re-run the hand-back when it next sees the end state.
+    restoredRef.current = false;
+    // Apply the fade's CURRENT position to the fresh list — the helper
+    // multiplies each entry's pristine AUTHORED base, never the live value
+    // (on a mid-fade effect replay the live opacity is already faded and
+    // multiplying it again would double-dim), so a theme swap mid-fade
+    // picks the crossfade up seamlessly on the new materials. The raw
+    // progress rides through smoothstep — the SAME easing the frame loop
+    // applies (below), so a re-registration lands on the identical curve
+    // instead of a linearly-faster step.
+    applyFadeMaterials(entries, smoothstep(0, 1, fadeTRef.current));
+  }, [propMaterials]);
   // Mount-cost trace: the first frame tick after mount closes the commit
   // span (door-manager request → React commit → rAF tick).
   const firstFrameRef = useRef(true);
-  useFrame(() => {
+  useGameFrame(() => {
     if (!firstFrameRef.current) return;
     firstFrameRef.current = false;
     MOUNT_TRACE.commitMs =
       MOUNT_TRACE.tRequest >= 0 ? performance.now() - MOUNT_TRACE.tRequest : -1;
   });
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
     const mats = fadeMatsRef.current;
     if (mats.length === 0) return;
     // Probe mirror — the console reads live crossfade progress (and the
@@ -7921,13 +7924,11 @@ export function SpaceScene({
       if (!restoredRef.current) {
         // Fade-in done: hand materials back to their authored state.
         restoredRef.current = true;
-        for (const entry of mats) {
-          entry.mat.opacity = entry.base;
-          entry.mat.transparent = entry.transparent;
-        }
+        restoreFadeMaterials(mats);
       }
       return;
     }
+    if (GAME_SIM_FREEZE.frozen) return;
     if (dirSign < 0 && t <= 0) {
       if (!fadeDoneRef.current) {
         fadeDoneRef.current = true;
@@ -7941,17 +7942,13 @@ export function SpaceScene({
       1,
     );
     fadeTRef.current = next;
-    const k = smoothstep(0, 1, next);
-    for (const entry of mats) {
-      entry.mat.transparent = true;
-      entry.mat.opacity = entry.base * k;
-    }
+    applyFadeMaterials(mats, smoothstep(0, 1, next));
   });
   // Slow probe sampler: every ~0.5s count materials still left transparent
   // or below their authored opacity after the crossfade should have handed
   // them back — a nonzero matsFaded pins the "veil" on a stuck material.
   const probeFrameRef = useRef(0);
-  useFrame(() => {
+  useGameFrame(() => {
     if (probeFrameRef.current++ % 30 !== 0) return;
     let transparent = 0;
     let faded = 0;
@@ -8216,7 +8213,7 @@ export function SpaceScene({
   // the legacy template path. The outdoor pool biome is a nature room like
   // any other now: the shallows skin's shore kits (jetty, reeds) furnish
   // its rim through the same staging call.
-  const furniture = useMemo(() => {
+  const stagedFurniture = useMemo(() => {
     if (
       recipe.worldClass !== "interior" &&
       recipe.worldClass !== "wonder" &&
@@ -8228,13 +8225,19 @@ export function SpaceScene({
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, seedId, "furniture"),
     );
-    const toPlacement = (p: StagedKitPiece): PropPlacement => ({
+    const toPlacement = (p: StagedKitPiece, i: number): PropPlacement => ({
       kind: p.kind,
       x: p.x,
       y: p.y,
       z: p.z,
       rotY: p.rotY,
       scale: p.scale,
+      // Stable instance identity: kitId + kitIndex (the placement serial)
+      // + the piece's index in this staging map — same room rebuilds the
+      // identical id, two pieces never collide (propDetailKey encodes the
+      // parts unambiguously).
+      instanceId: `${p.kitId}:${p.kitIndex}:${i}`,
+      kitIndex: p.kitIndex,
       trace: p.trace,
     });
     if (recipe.worldClass === "nature" || recipe.worldClass === "hybrid") {
@@ -8267,10 +8270,13 @@ export function SpaceScene({
         doors: clearanceDoors,
         obstacles: [],
         // v0.12 P3: the world's biome skin — §6.2 slot overrides and the
-        // skin's curated decks ride in through the staging machine.
-        skin,
+        // skin's curated decks ride in through the staging machine. A
+        // FUNCTIONAL semantic profile narrows it to null (the deck stays
+        // the room's own semantics; the skin keeps only materials and
+        // the outside view).
+        skin: furnishingSkin,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
-      }).map(toPlacement);
+      }).map((p, i) => toPlacement(p, i));
     }
     if (recipe.worldClass === "interior") {
       const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
@@ -8303,8 +8309,10 @@ export function SpaceScene({
         // v0.12 P3: the forced biome skin — §6.2 slot overrides replace
         // seeded slot kinds and the skin's decks take over the draw
         // vocabulary (the staging machine's own contract; null = the
-        // byte-for-byte legacy path).
-        skin,
+        // byte-for-byte legacy path). A FUNCTIONAL semantic profile
+        // passes null: the skin may re-dress materials and the outside,
+        // but never the semantic deck or a schematic slot.
+        skin: furnishingSkin,
         plan,
         comp,
         baseExtent: recipe.size.extent,
@@ -8359,13 +8367,13 @@ export function SpaceScene({
           baseArea: Math.max(0, baseArea - waterArea),
           obstacles,
         });
-        return [...legacy, ...kits.map(toPlacement)];
+        return [...legacy, ...kits.map((p, i) => toPlacement(p, i))];
       }
       return stageInteriorKits({
         ...staging,
         baseArea,
         obstacles: seamObstacles,
-      }).map(toPlacement);
+      }).map((p, i) => toPlacement(p, i));
     }
     if (recipe.worldClass === "wonder") {
       // §3.1 N4: the dioramas are furnished by the WONDER kits on the same
@@ -8408,12 +8416,24 @@ export function SpaceScene({
         obstacles: [],
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       });
-      return [...rugs, ...kits.map(toPlacement)];
+      return [...rugs, ...kits.map((p, i) => toPlacement(p, i))];
     }
     // Unreachable: the gate above covers every world class. Kept so the
     // memo's return type stays PropPlacement[] without a cast.
     return [];
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, furnishingSkin]);
+
+  // THE ACTIVITY TRACE (semantic profile layer): a FUNCTIONAL profile
+  // (activity ≠ neutral) grows ONE activity marker ON a real host piece
+  // of the FINAL furniture — a resolved decision, not a staged kit piece.
+  // Pure in (activity, seedId, furniture): it consumes no rng stream, so
+  // the layout draws stay byte-for-byte, and it never enters the
+  // fixtures' OBB set (the host piece already occupies the spot).
+  const { furniture, trace: activityTrace } = useMemo(
+    () =>
+      resolveActivityDressing(recipe.profile?.activity ?? "neutral", seedId, stagedFurniture),
+    [recipe.profile, seedId, stagedFurniture],
+  );
 
 
   // Internal structure (L/XL only, on the scaled tier): partition or
@@ -8535,35 +8555,119 @@ export function SpaceScene({
   // worked example: its water needs a bright source to reflect.
   const hasClerestory =
     recipe.worldClass !== "interior" || recipe.archetype === "pool-hall";
-  const fixtures = useMemo(
-    () =>
-      buildRoomFixtures(
-        recipe,
-        scaledRecipe,
-        plan,
-        comp,
-        walls,
-        wallHeight,
-        dir,
-        waterRect,
-        clearanceDoors,
-        propScale,
-        wallHeight / WALL_HEIGHT,
-        hasClerestory,
-        new Set([
-          ...roomFeatures.niches.map((n) => wallRuns[n.run].source),
-          ...roomFeatures.pilasters.map((p) => wallRuns[p.run].source),
-          ...roomFeatures.arches.map((a) => wallRuns[a.run].source),
-          ...roomFeatures.columnOrders.map((c) => wallRuns[c.run].source),
-          ...roomFeatures.platforms.map((p) => wallRuns[p.run].source),
-          ...roomFeatures.mezzanines.map((m) => wallRuns[m.run].source),
-          // A glass span carries its own view + key — the window never
-          // punches a second opening into it.
-          ...new Set(glassSpans.map((s) => wallRuns[s.run].source)),
-        ]),
-      ),
-    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, roomFeatures, wallRuns, glassSpans],
-  );
+  const fixtures = useMemo(() => {
+    const wallScale = wallHeight / WALL_HEIGHT;
+    return buildRoomFixtures(
+      recipe,
+      plan,
+      comp,
+      walls,
+      wallHeight,
+      dir,
+      waterRect,
+      clearanceDoors,
+      propScale,
+      wallScale,
+      hasClerestory,
+      // The FINAL furniture's real OBBs — the legacy ladder included:
+      // nothing physical is filtered out of the fixture clearance.
+      propObbsForPieces(furniture),
+      {
+        // Authored openings: each glass span maps to its run's ORIGINAL
+        // source wall as a frame-inclusive run-local interval (the span
+        // interval already carries the curtain wall's frame). A glass
+        // span turns the generic window to null in the resolver — the
+        // two never stack. No other authored window types exist yet.
+        glassSpans: glassSpans.flatMap((s) => {
+          const sourceIndex = wallRuns[s.run].source;
+          const source = walls[sourceIndex];
+          // Spans are far-wall (horizontal) only — the composition
+          // memo guarantees it; a vertical hit has no along register.
+          if (source.sizeZ > source.sizeX) return [];
+          return [{ wall: sourceIndex, along0: s.x0 - source.x, along1: s.x1 - source.x }];
+        }),
+        windows: [],
+      },
+      [
+        // Lights already standing in the room: a staged floorlamp or
+        // desk lamp piece (its real x/y/z/scale — the desk lamp rides
+        // its host's top), then the module sconces (the register's own
+        // source — a REUSE sconce adds nothing, ModuleSconce owns its
+        // light).
+        ...furniture
+          .filter(
+            (p): p is PropPlacement & { kind: "floorlamp" | "desklamp" } =>
+              p.kind === "floorlamp" || p.kind === "desklamp",
+          )
+          .map((p) => ({ kind: p.kind, x: p.x, y: p.y, z: p.z, scale: p.scale })),
+        ...moduleSconces.map((a) => ({
+          kind: "sconce" as const,
+          x: a.x,
+          z: a.z,
+          y: 2.05 * wallScale,
+          scale: wallScale,
+        })),
+      ],
+      new Set([
+        ...roomFeatures.niches.map((n) => wallRuns[n.run].source),
+        ...roomFeatures.pilasters.map((p) => wallRuns[p.run].source),
+        ...roomFeatures.arches.map((a) => wallRuns[a.run].source),
+        ...roomFeatures.columnOrders.map((c) => wallRuns[c.run].source),
+        ...roomFeatures.platforms.map((p) => wallRuns[p.run].source),
+        ...roomFeatures.mezzanines.map((m) => wallRuns[m.run].source),
+        // A glass span carries its own view + key — the window never
+        // punches a second opening into it.
+        ...new Set(glassSpans.map((s) => wallRuns[s.run].source)),
+      ]),
+    );
+  }, [recipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, furniture, moduleSconces, roomFeatures, wallRuns, glassSpans]);
+  // THE SHELF WALL'S CUTS: every real opening on a shelf-register run,
+  // in the builder's run-local (along, y) coordinates with frame-inclusive
+  // widths — the generic window (a host-pool fallback can still land one
+  // on a shelf wall), the clerestory band, and this run's glass wall
+  // spans (floor-to-top authored openings). The builder cuts stiles,
+  // boards, back plate and book rows around them; the case is never
+  // built through a hole.
+  const shelfOpeningsForRun = (i: number): WallOpening[] => {
+    const wall = wallRuns[i].wall;
+    const horizontal = wall.sizeZ <= wall.sizeX;
+    const len = horizontal ? wall.sizeX : wall.sizeZ;
+    const onWall = (x: number, z: number): boolean =>
+      horizontal
+        ? Math.abs(z - wall.z) < 0.2 && Math.abs(x - wall.x) <= len / 2
+        : Math.abs(x - wall.x) < 0.2 && Math.abs(z - wall.z) <= len / 2;
+    const alongOf = (x: number, z: number): number =>
+      horizontal ? x - wall.x : z - wall.z;
+    const out: WallOpening[] = [];
+    const win = fixtures.window;
+    if (win && onWall(win.x, win.z)) {
+      out.push({
+        along: alongOf(win.x, win.z),
+        width: win.width,
+        // Architraves/reveal extend 12cm beyond the glass vertically.
+        bottom: win.bottom - 0.12,
+        top: win.top + 0.12,
+      });
+    }
+    const cl = fixtures.clerestory;
+    if (cl && onWall(cl.x, cl.z)) {
+      out.push({
+        along: alongOf(cl.x, cl.z),
+        width: cl.len,
+        bottom: cl.bottom - 0.1,
+        top: cl.top + 0.1,
+      });
+    }
+    for (const s of glassSpansForRun(i)) {
+      out.push({
+        along: (s.x0 + s.x1) / 2 - wall.x,
+        width: s.x1 - s.x0,
+        bottom: 0,
+        top: wallHeights[i],
+      });
+    }
+    return out;
+  };
   // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
   // and cool at night while the lamp burns brighter (readability never
   // depends on the window).
@@ -8639,16 +8743,20 @@ export function SpaceScene({
   }, [skin]);
   // Probe/e2e aid (GAME_DEBUG is a plain object; the fixture block is
   // optional debug surface, typed loosely to keep debug.ts untouched).
+  // The window/clerestory are NULLABLE — a room with an authored glass
+  // span (or no legal host) grows no generic window.
   useEffect(() => {
     (GAME_DEBUG as unknown as Record<string, unknown>).fixtures = {
       register: lightRegister,
       lamp: fixtures.lamp,
-      window: {
-        x: fixtures.window.x,
-        z: fixtures.window.z,
-        nx: fixtures.window.nx,
-        nz: fixtures.window.nz,
-      },
+      window: fixtures.window
+        ? {
+            x: fixtures.window.x,
+            z: fixtures.window.z,
+            nx: fixtures.window.nx,
+            nz: fixtures.window.nz,
+          }
+        : null,
       clerestory: fixtures.clerestory
         ? {
             x: fixtures.clerestory.x,
@@ -8659,17 +8767,12 @@ export function SpaceScene({
         : null,
     };
   }, [fixtures, lightRegister]);
+  // The band's view tiles one pane per bay over the resolver's ACTUAL
+  // span (len is guaranteed ≥ one unit — no end-pad arithmetic here).
   const clerestoryBays = fixtures.clerestory
     ? Math.max(
         1,
-        Math.round(
-          Math.max(
-            CLERESTORY_UNIT * (wallHeight / WALL_HEIGHT),
-            fixtures.clerestory.len -
-              2 * CLERESTORY_END_PAD * (wallHeight / WALL_HEIGHT),
-          ) /
-            (CLERESTORY_UNIT * (wallHeight / WALL_HEIGHT)),
-        ),
+        Math.round(fixtures.clerestory.len / (CLERESTORY_UNIT * (wallHeight / WALL_HEIGHT))),
       )
     : 1;
   const clerestoryView = useMemo(() => {
@@ -8737,18 +8840,6 @@ export function SpaceScene({
     [recipe.palette.fog],
   );
 
-  const canopyColor = useMemo(
-    () =>
-      new THREE.Color("#4e7a3a").lerp(
-        new THREE.Color(recipe.palette.ground),
-        0.3,
-      ),
-    [recipe],
-  );
-  // The room's ONE shared prop-material set (room-props.tsx): created per
-  // mount, disposed on unmount; the fade's WeakMap capture dedups it across
-  // every mesh and instanced fill that references it.
-  const propMaterials = useRoomPropMaterials(recipe.palette, canopyColor);
   const wallColor = useMemo(
     () =>
       // v0.12 P3: a forced skin's wall material wears its authored
@@ -8796,7 +8887,8 @@ export function SpaceScene({
   // fire for the entrance (no placement exists on its wall). Waits for
   // corridorGone: before that the player is still at the corridor door.
   const crossedDoorsRef = useRef<Set<number>>(new Set());
-  useFrame(() => {
+  useGameFrame(() => {
+    if (GAME_SIM_FREEZE.frozen || prewarm) return;
     if (!onRoomDoor || doorLayout.doors.length === 0 || !corridorGone) return;
     const p = playerRef.current;
     const lx = (p.x - door.x) * dir;
@@ -8880,7 +8972,14 @@ export function SpaceScene({
       // §4.4: the room's one trace (null when the room grew none) — its
       // kind and XZ, and the host piece it rests on, so probes can assert
       // "exactly one, inside the path/hero visibility band" from data.
-      trace: tracePiece
+      trace: activityTrace
+        ? {
+            kind: activityTrace.kind,
+            x: activityTrace.x,
+            z: activityTrace.z,
+            host: furniture.find((p) => p.instanceId === activityTrace.instanceId)?.kind ?? "",
+          }
+        : tracePiece
         ? {
             kind: tracePiece.kind,
             x: tracePiece.x,
@@ -8894,7 +8993,7 @@ export function SpaceScene({
     return () => {
       if (GAME_DEBUG.room?.sliceId === door.sliceId) GAME_DEBUG.room = null;
     };
-  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor, wallThick, seamPartitions, door]);
+  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, activityTrace, scaleFactor, wallThick, seamPartitions, door]);
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
    * AND bowl sample the shared tile maps with one texture cell per physical
@@ -8950,7 +9049,7 @@ export function SpaceScene({
         : undefined,
     });
   }, [groundMaterial, waterRect, width, extent, waveDriver]);
-  useFrame((state) => caustics?.update(state.clock.elapsedTime));
+  useGameFrame((_, { elapsed }) => caustics?.update(elapsed));
   // PER-MODULE WALL REGISTERS (§8.2): in a composed room each perimeter
   // span belongs to one module's exposed edge, and the span takes THAT
   // module's wall role as an OPAQUE material colour (panelling → wood,
@@ -9374,10 +9473,18 @@ export function SpaceScene({
               accent={recipe.palette.accent}
               canopyColor={canopyColor}
               mats={propMaterials}
+              roomId={seedId}
+              instanceId={p.instanceId ?? `legacy:${p.kind}:${i}`}
             />
           </Shadowed>
         </group>
       ))}
+      {/* The activity trace (semantic profile): the ONE functional marker
+          ON its resolved host piece — placed by the resolved transform,
+          never through the kit/staging stream and never in the fixtures'
+          OBB set (the host owns the spot). Absent without a functional
+          profile or an eligible host (空场 rules). */}
+      {activityTrace && <ActivityTraceProp trace={activityTrace} mats={propMaterials} />}
 
       {/* Internal structure (L/XL): partition wall with a door gap, or a
           column grid. Same opaque wall dressing as the perimeter; heights
@@ -9448,6 +9555,8 @@ export function SpaceScene({
                 accent={recipe.palette.accent}
                 canopyColor={canopyColor}
                 mats={propMaterials}
+                roomId={seedId}
+                instanceId={`structure:column:${i}`}
               />
             </Shadowed>
           </group>
@@ -9690,8 +9799,10 @@ export function SpaceScene({
             height={wallHeights[i]}
             plan={plan}
             wallScale={wallHeight / WALL_HEIGHT}
-            window={fixtures.window}
+            openings={shelfOpeningsForRun(i)}
             mats={propMaterials}
+            roomId={seedId}
+            instanceId={i}
           />
         ) : null,
       )}
@@ -9888,6 +9999,8 @@ export function SpaceScene({
               accent={recipe.palette.accent}
               canopyColor={canopyColor}
               mats={propMaterials}
+              roomId={seedId}
+              instanceId={`colonnade:column:${i}`}
             />
           </Shadowed>
         </group>
@@ -9898,13 +10011,32 @@ export function SpaceScene({
           layered outside whose spot is the interior rooms' shadow-casting
           KEY, and (outdoor-class sets + pool hall) the clerestory band
           that justifies the overall key. */}
-      <RoomLamp
-        x={fixtures.lamp.x}
-        z={fixtures.lamp.z}
-        y={terrainHeight(scaledRecipe, fixtures.lamp.x, fixtures.lamp.z)}
-        scale={propScale}
-        boost={night ? LAMP_NIGHT_BOOST : 1}
-      />
+      {/* The lamp, by resolution: GENERIC grows the room's own lamp
+          model (pole, shade, the point light and the floor pool); REUSE
+          bolts the SAME light onto a light source the furniture already
+          carries — a staged floor lamp (bulb 1.9 local) or a desk lamp
+          riding its host (bulb 0.6) — never a second lamp model; a
+          REUSE sconce adds nothing (ModuleSconce owns its light), and
+          NONE grows no lamp at all. */}
+      {fixtures.lamp.kind === "generic" && (
+        <RoomLamp
+          x={fixtures.lamp.x}
+          z={fixtures.lamp.z}
+          y={terrainHeight(scaledRecipe, fixtures.lamp.x, fixtures.lamp.z)}
+          scale={propScale}
+          boost={night ? LAMP_NIGHT_BOOST : 1}
+        />
+      )}
+      {fixtures.lamp.kind === "reuse" && fixtures.lamp.source !== "sconce" && (
+        <RoomLampLight
+          x={fixtures.lamp.x}
+          y={fixtures.lamp.y}
+          z={fixtures.lamp.z}
+          scale={fixtures.lamp.scale}
+          bulbLift={fixtures.lamp.source === "floorlamp" ? 1.9 : 0.6}
+          boost={night ? LAMP_NIGHT_BOOST : 1}
+        />
+      )}
       {/* Module register sconces (§8.2): one per composed-room module, the
           register's findable source — wall plate, lit dome, real point
           light, additive pool. Non-composed rooms grow none. */}
@@ -9916,15 +10048,20 @@ export function SpaceScene({
           skinFixture={skin ? skinLightFixture(skin) : undefined}
         />
       ))}
-      <RoomWindow
-        fixture={fixtures.window}
-        wallScale={wallHeight / WALL_HEIGHT}
-        paneColor={windowPaneColor}
-        view={windowView}
-        viewColor={windowViewColor}
-        isKey={recipe.worldClass === "interior"}
-        night={night}
-      />
+      {/* The window is NULLABLE: a room with an authored glass span (or no
+          legal host) grows no generic window — the authored opening IS the
+          window (fill the gap, never stack). */}
+      {fixtures.window && (
+        <RoomWindow
+          fixture={fixtures.window}
+          wallScale={wallHeight / WALL_HEIGHT}
+          paneColor={windowPaneColor}
+          view={windowView}
+          viewColor={windowViewColor}
+          isKey={recipe.worldClass === "interior"}
+          night={night}
+        />
+      )}
       {fixtures.clerestory && (
         <RoomClerestory
           fixture={fixtures.clerestory}

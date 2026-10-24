@@ -30,6 +30,7 @@ import { worldScaleFor } from "@/lib/timeline3d/camera";
 import { FrameCardTexts, frameCardLabel, SliceCardFace } from "./frame-card";
 import { SliceNarrateButton, type SliceNarration } from "./slice-narrate-button";
 import { hhmm } from "./cards";
+import { useWorldFrameRequest } from "./world-slot";
 import {
   DEAL_DURATION,
   DEAL_STAGGER,
@@ -213,12 +214,15 @@ export function RowGroup({
     ],
   );
 
-  useFrame((_, rawDt) => {
+  const requestFrame = useWorldFrameRequest();
+  useFrame(({ invalidate }, rawDt) => {
     const group = groupRef.current;
     if (!group) return;
     const dt = Math.min(rawDt, 0.1);
 
     const anim = animRef.current!;
+    const previousDeal = anim.deal;
+    const previousLift = anim.lift;
     anim.deal = Math.min(
       1 + (12 * DEAL_STAGGER) / DEAL_DURATION,
       anim.deal + dt / DEAL_DURATION,
@@ -230,7 +234,10 @@ export function RowGroup({
       rig.current.dealEligible.delete(row.key);
     }
     const liftTarget = rig.current.hoverKey === row.key ? 1 : 0;
-    anim.lift += (liftTarget - anim.lift) * Math.min(1, dt * 10);
+    anim.lift = reducedMotion
+      ? liftTarget
+      : anim.lift + (liftTarget - anim.lift) * Math.min(1, dt * 10);
+    if (Math.abs(liftTarget - anim.lift) < 0.001) anim.lift = liftTarget;
 
     const p = computeRowPosition(
       index,
@@ -265,6 +272,11 @@ export function RowGroup({
         ((pose.rotate * 1.35) * Math.PI) / 180,
       );
     });
+    if (
+      (!reducedMotion && previousDeal !== anim.deal) ||
+      previousLift !== anim.lift ||
+      anim.lift !== liftTarget
+    ) invalidate();
   });
 
   return (
@@ -296,8 +308,8 @@ export function RowGroup({
                 onActivate(row);
               }
             }}
-            onPointerEnter={() => (rig.current.hoverKey = row.key)}
-            onPointerLeave={() => (rig.current.hoverKey = null)}
+            onPointerEnter={() => { rig.current.hoverKey = row.key; requestFrame(); }}
+            onPointerLeave={() => { rig.current.hoverKey = null; requestFrame(); }}
           >
             <SliceCardFace entry={row.top} geo={geo} flash={flash} texts={texts} />
           </div>

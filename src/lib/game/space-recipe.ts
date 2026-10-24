@@ -2,8 +2,9 @@
  * Space-recipe compiler: pure data in → pure recipe out.
  *
  * A corridor door opens onto a deterministic liminal space. Everything the
- * renderer needs is decided here, up front, from the world seed and the
- * slice id alone. No randomness exists outside the seeded RNG.
+ * renderer needs is decided here, up front, from the world seed, slice id
+ * and an optional bounded activity profile. No randomness exists outside
+ * the seeded RNG, and neither source text nor semantic revision is a seed.
  *
  * v2 taxonomy: a weighted draw picks the world class (nature 40%,
  * interior 25%, hybrid 20%, wonder 15%), then the specific room/biome
@@ -290,26 +291,40 @@ function weightedPick<T>(
   return items[items.length - 1];
 }
 
+const ACTIVITY_ARCHETYPES: Readonly<
+  Record<import("./room-profile").FunctionalRoomActivity, ArchetypeId>
+> = {
+  writing: "hotel-room",
+  research: "library",
+  making: "hotel-room",
+  planning: "hotel-room",
+  conversation: "hotel-room",
+  reflection: "hotel-room",
+};
+
 /**
  * Compile the recipe for the space behind a corridor door.
  *
  * The recipe is everything the renderer needs: rendering must be a pure
  * function of this value, with no further dependence on the world seed or
- * slice id. Regenerating with the same `sliceId` and `worldSeed` must
- * produce an identical recipe — same world class, same archetype, same
- * size tier and width, same palette, same layout/light seeds — on any
- * machine, at any time.
+ * slice id. Regenerating with the same `sliceId`, `worldSeed` and profile
+ * produces an identical recipe on any machine, at any time.
  *
  * Each recipe facet derives from its own sub-seed, so changing one facet
  * of the world never reshuffles the others. Any string works as a
- * `sliceId`; compilation is total and never throws.
+ * `sliceId`; compilation is total and never throws. A functional profile
+ * pins a compatible interior archetype and one standard-module size tier;
+ * it never reseeds the layout or light streams. Neutral and omitted
+ * profiles retain the legacy recipe byte-for-byte. Debug galleries win.
  *
  * @param sliceId   Door label / memory slice the space belongs to.
  * @param worldSeed World seed the sub-seeds are derived from.
+ * @param profile   Bounded semantic activity derived from one record.
  */
 export function compileSpaceRecipe(
   sliceId: string,
   worldSeed: string = WORLD_SEED,
+  profile?: import("./room-profile").RoomProfile,
 ): SpaceRecipe {
   const classRng = createRng(deriveSubSeed(worldSeed, sliceId, "class"));
   const typeRng = createRng(deriveSubSeed(worldSeed, sliceId, "type"));
@@ -333,6 +348,8 @@ export function compileSpaceRecipe(
   // plan), the template page the tier its layout asks for. A real slice never
   // matches, so every draw above and below is untouched for it.
   const debug = parseDebugSlice(sliceId);
+  const semanticActivity =
+    !debug && profile && profile.activity !== "neutral" ? profile.activity : null;
   if (debug?.page === "archetypes") {
     archetype = debug.id as typeof archetype;
     worldClass = worldClassOfArchetype(debug.id);
@@ -350,6 +367,10 @@ export function compileSpaceRecipe(
     if (template) {
       size = SIZE_TIERS.find((tier) => tier.extent === template.minExtent) ?? size;
     }
+  } else if (semanticActivity) {
+    worldClass = "interior";
+    archetype = ACTIVITY_ARCHETYPES[semanticActivity];
+    size = SIZE_TIERS.find((tier) => tier.id === "S") ?? size;
   }
 
   const widthFactor = pick(widthRng, WIDTH_FACTORS);
@@ -382,5 +403,6 @@ export function compileSpaceRecipe(
     },
     layoutSeed: deriveSubSeed(worldSeed, sliceId, "layout"),
     lightSeed: deriveSubSeed(worldSeed, sliceId, "light"),
+    ...(semanticActivity && profile ? { profile } : {}),
   };
 }

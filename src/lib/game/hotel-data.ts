@@ -22,9 +22,13 @@
  *      page grew) is deliberate: strand-only changes have no client-visible
  *      growth signal, and an unnecessary re-fetch is cheaper than stale
  *      doors.
- *   2. LOCALE IS PART OF THE KEY. Labels are formatted per locale at build
- *      time; a locale switch misses the cache and re-derives.
- *   3. PAGE RELOAD RESETS EVERYTHING. Module state dies with the page, so
+ *   2. LOCALE + SCOPE ARE PART OF THE KEY. Labels are formatted per locale,
+ *      while source scope isolates deployment/persona-facing data lanes.
+ *   3. FETCHES COMMIT TO THEIR START EPOCH. `captureHotelDataRequest` freezes
+ *      scope + epoch at fetch start; `writeHotelDataAtEpoch` rejects a late
+ *      response instead of restamping it. Profile caches observe this same
+ *      epoch without mutating any mounted ActiveSpace snapshot.
+ *   4. PAGE RELOAD RESETS EVERYTHING. Module state dies with the page, so
  *      the first game entry of a session always fetches.
  *
  * What is NOT invalidated: cross-instance writes that bypass this client's
@@ -54,7 +58,15 @@ export interface HotelData {
   timelines: ReadonlyMap<string, readonly CorridorDoor[]>;
 }
 
+export const DEFAULT_HOTEL_DATA_SCOPE = "default";
+
+export interface HotelDataRequest {
+  readonly scope: string;
+  readonly epoch: number;
+}
+
 interface CacheSlot {
+  scope: string;
   locale: string;
   epoch: number;
   data: HotelData;
@@ -65,9 +77,9 @@ let slot: CacheSlot | null = null;
 
 /**
  * Bump the cache generation. Every entry written before this call is dead —
- * the next `readHotelData` misses and the shell re-fetches. Called when the
- * memory data the hotel derives from may have changed (see the contract
- * above).
+ * the next `readHotelData` misses and the shell re-fetches. The same epoch
+ * is observed by room-profile caches; mounted ActiveSpace snapshots are not
+ * mutated here.
  */
 export function invalidateHotelData(): void {
   epoch += 1;
@@ -78,16 +90,54 @@ export function hotelDataEpoch(): number {
   return epoch;
 }
 
+/** Capture scope + epoch when a fetch starts, not when it settles. */
+export function captureHotelDataRequest(
+  scope: string = DEFAULT_HOTEL_DATA_SCOPE,
+): HotelDataRequest {
+  return Object.freeze({ scope, epoch });
+}
+
 /**
- * The cached lane for `locale`, or null when there is none (first entry of
- * the session) or the slot was invalidated / written under another locale.
+ * The cached lane for `locale` + `scope`, or null when none is current.
+ * The default scope keeps pre-scope callers compatible.
  */
-export function readHotelData(locale: string): HotelData | null {
-  if (slot && slot.locale === locale && slot.epoch === epoch) return slot.data;
+export function readHotelData(
+  locale: string,
+  scope: string = DEFAULT_HOTEL_DATA_SCOPE,
+): HotelData | null {
+  if (slot && slot.scope === scope && slot.locale === locale && slot.epoch === epoch) {
+    return slot.data;
+  }
   return null;
 }
 
-/** Store the freshly derived lane for `locale`. */
-export function writeHotelData(locale: string, data: HotelData): void {
-  slot = { locale, epoch, data };
+/** Store the freshly derived lane using the legacy settle-time epoch contract. */
+export function writeHotelData(
+  locale: string,
+  data: HotelData,
+  scope: string = DEFAULT_HOTEL_DATA_SCOPE,
+): void {
+  slot = { scope, locale, epoch, data };
+}
+
+/** Read only while the caller's captured navigation request is still current. */
+export function readHotelDataAtEpoch(
+  locale: string,
+  request: HotelDataRequest,
+): HotelData | null {
+  return request.epoch === epoch ? readHotelData(locale, request.scope) : null;
+}
+
+/**
+ * Commit a fetch only into the epoch it started in. A late response returns
+ * false and can never stamp old data with the newer settle-time epoch.
+ */
+export function writeHotelDataAtEpoch(
+  locale: string,
+  data: HotelData,
+  request: HotelDataRequest,
+): boolean {
+  if (request.epoch !== epoch) return false;
+  slot = { scope: request.scope, locale, epoch: request.epoch, data };
+  return true;
 }

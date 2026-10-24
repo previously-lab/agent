@@ -12,7 +12,14 @@ import {
   buildRoomDoorMap,
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
-import { readHotelData, writeHotelData, HOTEL_WINDOW_DOORS } from "@/lib/game/hotel-data";
+import {
+  captureHotelDataRequest,
+  hotelDataEpoch,
+  readHotelDataAtEpoch,
+  writeHotelDataAtEpoch,
+  HOTEL_WINDOW_DOORS,
+} from "@/lib/game/hotel-data";
+import type { RoomSnapshot } from "@/lib/game/room-snapshot";
 import { debugUnitsFor, isDebugPage } from "@/lib/game/debug-catalog";
 import { CAMERA_PARAM, cameraModeFor } from "@/lib/game/chase-camera";
 import {
@@ -122,6 +129,10 @@ export function GameShell({
   focusSlice = null,
   onOpenDoc,
   suspended = false,
+  persona = "user",
+  sourceScope,
+  dataGeneration = 0,
+  onRoomSnapshotChange,
 }: {
   onExit: () => void;
   focusSlice?: string | null;
@@ -132,6 +143,12 @@ export function GameShell({
    *  frozen world — the view's chrome (title/exit, the gallery switcher)
    *  stands down with the simulation, exactly like the in-world HUD. */
   suspended?: boolean;
+  persona?: string;
+  /** Server-resolved deployment/source labels; never credentials or paths. */
+  sourceScope: string;
+  /** A refresh starts a new cache epoch while a mounted room stays frozen. */
+  dataGeneration?: number;
+  onRoomSnapshotChange?: (snapshot: RoomSnapshot | null) => void;
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -189,7 +206,8 @@ export function GameShell({
   // fast path a cold entry already takes. Staleness is bounded by the
   // invalidation contract in hotel-data.ts: a turn settle bumps the epoch,
   // a locale change misses the key, a reload clears the module.
-  const cachedLane = readHotelData(locale);
+  const cacheScope = JSON.stringify([sourceScope, persona]);
+  const cachedLane = readHotelDataAtEpoch(locale, captureHotelDataRequest(cacheScope));
   // null = the skeleton is still in flight; the corridor mounts only once the
   // doors resolve (to the timeline, or to the fallback on empty/error). The
   // gallery replaces the lot with its own door list.
@@ -219,6 +237,8 @@ export function GameShell({
     // graph — the corridor shows the standard units and nothing else.
     if (galleryDoors) {
       setDoors(galleryDoors);
+      setRoomDoors(NO_ROOM_DOORS);
+      setTimelines(NO_TIMELINES);
       return;
     }
     // Cache hit (state was initialized from it): nothing to fetch. Re-read
@@ -226,23 +246,29 @@ export function GameShell({
     // render and this effect (a turn settling in that window) must send us
     // down the fetch path like any stale entry. The cached doors go back in
     // too: leaving the gallery left ITS list in the state.
-    const cached = readHotelData(locale);
+    const request = captureHotelDataRequest(cacheScope);
+    const cached = readHotelDataAtEpoch(locale, request);
     if (cached) {
       setDoors(cached.doors);
+      setRoomDoors(cached.roomDoors);
+      setTimelines(cached.timelines);
       return;
     }
     let cancelled = false;
+    const isCurrent = () => !cancelled && request.epoch === hotelDataEpoch();
     (async () => {
       try {
-        const skeleton = await getTimelineSkeleton();
-        if (cancelled) return;
+        const skeleton = await getTimelineSkeleton(persona);
+        if (!isCurrent()) return;
         if (skeleton.length === 0) {
           setDoors(EMPTY_DOORS);
-          writeHotelData(locale, {
+          setRoomDoors(NO_ROOM_DOORS);
+          setTimelines(NO_TIMELINES);
+          writeHotelDataAtEpoch(locale, {
             doors: EMPTY_DOORS,
             roomDoors: NO_ROOM_DOORS,
             timelines: NO_TIMELINES,
-          });
+          }, request);
           return;
         }
         // The skeleton arrives oldest → newest; corridor door index 0 is the
@@ -272,7 +298,7 @@ export function GameShell({
         // a separate piece of work, not a patch on this resolver.
         try {
           const graph = buildStrandGraph(await getStrandPaths());
-          if (cancelled) return;
+          if (!isCurrent()) return;
           if (graph.paths.size === 0) {
             if (!warnedStrandFailure) {
               warnedStrandFailure = true;
@@ -283,11 +309,11 @@ export function GameShell({
             setTimelines(NO_TIMELINES);
             setRoomDoors(NO_ROOM_DOORS);
             // Corridor-only lane, cached exactly as the failure path does.
-            writeHotelData(locale, {
+            writeHotelDataAtEpoch(locale, {
               doors: corridorDoors,
               roomDoors: NO_ROOM_DOORS,
               timelines: NO_TIMELINES,
-            });
+            }, request);
           } else {
             const entryById = new Map(
               skeleton.map((entry) => [entry.id, entry]),
@@ -337,14 +363,14 @@ export function GameShell({
             });
             setRoomDoors(roomDoorMap);
             // The full lane is derived — cache it for the next view switch.
-            writeHotelData(locale, {
+            writeHotelDataAtEpoch(locale, {
               doors: corridorDoors,
               roomDoors: roomDoorMap,
               timelines: strandTimelines,
-            });
+            }, request);
           }
         } catch (err) {
-          if (cancelled) return;
+          if (!isCurrent()) return;
           if (!warnedStrandFailure) {
             warnedStrandFailure = true;
             console.warn(
@@ -355,14 +381,16 @@ export function GameShell({
           // Strand read failed: cache the corridor-only lane so a view
           // switch still avoids re-fetching the skeleton (the strand map
           // degrades to empty, exactly as the live state does).
-          writeHotelData(locale, {
+          setRoomDoors(NO_ROOM_DOORS);
+          setTimelines(NO_TIMELINES);
+          writeHotelDataAtEpoch(locale, {
             doors: corridorDoors,
             roomDoors: NO_ROOM_DOORS,
             timelines: NO_TIMELINES,
-          });
+          }, request);
         }
       } catch (err) {
-        if (cancelled) return;
+        if (!isCurrent()) return;
         if (!warnedCatalogFailure) {
           warnedCatalogFailure = true;
           console.warn(
@@ -371,12 +399,14 @@ export function GameShell({
           );
         }
         setDoors(EMPTY_DOORS);
+        setRoomDoors(NO_ROOM_DOORS);
+        setTimelines(NO_TIMELINES);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [locale, galleryDoors]);
+  }, [locale, galleryDoors, cacheScope, persona, dataGeneration]);
 
   return (
     <div className="relative h-full w-full">
@@ -445,12 +475,15 @@ export function GameShell({
       )}
       {doors ? (
         <GameCanvas
+          persona={persona}
+          sourceScope={sourceScope}
           doors={doors}
           roomDoors={roomDoors}
           timelines={timelines}
           focusSlice={focusSlice}
           onOpenDoc={onOpenDoc}
           onActiveSliceChange={setActiveScenario}
+          onRoomSnapshotChange={onRoomSnapshotChange}
           suspended={suspended}
           // The product uses a fixed RTS camera. Only an explicit debug
           // query can compare the former chase view.

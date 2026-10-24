@@ -31,9 +31,9 @@
  *                    transition machine belongs to the world, and the world
  *                    belongs to the route.
  *   getChatView      the per-turn 视野 getter (v0.13 §5), read by the chat
- *                    transport at SEND time, never render time. No cursor, or
- *                    no registered world (off `/app`), is the lobby:
- *                    undefined, and the request carries no view block.
+ *                    transport at SEND time, never render time. Only an
+ *                    active, visible room supplies a frozen snapshot; the
+ *                    corridor, reader and other routes carry no room view.
  *   feed             the one FieldFeed object (field-feed.ts). The band's
  *                    braid and the chat stream share it; it is created here
  *                    so the stream's writer survives a route unmount.
@@ -71,9 +71,14 @@ import type { CaseCategory } from "@/lib/docs";
 import { createFieldFeed, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import type { ConversationPanelMode } from "@/components/chat/conversation-panel";
-import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import { ShellNavContext, type ShellNav } from "@/components/shell/shell-nav";
 import { panelModeForDeskOpen } from "@/components/desk/desk-model";
+import {
+  currentRoomView,
+  type WorldPose,
+  type WorldViewDriver,
+} from "@/components/shell/world-view";
+export type { WorldPose } from "@/components/shell/world-view";
 
 /** The desk's memory (v0.25b, product-pass §4): the last document the
  *  reader opened, so a returning reader's desk opens on his paper instead
@@ -83,25 +88,14 @@ import { panelModeForDeskOpen } from "@/components/desk/desk-model";
 export const LAST_DOCUMENT_KEY = "previously:last-document:v1";
 
 /**
- * The world's pose, as the route last reported it. The per-turn view getter
- * reads it through the driver's `getPose` instead of this state, because it
- * runs at send time, outside React.
- */
-export interface WorldPose {
-  settled: WorldKind;
-}
-
-/**
  * What the route (the world) implements and the provider calls. The cursor
  * half of the nav action lives in the provider; these are the WORLD-MOTION
  * halves, plus the turn callback the overlay's ChatPage reports and the pose
  * read the send-time getter needs.
  */
-export interface WorldDriver {
+export interface WorldDriver extends WorldViewDriver {
   /** Address a slice to the HOTEL: the reader stands at the slice's door. */
   standAtSlice: (sliceId: string) => void;
-  /** The live pose, read at CALL time — never a render-time snapshot. */
-  getPose: () => WorldPose;
   /** A turn settled — the route refreshes its catalog and the hotel's doors. */
   onTurnSettled: () => void;
 }
@@ -183,7 +177,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // (panelModeForDeskOpen), the same rule as leaving `/app` (fullscreen
   // would freeze the world the desk renders in).
   const [deskDoc, setDeskDoc] = useState<string | null>(null);
+  const deskDocRef = useRef<string | null>(null);
   const openDesk = useCallback((ref: string) => {
+    deskDocRef.current = ref;
     setPanelMode(panelModeForDeskOpen);
     setDeskDoc(ref);
     try {
@@ -193,7 +189,10 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       // never a gate.
     }
   }, []);
-  const closeDesk = useCallback(() => setDeskDoc(null), []);
+  const closeDesk = useCallback(() => {
+    deskDocRef.current = null;
+    setDeskDoc(null);
+  }, []);
 
   // THE ARCHIVE FIELD'S FILTER (v0.25a §四). The library control's category
   // selection doubles as the field's column filter — lifted here because the
@@ -258,21 +257,12 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ── THE CONVERSATION'S VIEW OF THE WORLD (v0.13 §5 视野注入) ─────────
-  // What the reader is currently looking at, derived at SEND time from the
-  // shared cursor and the world's live pose (never render time — the
-  // transport asks when the message leaves). Standing at the slice's door in
-  // the hotel = room; ANYTHING ELSE — no shared address, the reader's desk,
-  // or no registered world (a route without one) — is the lobby: the getter
-  // returns undefined and the request carries NO view, so the server injects
-  // no per-turn block. A mid-move read uses the settled world: that is where
-  // the reader stands while the transition runs.
+  // The actual mounted room supplies its frozen recipe inputs at SEND time.
+  // The shared cursor is deliberately absent: it can outlive a room visit.
+  // Desk opens are mirrored synchronously, so a send in that same event
+  // cannot describe the world underneath a document as the current view.
   const getChatView = useCallback((): CurrentView | undefined => {
-    const sliceId = sharedSliceRef.current;
-    if (!sliceId) return undefined;
-    const pose = driverRef.current?.getPose();
-    if (!pose) return undefined;
-    if (pose.settled === "game") return { sliceId, surface: "room" };
-    return undefined;
+    return currentRoomView(driverRef.current, deskDocRef.current !== null);
   }, []);
 
   // ── THE NAVIGATION ACTION (shell-nav.ts) ────────────────────────────────

@@ -13,6 +13,7 @@
 
 import { streamText } from "@/lib/deepseek/generate";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
+import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
@@ -124,8 +125,10 @@ export interface ToolContext {
   useGithub: boolean;
   /** Whether demo mode is active (remote benchmark data, read-only). */
   useDemo: boolean;
-  /** The current time-slice id. */
+  /** The current conversation's persistence slice id. */
   sliceId: string;
+  /** The validated room/card the reader is looking at; visual context only. */
+  view?: CurrentView;
   /** Recent conversation turns (last exchange + current user msg). */
   recentTurns: Array<{ role: string; content: string }>;
   /**
@@ -1255,15 +1258,37 @@ export async function describeRoomExecute(
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
-  const sid = sliceId ?? ctx.sliceId;
+  const view = ctx.view;
+  const sid = sliceId ?? view?.sliceId ?? ctx.sliceId;
   if (!parseSliceId(sid)) {
     return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
   }
-  const desc = describeRoom(sid, {
-    ...(strandDoors !== undefined ? { strandDoors } : {}),
-    ...(corridorSide ? { corridorSide } : {}),
-  });
-  return formatRoomDescription(desc, ctx.locale === "zh" ? "zh" : "en");
+  const frozen =
+    view?.sliceId === sid && view.snapshot?.sliceId === sid
+      ? view.snapshot
+      : undefined;
+  const desc = describeRoom(
+    sid,
+    frozen
+      ? {
+          profile: frozen.profile,
+          strandDoors: frozen.roomDoorCount,
+          corridorSide: frozen.corridorSide,
+        }
+      : view
+        ? {}
+        : {
+            ...(strandDoors !== undefined ? { strandDoors } : {}),
+            ...(corridorSide ? { corridorSide } : {}),
+          },
+  );
+  const rendered = formatRoomDescription(desc, ctx.locale === "zh" ? "zh" : "en");
+  if (frozen) return rendered;
+  const baseNote =
+    ctx.locale === "zh"
+      ? "基础空间说明：以上仅使用现有基础编译；没有读取该记录原文或语义 profile，也没有借用其他房间的冻结快照。"
+      : "Base space only: this is the existing basic compilation. No record text or semantic profile was read, and no other room's frozen snapshot was borrowed.";
+  return `${rendered}\n\n${baseNote}`;
 }
 
 /**

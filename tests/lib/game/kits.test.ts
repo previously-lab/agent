@@ -58,6 +58,12 @@ import {
 import { wallSegmentsFor } from "@/lib/game/room-plan";
 import { ROOM_MODULES } from "@/lib/game/room-modules";
 import {
+  BOOKSHELF_DIMENSIONS,
+  BOOKSHELF_RUN_SPACING,
+  obbsIntersect,
+  propObbFor,
+} from "@/lib/game/prop-geometry";
+import {
   COLONNADE_BAY,
   HERO_CLEAR,
   KIT_COUNT_MAX,
@@ -1302,11 +1308,19 @@ describe("template zones parameter (§7) — additive", () => {
    *  time — a wider deck shifts the deal even where the cap never
    *  binds. Recaptured a sixth time for the v0.13 module grid: only the
    *  WITH-doors pins move (strand doors reseat onto lattice cell centers,
-   *  shifting their approach strips); the no-door pins are unchanged. */
+   *  shifting their approach strips); the no-door pins are unchanged.
+   *  Recaptured a seventh time 2026-10 for the bookshelf-run REAL GEOMETRY
+   *  fix (prop-geometry.ts): the three shelves re-space to the case's true
+   *  1.84m width (±1.92, was ±1.6 — the old spacing interleaved the
+   *  bodies) and the footprint disc grows 2.6 → 2.95 to cover the true
+   *  outermost edge. Only the rooms whose staging actually touched the
+   *  resized kit move (the library pins and the ballroom no-door pin,
+   *  where the wider disc re-seats a later kit); every other pin is
+   *  byte-identical. */
   const PINS: [string, number, string, number, string, string][] = [
     ["2026-10-11", 16, "hotel-room", 1, "6060:535184652", "5986:3747424891"],
-    ["2026-10-12", 32, "library", 1.5, "17717:2165748283", "17699:1570385866"],
-    ["2026-10-13", 64, "ballroom", 0.66, "30230:83039979", "29165:4262870438"],
+    ["2026-10-12", 32, "library", 1.5, "17843:1387805396", "17322:3965025760"],
+    ["2026-10-13", 64, "ballroom", 0.66, "30202:995717662", "29165:4262870438"],
     ["2026-10-14", 96, "hotel-room", 1, "31847:1835721113", "30879:1633728112"],
     ["2026-10-15", 32, "pool-hall", 1, "16558:2811097141", "16370:1042149808"],
   ];
@@ -1640,6 +1654,109 @@ describe("openFields channel (§8.2 随机区域 — the sparse dressing)", () =
         heightAt: () => 0,
       });
       for (const p of pieces) expect(whitelist).toContain(p.kitId);
+    }
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/* bookshelf-run real geometry (2026-10 realism lane): the kit's three  */
+/* shelves ride the BookshelfProp's TRUE 1.84m width — the old 1.6m     */
+/* center spacing interleaved the 1.84m bodies. These tests measure the */
+/* placed OBBs (prop-geometry.ts), not snapshots.                       */
+/* ------------------------------------------------------------------ */
+
+describe("bookshelf-run real geometry (prop-geometry.ts)", () => {
+  const kit = KITS.find((k) => k.id === "bookshelf-run")!;
+  const runObbs = (t: { x: number; z: number; rotY: number; scale: number }) =>
+    placeKit(kit, { ...t, scale: t.scale })
+      .filter((p) => p.kind === "bookshelf")
+      .map((p) => propObbFor({ kind: p.kind, x: p.x, z: p.z, rotY: p.rotY, scale: p.scale }));
+
+  it("spaces the three shelves at the real run spacing", () => {
+    const shelves = kit.pieces.filter((p) => p.kind === "bookshelf");
+    expect(shelves.map((p) => p.dx)).toEqual([
+      -BOOKSHELF_RUN_SPACING,
+      0,
+      BOOKSHELF_RUN_SPACING,
+    ]);
+    expect(BOOKSHELF_RUN_SPACING).toBeCloseTo(1.92, 9);
+  });
+
+  it("the three placed shelves never overlap, straight or rotated", () => {
+    for (const t of [
+      { x: 0, z: 0, rotY: 0, scale: 1 },
+      { x: 2, z: 3, rotY: Math.PI / 2, scale: 1 },
+      { x: -1, z: 4, rotY: 0.37, scale: 1 },
+      { x: 0, z: 0, rotY: 0, scale: 1.35 },
+    ]) {
+      const obbs = runObbs(t);
+      expect(obbs).toHaveLength(3);
+      for (let i = 0; i < 3; i++) {
+        for (let j = i + 1; j < 3; j++) {
+          expect(
+            obbsIntersect(obbs[i], obbs[j]),
+            `shelves ${i}/${j} overlap at rotY ${t.rotY}`,
+          ).toBe(false);
+        }
+      }
+      // …and the minimum edge-to-edge gap along the center line is the
+      // authored 8cm: project each half-extent onto the axis joining the
+      // centers (width axis at rotY 0, depth axis at π/2).
+      const [a, b] = obbs;
+      const dx = b.cx - a.cx;
+      const dz = b.cz - a.cz;
+      const dist = Math.hypot(dx, dz);
+      const ux = dx / dist;
+      const uz = dz / dist;
+      const proj = (o: typeof a) =>
+        o.hx * Math.abs(ux * o.ux + uz * o.uz) + o.hz * Math.abs(ux * o.vx + uz * o.vz);
+      const gap = dist - (proj(a) + proj(b));
+      expect(gap).toBeGreaterThanOrEqual(0.08 * t.scale - 1e-9);
+    }
+  });
+
+  it("the footprint disc covers the true outermost edge", () => {
+    const reach = BOOKSHELF_RUN_SPACING + BOOKSHELF_DIMENSIONS.width / 2; // 2.84
+    expect(reach).toBeLessThanOrEqual(kit.footprint + 1e-9);
+    // Every piece center sits inside the disc…
+    for (const p of kit.pieces) {
+      expect(Math.hypot(p.dx, p.dz)).toBeLessThanOrEqual(kit.footprint + 1e-9);
+    }
+    // …and the back offset is flush with the 0.44m-deep case.
+    expect(kit.backOffset).toBeCloseTo(BOOKSHELF_DIMENSIONS.depth / 2, 9);
+  });
+
+  it("library / study / reading-room staging stays non-empty with the resized kit", () => {
+    const whitelists: Record<string, readonly string[]> = {
+      library: ["reading", "bookshelf-run", "writing-desk", "plant-pedestal"],
+      study: ["writing-desk", "bookshelf-run", "reading", "plant-pedestal"],
+      "reading-room": ["reading", "bookshelf-run", "gallery-bench", "plant-pedestal", "clock-nook"],
+    };
+    for (const [room, kitIds] of Object.entries(whitelists)) {
+      let staged = 0;
+      for (const sliceId of SLICE_IDS.slice(0, 12)) {
+        const extent = 48;
+        const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+        const comp = composeRoom(sliceId, plan, 1);
+        const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+        const pieces = stageInteriorKits({
+          rng,
+          archetype: "library",
+          plan,
+          comp,
+          baseArea: planArea(plan),
+          baseExtent: extent,
+          propScale: 1,
+          wallThick: ROOM_WALL_THICKNESS,
+          water: null,
+          kitIds,
+          heightAt: () => 0,
+        });
+        expect(pieces.length, `${room} / ${sliceId} staged nothing`).toBeGreaterThan(0);
+        staged += pieces.length;
+      }
+      expect(staged).toBeGreaterThan(12);
     }
   });
 });

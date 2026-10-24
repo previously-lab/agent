@@ -32,10 +32,44 @@ vi.mock("@/lib/demo/model-lock", () => ({
 
 import {
   startTurn,
+  sanitizeView,
   summarizeModelContent,
   extractImageAttachments,
   MAX_MACHINE_CONTEXT_CHARS,
 } from "@/app/api/chat/start-turn";
+import { deriveRoomProfile } from "@/lib/game/room-profile";
+import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
+
+describe("sanitizeView room snapshots", () => {
+  const sliceId = "2026-10-24-0930";
+  const snapshot = {
+    sliceId,
+    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    profile: deriveRoomProfile({ focus: "撰写小说" }),
+    roomDoorCount: 2,
+    corridorSide: "north" as const,
+  };
+
+  it("keeps a valid frozen snapshot and legacy views without one", () => {
+    expect(sanitizeView({ sliceId, surface: "room", snapshot })).toEqual({
+      sliceId,
+      surface: "room",
+      snapshot,
+    });
+    expect(sanitizeView({ sliceId, surface: "card" })).toEqual({ sliceId, surface: "card" });
+  });
+
+  it("drops the whole view rather than laundering an invalid snapshot into a basic one", () => {
+    expect(
+      sanitizeView({
+        sliceId,
+        surface: "room",
+        snapshot: { ...snapshot, sourceText: "用户原文" },
+      }),
+    ).toBeUndefined();
+    expect(sanitizeView({ sliceId, surface: "room", snapshot, extra: true })).toBeUndefined();
+  });
+});
 
 describe("summarizeModelContent", () => {
   it("passes string content through unchanged", () => {

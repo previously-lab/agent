@@ -17,8 +17,10 @@ import { convertToModelMessages } from "@/lib/chat/server-stream";
 import { type UIMessage } from "@/lib/chat/protocol";
 import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
-import type { CurrentView } from "@/lib/chat/current-view";
-import { parseSliceId } from "@/lib/episodic/turn-parser";
+import {
+  parseCurrentView,
+  type CurrentView,
+} from "@/lib/chat/current-view";
 import { loadUserConfig } from "@/lib/config/loader";
 import { FIXED_MODEL } from "@/lib/models/registry";
 import { getRepoConfig } from "@/lib/capabilities";
@@ -108,14 +110,11 @@ export function sanitizeMachineContext(
  * field is OMITTED and the turn stays byte-identical to a plain chat turn.
  */
 export function sanitizeView(raw: unknown): CurrentView | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const v = raw as { sliceId?: unknown; surface?: unknown };
-  if (typeof v.sliceId !== "string" || typeof v.surface !== "string") {
+  try {
+    return parseCurrentView(raw);
+  } catch {
     return undefined;
   }
-  if (v.surface !== "room" && v.surface !== "card") return undefined;
-  if (!parseSliceId(v.sliceId)) return undefined;
-  return { sliceId: v.sliceId, surface: v.surface };
 }
 
 /**

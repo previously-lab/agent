@@ -42,6 +42,7 @@ import { getCaseDoc, getSliceStart } from "@/lib/episodic/actions";
 import { getDossierDoc } from "@/lib/archive/actions";
 import { deskRefKind, parseRecordRef } from "@/lib/archive/refs";
 import { invalidateHotelData } from "@/lib/game/hotel-data";
+import type { RoomSnapshot } from "@/lib/game/room-snapshot";
 import { useShellNav } from "@/components/shell/shell-nav";
 import {
   LAST_DOCUMENT_KEY,
@@ -87,11 +88,23 @@ import {
  *  not re-open what the reader put back). See the restore effect below. */
 let restoreAttempted = false;
 
-export function AppShell() {
+export function AppShell({ sourceScope }: { sourceScope: string }) {
   const searchParams = useSearchParams();
   // The demo persona rides the dev-only URL, exactly like `?view=game` —
-  // read once at mount, forwarded to the library column's server actions.
+  // forwarded explicitly to the library and the hotel's data/profile reads.
   const persona = searchParams.get("persona") ?? undefined;
+  const roomSnapshotLane = JSON.stringify([sourceScope, persona ?? "user"]);
+  const roomSnapshotRef = useRef<{
+    lane: string;
+    snapshot: RoomSnapshot | null;
+  } | null>(null);
+  const onRoomSnapshotChange = useCallback((snapshot: RoomSnapshot | null) => {
+    roomSnapshotRef.current = { lane: roomSnapshotLane, snapshot };
+  }, [roomSnapshotLane]);
+  const getRoomSnapshot = useCallback(() => {
+    const current = roomSnapshotRef.current;
+    return current?.lane === roomSnapshotLane ? current.snapshot : null;
+  }, [roomSnapshotLane]);
   // THE IN-PLACE COMPARISON SWITCH (v0.28 step 1): `?dissolve=1` forces the
   // old scripted dissolve for game ⇄ field moves — a debug flag read ONCE
   // at mount (the URL is dev-only), never product UI. Without it, leaving
@@ -396,10 +409,13 @@ export function AppShell() {
     setPanelMode("pill");
     if (settledRef.current !== "game") beginTransition("game", null);
   }, [beginTransition, closeDesk, setPanelMode]);
-  /** The live pose for the provider's send-time view getter (via this ref
-   *  read — the transport asks outside React's render). A mid-move read
-   *  reports the SETTLED world: that is where the reader stands. */
-  const getPose = useCallback(() => ({ settled: settledRef.current }), []);
+  /** Read synchronously at send time. A transition or document pause hides
+   *  the room context even while the world remains mounted underneath. */
+  const getPose = useCallback(() => ({
+    settled: settledRef.current,
+    transitioning: transitionRef.current !== null,
+    suspended: gameSuspendedRef.current,
+  }), []);
 
   // The room → reader entrance: the terminal interaction fires this after
   // its depart flare (world-transition.ts's hook), and the move starts
@@ -471,6 +487,7 @@ export function AppShell() {
           GAME_SIM_FREEZE.frozen = false;
         }
       }
+      settledRef.current = transitionTo;
       setSettledView(transitionTo);
       setTransition(null);
     };
@@ -801,6 +818,10 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deskDoc, openDesk]);
   const refreshCatalog = useCallback(async () => {
+    // Invalidate at START, including failed refreshes. An older hotel/profile
+    // request may not adopt this newer generation while the catalog is pending.
+    // A mounted room keeps its own frozen snapshot throughout the refresh.
+    invalidateHotelData();
     // A settled turn may have written new CASES too — the archive field's
     // aggregated read is session-cached, so drop it and let the mounted
     // field re-aggregate (its dataGen prop bumps below on success AND on
@@ -809,11 +830,6 @@ export function AppShell() {
     setArchiveGen((g) => g + 1);
     try {
       const page = await getTimelineCatalogPage(null);
-      // A settled turn may have written a new slice — kill the hotel's
-      // cached lane so the next game entry re-derives instead of serving
-      // pre-turn doors. Bumping on every successful refresh is deliberate:
-      // an unnecessary re-fetch beats stale doors.
-      invalidateHotelData();
       setEntries((prev) => {
         const have = new Set(prev.map((e) => e.id));
         const newest = prev.at(-1)?.start ?? "";
@@ -855,9 +871,10 @@ export function AppShell() {
     () => ({
       standAtSlice: driveStandAtSlice,
       getPose,
+      getRoomSnapshot,
       onTurnSettled: refreshCatalog,
     }),
-    [driveStandAtSlice, getPose, refreshCatalog],
+    [driveStandAtSlice, getPose, getRoomSnapshot, refreshCatalog],
   );
   useEffect(() => {
     registerWorldDriver(driver);
@@ -1109,6 +1126,11 @@ export function AppShell() {
         {mountedWorlds.includes("game") && (
           <div className="relative flex-1 min-h-0">
             <GameShell
+              key={roomSnapshotLane}
+              persona={persona ?? "user"}
+              sourceScope={sourceScope}
+              dataGeneration={archiveGen}
+              onRoomSnapshotChange={onRoomSnapshotChange}
               onExit={() => {
                 documentFromSceneRef.current = false;
                 beginTransition("field", null);

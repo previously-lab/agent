@@ -50,6 +50,7 @@ import {
   type RoomPlan,
 } from "./room-plan";
 import { inDoorApproach, type RoomDoorPlacement } from "./room-doors";
+import { BOOKSHELF_DIMENSIONS, BOOKSHELF_RUN_SPACING } from "./prop-geometry";
 import {
   resolveSchematic,
   type ResolvedSchematicGroup,
@@ -477,18 +478,22 @@ export const KITS: readonly Kit[] = [
   {
     // 三联书架 + 书堆 + 面向书墙的扶手椅 — the shelf wall: three shelves
     // in a run, loose piles at their feet, one chair turned toward the
-    // spines. The library's signature wall.
+    // spines. The library's signature wall. Centers ride the REAL case
+    // width (BOOKSHELF_RUN_SPACING = 1.84 + 0.08 finger gap — the old
+    // 1.6 interleaved the 1.84-wide bodies), the back sits flush to the
+    // 0.44-deep case, and the footprint disc covers the true outermost
+    // edge (1.92 + 0.92 = 2.84) with margin.
     id: "bookshelf-run",
     worldClasses: ["interior"],
     archetypes: ["library", "ballroom"],
     anchor: "wall",
-    backOffset: 0.3,
+    backOffset: BOOKSHELF_DIMENSIONS.depth / 2,
     facing: "center",
-    footprint: 2.6,
+    footprint: 2.95,
     pieces: [
-      { kind: "bookshelf", dx: -1.6, dz: 0, rotY: 0 },
+      { kind: "bookshelf", dx: -BOOKSHELF_RUN_SPACING, dz: 0, rotY: 0 },
       { kind: "bookshelf", dx: 0, dz: 0, rotY: 0 },
-      { kind: "bookshelf", dx: 1.6, dz: 0, rotY: 0 },
+      { kind: "bookshelf", dx: BOOKSHELF_RUN_SPACING, dz: 0, rotY: 0 },
       { kind: "bookpile", dx: -0.8, dz: 0.7, rotY: 0.2 },
       { kind: "bookpile", dx: 0.85, dz: 0.75, rotY: -0.3 },
       { kind: "readingchair", dx: 0, dz: 1.15, rotY: Math.PI },

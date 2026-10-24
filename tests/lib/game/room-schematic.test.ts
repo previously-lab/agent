@@ -33,7 +33,9 @@ import {
   roomSchematicFor,
   roomSchematics,
   schematicPlacementsFor,
+  type SchematicPlacement,
 } from "@/lib/game/room-schematic";
+import { BOOKSHELF_DIMENSIONS } from "@/lib/game/prop-dimensions";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import {
   composeRoom,
@@ -481,5 +483,39 @@ describe("the outline is same-sourced with the render", () => {
     // The bedroom declares a niche on its east edge → the right wall is
     // a feature host the render's window pool excludes (v0.12 rule sync).
     expect(bedroom.fixtures.featureHostWalls).toContain("right");
+  });
+});
+
+describe("scaled bookshelf rows", () => {
+  const placement: SchematicPlacement = {
+    rect: { x0: -6, x1: 6, z0: 0, z1: 6 }, scale: 1,
+    exposed: { n: true, s: true, e: true, w: true },
+    schematic: {
+      moduleId: "fixture-shelves", focalWall: "n", paths: [],
+      slots: [{
+        role: "bookshelf", group: "shelves", required: true,
+        at: { kind: "wall", wall: "n", dist: [.5, .5], along: .5, alongTol: 0 },
+        facing: { kind: "intoRoom", wall: "n" }, accepts: ["bookshelf"],
+        clearance: .5, count: [3, 3], scale: [1.7, 1.7],
+      }],
+    },
+  };
+  it("keeps every scaled shelf body separate and inside the wall", () => {
+    const group = resolveSchematic(placement, createRng(17), 1)![0];
+    const centers = group.pieces.map((p) => ({
+      x: group.x + p.dx * Math.cos(group.rotY) + p.dz * Math.sin(group.rotY),
+      half: BOOKSHELF_DIMENSIONS.width * p.scale / 2,
+    })).sort((a, b) => a.x - b.x);
+    expect(centers).toHaveLength(3);
+    for (const p of centers) {
+      expect(p.x - p.half).toBeGreaterThanOrEqual(placement.rect.x0);
+      expect(p.x + p.half).toBeLessThanOrEqual(placement.rect.x1);
+    }
+    for (let i = 1; i < centers.length; i++) {
+      expect(centers[i].x - centers[i].half).toBeGreaterThan(centers[i - 1].x + centers[i - 1].half);
+    }
+  });
+  it("refuses a required run whose end bodies would cross the corner", () => {
+    expect(resolveSchematic({ ...placement, rect: { ...placement.rect, x0: -4, x1: 4 } }, createRng(17), 1)).toBeNull();
   });
 });

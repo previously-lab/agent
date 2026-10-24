@@ -76,7 +76,13 @@ vi.mock("@/app/api/chat/inner-envelope", () => ({
   buildMergeSummaryBrief: vi.fn(() => null),
 }));
 
-import { turnWorkflow } from "@/app/api/chat/turn-workflow";
+import {
+  buildTurnToolContext,
+  turnWorkflow,
+} from "@/app/api/chat/turn-workflow";
+import { buildChatToolsContext } from "@/app/api/agent/tools";
+import { NEUTRAL_ROOM_PROFILE } from "@/lib/game/room-profile";
+import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimeSlice } from "@/lib/episodic";
@@ -186,6 +192,33 @@ describe("turnWorkflow — the v0.42 §5 failure floor", () => {
     await expect(turnWorkflow(input())).rejects.toThrow("handoff acknowledgement lost");
     expect(h.startSummaryRun).toHaveBeenCalledOnce();
     expect(h.closeTurnStream).toHaveBeenCalledWith(expect.objectContaining({ text: "already produced answer", error: "handoff acknowledgement lost" }), TURN_ID, undefined);
+  });
+
+  it("preserves the validated view in outer and inner context construction", async () => {
+    const view: NonNullable<TurnInput["view"]> = {
+      sliceId: SLICE_ID,
+      surface: "room",
+      snapshot: {
+        sliceId: SLICE_ID,
+        generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+        profile: NEUTRAL_ROOM_PROFILE,
+        roomDoorCount: 2,
+        corridorSide: "north",
+      },
+    };
+    const withView = { ...input(), view };
+    const outer = buildTurnToolContext(withView, SLICE_ID, "system", true);
+    const inner = buildTurnToolContext(withView, SLICE_ID, "system", false);
+    expect(outer.view).toBe(view);
+    expect(inner.view).toBe(view);
+    expect(outer.imageAttachments).toEqual([]);
+    expect(inner.imageAttachments).toBeUndefined();
+
+    h.successful = true;
+    await turnWorkflow(withView);
+    expect(vi.mocked(buildChatToolsContext)).toHaveBeenCalledWith(
+      expect.objectContaining({ view }),
+    );
   });
 
   it("regenerate and stable client identity cross the durable handoff", async () => {

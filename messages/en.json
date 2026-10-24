@@ -498,6 +498,10 @@
   "game": {
     "title": "The Hotel",
     "loading": "Preparing the corridor…",
+    "roomPreparing": "Preparing this scenario…",
+    "roomUnavailable": "This scenario could not be prepared.",
+    "roomRetry": "Try again",
+    "roomEnterBase": "Enter a basic room",
     "exit": "Exit",
     "enter": "Enter",
     "readDoc": "Read",

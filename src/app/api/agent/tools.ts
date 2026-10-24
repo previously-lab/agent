@@ -16,6 +16,8 @@ import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { currentViewSchema } from "@/lib/chat/current-view";
+import { ROOM_SNAPSHOT_MAX_DOOR_COUNT } from "@/lib/game/room-snapshot";
 import { RECALL_CATEGORIES } from "@/lib/memory/categories";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
@@ -79,6 +81,9 @@ export const toolContextSchema = z.object({
   useGithub: z.boolean(),
   useDemo: z.boolean(),
   sliceId: z.string(),
+  // Sanitized visual context only. Its nested schemas are strict, so a malformed
+  // snapshot is rejected rather than stripped into an apparently valid view.
+  view: currentViewSchema.optional(),
   recentTurns: z.array(z.object({
     role: z.string(),
     content: z.string(),
@@ -655,41 +660,38 @@ export const chatTools = {
   describeRoom: tool({
     description:
       "Describe the hotel room a time slice opens onto in the game view — " +
-      "an engine-computed outline of what the room CONTAINS: world class and " +
-      "archetype, size and scale notation, floor plan, module/template layout, " +
-      "palette and light register, furnishing kits, water, doors and windows. " +
-      "The outline is derived from the world seed by the same pure modules " +
-      "that render the room, so it is exact and deterministic — quote it " +
-      "freely, it cannot disagree with what the user sees. Use it when the " +
-      "user asks what is in the room they are standing in (omit sliceId for " +
-      "the current slice's room) or what a past slice's room looks like. " +
-      "Strand-door PLACEMENTS additionally depend on the runtime strand " +
-      "graph: pass strandDoors + corridorSide only if you know them; " +
-      "otherwise the outline reports the permitted walls and measured " +
-      "capacity instead of positions.",
+      "an engine-computed outline of its world, plan, modules, palette, light, " +
+      "furnishing, water, doors and windows. With a validated view, omitting " +
+      "sliceId describes the room being viewed. Its frozen snapshot, when " +
+      "present, ALWAYS supplies the profile, door count and corridor side; " +
+      "model-supplied runtime inputs cannot override what the user sees. " +
+      "Without a matching snapshot the result says plainly that it is only " +
+      "the base compilation and no record semantics were read. Legacy calls " +
+      "without a view may supply known strandDoors + corridorSide; never " +
+      "guess them for the currently viewed room.",
     inputSchema: z.object({
       sliceId: z
         .string()
         .optional()
         .describe(
-          "Slice ID in YYYY-MM-DD-HHMM format. Defaults to the current slice.",
+          "Slice ID in YYYY-MM-DD-HHMM format. Defaults to the validated view's slice, then the conversation slice.",
         ),
       strandDoors: z
         .number()
         .int()
         .min(0)
+        .max(ROOM_SNAPSHOT_MAX_DOOR_COUNT)
         .optional()
         .describe(
-          "The runtime strand-door count for this slice, when known. Steers " +
-          "layout selection exactly as the real count does at render time.",
+          "Legacy/no-view calls only: the known runtime strand-door count. " +
+          "A validated view takes precedence; its frozen count cannot be overridden.",
         ),
       corridorSide: z
         .enum(["north", "south"])
         .optional()
         .describe(
-          "Which side of the corridor the room's entrance door sits on " +
-          "(the room's mirror). Required together with strandDoors for exact " +
-          "door placements.",
+          "Legacy/no-view calls only: which corridor side the entrance sits on. " +
+          "A validated view takes precedence; its frozen side cannot be overridden.",
         ),
     }),
     contextSchema: toolContextSchema,

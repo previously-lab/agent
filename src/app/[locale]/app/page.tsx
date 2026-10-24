@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { setRequestLocale } from "next-intl/server";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getMode } from "@/lib/mode";
 import { AppShell } from "@/components/shell/app-shell";
 import { ClientErrorCapture } from "@/components/chat/client-error-capture";
 import { DebugErrorBoundary } from "@/components/ui/error-boundary";
@@ -38,7 +39,8 @@ export default async function AppPage({
   setRequestLocale(locale);
 
   const { persona } = await searchParams;
-  const isDemo = resolveDataSource() === "demo";
+  const source = resolveDataSource();
+  const isDemo = source === "demo";
   if (isDemo) {
     setDemoPersona(persona || "user");
   }
@@ -56,7 +58,7 @@ export default async function AppPage({
             `?view=game` cold-boot read), not for data — nothing here awaits
             any more. */}
         <Suspense fallback={<ChatStreamSkeleton />}>
-          <AppShell />
+          <AppShell sourceScope={`${getMode()}:${source}`} />
         </Suspense>
       </DebugErrorBoundary>
     </>

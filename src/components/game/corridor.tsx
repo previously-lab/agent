@@ -105,7 +105,7 @@
  * faster rate (6/s) so the corridor is ~95% dark within the 500 ms hide
  * window, while the recovery keeps the game canvas's atmosphere rate
  * (2.5/s, dt clamped at 0.05). The live values sit in three.js object
- * refs mutated from `useFrame` — no React state per frame, no
+ * refs mutated from `useGameFrame` — no React state per frame, no
  * allocations. Full/dimmed pairs live in one LIGHT_LEVELS table so the
  * JSX initial values and the lerp targets can never drift apart. The
  * `dimmed` flag reaches the lerp callbacks through a ref (synced in an
@@ -162,8 +162,7 @@
  * hotel, on any machine. No Math.random anywhere (see seed.ts).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Html } from "@react-three/drei";
 import { AdditiveBlending, CanvasTexture, Color, DoubleSide, MeshStandardMaterial, SRGBColorSpace } from "three";
 import type { JSX, MutableRefObject } from "react";
@@ -264,6 +263,8 @@ import {
   DOOR_SWING_RATE,
   DOOR_WIDTH,
 } from "@/lib/game/tuning/room";
+import { useGameFrame } from "./use-game-frame";
+import { gameElapsed } from "./game-time";
 import "./lobby-register.css";
 
 /** A corridor door as the integrator supplies it. */
@@ -391,7 +392,7 @@ function useDimLerp(
     if (day && levels.day !== undefined) return levels.day;
     return levels.full;
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Mount initialization: start at the DIMMED level and let the recovery
     // lerp ease the value up. Remounts happen on room exit — the corridor
     // returning — and a corridor that fades in reads; one that snaps to
@@ -401,14 +402,19 @@ function useDimLerp(
     writeRef.current(levels.dimmed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useFrame((_, rawDt) => {
+  useGameFrame((_state, meta) => {
     const current = readRef.current();
     if (current === null) return;
-    const dt = Math.min(rawDt, DIM_MAX_DT);
+    const dt = Math.min(meta.delta, DIM_MAX_DT);
     const descending = dimRef.current;
     const target = targetFor(descending, dayRef?.current ?? false);
     const rate = descending ? DIM_LERP_RATE_DESCEND : DIM_LERP_RATE;
-    const next = current + (target - current) * (1 - Math.exp(-rate * dt));
+    // A world mounted directly under the document pause never gets a
+    // recovery frame. Bind its static light now instead of freezing every
+    // newly mounted fixture at the dark entry value.
+    const next = meta.initialize && meta.delta === 0
+      ? target
+      : current + (target - current) * (1 - Math.exp(-rate * dt));
     if (next !== current) writeRef.current(next);
   });
 }
@@ -948,7 +954,7 @@ function DoorAssembly({
   const hingeRef = useRef<Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
-  useFrame((_, delta) => {
+  useGameFrame((_state, meta) => {
     const hinge = hingeRef.current;
     if (!hinge) return;
     const p = playerRef.current;
@@ -956,7 +962,7 @@ function DoorAssembly({
       Math.hypot(p.x - door.x, p.z - door.z) < DOOR_OPEN_DIST;
     const away = Math.sign(p.z - door.z) || 1;
     const target = near ? away * DOOR_OPEN_ANGLE : 0;
-    const dt = Math.min(delta, 0.05);
+    const dt = Math.min(meta.delta, 0.05);
     if (!snappedRef.current) {
       angleRef.current = target;
       snappedRef.current = true;
@@ -2558,13 +2564,13 @@ function ArrivalDoor({
   const hingeRef = useRef<Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
-  useFrame((_, delta) => {
+  useGameFrame((_state, meta) => {
     const hinge = hingeRef.current;
     if (!hinge) return;
     const p = playerRef.current;
     const near = Math.hypot(p.x - LOBBY_LENGTH, p.z) < DOOR_OPEN_DIST;
     const target = near ? DOOR_OPEN_ANGLE : 0;
-    const dt = Math.min(delta, 0.05);
+    const dt = Math.min(meta.delta, 0.05);
     if (!snappedRef.current) {
       angleRef.current = target;
       snappedRef.current = true;
@@ -2762,13 +2768,13 @@ function CorridorEnd({
   const hingeRef = useRef<Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
-  useFrame((_, delta) => {
+  useGameFrame((_state, meta) => {
     const hinge = hingeRef.current;
     if (!hinge) return;
     const p = playerRef.current;
     const near = Math.hypot(p.x - endX, p.z) < DOOR_OPEN_DIST;
     const target = near ? -DOOR_OPEN_ANGLE : 0;
-    const dt = Math.min(delta, 0.05);
+    const dt = Math.min(meta.delta, 0.05);
     if (!snappedRef.current) {
       angleRef.current = target;
       snappedRef.current = true;
@@ -3043,13 +3049,18 @@ function HallCeiling({
 }): JSX.Element {
   const groupRef = useRef<Group>(null);
   const hiddenRef = useRef(false);
-  useFrame(({ camera }) => {
+  useGameFrame(({ camera }, meta) => {
     const g = groupRef.current;
     if (!g) return;
-    const hide = hiddenRef.current
+    // The one-shot initialize beat settles the visibility even on a
+    // cold-suspended first frame (delta 0) — no hysteresis yet, so the
+    // initial state simply follows the camera height.
+    const hide = meta.initialize
       ? camera.position.y > WALL_HEIGHT - 0.2
-      : camera.position.y > WALL_HEIGHT + 0.1;
-    if (hide !== hiddenRef.current) {
+      : hiddenRef.current
+        ? camera.position.y > WALL_HEIGHT - 0.2
+        : camera.position.y > WALL_HEIGHT + 0.1;
+    if (meta.initialize || hide !== hiddenRef.current) {
       hiddenRef.current = hide;
       g.visible = !hide;
     }
@@ -3160,7 +3171,7 @@ export function Corridor({
 
   // Shared themed materials, created once with the theme at mount and
   // disposed with Corridor (R3F only auto-disposes JSX-created materials;
-  // these are passed in by reference). One useFrame below eases all eight
+  // these are passed in by reference). One useGameFrame below eases all eight
   // toward the active theme's targets.
   const [{ materials: mats, grungeMap }] = useState(() => createHotelMaterials(dark));
   useEffect(() => {
@@ -3169,8 +3180,8 @@ export function Corridor({
       grungeMap.dispose();
     };
   }, [mats, grungeMap]);
-  useFrame((_, rawDt) => {
-    const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(rawDt, DIM_MAX_DT));
+  useGameFrame((_state, meta) => {
+    const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(meta.delta, DIM_MAX_DT));
     const night = darkRef.current;
     for (const role of HOTEL_ROLES) {
       mats[role].color.lerp(night ? THEME_TARGETS[role].night : THEME_TARGETS[role].day, k);
@@ -3179,21 +3190,34 @@ export function Corridor({
 
   // Delayed unmount: the moment a space engages the player the lights ramp
   // down (useDimLerp at the descend rate) and only once that is ~complete
-  // (HIDE_DELAY_MS) does the whole hotel — geometry, glow, every light
-  // source — leave the scene, so nothing residual can light the space and
-  // the cut itself is invisible. Corridor stays mounted throughout, and
-  // its chunk-window state lives above this flag, so when the space ends
-  // the hotel remounts exactly where the player left it — dark, easing up
+  // (HIDE_DELAY_MS of GAME time) does the whole hotel — geometry, glow,
+  // every light source — leave the scene, so nothing residual can light the
+  // space and the cut itself is invisible. The deadline lives on the game
+  // clock (game-time.ts), not a wall-clock setTimeout: while the document
+  // pause freezes the clock the countdown holds, and it resumes where it
+  // left off on thaw. Corridor stays mounted throughout, and its
+  // chunk-window state lives above this flag, so when the space ends the
+  // hotel remounts exactly where the player left it — dark, easing up
   // through the same useDimLerp recovery lerp (no pop on exit).
   const [hidden, setHidden] = useState(false);
+  const hideAtRef = useRef<number | null>(null);
   useEffect(() => {
     if (!dimmed) {
+      // Never hide on the way back in — and clear any pending deadline so a
+      // later dim starts a fresh countdown.
+      hideAtRef.current = null;
       setHidden(false);
       return;
     }
-    const timer = setTimeout(() => setHidden(true), HIDE_DELAY_MS);
-    return () => clearTimeout(timer);
+    hideAtRef.current = gameElapsed() + HIDE_DELAY_MS / 1000;
   }, [dimmed]);
+  useGameFrame((_state, meta) => {
+    const at = hideAtRef.current;
+    if (at !== null && meta.elapsed >= at) {
+      hideAtRef.current = null;
+      setHidden(true);
+    }
+  });
 
   // The diorama fill light follows the hotel-wide dimming, and opens up
   // further in day mode.

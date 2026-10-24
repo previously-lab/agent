@@ -74,6 +74,7 @@ import * as THREE from "three";
 import { Canvas, createPortal, useFrame, useThree } from "@react-three/fiber";
 import { useTheme } from "@teispace/next-themes";
 import { FIELD_FOV, camZFor } from "@/lib/timeline3d/camera";
+import { requestFrozenLayoutFrames } from "@/lib/timeline3d/frozen-frame";
 import { canvasPolicy, canvasPolicyWorld } from "@/components/timeline-3d/world-contract";
 import {
   WORLD_TRANSITION,
@@ -126,6 +127,36 @@ function WorldContract({
 function FrameRequestBridge(): null {
   const invalidate = useThree((s) => s.invalidate);
   useWorldFrameRegistration(invalidate);
+  return null;
+}
+
+/**
+ * The field keeps working while the hotel is frozen. A resize can commit
+ * its virtual rows and drei Html roots AFTER R3F's size-change invalidation
+ * has already been consumed. Request a finite follow-up after those commits;
+ * never unlock the field GL renderer, which would erase the hotel backdrop.
+ */
+function SuspendedFieldLayout({
+  enabled,
+  fieldNode,
+  band,
+}: {
+  enabled: boolean;
+  fieldNode: ReactNode;
+  band: WorldBand | null;
+}): null {
+  const invalidate = useThree((state) => state.invalidate);
+  const width = useThree((state) => state.size.width);
+  const height = useThree((state) => state.size.height);
+  const dpr = useThree((state) => state.viewport.dpr);
+  useEffect(() => {
+    if (!enabled || !fieldNode) return;
+    return requestFrozenLayoutFrames(
+      invalidate,
+      (callback) => window.requestAnimationFrame(callback),
+      (handle) => window.cancelAnimationFrame(handle),
+    );
+  }, [enabled, fieldNode, band, invalidate, width, height, dpr]);
   return null;
 }
 
@@ -427,8 +458,12 @@ export interface WorldCanvasProps {
    *  sits above the shell's blur layer, so the canvas keeps showing exactly
    *  the game's frozen frame — PRESERVED, not redrawn (the field renderer
    *  stays gated and the game's composer is disabled, so no demand frame
-   *  repaints it). The contract follows the game (worlds[0]) so the frozen
-   *  frame's renderer values stay its own. The frame loop is "demand" here,
+   *  repaints it). The single exception is a mid-pause canvas resize or DPR
+   *  change, which CLEARS the drawing buffer: the game owner repairs it
+   *  with exactly one manual repaint of the game's OWN composer
+   *  (frozen-frame.ts) — never the field's renderer. The contract follows
+   *  the game (worlds[0]) so the frozen frame's renderer values stay its
+   *  own. The frame loop is "demand" here,
    *  not "never": the DOM archive reaches the canvas through drei `<Html>`
    *  portals and its virtual list sets its visible range in a `useFrame`,
    *  so a cold mount and the ref-only scroll gestures need the finite
@@ -456,10 +491,11 @@ export function WorldCanvas({
   const transitionActive = worlds.length === 2 && !suspended;
   // The settled world's contract applies before its first paint; the
   // compositor owns the renderer for the frames in between. While SUSPENDED
-  // no world paints at all — the field renderer is gated and the game's
-  // composer is disabled — so the renderer simply keeps the game's contract
-  // values (worlds[0]) and the frozen hotel frame is never re-rendered
-  // under a foreign mapping.
+  // no world paints on demand frames — the field renderer is gated and the
+  // game's composer is disabled — so the renderer simply keeps the game's
+  // contract values (worlds[0]); the only suspended repaint anywhere is the
+  // game owner's one-shot of its OWN composer on a size/DPR change
+  // (frozen-frame.ts), which never runs under a foreign mapping.
   const contractWorld: WorldKind | null = transitionActive
     ? null
     : (worlds[0] ?? null);
@@ -525,6 +561,11 @@ export function WorldCanvas({
         >
           <WorldContract world={contractWorld} />
           <FrameRequestBridge />
+          <SuspendedFieldLayout
+            enabled={suspended && !paused && fieldMounted}
+            fieldNode={nodes.field}
+            band={band}
+          />
           {fieldMounted && band !== null && (
             <BraidPortal
               band={band}

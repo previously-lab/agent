@@ -9,10 +9,13 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  captureHotelDataRequest,
   invalidateHotelData,
   hotelDataEpoch,
   readHotelData,
+  readHotelDataAtEpoch,
   writeHotelData,
+  writeHotelDataAtEpoch,
   type HotelData,
 } from "@/lib/game/hotel-data";
 
@@ -70,5 +73,28 @@ describe("hotel-data cache", () => {
     writeHotelData("en", fresh);
     expect(readHotelData("en")).toBe(fresh);
     expect(hotelDataEpoch()).toBe(before + 2);
+  });
+
+  it("keys the lane by scope as well as locale", () => {
+    const scoped = lane();
+    writeHotelData("en", scoped, "source-a");
+    expect(readHotelData("en", "source-a")).toBe(scoped);
+    expect(readHotelData("en", "source-b")).toBeNull();
+    expect(readHotelData("en")).toBeNull();
+  });
+
+  it("rejects a write captured before invalidation instead of restamping it", () => {
+    const request = captureHotelDataRequest("source-a");
+    const stale = lane({ doors: [] });
+    invalidateHotelData();
+    expect(writeHotelDataAtEpoch("en", stale, request)).toBe(false);
+    expect(readHotelData("en", "source-a")).toBeNull();
+    expect(readHotelDataAtEpoch("en", request)).toBeNull();
+
+    const current = captureHotelDataRequest("source-a");
+    const fresh = lane();
+    expect(writeHotelDataAtEpoch("en", fresh, current)).toBe(true);
+    expect(readHotelDataAtEpoch("en", current)).toBe(fresh);
+    expect(readHotelData("en", "source-a")).toBe(fresh);
   });
 });

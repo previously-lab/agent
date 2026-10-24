@@ -13,9 +13,11 @@
  * placeRoomDoors) → kits.ts (stageInteriorKits) — with the same arguments
  * space.tsx / game-canvas.tsx pass them, so the description can never drift
  * from the render: change the render's pure modules and this outline changes
- * with them. A room is a pure function of its slice id, so describeRoom is
- * total and fully deterministic: same slice ⇒ same outline, on any machine,
- * independent of call order.
+ * with them. A room is a pure function of its slice id, bounded semantic
+ * profile and runtime door inputs, so describeRoom is total and fully
+ * deterministic: same slice + options ⇒ same outline, on any machine,
+ * independent of call order. The exact shared recipe and profile ride in
+ * the returned outline as well as their derived facts.
  *
  * WHAT IS NOT DERIVABLE from a slice id (and therefore never claimed):
  *   - the actual STRAND-DOOR placements. They are a function of the runtime
@@ -78,6 +80,8 @@
  */
 
 import { compileSpaceRecipe } from "./space-recipe";
+import { NEUTRAL_ROOM_PROFILE } from "./room-profile";
+import { resolveActivityDressing } from "./activity-traces";
 import {
   composeRoom,
   roomPlanFor,
@@ -150,6 +154,8 @@ export interface DescribeRoomOptions {
    *  for exact door placement: the camera-facing sill walls differ per
    *  side. Omit = report capacity, not placements. */
   corridorSide?: "north" | "south";
+  /** The same bounded profile supplied to the renderer's recipe compiler. */
+  profile?: import("./room-profile").RoomProfile;
 }
 
 /** One module of a composed interior room (room-modules.ts §8). */
@@ -173,6 +179,10 @@ export interface PlacedDoorOutline {
 
 export interface RoomDescription {
   sliceId: string;
+  /** The exact unscaled compiler result used by every derivation below. */
+  recipe: import("./space-types").SpaceRecipe;
+  /** Neutral means the legacy ID-only fallback, not missing or unavailable IO. */
+  profile: import("./room-profile").RoomProfile;
   worldClass: WorldClass;
   archetype: ArchetypeId;
   /** The archetype's ground shape (flat / rolling / sunken basin). */
@@ -261,15 +271,15 @@ export interface RoomDescription {
     };
   };
   fixtures: {
-    /** Every room grows a lamp and a window; the window prefers an
-     *  east/west side wall (§10.5 axial semantics). */
+    /** Placement preference only; the actual resolver may reuse an
+     * authored light/window or omit a fixture when no legal spot exists. */
     windowPrefersSideWall: boolean;
     /** v0.12: the window host pool excludes every wall hosting a wall
      *  feature (niche, pilaster rhythm, arch, column order, platform,
      *  mezzanine) — derived from this room's declared wall features (see
      *  the module header's same-source note). */
     featureHostWalls: readonly WallRole[];
-    /** The high clerestory band: every non-interior room + the pool hall. */
+    /** Eligibility for a high clerestory band, not proof one was placed. */
     clerestory: boolean;
   };
 }
@@ -316,7 +326,8 @@ export function describeRoom(
   const roomId = debugSliceIdWithoutSkin(sliceId);
   // The renderer's own derivation order (space.tsx SpaceScene /
   // game-canvas.tsx roomGeometryForSpace), same functions, same arguments.
-  const recipe = compileSpaceRecipe(roomId, WORLD_SEED);
+  const recipe = compileSpaceRecipe(roomId, WORLD_SEED, options.profile);
+  const profile = recipe.profile ?? NEUTRAL_ROOM_PROFILE;
   // The strand-door count steers the composition the same way the renderer
   // steers it (§8.4): absent = 0, the doorless derivation the renderer's
   // own pre-strand resolutions freeze — a description WITH the count
@@ -458,7 +469,7 @@ export function describeRoom(
       // authored deck (the renderer's wonder branch passes no skin to
       // staging), so the outline enumerates the playthings, not the skin's
       // nature decks.
-      skin: recipe.worldClass === "wonder" ? null : skin,
+      skin: recipe.worldClass === "wonder" || profile.activity !== "neutral" ? null : skin,
       plan,
       comp: composeRoom(roomId, plan, scaleFactor, WORLD_SEED),
       baseArea: Math.max(0, baseArea - waterArea),
@@ -500,8 +511,10 @@ export function describeRoom(
           : {}),
       heightAt: (x, z) => terrainHeight(scaled, x, z),
     });
+    const visibleFurniture = resolveActivityDressing(profile.activity, roomId,
+      staged.map((p, i) => ({ ...p, instanceId: `${p.kitId}:${p.kitIndex}:${i}` }))).furniture;
     const byPlacement = new Map<number, { kit: string; pieces: KitKind[] }>();
-    for (const piece of staged) {
+    for (const piece of visibleFurniture) {
       const entry = byPlacement.get(piece.kitIndex) ?? {
         kit: piece.kitId,
         pieces: [],
@@ -516,6 +529,8 @@ export function describeRoom(
 
   return {
     sliceId,
+    recipe,
+    profile,
     worldClass: recipe.worldClass,
     archetype: recipe.archetype,
     ground: spec.ground,
@@ -621,6 +636,15 @@ const ARCHETYPE_ZH: Record<ArchetypeId, string> = {
   cats: "猫",
   dogs: "狗",
   balloons: "气球",
+};
+const ACTIVITY_ZH: Record<import("./room-profile").RoomActivity, string> = {
+  neutral: "未确定（旧种子回退）",
+  writing: "写作/创作",
+  research: "阅读/研究",
+  making: "制作/修复",
+  planning: "计划/决策",
+  conversation: "沟通/相处",
+  reflection: "回顾/整理",
 };
 const PLAN_ZH: Record<PlanId, string> = {
   rect: "矩形",
@@ -754,6 +778,13 @@ export function formatRoomDescription(
       ? `世界：${worldClass} · ${archetype} ｜ 尺寸档：${desc.sizeTier}（${round(desc.extent)}m 深 × ${round(desc.width)}m 宽）｜ 尺度：${scale}${scaleFactor}`
       : `World: ${worldClass} · ${archetype} | size tier: ${desc.sizeTier} (${round(desc.extent)}m deep × ${round(desc.width)}m wide) | scale: ${scale}${scaleFactor}`,
   );
+  if (desc.profile.activity !== "neutral") {
+    L.push(
+      zh
+        ? `功能：${ACTIVITY_ZH[desc.profile.activity]}｜主模块：${desc.profile.primaryModule}｜规则：${desc.profile.ruleVersion}｜语义 revision：${desc.profile.revision}｜依据：${desc.profile.evidence.join(", ")}`
+        : `Activity: ${desc.profile.activity} | primary module: ${desc.profile.primaryModule} | rules: ${desc.profile.ruleVersion} | semantic revision: ${desc.profile.revision} | evidence: ${desc.profile.evidence.join(", ")}`,
+    );
+  }
 
   const planName = zh ? PLAN_ZH[desc.plan.id] : desc.plan.id;
   const planNote =
@@ -918,7 +949,7 @@ export function formatRoomDescription(
   }
 
   const fixtureParts = [
-    zh ? "窗优先挂东西侧墙" : "window prefers an east/west side wall",
+    zh ? "若增设窗，优先东西侧墙" : "additional windows prefer an east/west side wall",
     desc.fixtures.featureHostWalls.length > 0
       ? zh
         ? `窗避开特征宿主墙（${desc.fixtures.featureHostWalls
@@ -928,12 +959,12 @@ export function formatRoomDescription(
       : null,
     desc.fixtures.clerestory
       ? zh
-        ? "有高侧窗带"
-        : "clerestory band"
+        ? "墙面净空允许时可布置高侧窗带"
+        : "eligible for a clerestory where wall clearance allows"
       : null,
-    zh ? "有一盏落地灯" : "one floor lamp",
+    zh ? "优先复用现有灯具；无合法净空时不补灯或窗，具体放置未在此枚举" : "existing lights are reused; extra lights/windows require clearance, and their actual placements are not enumerated here",
   ].filter(Boolean);
-  L.push(zh ? `采光：${fixtureParts.join("；")}` : `Light sources: ${fixtureParts.join("; ")}`);
+  L.push(zh ? `采光布局规则：${fixtureParts.join("；")}` : `Lighting placement rules: ${fixtureParts.join("; ")}`);
 
   return L.join("\n");
 }

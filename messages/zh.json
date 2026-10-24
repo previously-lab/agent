@@ -498,6 +498,10 @@
   "game": {
     "title": "旅店",
     "loading": "正在布置长廊……",
+    "roomPreparing": "正在布置这个情景……",
+    "roomUnavailable": "暂时无法布置这个情景。",
+    "roomRetry": "重试",
+    "roomEnterBase": "进入基础房间",
     "exit": "离开",
     "enter": "进入",
     "readDoc": "阅读",

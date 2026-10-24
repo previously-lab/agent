@@ -53,6 +53,13 @@ const SLICES = [
 ];
 
 describe("describeRoom", () => {
+  it("describes fixture eligibility without inventing actual lamps or windows", () => {
+    const desc = describeRoom("dbg-m:study");
+    expect(formatRoomDescription(desc, "en")).toContain("Lighting placement rules:");
+    expect(formatRoomDescription(desc, "en")).not.toContain("one floor lamp");
+    expect(formatRoomDescription(desc, "zh")).not.toContain("有一盏落地灯");
+    expect(formatRoomDescription(desc, "zh")).not.toContain("有高侧窗带");
+  });
   it("is deterministic: same slice → identical outline, independent of call order", () => {
     for (const sliceId of SLICES) {
       const first = describeRoom(sliceId);

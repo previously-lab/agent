@@ -128,7 +128,8 @@ import {
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
-import { useWorldScene } from "./world-slot";
+import { useWorldFrameRequest, useWorldScene } from "./world-slot";
+import { requestFrozenLayoutFrames } from "@/lib/timeline3d/frozen-frame";
 import type { SliceNarration } from "./slice-narrate-button";
 import { BoundaryRow } from "./boundary-row";
 import { OriginRow } from "./origin-row";
@@ -423,6 +424,7 @@ function FieldScene({
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
   const pitch = metrics.fallbackExtent;
   const turns = presentationForRung(rung) === "turns";
   /** The card-to-card advance minus the face — the room the PILE cascades
@@ -526,6 +528,7 @@ function FieldScene({
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
+    const previousScroll = rigNow.current;
     const max = maxOffsetFor(layout.total, size.height, minOffset, insetBottom);
     // The clamp allows the rubber band's slack past the ends (the input path
     // asymptotes to RUBBER_BAND_PX, so this never hard-stops a live overscroll;
@@ -748,6 +751,16 @@ function FieldScene({
       rangeRef.current = [first, last];
       setRange([first, last]);
     }
+    // DOM-side gestures only mutate refs. Under demand rendering they
+    // start one frame; keep requesting frames just until the field settles.
+    // The final changed-position frame gets one successor so Html projects
+    // the final pose even when its callback ran before this scene callback.
+    if (
+      previousScroll !== rigNow.current ||
+      rigNow.current !== rigNow.target ||
+      rigNow.releaseAt > 0 ||
+      leaving.length > 0
+    ) invalidate();
   });
 
   const rowIndexMap = useMemo(
@@ -757,6 +770,11 @@ function FieldScene({
 
   const [first, last] = range;
   const visible = rows.slice(first, last + 1);
+  useEffect(() => requestFrozenLayoutFrames(
+    invalidate,
+    (callback) => window.requestAnimationFrame(callback),
+    (handle) => window.cancelAnimationFrame(handle),
+  ), [invalidate, first, last, rows, size.width, size.height]);
 
   return (
     <>
@@ -879,6 +897,7 @@ export function CardField({
   exiting = false,
   frozenRung,
 }: CardFieldProps) {
+  const requestFrame = useWorldFrameRequest();
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
   const locale = useLocale();
@@ -1131,7 +1150,8 @@ export function CardField({
     if (delta === 0) return;
     rig.current.current += delta;
     rig.current.target += delta;
-  }, [rows, tops]);
+    requestFrame();
+  }, [rows, tops, requestFrame]);
 
   const arias = useMemo(() => {
     const map = new Map<string, string>();
@@ -1149,7 +1169,7 @@ export function CardField({
     );
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [entries.length]);
 
   // The threadline only converges while the field is mounted; clear the
   // anchors on unmount (view switch) so the weave relaxes back to straight.
@@ -1453,6 +1473,7 @@ export function CardField({
         const b = scrollBoundsRef.current;
         rig.current.target = elasticAdd(rig.current.target, e.deltaY, b.min, b.max);
         rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
+        requestFrame();
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -1460,7 +1481,7 @@ export function CardField({
       el.removeEventListener("wheel", onWheel);
       if (zoomIdleRef.current) clearTimeout(zoomIdleRef.current);
     };
-  }, [zoomBy]);
+  }, [zoomBy, requestFrame, entries.length]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -1503,6 +1524,7 @@ export function CardField({
         );
         rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
         dragMoved = true;
+        requestFrame();
         return;
       }
       if (pointers.size !== 2) return;
@@ -1524,6 +1546,7 @@ export function CardField({
         // quiet: if the drag left the offset past an end, it eases home.
         rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
         dragMoved = false;
+        requestFrame();
       }
     };
     el.addEventListener("pointerdown", down);
@@ -1536,7 +1559,7 @@ export function CardField({
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
     };
-  }, [zoomBy]);
+  }, [zoomBy, requestFrame, entries.length]);
 
   // ── Keyboard: the field had NO keyboard scroll at all before this ────────
   // Wheel, one-finger drag and pinch were the only ways to move, so a reader
@@ -1595,8 +1618,10 @@ export function CardField({
       }
       e.preventDefault();
       rig.current.target = THREE.MathUtils.clamp(next, minOffset, max);
+      rig.current.releaseAt = 0;
+      requestFrame();
     },
-    [layout.total, fieldSize.h, minOffset, insetBottom],
+    [layout.total, fieldSize.h, minOffset, insetBottom, requestFrame],
   );
 
   // THE CANVAS IS THE SHELL'S (§14 merge). This component keeps everything

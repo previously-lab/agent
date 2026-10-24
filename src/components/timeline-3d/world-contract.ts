@@ -139,7 +139,11 @@ const FIELD_DPR: [number, number] = [1, 2];
  *                   re-runs setPixelRatio/setSize, and the size write
  *                   CLEARS the canvas, erasing the frozen frame (measured:
  *                   every pixel alpha=0 after a game→field pause flipped
- *                   DPR 1.5 → 2 → 1.5).
+ *                   DPR 1.5 → 2 → 1.5). (The erasure the policy still
+ *                   allows — a user resizing the window mid-pause — is
+ *                   repaired by the game owner's one-shot frozen-frame
+ *                   repaint, frozen-frame.ts; this rule is about the
+ *                   POLICY not flipping DPR by itself.)
  *   - otherwise   — the settled world (worlds[0]).
  *
  * Returns null for an empty list or a missing slot, matching the canvas's
@@ -176,13 +180,22 @@ export function canvasPolicyWorld(
  *                     `useWorldScene`), and the scene's own useFrame
  *                     re-arms the loop while its easing is converging.
  *                     Suspended is thus finite frames by construction —
- *                     not a continuous RAF, and never a GL repaint: the
- *                     field renderer stays gated and the game's composer
- *                     is disabled, so a demand frame touches no GL.
+ *                     not a continuous RAF, and never a GL repaint through
+ *                     the loop: the field renderer stays gated and the
+ *                     game's composer is disabled, so a demand frame
+ *                     touches no GL. The single exception is a mid-pause
+ *                     canvas resize or DPR change, which CLEARS the
+ *                     drawing buffer: the game owner repairs it with
+ *                     one manual repaint of the game's OWN composer after
+ *                     the frozen scene's static frame setup (frozen-frame.ts).
+ *                     Cold suspended mounts get the same initial paint;
+ *                     ordinary demand frames never invoke the composer.
  *
  * In every flavour the world stays MOUNTED through the pause; only the
  * loop's cadence changes. The game's own composer is separately disabled
- * while suspended (game-canvas), so demand frames never repaint the hotel.
+ * while suspended (game-canvas), so an ordinary demand frame never
+ * repaints the hotel — the only repaint is the game owner's single
+ * repair of a suspended size/DPR change (frozen-frame.ts).
  */
 export function canvasPolicy(
   world: WorldKind,

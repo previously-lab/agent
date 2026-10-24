@@ -22,12 +22,12 @@
  *
  * Books and plant leaves are STATIC InstancedMesh fills (the Ducks matrix
  * discipline): matrices/colors are written once in a mount/layout effect,
- * never per frame — no useFrame anywhere in this module.
+ * never per frame. Only the TV tint uses the pause-aware game clock.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, type JSX } from "react";
 import * as THREE from "three";
-import { useFrame } from "@react-three/fiber";
+import { useGameFrame } from "./use-game-frame";
 import {
   sharedGrungeRoughnessMap,
   sharedRadialGlowTexture,
@@ -35,6 +35,11 @@ import {
   WOOD_ALBEDO_MEAN,
 } from "@/lib/game/materials";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import {
+  BOOKSHELF_DIMENSIONS, ACTIVITY_SHEETS, ACTIVITY_CUPS,
+  ACTIVITY_CUP_RADIUS, ACTIVITY_DIARY_SIZE,
+} from "@/lib/game/prop-dimensions";
+import type { ActivityTraceItem } from "@/lib/game/activity-traces";
 
 /** The palette roles the prop materials derive from — the scenarioPalette
  *  output (day or night) satisfies this structurally. */
@@ -479,6 +484,24 @@ export function ContactShadowPlane({
 /* ------------------------------------------------------------------ */
 
 /**
+ * Stable identity → seed-key fragment for one prop instance. The scene
+ * passes the recipe's skin-stripped room id plus the kit piece index, so two
+ * bookshelves in the same room (or two plants) lay out different books/
+ * leaves, and revisiting a room rebuilds the identical prop. The defaults
+ * keep the old no-identity debug-gallery calls stable.
+ */
+export function propDetailKey(
+  kind: string,
+  roomId: string,
+  instanceId: string | number,
+): string {
+  // JSON-array encoding: roomId/instanceId may themselves contain ":" (the
+  // kit path builds instanceId as kitId:kitIndex:index), so a colon-joined
+  // string could collide two distinct identities; an array cannot.
+  return JSON.stringify([kind, roomId, String(instanceId)]);
+}
+
+/**
  * Sofa: plinth + two seat cushions, a raked backrest, wrap arms, two throw
  * pillows, short wood legs — soft low-poly upholstery in the cloth roles,
  * no single accent slab.
@@ -539,25 +562,38 @@ export function SofaProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
 /**
  * Bookshelf: plinth, sides, back, top and shelf boards in the wood roles,
  * and PER-BOOK instanced rows — variable width/height, muted palette-
- * derived spines — replacing the old three-color row bands.
+ * derived spines — replacing the old three-color row bands. Overall
+ * dimensions come from the shared BOOKSHELF_DIMENSIONS (kits.ts's
+ * bookshelf-run kit spaces its three cases by BOOKSHELF_RUN_SPACING, and
+ * the shelf wall bays these same numbers); each row's seedKey carries the
+ * instance identity so two shelves never share one book layout.
  */
-export function BookshelfProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+export function BookshelfProp({
+  mats,
+  roomId = "room-props",
+  instanceId = 0,
+}: {
+  mats: RoomPropMaterials;
+  roomId?: string;
+  instanceId?: string | number;
+}): JSX.Element {
+  const { width, depth, height } = BOOKSHELF_DIMENSIONS;
   const shelves = [0.5, 1.1, 1.7] as const;
   return (
     <group>
-      <ContactShadowPlane materials={mats} width={2.0} depth={0.6} />
-      <GrainBox size={[1.84, 0.1, 0.44]} position={[0, 0.05, 0]} material={mats.woodDark} />
+      <ContactShadowPlane materials={mats} width={width + 0.16} depth={depth + 0.16} />
+      <GrainBox size={[width, 0.1, depth]} position={[0, 0.05, 0]} material={mats.woodDark} />
       {[-0.85, 0.85].map((x) => (
-        <GrainBox key={x} size={[0.07, 2.2, 0.42]} position={[x, 1.1, 0]} material={mats.woodBase} />
+        <GrainBox key={x} size={[0.07, height, 0.42]} position={[x, height / 2, 0]} material={mats.woodBase} />
       ))}
-      <GrainBox size={[1.77, 2.2, 0.05]} position={[0, 1.1, -0.185]} material={mats.woodDark} />
-      <GrainBox size={[1.84, 0.06, 0.44]} position={[0, 2.17, 0]} material={mats.woodBase} />
+      <GrainBox size={[width - 0.07, height, 0.05]} position={[0, height / 2, -depth / 2 + 0.035]} material={mats.woodDark} />
+      <GrainBox size={[width, 0.06, depth]} position={[0, height - 0.03, 0]} material={mats.woodBase} />
       {shelves.map((y, i) => (
         <group key={y}>
           <GrainBox size={[1.7, 0.05, 0.4]} position={[0, y, 0]} material={mats.woodTop} />
           <group position={[0, y + 0.025, 0.02]}>
             <BookSpines
-              seedKey={`bookshelf:${i}`}
+              seedKey={`${propDetailKey("bookshelf", roomId, instanceId)}:row:${i}`}
               width={1.58}
               height={Math.max(0.1, 0.31 - 0.04 * ((i + 1) % 2))}
               depth={0.3}
@@ -692,7 +728,7 @@ export function RugProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
 }
 
 /** One plant leaf's placement: direction from the stem, height, size. */
-interface LeafSpec {
+export interface LeafSpec {
   dir: THREE.Vector3;
   h: number;
   dist: number;
@@ -700,11 +736,13 @@ interface LeafSpec {
   jitter: number;
 }
 
-/** Twelve leaves on four stems, generated once from a fixed sub-seed —
- *  per-plant variety comes from the room's canopy color, so no slice-seed
- *  coupling is needed here. */
-function leafSpecs(): LeafSpec[] {
-  const rng = createRng(deriveSubSeed(WORLD_SEED, "room-props:plant-leaves", "props"));
+/** Twelve leaves on four stems, generated once from a sub-seed keyed by
+ *  `seedKey` — the default keeps the original single-plant layout; passing
+ *  a prop instance identity (propDetailKey) gives every plant its own leaf
+ *  directions/lengths/placements while staying reproducible on revisit.
+ *  Pure: same seedKey, same specs, on any machine. */
+export function layoutPlantLeaves(seedKey = "room-props:plant-leaves"): LeafSpec[] {
+  const rng = createRng(deriveSubSeed(WORLD_SEED, seedKey, "props"));
   const specs: LeafSpec[] = [];
   for (let i = 0; i < 12; i++) {
     const yaw = i * 2.39996 + rng() * 0.5;
@@ -726,8 +764,19 @@ function leafSpecs(): LeafSpec[] {
  * INSTANCED leaves — flattened ellipsoids pointing every direction, tinted
  * per instance around the canopy color. No ball-of-spheres crown.
  */
-export function PlantProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
-  const leaves = useMemo(() => leafSpecs(), []);
+export function PlantProp({
+  mats,
+  roomId = "room-props",
+  instanceId = 0,
+}: {
+  mats: RoomPropMaterials;
+  roomId?: string;
+  instanceId?: string | number;
+}): JSX.Element {
+  const leaves = useMemo(
+    () => layoutPlantLeaves(propDetailKey("plant", roomId, instanceId)),
+    [roomId, instanceId],
+  );
   const leafRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const xAxis = useMemo(() => new THREE.Vector3(1, 0, 0), []);
@@ -837,10 +886,12 @@ export function FloorLampProp({ mats }: { mats: RoomPropMaterials }): JSX.Elemen
 
 /**
  * A loose stack of books — the bookshelf's muted spine language off the
- * shelf: four stacked with jitter, one leaning against the pile.
+ * shelf: four stacked with jitter, one leaning against the pile. The
+ * optional seedKey defaults to the original single-pile layout; pass a
+ * prop instance identity (propDetailKey) to give each pile its own stack.
  */
-export function layoutBookPile(): BoxInstance[] {
-  const rng = createRng(deriveSubSeed(WORLD_SEED, "room-props:bookpile", "props"));
+export function layoutBookPile(seedKey = "room-props:bookpile"): BoxInstance[] {
+  const rng = createRng(deriveSubSeed(WORLD_SEED, seedKey, "props"));
   const specs: BoxInstance[] = [];
   let y = 0;
   for (let i = 0; i < 4; i++) {
@@ -875,8 +926,19 @@ export function layoutBookPile(): BoxInstance[] {
   return specs;
 }
 
-export function BookpileProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
-  const specs = useMemo(() => layoutBookPile(), []);
+export function BookpileProp({
+  mats,
+  roomId = "room-props",
+  instanceId = 0,
+}: {
+  mats: RoomPropMaterials;
+  roomId?: string;
+  instanceId?: string | number;
+}): JSX.Element {
+  const specs = useMemo(
+    () => layoutBookPile(propDetailKey("bookpile", roomId, instanceId)),
+    [roomId, instanceId],
+  );
   return (
     <group>
       <InstancedBoxes specs={specs} colors={mats.bookColors} material={mats.book} />
@@ -895,8 +957,7 @@ export function BookpileProp({ mats }: { mats: RoomPropMaterials }): JSX.Element
 export function TvProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
   const screen = useMemo(() => mats.screen.clone(), [mats]);
   useEffect(() => () => screen.dispose(), [screen]);
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
+  useGameFrame((_, { elapsed: t }) => {
     const n =
       Math.sin(t * 7.3) * Math.sin(t * 3.1 + 1.7) * Math.sin(t * 0.9 + 0.4);
     screen.emissiveIntensity = 0.22 + 0.1 * (0.5 + 0.5 * n);
@@ -917,6 +978,176 @@ export function TvProp({ mats }: { mats: RoomPropMaterials }): JSX.Element {
       <mesh position={[0, 0.95, 0.045]} material={screen}>
         <boxGeometry args={[1.13, 0.63, 0.012]} />
       </mesh>
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Activity traces — "someone was just here" dressing                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One sheet of paper on a trace pile — a thin paper box whose BASE sits at
+ * `yBase` (never floating above the surface or the sheet beneath it).
+ */
+function TraceSheet({
+  mats,
+  width,
+  depth,
+  yBase,
+  x,
+  z,
+  rotY,
+}: {
+  mats: RoomPropMaterials;
+  width: number;
+  depth: number;
+  yBase: number;
+  x: number;
+  z: number;
+  rotY: number;
+}): JSX.Element {
+  const t = 0.004;
+  return (
+    <mesh
+      position={[x, yBase + t / 2, z]}
+      rotation={[0, rotY, 0]}
+      material={mats.paper}
+      userData={{ noCastShadow: true }}
+    >
+      <boxGeometry args={[width, t, depth]} />
+    </mesh>
+  );
+}
+
+/** Writing: a few staggered draft sheets and a pen resting on the top one. */
+function WritingTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  return (
+    <group>
+      {ACTIVITY_SHEETS.writing.map((sheet, i) => <TraceSheet key={i} mats={mats} {...sheet} />)}
+      <group position={[0.02, 0.018, 0.01]} rotation={[0, 0.5, 0]}>
+        <mesh rotation={[0, 0, Math.PI / 2]} material={mats.metal} userData={{ noCastShadow: true }}>
+          <cylinderGeometry args={[0.006, 0.006, 0.15, 6]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+/** Research: an open reference book — two muted cover boards (the spine
+ *  book instanceColor idiom) with two page slabs above, opened flat. */
+const RESEARCH_COVERS: BoxInstance[] = [
+  { x: -0.083, y: 0.004, z: 0, sx: 0.17, sy: 0.008, sz: 0.24, rotY: 0, rotZ: -0.03, colorIndex: 2 },
+  { x: 0.083, y: 0.004, z: 0, sx: 0.17, sy: 0.008, sz: 0.24, rotY: 0, rotZ: 0.03, colorIndex: 5 },
+];
+
+function ResearchTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  return (
+    <group>
+      <InstancedBoxes specs={RESEARCH_COVERS} colors={mats.bookColors} material={mats.book} />
+      <mesh position={[-0.078, 0.011, 0]} rotation={[0, 0, -0.02]} material={mats.paper} userData={{ noCastShadow: true }}>
+        <boxGeometry args={[0.155, 0.006, 0.22]} />
+      </mesh>
+      <mesh position={[0.078, 0.011, 0]} rotation={[0, 0, 0.02]} material={mats.paper} userData={{ noCastShadow: true }}>
+        <boxGeometry args={[0.155, 0.006, 0.22]} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Planning: a spread sheet of plans with two small cards laid on it. */
+function PlanningTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  return (
+    <group>
+      {ACTIVITY_SHEETS.planning.map((sheet, i) => <TraceSheet key={i} mats={mats} {...sheet} />)}
+    </group>
+  );
+}
+
+/** Making: a sketch sheet on the bench, a wooden ruler and two small tools. */
+function MakingTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  return (
+    <group>
+      {ACTIVITY_SHEETS.making.map((sheet, i) => <TraceSheet key={i} mats={mats} {...sheet} />)}
+      <mesh position={[0, 0.002, 0.1]} rotation={[0, 0.04, 0]} material={mats.woodBase} userData={{ noCastShadow: true }}>
+        <boxGeometry args={[0.2, 0.004, 0.022]} />
+      </mesh>
+      <mesh position={[0.04, 0.003, -0.1]} rotation={[0, -0.3, 0]} material={mats.metal} userData={{ noCastShadow: true }}>
+        <boxGeometry args={[0.09, 0.006, 0.02]} />
+      </mesh>
+      <group position={[-0.04, 0.008, -0.1]} rotation={[0, 0.4, 0]}>
+        <mesh rotation={[0, 0, Math.PI / 2]} material={mats.metal} userData={{ noCastShadow: true }}>
+          <cylinderGeometry args={[0.008, 0.008, 0.05, 6]} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+/** Conversation: two cups set facing each other, a dark drink surface in
+ *  each (the woodDark role reads as tea/coffee, never a glowing liquid). */
+function ConversationTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  const cup = (x: number, z: number, yaw: number): JSX.Element => (
+    <group position={[x, 0, z]} rotation={[0, yaw, 0]}>
+      <mesh position={[0, 0.035, 0]} material={mats.ceramic} userData={{ noCastShadow: true }}>
+        <cylinderGeometry args={[ACTIVITY_CUP_RADIUS, 0.027, 0.07, 10]} />
+      </mesh>
+      <mesh position={[0, 0.066, 0]} material={mats.woodDark} userData={{ noCastShadow: true }}>
+        <cylinderGeometry args={[0.028, 0.028, 0.004, 10]} />
+      </mesh>
+    </group>
+  );
+  return (
+    <group>
+      {ACTIVITY_CUPS.map((p, i) => <group key={i}>{cup(p.x, p.z, p.yaw)}</group>)}
+    </group>
+  );
+}
+
+/** Reflection: one closed diary beside the seat — cover boards in the
+ *  muted spine palette around a paper page block. */
+const REFLECTION_COVERS: BoxInstance[] = [
+  { x: 0, y: 0.002, z: 0, sx: ACTIVITY_DIARY_SIZE.width, sy: 0.004, sz: ACTIVITY_DIARY_SIZE.depth, rotY: 0, rotZ: 0, colorIndex: 3 },
+  { x: 0, y: 0.022, z: 0, sx: ACTIVITY_DIARY_SIZE.width, sy: 0.004, sz: ACTIVITY_DIARY_SIZE.depth, rotY: 0, rotZ: 0, colorIndex: 3 },
+];
+
+function ReflectionTrace({ mats }: { mats: RoomPropMaterials }): JSX.Element {
+  return (
+    <group>
+      <InstancedBoxes specs={REFLECTION_COVERS} colors={mats.bookColors} material={mats.book} />
+      <mesh position={[0, 0.012, 0]} material={mats.paper} userData={{ noCastShadow: true }}>
+        <boxGeometry args={[0.132, 0.016, 0.192]} />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * Activity trace: the small dressing `activityTraceFor` (activity-traces.ts)
+ * places ON a host furniture top — drafts on the desk, two cups on the
+ * coffee table, a closed diary on the nightstand. The item's y is the
+ * host's REAL working top (host.y + ACTIVITY_SURFACE_HEIGHTS·scale), so
+ * this group's origin sits exactly on the support plane: every sheet,
+ * cover and cup base is authored at y ≥ 0 inside the group and nothing
+ * floats. Rendered with the shared role materials only (paper / book /
+ * ceramic / metal / woodBase / woodDark) — no labels, no lights, no new
+ * materials, no effect on the room fade or the instanced books/leaves.
+ */
+export function ActivityTraceProp({
+  trace,
+  mats,
+}: {
+  trace: ActivityTraceItem;
+  mats: RoomPropMaterials;
+}): JSX.Element {
+  return (
+    <group position={[trace.x, trace.y, trace.z]} rotation={[0, trace.rotY, 0]} scale={trace.scale}>
+      {trace.kind === "writing" && <WritingTrace mats={mats} />}
+      {trace.kind === "research" && <ResearchTrace mats={mats} />}
+      {trace.kind === "planning" && <PlanningTrace mats={mats} />}
+      {trace.kind === "making" && <MakingTrace mats={mats} />}
+      {trace.kind === "conversation" && <ConversationTrace mats={mats} />}
+      {trace.kind === "reflection" && <ReflectionTrace mats={mats} />}
     </group>
   );
 }

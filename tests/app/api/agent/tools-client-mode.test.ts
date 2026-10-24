@@ -9,6 +9,8 @@ import {
   buildChatToolsContext,
 } from "@/app/api/agent/tools";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
+import { deriveRoomProfile } from "@/lib/game/room-profile";
+import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 
 const SAVED_MODE = process.env.PREVIOUSLY_MODE;
 
@@ -187,19 +189,47 @@ describe("chat tool surface", () => {
 });
 
 describe("toolContextSchema — step-boundary round-trip", () => {
-  it("keeps timezone / startedAtIso / locale / imageAttachments through the schema re-parse (zod strips undeclared keys)", async () => {
+  const view: NonNullable<ToolContext["view"]> = {
+    sliceId: ctx.sliceId,
+    surface: "room",
+    snapshot: {
+      sliceId: ctx.sliceId,
+      generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+      profile: deriveRoomProfile({ focus: "撰写小说" }),
+      roomDoorCount: 4,
+      corridorSide: "south",
+    },
+  };
+  const full: ToolContext = {
+    ...ctx,
+    view,
+    timezone: "Asia/Shanghai",
+    startedAtIso: "2026-08-28T07:39:01.339Z",
+    locale: "zh",
+    imageAttachments: ["data:image/png;base64,xx"],
+  };
+
+  it("keeps the validated view and existing optional fields through JSON + schema round-trips", async () => {
     const { toolContextSchema } = await import("@/app/api/agent/tools");
-    const full: ToolContext = {
-      ...ctx,
-      timezone: "Asia/Shanghai",
-      startedAtIso: "2026-08-28T07:39:01.339Z",
-      locale: "zh",
-      imageAttachments: ["data:image/png;base64,xx"],
-    };
-    const parsed = toolContextSchema.parse(full);
+    const parsed = toolContextSchema.parse(JSON.parse(JSON.stringify(full)));
+
+    expect(parsed.view).toEqual(view);
     expect(parsed.timezone).toBe("Asia/Shanghai");
     expect(parsed.startedAtIso).toBe("2026-08-28T07:39:01.339Z");
     expect(parsed.locale).toBe("zh");
     expect(parsed.imageAttachments).toEqual(["data:image/png;base64,xx"]);
+  });
+
+  it("rejects an unknown nested snapshot field at the tool boundary", async () => {
+    const { toolContextSchema } = await import("@/app/api/agent/tools");
+    expect(() =>
+      toolContextSchema.parse({
+        ...full,
+        view: {
+          ...view,
+          snapshot: { ...view.snapshot, sourceText: "用户原文" },
+        },
+      }),
+    ).toThrow();
   });
 });

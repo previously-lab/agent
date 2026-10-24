@@ -25,6 +25,7 @@ import { start } from "workflow/api";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
+import type { ToolContext } from "@/app/api/agent/tool-executors";
 import type {
   InnerTurnInput,
   NestedTurnTail,
@@ -71,6 +72,32 @@ import {
 import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
+
+/** The one context shape shared by the outer answerer and every nested answerer. */
+export function buildTurnToolContext(
+  input: TurnInput,
+  sliceId: string,
+  systemPrompt: string,
+  includeImageAttachments: boolean,
+): ToolContext {
+  return {
+    repo: input.repo,
+    owner: input.owner,
+    useGithub: input.useGithub,
+    useDemo: input.useDemo,
+    sliceId,
+    recentTurns: input.recentTurns,
+    baseSystemPrompt: systemPrompt,
+    mainModel: input.modelConfig,
+    timezone: input.clientTimezone,
+    startedAtIso: input.startedAtIso,
+    locale: input.locale,
+    ...(includeImageAttachments
+      ? { imageAttachments: input.imageAttachments }
+      : {}),
+    ...(input.view ? { view: input.view } : {}),
+  };
+}
 
 /**
  * Episode idle grace (R4, v0.30 §3): after a clean answer the run keeps its
@@ -1036,29 +1063,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     model: input.modelConfig,
     thinking: input.thinking,
     reasoningEffort: input.reasoningEffort,
-    toolsContext: buildChatToolsContext({
-      repo: input.repo,
-      owner: input.owner,
-      useGithub: input.useGithub,
-      useDemo: input.useDemo,
-      sliceId: slice.slice_id,
-      recentTurns: input.recentTurns,
-      // The full assembled system prompt — thinkDeep sub-agents reuse it as
-      // their prefix so provider prompt-cache hits span main + sub calls.
-      baseSystemPrompt: systemPrompt,
-      // The turn's resolved main model — all sub-agents reuse it (shared
-      // context) instead of re-resolving config from GitHub on every step.
-      mainModel: input.modelConfig,
-      // Read tools pre-render user-local time from these (see time-localize.ts).
-      timezone: input.clientTimezone,
-      startedAtIso: input.startedAtIso,
-      locale: input.locale,
-      // Image attachments ride the workflow step boundary as data URLs so the
-      // viewImage tool can resolve `attachment:N` for non-vision main models.
-      // They are capped at 4 images and client-compressed to 1568px, keeping the
-      // serialized payload bounded.
-      imageAttachments: input.imageAttachments,
-    }),
+    toolsContext: buildChatToolsContext(
+      buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
+    ),
     // Snapshot exact native messages, including checkpointed partial HTTP
     // output, for recovery and bounded platform-timeout continuation.
     onStepEnd: (step) => {
@@ -1315,23 +1322,14 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
                 modelConfig: input.modelConfig,
                 thinking: input.thinking,
                 reasoningEffort: input.reasoningEffort,
-                toolsContext: {
-                  repo: input.repo,
-                  owner: input.owner,
-                  useGithub: input.useGithub,
-                  useDemo: input.useDemo,
-                  sliceId: slice.slice_id,
-                  recentTurns: input.recentTurns,
-                  baseSystemPrompt: systemPrompt,
-                  mainModel: input.modelConfig,
-                  timezone: input.clientTimezone,
-                  startedAtIso: input.startedAtIso,
-                  locale: input.locale,
-                  // The FIRST child inherits the turn's image attachments so
-                  // viewImage resolves `attachment:N` for non-vision models;
-                  // arrivals are text-only (the messages route takes no files).
-                  ...(first ? { imageAttachments: input.imageAttachments } : {}),
-                },
+                // The FIRST child inherits image attachments; arrivals are
+                // text-only. Both carry the same validated visual view.
+                toolsContext: buildTurnToolContext(
+                  input,
+                  slice.slice_id,
+                  systemPrompt,
+                  first,
+                ),
               };
               // Step-backed spawn (workflow-v5 composition, start.mdx); the
               // region matches every other start call in the repo (D10).

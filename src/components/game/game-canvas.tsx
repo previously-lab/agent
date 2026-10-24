@@ -133,7 +133,7 @@ import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessi
 import { useTranslations, useLocale } from "next-intl";
 import { useReducedMotion } from "motion/react";
 import { useTheme } from "@teispace/next-themes";
-import type { JSX, MutableRefObject, ReactNode } from "react";
+import type { ComponentRef, JSX, MutableRefObject, ReactNode } from "react";
 import { GAME_DEBUG } from "./debug";
 import { useWorldScene } from "@/components/timeline-3d/world-slot";
 import { AnchorHologram } from "@/lib/game/anchor-hologram";
@@ -153,7 +153,16 @@ import {
   hotelShotPose,
   type FollowPose,
 } from "@/lib/timeline3d/world-transition";
+import {
+  createFrozenFrameRepaintPlanner,
+  renderFrozenComposerOnce,
+  type FrozenFrameGeometry,
+  type FrozenFrameRepaintPlanner,
+} from "@/lib/timeline3d/frozen-frame";
 import { GAME_SIM_FREEZE } from "./sim-freeze";
+import { GameTimeOwner, useGameFrame } from "./use-game-frame";
+import { gameElapsed } from "./game-time";
+import { hotelDataEpoch } from "@/lib/game/hotel-data";
 import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import {
   LOBBY_LENGTH,
@@ -188,8 +197,19 @@ import {
 } from "@/lib/game/clamps";
 import { compositionForRecipe, seamPartitionsFor } from "@/lib/game/room-modules";
 import { WORLD_SEED } from "@/lib/game/seed";
-import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
+import { debugSliceIdWithoutSkin, isDebugSlice } from "@/lib/game/debug-slice";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { getBrowserRoomProfileCache, type RoomProfileRequest, type RoomProfileCacheResult } from "@/lib/game/room-profile-cache";
+import { NEUTRAL_ROOM_PROFILE, type RoomProfile } from "@/lib/game/room-profile";
+import {
+  ROOM_SNAPSHOT_GENERATOR_VERSION,
+  type RoomSnapshot,
+} from "@/lib/game/room-snapshot";
+import {
+  clampToThreshold,
+  decideGate,
+  roomProfileSourceScope,
+} from "@/lib/game/room-intent";
 import { rtsRoomZoom, scenarioPalette, shouldInteractWithScene } from "@/lib/game/scenario-art";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
 import {
@@ -358,6 +378,15 @@ interface WalkTarget {
   lastD: number;
 }
 
+/** A corridor door's readiness verdict — the synchronous half of the
+ *  profile lane. `ready` carries the fully resolved space (recipe compiled
+ *  with the peeked profile, snapshot frozen) and mounts the same frame it
+ *  is returned; `hold` keeps the player at the threshold with the gate's
+ *  status (`loading` — read in flight, `retry` — failed, user decides). */
+type RoomReadiness =
+  | { kind: "ready"; space: ActiveSpace }
+  | { kind: "hold"; status: "loading" | "retry" };
+
 /** The one space that may be mounted at a time. `recipe` is the authored
  *  recipe (palette, archetype); `scaledRecipe` is the same recipe with the
  *  room-language scale notation applied to its plan dims — the ONE scaled
@@ -367,13 +396,39 @@ interface WalkTarget {
  *  pure derivation for the slice): the composition that sized scaledRecipe
  *  grew by it (§8.4), and freezing it here keeps the renderer and the
  *  clamp on one value for the whole visit — the room can never morph
- *  mid-stay when the strand lane resolves after the mount. */
+ *  mid-stay when the strand lane resolves after the mount.
+ *
+ *  `snapshot` is the frozen VISUAL CONTRACT of this exact visit (v0.13 §5):
+ *  the bounded semantic profile the recipe compiled with, the strand-door
+ *  count, and the corridor side — everything the clamp, the renderer, the
+ *  return door and the chat view's describe-room snapshot ride, so a room
+ *  mounted by ANY path (wall crossing, prewarm, return landing) describes
+ *  itself identically. Never seeded into any RNG: the snapshot freezes
+ *  state, it never perturbs the streams. */
 interface ActiveSpace {
   door: DoorRef;
   recipe: SpaceRecipe;
   scaledRecipe: SpaceRecipe;
   scale: ScaleNotation;
   roomDoorCount: number;
+  snapshot: RoomSnapshot;
+}
+
+/** The complete, frozen visual state of the room behind `door` for one
+ *  visit — the single snapshot construction every mount path shares
+ *  (room-snapshot.ts is the wire schema; this is its in-scene twin). */
+function buildSnapshotForDoor(
+  door: DoorRef,
+  profile: RoomProfile,
+  roomDoorCount: number,
+): RoomSnapshot {
+  return Object.freeze({
+    sliceId: door.sliceId,
+    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    profile,
+    roomDoorCount,
+    corridorSide: door.side,
+  });
 }
 
 /** Stand-in plan while no space is active — the space clamp never runs
@@ -741,7 +796,16 @@ export type TripSide = Side | "east";
 
 export interface NavEntry {
   readonly hotel: HotelRef;
-  readonly returnTo: { readonly sliceId: string; readonly key: string } | null;
+  readonly returnTo: {
+    readonly sliceId: string;
+    readonly key: string;
+    /** The room's frozen visual contract at departure (v0.13 §5): the
+     *  return landing restores THE ROOM THE PLAYER LEFT — same profile,
+     *  same strand-door count — with zero network and no re-derive. Old
+     *  entries pushed before snapshots existed simply carry none and take
+     *  the prepare path. */
+    readonly snapshot?: RoomSnapshot;
+  } | null;
   readonly side: TripSide;
 }
 
@@ -890,28 +954,52 @@ function doorRefForFlatIndex(
 }
 
 /** Build the ActiveSpace for a corridor door — the ONE construction shared
- *  by the door manager's wall-crossing mount and the return door's
- *  back-into-the-room landing, so a room mounted either way is identical
- *  (recipe, archetype override, and the single scaled view the clamps and
- *  terrain consume). `roomDoorCount` is the strand-door count for this
- *  slice AT RESOLUTION TIME — frozen into the space (see ActiveSpace), so
- *  every consumer of the room shares one value. */
+ *  by the door manager's wall-crossing mount, the prewarm's invisible
+ *  mount, and the return door's back-into-the-room landing, so a room
+ *  mounted any way is identical (recipe, archetype override, the single
+ *  scaled view the clamps and terrain consume, and the frozen snapshot).
+ *  `roomDoorCount` is the strand-door count for this slice AT RESOLUTION
+ *  TIME — frozen into the space (see ActiveSpace), so every consumer of
+ *  the room shares one value.
+ *
+ *  THE PROFILE LANE (v0.13): a committable `profile` (peeked ready, a
+ *  definitive missing, or an explicit user-chosen fallback) compiles into
+ *  the recipe here — pinned archetype, never a reseed (space-recipe.ts).
+ *  Absent (gallery/debug doors, prepare still in flight) the legacy
+ *  byte-for-byte recipe compiles and the snapshot records the neutral
+ *  profile. A saved `snapshot` (the return door's way back into the room
+ *  the player left) wins only while it truly describes THIS door — same
+ *  slice, same corridor side, same generator version — so a stale saved
+ *  view can never print over a different door. */
 function resolveSpaceForDoor(
   door: DoorRef,
   archetypeById: ReadonlyMap<string, ArchetypeId>,
   roomDoorCount: number = 0,
+  profile?: RoomProfile,
+  snapshot?: RoomSnapshot,
 ): ActiveSpace {
+  const saved = snapshot?.sliceId === door.sliceId &&
+    snapshot.generatorVersion === ROOM_SNAPSHOT_GENERATOR_VERSION &&
+    snapshot.corridorSide === door.side ? snapshot : undefined;
+  const visitProfile = saved?.profile ?? profile ?? NEUTRAL_ROOM_PROFILE;
+  const visitDoorCount = saved?.roomDoorCount ?? roomDoorCount;
   // P3-b1: the recipe compiles from the SKIN-STRIPPED id — the skin is a
   // view-layer force and must never perturb the room's own streams
   // (palette/size/lightSeed feed every downstream seed, composition and
   // scale notation included). The raw id survives on `space.door`,
   // where the view layer (skinForSlice, probe mirrors) reads it.
   // Identity for every non-skinned id, so the default path is untouched.
-  const recipe = compileSpaceRecipe(debugSliceIdWithoutSkin(door.sliceId));
+  const recipe = compileSpaceRecipe(
+    debugSliceIdWithoutSkin(door.sliceId),
+    WORLD_SEED,
+    visitProfile,
+  );
   const archetype = archetypeById.get(door.sliceId);
-  const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
-  const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe, roomDoorCount);
-  return { door, recipe: finalRecipe, scaledRecipe, scale, roomDoorCount };
+  const finalRecipe = archetype === undefined || visitProfile.activity !== "neutral"
+    ? recipe : { ...recipe, archetype };
+  const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe, visitDoorCount);
+  const frozen = saved ?? buildSnapshotForDoor(door, visitProfile, visitDoorCount);
+  return { door, recipe: finalRecipe, scaledRecipe, scale, roomDoorCount: visitDoorCount, snapshot: frozen };
 }
 
 /**
@@ -1176,9 +1264,13 @@ function CameraRig({
     };
   }, [projectPoint]);
 
-  useFrame(({ camera, gl }, dt) => {
+  useGameFrame(({ camera, gl }, { delta: dt, initialize }) => {
     cameraRef.current = camera;
     canvasRef.current = gl.domElement;
+    if (GAME_SIM_FREEZE.frozen && !initialize) {
+      camera.updateProjectionMatrix();
+      return;
+    }
     const step = Math.min(dt, MAX_DT);
     const live = CHASE_LIVE;
     const p = playerRef.current;
@@ -1195,7 +1287,7 @@ function CameraRig({
     if (mode === "top") {
       // A fixed RTS direction. The room is the subject; a small amount of
       // player follow makes walking legible without orbiting the scene.
-      const k = 1 - Math.exp(-CAMERA_LERP_RATE * step);
+      const k = initialize ? 1 : 1 - Math.exp(-CAMERA_LERP_RATE * step);
       const dir = space === null ? 1 : roomOrientationFor(space.door).dir;
       const centerX = space?.door.x ?? p.x;
       const centerZ = space === null ? p.z : space.door.z + dir * space.scaledRecipe.size.extent / 2;
@@ -1434,12 +1526,13 @@ function Atmosphere({
     ambient: CORRIDOR_AMBIENT,
   }));
 
-  useFrame((_, dt) => {
+  useGameFrame((_, { delta: dt, initialize }) => {
     const bg = bgRef.current;
     const sun = sunRef.current;
     const ambient = ambientRef.current;
     if (!bg || !sun || !ambient) return;
-    const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
+    if (GAME_SIM_FREEZE.frozen && !initialize) return;
+    const k = initialize ? 1 : 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
     resolveAtmosphere(space, dark, targets);
     bg.lerp(targets.background, k);
     sun.color.lerp(targets.sunColor, k);
@@ -1582,10 +1675,11 @@ function StageBackdrop({
   const [white] = useState(() => new THREE.Color("#ffffff"));
   const initializedRef = useRef(false);
 
-  useFrame((_, dt) => {
+  useGameFrame((_, { delta: dt, initialize }) => {
     const mesh = meshRef.current;
     const mat = matRef.current;
     if (!mesh || !mat) return;
+    if (GAME_SIM_FREEZE.frozen && !initialize) return;
     const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
     resolveAtmosphere(space, dark, targets);
     scratch.copy(targets.background).lerp(white, STAGE_BACKDROP_LIFT);
@@ -1646,15 +1740,17 @@ function PlayerAvatar({
   const bobRef = useRef(0);
   const yRef = useRef(0);
 
-  useFrame((_, dt) => {
+  useGameFrame((_, { delta: dt, initialize }) => {
     const root = rootRef.current;
     const body = bodyRef.current;
     if (!root || !body) return;
+    if (GAME_SIM_FREEZE.frozen && !initialize) return;
     const step = Math.min(dt, MAX_DT);
     const motion = motionRef.current;
 
     const p = playerRef.current;
     const targetY = space ? groundTargetY(space, waterSide, p.x, p.z) : 0;
+    if (initialize) yRef.current = targetY;
     yRef.current += (targetY - yRef.current) * (1 - Math.exp(-GROUND_LERP_RATE * step));
     root.position.set(p.x, yRef.current, p.z);
     if (motion.moving) {
@@ -1763,7 +1859,7 @@ function GameLoop({
   onArrivalDoor,
   hopGuard,
   hotelLabel,
-  archetypeById,
+  roomReadiness,
   activeSpace,
   setActiveSpace,
   corridorHidden,
@@ -1774,7 +1870,6 @@ function GameLoop({
   setPrewarmDoor,
   transitionActive,
   roomDoors,
-  roomDoorCountFor,
   roomPlan,
   roomSeams,
   roomPapers,
@@ -1830,7 +1925,7 @@ function GameLoop({
   hopGuard: MutableRefObject<boolean>;
   /** "timelineId@windowIndex" — written to GAME_DEBUG.hotel every frame. */
   hotelLabel: string;
-  archetypeById: ReadonlyMap<string, ArchetypeId>;
+  roomReadiness: (door: DoorRef) => RoomReadiness;
   activeSpace: ActiveSpace | null;
   setActiveSpace: (space: ActiveSpace | null) => void;
   corridorHidden: boolean;
@@ -1848,7 +1943,6 @@ function GameLoop({
    *  the pure door-map lookup (data lane), consumed at the wall crossing
    *  to freeze the count into the new ActiveSpace. GameLoop sees only the
    *  ACTIVE space's placements above, so the mount asks here per slice. */
-  roomDoorCountFor: (sliceId: string) => number;
   /** The active space's floor plan (same derivation as roomDoors) — the
    *  clamp's plan-aware containment; a placeholder rect when no space is
    *  active (the space clamp never runs then). */
@@ -1879,7 +1973,7 @@ function GameLoop({
   anchorHudRef: MutableRefObject<AnchorHud | null>;
   setHudAnchor: (anchor: AnchorHud | null) => void;
 }): null {
-  useFrame((_, delta) => {
+  useGameFrame((_, { delta }) => {
     const p = playerRef.current;
     let space = activeSpace;
 
@@ -2052,8 +2146,17 @@ function GameLoop({
           // with it (§8.4 — the composition grew by it): the room the
           // player walks in is the room the clamp contains.
           MOUNT_TRACE.tRequest = performance.now();
-          space = resolveSpaceForDoor(door, archetypeById, roomDoorCountFor(door.sliceId));
-          setActiveSpace(space);
+          const readiness = roomReadiness(door);
+          if (readiness.kind === "ready") {
+            space = readiness.space;
+            setActiveSpace(space);
+          } else {
+            clampToThreshold(p, { door });
+            if (prewarmIdRef.current !== door.sliceId) {
+              prewarmIdRef.current = door.sliceId;
+              setPrewarmDoor(door);
+            }
+          }
         }
       } else if (az < WALL_IN && space !== null) {
         // Release only through THE door gap: inside the corridor band and
@@ -2262,6 +2365,8 @@ function GameLoop({
     GAME_DEBUG.x = p.x;
     GAME_DEBUG.z = p.z;
     GAME_DEBUG.space = space === null ? null : space.door.sliceId;
+    GAME_DEBUG.snapshot = space?.snapshot ?? null;
+    GAME_DEBUG.elapsed = gameElapsed();
     GAME_DEBUG.hotel = hotelLabel;
   });
   return null;
@@ -2584,11 +2689,77 @@ function RenderTrace(): null {
 /* GameCanvas                                                          */
 /* ------------------------------------------------------------------ */
 
+/** Restore a cleared paused canvas after static initialization (priority 0)
+ * and the ordinary composer (priority 1). The independent game clock keeps
+ * demand frames frozen. Only actual paints discharge the resize debt. */
+function FrozenGameFrameRepaint({
+  suspended,
+  composer,
+}: {
+  suspended: boolean;
+  /** The game's EffectComposer ref — the postprocessing EffectComposerImpl
+   *  the wrapper exposes. Null until the wrapper mounts its composer. */
+  composer: ComponentRef<typeof EffectComposer> | null;
+}): null {
+  const plannerRef = useRef<FrozenFrameRepaintPlanner | null>(null);
+  if (plannerRef.current === null) {
+    plannerRef.current = createFrozenFrameRepaintPlanner();
+  }
+  const size = useThree((s) => s.size);
+  const dpr = useThree((s) => s.viewport.dpr);
+  useLayoutEffect(() => {
+    plannerRef.current?.syncActive({ width: size.width, height: size.height, dpr });
+  }, [size.width, size.height, dpr]);
+
+  useFrame(({ gl, size, viewport, invalidate }) => {
+    const planner = plannerRef.current;
+    if (planner === null) return;
+    const geometry: FrozenFrameGeometry = {
+      width: size.width,
+      height: size.height,
+      dpr: viewport.dpr,
+    };
+    if (!suspended) {
+      // The enabled composer ran at priority 1 in this frame.
+      if (composer !== null) planner.markPainted(geometry);
+      return;
+    }
+    if (planner.planSuspended(geometry, composer !== null) !== "paint") return;
+    // planner said paint ⇒ composer !== null by construction.
+    if (composer === null) return;
+    renderFrozenComposerOnce(gl, composer, geometry);
+    planner.markPainted(geometry);
+    invalidate();
+  }, 1.5);
+
+  return null;
+}
+
+function CorridorHideDelay({ hidden, onHidden }: {
+  hidden: boolean;
+  onHidden: (hidden: boolean) => void;
+}): null {
+  const deadline = useRef<number | null>(null);
+  const fired = useRef(false);
+  useGameFrame((_, { elapsed }) => {
+    if (!hidden) { deadline.current = null; fired.current = false; return; }
+    deadline.current ??= elapsed + HIDE_DELAY_MS / 1000;
+    if (!GAME_SIM_FREEZE.frozen && !fired.current && elapsed >= deadline.current) {
+      fired.current = true;
+      onHidden(true);
+    }
+  });
+  return null;
+}
+
 export default function GameCanvas({
   doors,
   roomDoors,
   timelines,
   onActiveSliceChange,
+  onRoomSnapshotChange,
+  persona = "user",
+  sourceScope = roomProfileSourceScope(),
   focusSlice = null,
   onOpenDoc,
   cameraMode = "top",
@@ -2609,6 +2780,9 @@ export default function GameCanvas({
    *  room's slice id, or null in the corridor. Fired from an effect on
    *  activeSpace, so it tracks the door manager exactly. */
   onActiveSliceChange?: (sliceId: string | null) => void;
+  onRoomSnapshotChange?: (snapshot: RoomSnapshot | null) => void;
+  persona?: string;
+  sourceScope?: string;
   /** The shared `?slice=` address (§14): enter the slice's own hotel window
    *  and stand at its door. Resolved once per value, through the same pure
    *  layout math the door manager uses; an unknown id is ignored (the
@@ -2623,8 +2797,10 @@ export default function GameCanvas({
   cameraMode?: GameCameraMode;
   /** THE DOCUMENT PAUSE (v0.28 step 1): the document tier sits over the
    *  frozen world — the in-world chrome (the door HUD, the touch layer)
-   *  stands down with the simulation. The scene itself keeps rendering
-   *  the frozen frame under the shell's blur layer. */
+   *  stands down with the simulation. The scene itself keeps showing the
+   *  frozen frame under the shell's blur layer; the only repaint it ever
+   *  gets while suspended is the one-shot repair of a mid-pause resize/DPR
+   *  change clearing the canvas (FrozenGameFrameRepaint, frozen-frame.ts). */
   suspended?: boolean;
 }): JSX.Element {
   const t = useTranslations("game");
@@ -2667,7 +2843,13 @@ export default function GameCanvas({
       // interaction's old instant catalog jump (world-transition.ts). The
       // URL is written at completion, not here.
       window.setTimeout(
-        () => WORLD_TRANSITION.hooks.enter?.(anchor.sliceId),
+        () => {
+          if (GAME_SIM_FREEZE.frozen || !departingRef.current) {
+            departingRef.current = false;
+            return;
+          }
+          WORLD_TRANSITION.hooks.enter?.(anchor.sliceId);
+        },
         reducedMotion ? 0 : TERMINAL_FLARE_MS,
       );
     };
@@ -2735,6 +2917,14 @@ export default function GameCanvas({
   });
   const hudIdRef = useRef<string | null>(null);
   const [activeSpace, setActiveSpace] = useState<ActiveSpace | null>(null);
+  const navigationEpoch = useRef(0);
+  const profileCache = getBrowserRoomProfileCache();
+  const [profileRevision, setProfileRevision] = useState(0);
+  const visitFallback = useRef<{ request: RoomProfileRequest; result: RoomProfileCacheResult } | null>(null);
+  const profileEpoch = hotelDataEpoch();
+  const [returnRequest, setReturnRequest] = useState<{
+    side: Side; request: RoomProfileRequest; status: "loading" | "retry";
+  } | null>(null);
   const [corridorHidden, setCorridorHidden] = useState(false);
   const [hudDoor, setHudDoor] = useState<CorridorDoor | null>(null);
   // The mounted room follows the door manager the instant the wall plane
@@ -2750,6 +2940,13 @@ export default function GameCanvas({
   useEffect(() => {
     onActiveSliceChange?.(activeSpace === null ? null : activeSpace.door.sliceId);
   }, [activeSpace, onActiveSliceChange]);
+  useEffect(() => {
+    onRoomSnapshotChange?.(suspended ? null : activeSpace?.snapshot ?? null);
+    return () => onRoomSnapshotChange?.(null);
+  }, [activeSpace, suspended, onRoomSnapshotChange]);
+  useEffect(() => {
+    if (activeSpace) visitFallback.current = null;
+  }, [activeSpace]);
   // ONE CURSOR (v0.13 §6): walking IS moving the shared slice cursor — the
   // room the reader stands in is the slice the cursor names. A QUIET write
   // through the module hook (lib/timeline3d/cursor.ts, the
@@ -2775,6 +2972,24 @@ export default function GameCanvas({
   // holds the shown space when there is one, the prewarm space otherwise.
   const [prewarmDoor, setPrewarmDoor] = useState<DoorRef | null>(null);
   const prewarmIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    navigationEpoch.current += 1;
+    visitFallback.current = null;
+    setActiveSpace(null);
+    setShownSpace(null);
+    setPrewarmDoor(null);
+    prewarmIdRef.current = null;
+    return () => { navigationEpoch.current += 1; };
+  }, [persona, sourceScope]);
+  useEffect(() => {
+    if (!prewarmDoor || isDebugSlice(prewarmDoor.sliceId)) return;
+    let cancelled = false;
+    const request = profileCache.capture(sourceScope, persona, prewarmDoor.sliceId);
+    void profileCache.load(request).then(() => {
+      if (!cancelled && profileCache.isCurrent(request)) setProfileRevision((n) => n + 1);
+    });
+    return () => { cancelled = true; };
+  }, [prewarmDoor, sourceScope, persona, profileEpoch, profileCache]);
   // Wrapper around the corridor so LightConfigCompiler can exclude its
   // lights from a proxy compile (compile gathers lights via
   // traverseVisible) without touching corridor.tsx.
@@ -2783,14 +2998,7 @@ export default function GameCanvas({
   // unmounts (HIDE_DELAY_MS after the hide threshold); the space's own
   // slab mounts exactly then — never two doors in one frame.
   const [corridorGone, setCorridorGone] = useState(false);
-  useEffect(() => {
-    if (!corridorHidden) {
-      setCorridorGone(false);
-      return;
-    }
-    const timer = setTimeout(() => setCorridorGone(true), HIDE_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [corridorHidden]);
+  useEffect(() => { if (!corridorHidden) setCorridorGone(false); }, [corridorHidden]);
 
   // Strand-door wormhole (doc B.11): the transition's phase lives in a
   // pure reducer (reduceStrandTransition); the effects below only execute
@@ -2924,13 +3132,46 @@ export default function GameCanvas({
   // door manager uses — a prewarmed room is identical to a crossed-into
   // one (A6), including the frozen strand-door count (re-resolved when the
   // door map lands, while the mount is still invisible).
-  const prewarmSpace = useMemo(
-    () =>
-      prewarmDoor === null
-        ? null
-        : resolveSpaceForDoor(prewarmDoor, archetypeById, roomDoorCountFor(prewarmDoor.sliceId)),
-    [prewarmDoor, archetypeById, roomDoorCountFor],
-  );
+  const roomReadiness = useCallback((door: DoorRef): RoomReadiness => {
+    if (isDebugSlice(door.sliceId)) return {
+      kind: "ready", space: resolveSpaceForDoor(door, archetypeById, roomDoorCountFor(door.sliceId)),
+    };
+    const request = profileCache.capture(sourceScope, persona, door.sliceId);
+    const fallback = visitFallback.current;
+    const sameFallback = fallback && profileCache.isCurrent(fallback.request) &&
+      fallback.request.sliceId === request.sliceId && fallback.request.persona === persona &&
+      fallback.request.sourceScope === sourceScope;
+    const verdict = decideGate(sameFallback ? fallback.result : profileCache.peek(request));
+    return verdict.kind === "commit" ? {
+      kind: "ready", space: resolveSpaceForDoor(door, archetypeById, roomDoorCountFor(door.sliceId), verdict.profile),
+    } : verdict;
+  }, [profileCache, sourceScope, persona, archetypeById, roomDoorCountFor]);
+  const prewarmSpace = useMemo(() => {
+    if (!prewarmDoor) return null;
+    const readiness = roomReadiness(prewarmDoor);
+    return readiness.kind === "ready" ? readiness.space : null;
+    // The cache is external mutable state; these revisions invalidate its peek.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prewarmDoor, roomReadiness, profileRevision, profileEpoch]);
+  const profileStatus = prewarmDoor && !activeSpace && !isDebugSlice(prewarmDoor.sliceId)
+    ? roomReadiness(prewarmDoor) : null;
+  const retryProfile = () => {
+    if (returnRequest) { void handleReturnDoor(returnRequest.side, true); return; }
+    if (!prewarmDoor) return;
+    visitFallback.current = null;
+    const request = profileCache.capture(sourceScope, persona, prewarmDoor.sliceId);
+    setProfileRevision((n) => n + 1);
+    void profileCache.retry(request).then(() => {
+      if (profileCache.isCurrent(request)) setProfileRevision((n) => n + 1);
+    });
+  };
+  const enterBaseRoom = () => {
+    if (returnRequest) { void handleReturnDoor(returnRequest.side, false, true); return; }
+    if (!prewarmDoor) return;
+    const request = profileCache.capture(sourceScope, persona, prewarmDoor.sliceId);
+    visitFallback.current = { request, result: profileCache.fallback(request) };
+    setProfileRevision((n) => n + 1);
+  };
   // The one room slot: the shown space (active or dissolving) wins; the
   // prewarm space fills it while the corridor is walked.
   const mountedSpace = shownSpace ?? prewarmSpace;
@@ -3069,7 +3310,8 @@ export default function GameCanvas({
       return;
     }
     let live = true;
-    getRoomPapers(sliceId)
+    if (isDebugSlice(sliceId)) { setRoomPapersPack({ sliceId, papers: [] }); return; }
+    getRoomPapers(sliceId, persona)
       .then((papers) => {
         if (live) setRoomPapersPack({ sliceId, papers });
       })
@@ -3079,7 +3321,7 @@ export default function GameCanvas({
     return () => {
       live = false;
     };
-  }, [mountedSpace?.recipe.sliceId]);
+  }, [mountedSpace?.recipe.sliceId, persona, sourceScope]);
   // Spot × document merge. The geometry call duplicates activeRoomGeometry's
   // derivation when the mounted room IS the active one — one extra pure pass
   // per mount, the A6 price both lanes already pay.
@@ -3141,6 +3383,8 @@ export default function GameCanvas({
    *  trip, page forward, arrive through the (identical) lobby's EAST
    *  arrival door (§10.5 西出东进). */
   const handlePageDoor = (): void => {
+    navigationEpoch.current += 1;
+    setReturnRequest(null);
     navStackRef.current.push({ hotel: location, returnTo: null, side: "east" });
     syncNavStack();
     setLocation({
@@ -3156,6 +3400,8 @@ export default function GameCanvas({
    *  facing the corridor (the exact mirror of handlePageDoor). Trips of
    *  other sides taken after it are walked past, not unwound. */
   const handleArrivalDoor = (): void => {
+    navigationEpoch.current += 1;
+    setReturnRequest(null);
     const trip = splitReturnTrip(navStackRef.current, "east");
     if (trip === null) return;
     navStackRef.current = trip.rest;
@@ -3184,15 +3430,19 @@ export default function GameCanvas({
    *  strand door they left by (HD4) — the thread walk reads as one
    *  continuous passage. (A stray returnTo-null entry still falls back to
    *  the lobby; east-west trips belong to the arrival door.) */
-  const handleReturnDoor = (side: Side): void => {
+  const handleReturnDoor = async (side: Side, retry = false, base = false): Promise<void> => {
+    if (returnRequest?.status === "loading" && !retry && !base) return;
     const trip = splitReturnTrip(navStackRef.current, side);
     if (trip === null) return;
-    navStackRef.current = trip.rest;
-    syncNavStack();
+    const token = ++navigationEpoch.current;
+    const origin = { ...playerRef.current };
     const entry = trip.entry;
-    setLocation(entry.hotel);
     const returnTo = entry.returnTo;
     if (returnTo === null) {
+      navStackRef.current = trip.rest;
+      syncNavStack();
+      setLocation(entry.hotel);
+      setReturnRequest(null);
       arriveInLobby();
       return;
     }
@@ -3220,6 +3470,10 @@ export default function GameCanvas({
     if (door === null) {
       // The room fell out of its window (the timeline changed under the
       // stack): land in the lobby rather than dropping the return.
+      navStackRef.current = trip.rest;
+      syncNavStack();
+      setLocation(entry.hotel);
+      setReturnRequest(null);
       arriveInLobby();
       return;
     }
@@ -3227,11 +3481,35 @@ export default function GameCanvas({
     for (const d of backDoors) {
       if (d.archetype !== undefined) backArchetypes.set(d.sliceId, d.archetype);
     }
+    let profile = returnTo.snapshot?.profile ?? NEUTRAL_ROOM_PROFILE;
+    if (!returnTo.snapshot && !isDebugSlice(door.sliceId)) {
+      const request = profileCache.capture(sourceScope, persona, door.sliceId);
+      setReturnRequest({ side, request, status: "loading" });
+      const result = base ? profileCache.fallback(request)
+        : await (retry ? profileCache.retry(request) : profileCache.load(request));
+      if (token !== navigationEpoch.current || !profileCache.isCurrent(request) ||
+        Math.hypot(playerRef.current.x - origin.x, playerRef.current.z - origin.z) > 1.5) {
+        if (token === navigationEpoch.current) setReturnRequest(null);
+        return;
+      }
+      const verdict = decideGate(result);
+      if (verdict.kind !== "commit") {
+        setReturnRequest({ side, request, status: "retry" });
+        return;
+      }
+      profile = verdict.profile;
+    }
     const space = resolveSpaceForDoor(
       door,
       backArchetypes,
       roomDoorCountFor(door.sliceId),
+      profile,
+      returnTo.snapshot,
     );
+    navStackRef.current = trip.rest;
+    syncNavStack();
+    setLocation(entry.hotel);
+    setReturnRequest(null);
     // The strand door the player left by: land just inside the room at
     // that door. placement.index is the placement's index into the room's
     // door list (room-doors.ts), so the spec's own index finds it. The
@@ -3305,13 +3583,15 @@ export default function GameCanvas({
     }
     navStackRef.current.push({
       hotel: location,
-      returnTo: { sliceId: shownSpace.door.sliceId, key: strandTransition.key },
+      returnTo: { sliceId: shownSpace.door.sliceId, key: strandTransition.key, snapshot: shownSpace.snapshot },
       // §10.5: the lateral this trip came in from — the corridor wall the
       // departed room's door hangs on — so the destination lobby hangs the
       // way back on the matching wall.
       side: shownSpace.door.side,
     });
     syncNavStack();
+    navigationEpoch.current += 1;
+    setReturnRequest(null);
     setLocation(strandTransition.destination);
     setShownSpace(null);
     arriveInLobby();
@@ -3330,6 +3610,8 @@ export default function GameCanvas({
       playerRef.current.z = z;
     };
     GAME_DEBUG.travel = (timelineId, windowIndex, side = "east") => {
+      navigationEpoch.current += 1;
+      setReturnRequest(null);
       navStackRef.current.push({ hotel: location, returnTo: null, side });
       syncNavStack();
       setLocation({ timelineId, windowIndex });
@@ -3387,6 +3669,12 @@ export default function GameCanvas({
       }
     }
     if (idx < 0) return;
+    navigationEpoch.current += 1;
+    setReturnRequest(null);
+    visitFallback.current = null;
+    setActiveSpace(null);
+    setShownSpace(null);
+    setCorridorHidden(false);
     focusAppliedRef.current = focusSlice;
     const windowIndex = Math.floor(idx / WINDOW_SLICES);
     const layout = windowLayout(corridorLayoutFromDoors(list), windowIndex);
@@ -3399,6 +3687,8 @@ export default function GameCanvas({
       setLocation({ timelineId, windowIndex });
     }
     if (door) {
+      setPrewarmDoor(door);
+      prewarmIdRef.current = door.sliceId;
       playerRef.current = { x: door.x, z: 0 };
       cameraSnapRef.current = true;
       hopGuardRef.current = true;
@@ -3460,6 +3750,24 @@ export default function GameCanvas({
     };
   }, [keysRef]);
 
+  // THE FROZEN-FRAME COMPOSER REF. The hotel's composer, captured through
+  // a stable callback ref so the suspended one-shot repaint (component
+  // above) can drive it while the wrapper's own useFrame is disabled. The
+  // wrapper's `enabled={!suspended}` only gates its useFrame — it never
+  // disposes the composer — so a manual `setSize(CSS size) + render(0)`
+  // reproduces the paused frame exactly (N8AO/Bloom/Vignette included,
+  // delta 0, no clock advanced). State (not a bare ref) so the composer's
+  // arrival re-runs the repaint effect and a repaint deferred while the
+  // composer was unready still lands.
+  const [frozenFrameComposer, setFrozenFrameComposer] =
+    useState<ComponentRef<typeof EffectComposer> | null>(null);
+  const frozenFrameComposerRef = useCallback(
+    (composer: ComponentRef<typeof EffectComposer> | null) => {
+      setFrozenFrameComposer(composer);
+    },
+    [],
+  );
+
   // THE CANVAS IS THE SHELL'S (§14 merge). This component keeps every
   // cross-module decision and the DOM HUD; the scene subtree renders in the
   // app's ONE shared canvas through the world slot (`useWorldScene`). The
@@ -3481,6 +3789,8 @@ export default function GameCanvas({
   useWorldScene(
     "game",
     <>
+      <GameTimeOwner />
+      <CorridorHideDelay hidden={corridorHidden} onHidden={setCorridorGone} />
       <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
         <RenderTrace />
         {/* The stage pool under the diorama — kills the featureless void
@@ -3600,7 +3910,7 @@ export default function GameCanvas({
           onArrivalDoor={handleArrivalDoor}
           hopGuard={hopGuardRef}
           hotelLabel={`${location.timelineId}@${location.windowIndex}`}
-          archetypeById={archetypeById}
+          roomReadiness={roomReadiness}
           activeSpace={activeSpace}
           setActiveSpace={setActiveSpace}
           corridorHidden={corridorHidden}
@@ -3611,7 +3921,6 @@ export default function GameCanvas({
           setPrewarmDoor={setPrewarmDoor}
           transitionActive={strandTransition.phase !== "idle"}
           roomDoors={activeRoomGeometry?.doors ?? []}
-          roomDoorCountFor={roomDoorCountFor}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
           roomSeams={activeRoomGeometry?.seams ?? NO_ROOM_SEAMS}
           roomPapers={mountedPapers}
@@ -3623,17 +3932,23 @@ export default function GameCanvas({
           anchorHudRef={anchorHudRef}
           setHudAnchor={setHudAnchor}
         />
-        {/*
-          Post chain — deliberately conservative. N8AO (half-res) adds
-          screen-space contact shading, Bloom (threshold 1.0) glows only
-          what is genuinely hot (emissive fixtures, sun pools), and a mild
-          Vignette closes the frame. AO + vignette are the depth cue that
-          replaced scene fog: both are camera-distance INDEPENDENT, so
-          neither can wash the whole room into a veil the way distance fog
-          did from this camera (commits 9116243/09c757b). Export names
-          verified against @react-three/postprocessing v3 dist .d.ts.
-        */}
-        <EffectComposer enabled={!suspended} multisampling={POST_MSAA_SAMPLES}>
+        {/* Post chain — deliberately conservative. N8AO (half-res) adds
+            screen-space contact shading, Bloom (threshold 1.0) glows only
+            what is genuinely hot (emissive fixtures, sun pools), and a mild
+            Vignette closes the frame. AO + vignette are the depth cue that
+            replaced scene fog: both are camera-distance INDEPENDENT, so
+            neither can wash the whole room into a veil the way distance fog
+            did from this camera (commits 9116243/09c757b). Export names
+            verified against @react-three/postprocessing v3 dist .d.ts.
+            `enabled={!suspended}` freezes the chain's automatic render
+            under the document tier — the one-shot frozen-frame repainter
+            below is the only manual drive it ever gets, and only for a
+            suspended size/DPR change (frozen-frame.ts). */}
+        <EffectComposer
+          ref={frozenFrameComposerRef}
+          enabled={!suspended}
+          multisampling={POST_MSAA_SAMPLES}
+        >
           <N8AO
             halfRes
             quality="performance"
@@ -3649,11 +3964,28 @@ export default function GameCanvas({
           />
           <Vignette offset={VIGNETTE_OFFSET} darkness={VIGNETTE_DARKNESS} />
         </EffectComposer>
+        {/* Suspended one-shot repaint: repaints the frozen hotel frame
+            exactly once when a mid-pause resize/DPR change cleared the
+            canvas (decisions in src/lib/timeline3d/frozen-frame.ts). No-op
+            while active — the composer's own useFrame owns every frame. */}
+        <FrozenGameFrameRepaint
+          suspended={suspended}
+          composer={frozenFrameComposer}
+        />
     </>
   );
 
   return (
     <div className="relative h-full w-full">
+      {!suspended && (returnRequest || profileStatus?.kind === "hold") && (
+        <div data-testid="room-profile-status" className="absolute left-1/2 top-24 z-20 flex -translate-x-1/2 items-center gap-3 rounded-full border border-white/30 bg-background/85 px-4 py-2 text-sm shadow-sm backdrop-blur-md" role="status" aria-live="polite">
+          <span>{t((returnRequest?.status ?? (profileStatus?.kind === "hold" ? profileStatus.status : "loading")) === "loading" ? "roomPreparing" : "roomUnavailable")}</span>
+          {(returnRequest?.status ?? (profileStatus?.kind === "hold" ? profileStatus.status : null)) === "retry" && <>
+            <button type="button" onClick={retryProfile} className="underline underline-offset-4">{t("roomRetry")}</button>
+            <button type="button" onClick={enterBaseRoom} className="whitespace-nowrap underline underline-offset-4">{t("roomEnterBase")}</button>
+          </>}
+        </div>
+      )}
       {!suspended && (
         <>
           <TouchControls onTap={handleTap} />

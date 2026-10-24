@@ -70,6 +70,7 @@
  */
 import type { KitKind } from "./kits";
 import type { PlacedModule } from "./room-modules";
+import { BOOKSHELF_DIMENSIONS, BOOKSHELF_RUN_SPACING } from "./prop-dimensions";
 import { skinSlotFeatureFor, type BiomeSkin } from "./skins";
 import { SCHEMATICS } from "./schematics";
 import type {
@@ -397,11 +398,39 @@ export function resolveSchematic(
         continue;
       }
 
+      // WALL ROWS — the real spacing discipline for the shelf run: a row
+      // whose accepts draw the bookshelf steps the REAL center distance
+      // BOOKSHELF_RUN_SPACING × the piece's own scale (the 1.84m body
+      // plus the 8cm finger gap — bodies never interleave, at any slot
+      // scale up to the authored 1.7), and the WHOLE row — end bodies
+      // included — must stay inside the host wall's edge. A row that
+      // would cross the corner is omitted, never clipped through the
+      // perpendicular wall: an optional slot drops alone; a required one
+      // forfeits the placement and the generic orchestration furnishes
+      // the module (the no-half-furnished-room degradation, kits.ts).
+      // Rows of any other kind keep the legacy 1.8·scale authored step
+      // byte-for-byte — the workshop's counter pair is AUTHORED to read
+      // as one contiguous slab, not spaced furniture.
+      const shelfRow = slot.accepts.includes("bookshelf") && count > 1;
+      const step = shelfRow ? BOOKSHELF_RUN_SPACING * pieceScale : 1.8 * scale;
+      if (base && shelfRow) {
+        const halfW = (BOOKSHELF_DIMENSIONS.width * pieceScale) / 2;
+        const rowHalf = ((count - 1) / 2) * step + halfW;
+        const span = edgeSpan(rect, base.edge);
+        const lateral =
+          base.edge === "n" || base.edge === "s"
+            ? base.x - rect.x0
+            : base.z - rect.z0;
+        if (rowHalf > lateral + 1e-9 || rowHalf > span - lateral + 1e-9) {
+          if (slot.required) return null;
+          continue;
+        }
+      }
+
       for (let k = 0; k < count; k++) {
         let p: { x: number; z: number; edge: SchematicEdge };
         if (base) {
           if (count > 1) {
-            const step = 1.8 * scale;
             const off = (k - (count - 1) / 2) * step;
             const horizontal = base.edge === "n" || base.edge === "s";
             p = {

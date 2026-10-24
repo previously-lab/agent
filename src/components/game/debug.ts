@@ -1,5 +1,6 @@
 import { TERMINAL_DEPART } from "@/lib/game/anchor";
 import { CHASE_LIVE } from "@/lib/game/chase-camera";
+import type { RoomSnapshot } from "@/lib/game/room-snapshot";
 
 /**
  * Live game-state probe shared by the integrator and the space renderer.
@@ -15,6 +16,8 @@ export const GAME_DEBUG = {
   x: 0,
   z: 0,
   space: null as string | null,
+  snapshot: null as RoomSnapshot | null,
+  elapsed: 0,
   /** The current hotel: "timelineId@windowIndex" (written by GameLoop). */
   hotel: "",
   /** Probe/e2e hook: teleport the player (clamps apply on the next frame). */

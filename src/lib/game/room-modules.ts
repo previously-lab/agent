@@ -555,11 +555,16 @@ export function primaryModulesFor(
  *  companion that would render empty never joins). The primary's own id
  *  may repeat at most as the catalogue allows — a composition never
  *  contains the same module twice (the jigsaw reads as different rooms). */
-function companionsFor(archetype: string, taken: readonly string[]): readonly RoomModule[] {
+function companionsFor(
+  archetype: string,
+  taken: readonly string[],
+  allowedIds?: readonly string[],
+): readonly RoomModule[] {
   return ROOM_MODULES.filter(
     (m) =>
       m.worldClasses.includes("interior") &&
       !taken.includes(m.id) &&
+      (!allowedIds || allowedIds.includes(m.id)) &&
       moduleKitsFor(m, archetype).length > 0,
   );
 }
@@ -768,8 +773,8 @@ function compositionRng(worldSeed: string, sliceId: string): () => number {
  * push the count upward from the hint.
  *
  * Deterministic: same (worldSeed, sliceId, worldClass, archetype,
- * doorCount, countHint) ⇒ same composition, always; independent of call
- * order.
+ * doorCount, countHint, forcedPrimaryId, allowedCompanionIds) ⇒ same
+ * composition, always; independent of call order.
  */
 export function resolveRoomComposition(
   sliceId: string,
@@ -778,10 +783,11 @@ export function resolveRoomComposition(
   doorCount: number = 0,
   worldSeed: string = WORLD_SEED,
   countHint?: number,
-  /** Debug gallery (debug-slice.ts): pin the primary module rather than
-   *  drawing it. Callers pass a countHint of 1 alongside, so the forced room
-   *  is exactly that module; a real slice never sets it. */
+  /** Debug gallery or semantic profile: pin the primary rather than draw it.
+   *  A countHint of 1 keeps the calm room to that module; door load may grow it. */
   forcedPrimaryId?: string,
+  /** Semantic profiles may join only activity-compatible companions. */
+  allowedCompanionIds?: readonly string[],
 ): RoomComposition | null {
   const primaries = primaryModulesFor(worldClass, archetype);
   const forcedPrimary = forcedPrimaryId
@@ -844,14 +850,17 @@ export function resolveRoomComposition(
   } | null = null;
 
   for (const c of candidateCounts) {
-    if (companionsFor(archetype, [primary.id]).length < c - 1) continue;
+    if (companionsFor(archetype, [primary.id], allowedCompanionIds).length < c - 1) continue;
     // Companions: seeded weighted picks without replacement — drawn once
     // per count so the topologies below re-seat the SAME modules (the
     // stream stays ordered, the picks never depend on topology order).
     const companions: RoomModule[] = [];
     const taken = [primary.id];
     for (let i = 0; i < c - 1; i++) {
-      const picked = weightedPick(rng, companionsFor(archetype, taken));
+      const picked = weightedPick(
+        rng,
+        companionsFor(archetype, taken, allowedCompanionIds),
+      );
       companions.push(picked);
       taken.push(picked.id);
     }
@@ -911,6 +920,17 @@ export const TIER_MODULE_COUNTS: Record<SpaceRecipe["size"]["id"], number> = {
   XL: 4,
 };
 
+const ACTIVITY_COMPANIONS: Readonly<
+  Record<import("./room-profile").FunctionalRoomActivity, readonly string[]>
+> = {
+  writing: ["reading-room"],
+  research: ["study", "living"],
+  making: ["study", "storage"],
+  planning: ["reading-room", "living"],
+  conversation: ["sunroom"],
+  reflection: ["study", "living"],
+};
+
 /**
  * The composition of one recipe's room — the ONE resolution the whole
  * render/contain chain shares (scaledRecipeFor sizes the plan from it;
@@ -920,7 +940,9 @@ export const TIER_MODULE_COUNTS: Record<SpaceRecipe["size"]["id"], number> = {
  * count is derived from the strand graph by the data lane, and freezing it
  * per visit keeps the renderer and the clamp on one value (see the module
  * header). Returns null for every non-interior class, where the room stays
- * byte-for-byte as it was before modules.
+ * byte-for-byte as it was before modules. A functional profile pins its
+ * primary and narrows companions; the same door-load resolver still grows
+ * and relaxes the placement. The debug gallery remains the strongest pin.
  */
 export function compositionForRecipe(
   recipe: SpaceRecipe,
@@ -931,15 +953,21 @@ export function compositionForRecipe(
   // Debug gallery (debug-slice.ts): a `dbg-m:` slice composes THAT module and
   // nothing else, so the standard rooms can be reviewed one at a time.
   const dbg = parseDebugSlice(recipe.sliceId);
-  const forced = dbg?.page === "modules" ? dbg.id : undefined;
+  const debugPrimary = dbg?.page === "modules" ? dbg.id : undefined;
+  const activity = recipe.profile?.activity;
+  const semanticActivity = activity && activity !== "neutral" ? activity : null;
+  const semanticPrimary = semanticActivity ? recipe.profile?.primaryModule : null;
+  const forced = debugPrimary ?? semanticPrimary ?? undefined;
+  const countHint = forced ? 1 : TIER_MODULE_COUNTS[recipe.size.id];
   return resolveRoomComposition(
     recipe.sliceId,
     recipe.worldClass,
     recipe.archetype,
     doorCount,
     worldSeed,
-    forced ? 1 : TIER_MODULE_COUNTS[recipe.size.id],
+    countHint,
     forced,
+    semanticActivity ? ACTIVITY_COMPANIONS[semanticActivity] : undefined,
   );
 }
 

@@ -127,6 +127,12 @@ import {
   viewImageExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
+import {
+  describeRoom,
+  formatRoomDescription,
+} from "@/lib/game/describe-room";
+import { deriveRoomProfile } from "@/lib/game/room-profile";
+import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -295,6 +301,80 @@ describe("describeRoomExecute", () => {
       opts({ locale: "en" }),
     );
     expect(out).toMatch(/^ERROR: Invalid slice ID/);
+  });
+});
+
+describe("describeRoomExecute — validated view snapshots", () => {
+  const viewedSlice = "2026-09-14-2207";
+
+  function activeView(): NonNullable<ToolContext["view"]> {
+    return {
+      sliceId: viewedSlice,
+      surface: "room",
+      snapshot: {
+        sliceId: viewedSlice,
+        generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+        profile: deriveRoomProfile({ focus: "撰写小说" }),
+        roomDoorCount: 3,
+        corridorSide: "north",
+      },
+    };
+  }
+
+  it("defaults to the viewed slice and ignores model attempts to override its frozen room", async () => {
+    const view = activeView();
+    const snapshot = view.snapshot;
+    if (!snapshot) throw new Error("fixture snapshot missing");
+    const expected = formatRoomDescription(
+      describeRoom(viewedSlice, {
+        profile: snapshot.profile,
+        strandDoors: 3,
+        corridorSide: "north",
+      }),
+      "en",
+    );
+
+    const out = await describeRoomExecute(
+      { strandDoors: 0, corridorSide: "south" },
+      opts({ sliceId: "2026-08-11-1115", view, locale: "en" }),
+    );
+
+    expect(out).toBe(expected);
+    expect(out).toContain("Placed strand doors (3)");
+    expect(out).toContain(snapshot.profile.revision);
+    expect(out).not.toContain("Base space only");
+  });
+
+  it("does not lend the active snapshot to another slice or accept model door inputs there", async () => {
+    const view = activeView();
+    const otherSlice = "2026-09-12-0941";
+    const base = formatRoomDescription(describeRoom(otherSlice), "en");
+
+    const out = await describeRoomExecute(
+      { sliceId: otherSlice, strandDoors: 7, corridorSide: "south" },
+      opts({ view, locale: "en" }),
+    );
+
+    expect(out.startsWith(base)).toBe(true);
+    expect(out).toContain("Base space only");
+    expect(out).toContain("No record text or semantic profile was read");
+    expect(out).not.toContain(view.snapshot?.profile.revision);
+    expect(out).not.toContain("Placed strand doors (7)");
+  });
+
+  it("falls back to the base room without inventing runtime inputs when an old view has no snapshot", async () => {
+    const base = formatRoomDescription(describeRoom(viewedSlice), "en");
+    const out = await describeRoomExecute(
+      { strandDoors: 2, corridorSide: "north" },
+      opts({
+        view: { sliceId: viewedSlice, surface: "room" },
+        locale: "en",
+      }),
+    );
+
+    expect(out.startsWith(base)).toBe(true);
+    expect(out).toContain("Base space only");
+    expect(out).not.toContain("Placed strand doors");
   });
 });
 

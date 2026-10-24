@@ -45,7 +45,7 @@
  */
 import { useEffect, useMemo, useRef, type JSX } from "react";
 import * as THREE from "three";
-import { useFrame } from "@react-three/fiber";
+import { useGameFrame } from "@/components/game/use-game-frame";
 import {
   TERMINAL_BREATH_PERIOD_S,
   TERMINAL_DEPART,
@@ -105,27 +105,38 @@ export function AnchorHologram({
   const groupRef = useRef<THREE.Group>(null);
   const lightRef = useRef<THREE.PointLight>(null);
   const dimKRef = useRef(0);
+  const departRef = useRef({ stamp: -1, startedAt: 0 });
   // Scratch — the frame loop reuses these, never allocates.
   const worldScale = useRef(new THREE.Vector3());
 
-  useFrame(({ clock }, delta) => {
+  useGameFrame((_state, meta) => {
     // The breath + the departure flare (the §13.2 屏幕亮起 beat's clock):
     // gain only, written for the probes — nothing visual consumes it now.
-    const t = clock.elapsedTime;
+    // The breath phase rides the GAME clock (game-time.ts): frozen time
+    // holds the breath mid-cycle, and a suspend/resume never rewinds it.
+    const t = meta.elapsed;
     const k = REDUCED_MOTION
       ? 0.5
       : 0.5 + 0.5 * Math.sin((t * Math.PI * 2) / TERMINAL_BREATH_PERIOD_S);
     let gain = GAIN_BASE + GAIN_BREATH * k;
     const depart = TERMINAL_DEPART.t0;
     if (depart >= 0) {
-      const f = Math.min(1, (performance.now() - depart) / TERMINAL_FLARE_MS);
+      if (departRef.current.stamp !== depart) {
+        // t0 remains the public interaction stamp. Measure its animation
+        // locally on game time so paused field frames cannot finish it.
+        departRef.current = { stamp: depart, startedAt: t };
+      }
+      const f = Math.min(1, Math.max(0, t - departRef.current.startedAt) * 1000 / TERMINAL_FLARE_MS);
       gain *= 1 + TERMINAL_FLARE_GAIN * f * f;
+    } else {
+      departRef.current.stamp = -1;
     }
     TERMINAL_DEPART.intensity = gain;
 
     // Dim (lobby): follow the corridor's dissolve rate (≈6/s lerp).
+    if (meta.initialize && meta.delta === 0) dimKRef.current = dimmed ? 1 : 0;
     const dimK = (dimKRef.current +=
-      (1 - Math.exp(-6 * Math.min(delta, 0.05))) * ((dimmed ? 1 : 0) - dimKRef.current));
+      (1 - Math.exp(-6 * Math.min(meta.delta, 0.05))) * ((dimmed ? 1 : 0) - dimKRef.current));
     const dim = 1 - DIM_FADE * dimK;
 
     // The point light rides the caller's group scale (the lamp's
