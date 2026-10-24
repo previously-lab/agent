@@ -13,16 +13,16 @@
  *
  * Cache key: `${kind}:${size}[:cells]` — the builders' deterministic output
  * depends only on those parameters (all entropy derives from WORLD_SEED).
- * In practice the cache holds exactly four entries at default parameters:
- *   tile:256:8 · concrete:256 · water:256:3 · caustics:256:2
- * = 11 GPU textures total (3 maps × tile/concrete + 3 water normal layers
- * + 2 caustics web layers).
+ * In practice the cache holds exactly five entries at default parameters:
+ *   tile:256:8 · concrete:256 · water:256:3 · caustics:256:2 · wood:256
+ * = 12 GPU textures total (3 maps × tile/concrete + 2 maps × wood + 3 water
+ * normal layers + 2 caustics web layers).
  *
  * Node-safe: DataTexture needs no DOM, so this module (unlike grunge.ts /
  * glow.ts) can be imported anywhere.
  */
 
-import { DataTexture, FloatType, RepeatWrapping, RGBAFormat } from "three";
+import { DataTexture, FloatType, RepeatWrapping, RGBAFormat, SRGBColorSpace, UnsignedByteType } from "three";
 import { buildConcreteMaps } from "./concrete";
 import { buildTileMaps } from "./tile";
 import {
@@ -32,8 +32,9 @@ import {
 } from "./three";
 import { buildWaterNormalMaps } from "./water";
 import { buildCausticsMaps } from "./caustics";
+import { buildWoodMaps } from "./wood";
 
-const cache = new Map<string, MaterialTextures | DataTexture[]>();
+const cache = new Map<string, MaterialTextures | DataTexture[] | WoodTextures>();
 
 /** The tile texture set (albedo + roughness + normal), built once. */
 export function sharedTileTextures(): MaterialTextures {
@@ -86,6 +87,47 @@ export function sharedWaterNormalTextures(): DataTexture[] {
     cache.set(key, entry);
   }
   return entry as DataTexture[];
+}
+
+/** The wood texture set (albedo + roughness), built once — the near-flat
+ *  normal the builder returns is never uploaded (no consumer attaches it). */
+export interface WoodTextures {
+  albedo: DataTexture;
+  roughness: DataTexture;
+}
+
+/** The low-contrast wood grain set, built once. Albedo is sRGB; roughness
+ *  is linear like the other sets (three.ts contract). */
+export function sharedWoodTextures(): WoodTextures {
+  const key = "wood:256";
+  let entry = cache.get(key);
+  if (!entry) {
+    const maps = buildWoodMaps();
+    const albedo = new DataTexture(
+      maps.albedo,
+      maps.size,
+      maps.size,
+      RGBAFormat,
+      UnsignedByteType,
+    );
+    albedo.colorSpace = SRGBColorSpace;
+    const roughness = new DataTexture(
+      maps.roughness,
+      maps.size,
+      maps.size,
+      RGBAFormat,
+      UnsignedByteType,
+    );
+    for (const texture of [albedo, roughness]) {
+      texture.wrapS = RepeatWrapping;
+      texture.wrapT = RepeatWrapping;
+      applyTextureSampling(texture);
+      texture.needsUpdate = true;
+    }
+    entry = { albedo, roughness } satisfies WoodTextures;
+    cache.set(key, entry);
+  }
+  return entry as WoodTextures;
 }
 
 /**

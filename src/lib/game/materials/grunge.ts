@@ -51,3 +51,13 @@ export function createGrungeRoughnessMap(): CanvasTexture {
   texture.wrapT = RepeatWrapping;
   return texture;
 }
+
+let grungeRoughnessMap: CanvasTexture | null = null;
+/** The seeded grunge map as an app-lifetime singleton — room scenes share
+ *  one roughness texture across every role material instead of each
+ *  mounting component uploading its own identical 128² canvas (the glow.ts
+ *  shared* pattern). Never disposed. */
+export function sharedGrungeRoughnessMap(): CanvasTexture {
+  if (!grungeRoughnessMap) grungeRoughnessMap = createGrungeRoughnessMap();
+  return grungeRoughnessMap;
+}

@@ -1249,8 +1249,13 @@ function CameraRig({
         focus.current.z + CAM_OFFSET.z,
       );
       camera.lookAt(focus.current.x, 0, focus.current.z);
-      ortho.zoom = zoomRef.current;
-      ortho.updateProjectionMatrix();
+      // Same guard as the chase rig: a settled RTS camera converges the
+      // lerped zoom to the ref's value, and re-projecting an unchanged
+      // ortho zoom every frame wastes the whole-room frame budget.
+      if (Math.abs(ortho.zoom - zoomRef.current) > 1e-4) {
+        ortho.zoom = zoomRef.current;
+        ortho.updateProjectionMatrix();
+      }
       live.yaw = TOPDOWN_YAW;
       live.camX = camera.position.x;
       live.camY = camera.position.y;
@@ -3628,7 +3633,7 @@ export default function GameCanvas({
           did from this camera (commits 9116243/09c757b). Export names
           verified against @react-three/postprocessing v3 dist .d.ts.
         */}
-        <EffectComposer multisampling={POST_MSAA_SAMPLES}>
+        <EffectComposer enabled={!suspended} multisampling={POST_MSAA_SAMPLES}>
           <N8AO
             halfRes
             quality="performance"

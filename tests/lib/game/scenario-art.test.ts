@@ -65,6 +65,26 @@ describe("scenario material colors", () => {
     const colors = SKINS.map((skin) => scenarioSkin(skin, sourcePalette)!.floor.colors.day);
     expect(new Set(colors).size).toBeGreaterThan(1);
   });
+
+  it("keeps the room-polish interior fill soft: lifted ambient, unchanged key hierarchy, distinct roles", () => {
+    const day = scenarioPalette(sourcePalette, false);
+    const night = scenarioPalette(sourcePalette, true);
+    // Soft bright diffuse (visual study 02): the ambient floor is lifted
+    // day and night, the key stays dominant, and the material-kind roles
+    // remain distinct hues — no flattened single-tint room.
+    expect(day.ambient).toBeGreaterThan(0.5);
+    expect(night.ambient).toBeGreaterThan(0.4);
+    expect(night.ambient).toBeLessThan(day.ambient);
+    expect(day.sunIntensity).toBeGreaterThan(day.ambient);
+    expect(day.wood).not.toBe(day.fabric);
+    expect(day.fabric).not.toBe(day.wall);
+    // The prop roles derive from these — the accent must not BE any role.
+    expect(day.accent).not.toBe(day.wood);
+    expect(day.accent).not.toBe(day.fabric);
+    // Night keeps the same family, only dimmed.
+    expect(night.wood).not.toBe(day.wood);
+    expect(night.fabric).not.toBe(day.fabric);
+  });
 });
 
 describe("fixed RTS camera", () => {

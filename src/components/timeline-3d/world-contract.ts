@@ -102,6 +102,104 @@ function restore(target: WorldContractTarget, snap: ContractSnapshot): void {
   target.scene.fog = snap.fog;
 }
 
+/* ------------------------------------------------------------------------ */
+/* Canvas render policy — the canvas-level props (dpr, frameloop)            */
+/* ------------------------------------------------------------------------ */
+
+/** The frame loop modes R3F's `frameloop` accepts that this app uses. */
+export type FrameLoopMode = "always" | "demand" | "never";
+
+/** The canvas props the shared `<Canvas>` should wear for a given state.
+ *  Pure — WorldCanvas derives these every render and hands them to fiber. */
+export interface CanvasRenderPolicy {
+  dpr: [number, number];
+  frameloop: FrameLoopMode;
+}
+
+/** The game world's whole-room RTS view pays the heaviest per-frame cost
+ *  (full room on screen, the hotel's EffectComposer on top), so its DPR cap
+ *  is lower than the field's. The field keeps the canvas's historical
+ *  [1, 2]. */
+const GAME_DPR: [number, number] = [1, 1.5];
+const FIELD_DPR: [number, number] = [1, 2];
+
+/**
+ * Resolve which world's DPR cap the canvas wears (the input to
+ * `canvasPolicy`). The rule follows whose pixels the canvas is actually
+ * keeping, not where the reader is heading:
+ *
+ *   - dissolve    — the ENTERING world (worlds[1]): the compositor is
+ *                   cross-fading the two worlds and settles on the
+ *                   entering one, so its DPR applies from the first frame.
+ *   - pause       — the LEAVING/FROZEN world (worlds[0]): a pause move
+ *                   (game ⇄ field with the documents rising/falling) keeps
+ *                   the leaving world mounted and FROZEN on the canvas —
+ *                   it is the reader's backdrop for the whole pause. Its
+ *                   DPR must not change mid-pause: an R3F `dpr` change
+ *                   re-runs setPixelRatio/setSize, and the size write
+ *                   CLEARS the canvas, erasing the frozen frame (measured:
+ *                   every pixel alpha=0 after a game→field pause flipped
+ *                   DPR 1.5 → 2 → 1.5).
+ *   - otherwise   — the settled world (worlds[0]).
+ *
+ * Returns null for an empty list or a missing slot, matching the canvas's
+ * existing null-world fallback.
+ */
+export function canvasPolicyWorld(
+  worlds: readonly WorldKind[],
+  transitionActive: boolean,
+  pauseTransition: boolean,
+): WorldKind | null {
+  if (transitionActive && !pauseTransition) return worlds[1] ?? null;
+  return worlds[0] ?? null;
+}
+
+/**
+ * Resolve the canvas's `dpr`/`frameloop` for a state. Three flavours:
+ *
+ *   - active        — "always": the loop runs every frame as before.
+ *   - fullscreen    — "never" (paused): the conversation layer owns the
+ *                     screen; nothing below it may draw, not even on
+ *                     demand. R3F keeps the last presented frame.
+ *   - document      — "demand" (suspended only): the archive under the
+ *                     document tier is DOM reached through drei `<Html>`
+ *                     portals, and its virtual list derives its visible
+ *                     range in a `useFrame` — with no frames at all a cold
+ *                     mount starves (first range stays [0,-1], no rows).
+ *                     Demand runs exactly the frames `invalidate()` asks
+ *                     for, so portals mount and the range responds, then
+ *                     the loop idles instead of redrawing the hidden world.
+ *                     React commits are not the only frame source: the
+ *                     archive's wheel/touch/keyboard handlers write only
+ *                     refs, so they ask for their next frame explicitly
+ *                     through the world-slot channel (`requestFrame` from
+ *                     `useWorldScene`), and the scene's own useFrame
+ *                     re-arms the loop while its easing is converging.
+ *                     Suspended is thus finite frames by construction —
+ *                     not a continuous RAF, and never a GL repaint: the
+ *                     field renderer stays gated and the game's composer
+ *                     is disabled, so a demand frame touches no GL.
+ *
+ * In every flavour the world stays MOUNTED through the pause; only the
+ * loop's cadence changes. The game's own composer is separately disabled
+ * while suspended (game-canvas), so demand frames never repaint the hotel.
+ */
+export function canvasPolicy(
+  world: WorldKind,
+  paused: boolean,
+  suspended: boolean,
+): CanvasRenderPolicy {
+  const frameloop: FrameLoopMode = paused
+    ? "never"
+    : suspended
+      ? "demand"
+      : "always";
+  return {
+    dpr: world === "game" ? GAME_DPR : FIELD_DPR,
+    frameloop,
+  };
+}
+
 /**
  * Enter `world`: set its renderer-level values, and clear the scene
  * atmosphere the OTHER world may have left (a world's own subtree re-attaches

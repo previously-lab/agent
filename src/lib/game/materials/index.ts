@@ -26,6 +26,13 @@ export {
 export type { TileOptions } from "./tile";
 export { buildConcreteMaps, CONCRETE_ALBEDO_MEAN } from "./concrete";
 export type { ConcreteOptions } from "./concrete";
+export {
+  buildWoodMaps,
+  WOOD_ALBEDO_MEAN,
+  WOOD_ROUGHNESS_BASE,
+  WOOD_ROUGHNESS_VARIANCE,
+} from "./wood";
+export type { WoodOptions } from "./wood";
 export { buildWaterNormalMaps } from "./water";
 export type { WaterNormalMaps, WaterNormalOptions } from "./water";
 export { buildCausticsMaps } from "./caustics";
@@ -42,6 +49,8 @@ export {
   sharedConcreteTextures,
   sharedWaterNormalTextures,
   sharedCausticsTextures,
+  sharedWoodTextures,
+  type WoodTextures,
 } from "./shared";
 export { createSurfaceMaterial } from "./surface";
 export type { SurfaceKind, SurfaceMaterialOptions } from "./surface";
@@ -51,6 +60,7 @@ export { applyPoolCaustics, CAUSTICS_CELL_METERS } from "./caustics-surface";
 export type { PoolCaustics, PoolCausticsOptions } from "./caustics-surface";
 export {
   createGrungeRoughnessMap,
+  sharedGrungeRoughnessMap,
   GRUNGE_MAP_BASE,
   GRUNGE_MAP_SIZE,
   GRUNGE_MAP_VARIANCE,

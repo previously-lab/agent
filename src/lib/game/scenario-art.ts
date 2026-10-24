@@ -20,7 +20,10 @@ export function scenarioPalette(source: Palette, night: boolean): ScenarioPalett
     accent: "#b78b60",
     sunColor: night ? "#e2ddbb" : "#fff3d5",
     sunIntensity: night ? 0.62 : 0.92,
-    ambient: night ? 0.38 : 0.5,
+    // Lifted (room-polish pass, visual study 02): interiors read soft and
+    // diffuse — the sun fill + IBL do the shaping — while the contact
+    // shadows under furniture carry the grounding instead of hard pools.
+    ambient: night ? 0.44 : 0.56,
   };
 }
 

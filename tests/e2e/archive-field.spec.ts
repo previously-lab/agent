@@ -68,11 +68,23 @@ function pile(page: Page, ref: string) {
 
 /** Seed the world and land on the reader rung with the field settled: the
  *  first pile visible is the post-hydration, post-fetch, post-compile
- *  signal (the first canvas mount compiles the three.js chunk in dev). */
-async function openField(page: Page): Promise<void> {
+ *  signal (the first canvas mount compiles the three.js chunk in dev).
+ *  With `suspended`, enter the field through the hotel's manuscripts door
+ *  instead: the shell lands in the document pause — the game world mounted
+ *  behind the field, the canvas on demand frames — the state the
+ *  frame-loop policy must serve. */
+async function openField(page: Page, suspended = false): Promise<void> {
   await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
   await seedCases(fieldCases());
-  await page.goto("/en/app?view=field");
+  if (!suspended) {
+    await page.goto("/en/app?view=field");
+  } else {
+    await page.goto("/en/app");
+    await page.locator("[data-game-manuscripts]").click();
+    await expect(
+      page.locator('[data-app-world="field"][data-scene-suspended="true"]'),
+    ).toBeVisible();
+  }
   await expect(pile(page, "people/field-alpha")).toBeVisible({ timeout: 30_000 });
 }
 
@@ -203,6 +215,37 @@ test.describe("Archive field", () => {
         { timeout: 10_000 },
       )
       .toBeLessThan(4);
+  });
+
+  test("suspended document pause: the archive scrolls on demand frames and the hotel never repaints", async ({
+    page,
+  }) => {
+    await openField(page, true);
+    await waitSettled(page, "people/field-alpha");
+
+    // The hotel is mounted behind the documents with its EffectComposer
+    // disabled: no demand frame may repaint it, so the last GL render's
+    // timestamp must stay frozen for the whole pause.
+    const lastRenderAt = (): Promise<number | undefined> =>
+      page.evaluate(() => window.__gameMountTrace?.frames.at(-1)?.[0]);
+    const t0 = await lastRenderAt();
+    expect(typeof t0).toBe("number");
+
+    // A real wheel scroll: the ref-only gesture asks for its first frame
+    // through the world-slot channel, the easing re-arms the loop, and the
+    // week bucket's pile mounts and settles — all on demand frames.
+    await page.mouse.move(640, 360);
+    await page.mouse.wheel(0, 4000);
+    const theta = pile(page, "orgs/field-theta");
+    await expect(theta).toBeVisible({ timeout: 15_000 });
+    await waitSettled(page, "orgs/field-theta");
+
+    // The scroll completed, the loop idled — and the game's last GL render
+    // is still the one from before the pause: the background world painted
+    // nothing.
+    await expect
+      .poll(async () => await lastRenderAt(), { timeout: 5_000 })
+      .toBe(t0);
   });
 
   test("a phone viewport lays the field flat: one pile per screen, one column", async ({

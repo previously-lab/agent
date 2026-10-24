@@ -4,11 +4,16 @@
  * every pause-mode move), the world's SIMULATION stops advancing: movement,
  * the door manager, the clamps and the HUD arbitration early-return in
  * GameLoop, and the terminal/paper interactions refuse to fire. RENDERING
- * CONTINUES on the frozen frame — the shared canvas's frame loop also drives
- * the desk's `<Html transform>` portals and zoom camera, so the loop itself
- * can never stop; what freezes is the world's own frame work. Ambient shader
- * animation (water caustics, the hologram's pulse) keeps ticking — it lives
- * under the blur layer, where the residue is invisible.
+ * STOPS BEHIND THE DOCUMENTS: the shell drops the shared canvas to
+ * `frameloop="never"` for a fullscreen pause, or to "demand" for this
+ * document pause (see `canvasPolicy` in world-contract.ts) — demand runs
+ * only the finite frames the archive field's `<Html>` portals and
+ * virtual-list range ask for (its ref-only scroll gestures request them
+ * explicitly through the world-slot channel), so the frozen hotel frame
+ * stays bit-identical while idle, and the game's EffectComposer is
+ * disabled for the whole pause so a demand frame never repaints the
+ * hotel. What freezes is the world's own frame work; the shell owns the
+ * loop.
  *
  * WHY A MODULE SINGLETON. The shell (React) writes it twice per move; the
  * GameLoop / interaction handlers read it inside frame loops and event

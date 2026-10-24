@@ -747,18 +747,26 @@ export const LAMP_BULB_Y = 1.82;
  *  constant), not palette-bound: a lamp reads as hotel property. */
 export const LAMP_COLOR = "#ffd9a0";
 /** Point-light level at human scale (×propScale² in the renderer so a
- *  colossal room's giant lamp actually reaches its giant floor). Matches
- *  the corridor's measured chunk light (6, decay 2). */
-export const LAMP_LIGHT_INTENSITY = 7;
+ *  colossal room's giant lamp actually reaches its giant floor). 7 → 4.5
+ *  in the room-polish pass (round 2): the lamp's floor pool read as a
+ *  blown hot spot in the after captures. 4.5 is a targeted STARTING value
+ *  for the A/B captures, not a measured optimum. */
+export const LAMP_LIGHT_INTENSITY = 4.5;
 /** Hard cutoff (m, ×propScale) — bounds the light's influence like the
  *  corridor chunk light's distance term. */
 export const LAMP_LIGHT_DISTANCE = 9;
-export const LAMP_SHADE_EMISSIVE = 1.6;
-/** Above the bloom threshold (1.0): the bulb is the one hot core. */
-export const LAMP_BULB_EMISSIVE = 2.2;
-/** Additive floor pool under the lamp (m / peak opacity, ×propScale). */
+/** Shade shell emissive (the shade glows as a surface, the bulb's light
+ *  does the lighting). 1.6 → 0.65 in the room-polish pass: at 1.6 the
+ *  shade was a white-hot disc. Starting value, pending the A/B captures. */
+export const LAMP_SHADE_EMISSIVE = 0.65;
+/** Just above the bloom threshold (1.0): the bulb still reads lit without
+ *  blooming into a halo (2.2 → 1.15, same pass). */
+export const LAMP_BULB_EMISSIVE = 1.15;
+/** Additive floor pool under the lamp (m / peak opacity, ×propScale). The
+ *  opacity was cut hard (0.42 → 0.16): the painted pool, not the point
+ *  light, was the visible hot spot. Starting value, pending the captures. */
 export const LAMP_POOL_RADIUS = 2.3;
-export const LAMP_POOL_OPACITY = 0.42;
+export const LAMP_POOL_OPACITY = 0.16;
 
 /** Window: pane size and sill height (m, ×wall scale — a window is
  *  architecture, scaled like the dado band). */
@@ -768,10 +776,11 @@ export const WINDOW_SILL_Y = 1.0;
 /** The pane is a VIEW, not a glowing plate (§11.2): a layered outside —
  *  sky gradient + sun halo + far/near silhouettes, all palette-driven —
  *  baked by materials/window-view.ts and shown on an unlit plane. These
- *  gains are the plane's color multiplier: >1 in daylight so the sky
- *  just clears the bloom threshold, a cool half-strength wash at night
- *  (the window goes dark and cold, never black). */
-export const WINDOW_VIEW_DAY_GAIN = 1.35;
+ *  gains are the plane's color multiplier: a small daylight lift (1.35 →
+ *  1.12 in the room-polish pass — the pane no longer clears the bloom
+ *  threshold, it is a VIEW, not a light plate), a cool half-strength wash
+ *  at night (the window goes dark and cold, never black). */
+export const WINDOW_VIEW_DAY_GAIN = 1.12;
 export const WINDOW_VIEW_NIGHT_GAIN = 0.5;
 export const WINDOW_VIEW_NIGHT_TINT = "#8ea0c8";
 /** Cross bars over the view (m, ×wall scale) — what makes it a window
@@ -781,27 +790,33 @@ export const WINDOW_MULLION = 0.07;
  *  sanctioned alpha materials). */
 export const WINDOW_SHEEN_OPACITY = 0.1;
 /** The interior KEY light: a spot just inside the pane, aimed down into
- *  the room (×wall scale²). 68 candela lands ≈2.6 at the spill pool's
- *  center (~5 m out) — the level the old full sun delivered, now with a
- *  source you can point at. It casts the room's strong shadows. At night
- *  the spot cools and dims (×WINDOW_NIGHT_SPOT_SCALE) and the lamp takes
- *  over as the room's primary. */
-export const WINDOW_SPOT_INTENSITY = 68;
+ *  the room (×wall scale²). 42 candela lands ≈1.7 at the spill pool's
+ *  center (~5 m out) — still the room's motivated key with strong
+ *  shadows, but the old 68 (≈2.7 there) blew the floor into a white
+ *  patch in the after captures. 42 is a targeted STARTING value for the
+ *  A/B captures, not a measured optimum. At night the spot cools and
+ *  dims (×WINDOW_NIGHT_SPOT_SCALE) and the lamp takes over as the room's
+ *  primary. */
+export const WINDOW_SPOT_INTENSITY = 42;
 export const WINDOW_NIGHT_SPOT_SCALE = 0.5;
 /** The lamp burns a little brighter after dark (×LAMP_NIGHT_BOOST) so
  *  the room's readability never depends on the window. */
 export const LAMP_NIGHT_BOOST = 1.2;
 export const WINDOW_SPOT_ANGLE = 0.62;
-export const WINDOW_SPOT_PENUMBRA = 0.5;
+/** Soft edge (0–1): 0.5 → 0.72 in the room-polish pass — the pool's rim
+ *  was a hard ring; this keeps the key motivated but feathers it. */
+export const WINDOW_SPOT_PENUMBRA = 0.72;
 /** Spot shadow rig (interior key): one 1024² map per mounted room. */
 export const WINDOW_SPOT_SHADOW_MAP = 1024;
 export const WINDOW_SPOT_SHADOW_NEAR = 0.4;
 /** Shadow far plane (×wall scale): must reach the floor across the cone. */
 export const WINDOW_SPOT_SHADOW_FAR = 26;
 /** Additive spill quad on the floor in front of the pane (m / peak
- *  opacity; length ×wall scale) — the visible "light spilling inward". */
+ *  opacity; length ×wall scale) — the visible "light spilling inward".
+ *  The opacity was cut hard (0.3 → 0.14): painted as a hot sheet in the
+ *  after captures. Starting value, pending the A/B captures. */
 export const WINDOW_SPILL_LENGTH = 4.2;
-export const WINDOW_SPILL_OPACITY = 0.3;
+export const WINDOW_SPILL_OPACITY = 0.14;
 /** Clearance between the window frame and any door on the same wall (m). */
 export const WINDOW_DOOR_CLEAR = 1.0;
 

@@ -60,7 +60,7 @@ import { Html } from "@react-three/drei";
 import { useTheme } from "@teispace/next-themes";
 import { useLocale, useTranslations } from "next-intl";
 import { useShell } from "@/components/shell/shell-provider";
-import { useWorldScene } from "@/components/timeline-3d/world-slot";
+import { useWorldFrameRequest, useWorldScene } from "@/components/timeline-3d/world-slot";
 import type { FieldRig } from "@/components/timeline-3d/field-rig";
 import {
   buildOffsets,
@@ -408,7 +408,11 @@ export function ArchiveField({
 
   // ── Gestures: wheel scrolls, one finger drags, the keyboard walks. All
   //    window-bound (see the module header), all chrome-gated, all writing
-  //    the rig's TARGET — the frame loop owns the easing and the clamps. ──
+  //    the rig's TARGET — the frame loop owns the easing and the clamps.
+  //    They write only refs (no React commit), so under the document
+  //    pause's "demand" loop each also asks for its next frame through
+  //    `requestFrame`; the easing then re-arms the loop itself until it
+  //    converges (ArchiveScene's useFrame). ──
   const boundsRef = useRef({ min: 0, max: 0 });
   boundsRef.current.min = minOffset;
   boundsRef.current.max = maxOffset;
@@ -416,6 +420,10 @@ export function ArchiveField({
    *  tails into (the cover is a button; see the pointer gesture's `up`). */
   const lastDragEndRef = useRef(0);
   const gesturesLive = units.length > 0 && panelMode === "pill";
+  // The world-slot frame channel, read ahead of the gesture effects (the
+  // scene registration below comes later in this body). Stable for the
+  // provider's lifetime; a no-op whenever the canvas is not listening.
+  const requestFrame = useWorldFrameRequest();
 
   useEffect(() => {
     if (!gesturesLive) return;
@@ -425,10 +433,14 @@ export function ArchiveField({
       const b = boundsRef.current;
       rig.current.target = elasticAdd(rig.current.target, e.deltaY, b.min, b.max);
       rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
+      // Ref-only mutation: no React commit will start the loop, so ask the
+      // canvas for the frame that eases this delta (a no-op while the loop
+      // is "always"; dropped under a fullscreen "never" pause).
+      requestFrame();
     };
     window.addEventListener("wheel", onWheel, { passive: true });
     return () => window.removeEventListener("wheel", onWheel);
-  }, [gesturesLive, rig]);
+  }, [gesturesLive, rig, requestFrame]);
 
   useEffect(() => {
     if (!gesturesLive) return;
@@ -456,12 +468,15 @@ export function ArchiveField({
       );
       rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
       dragMoved = true;
+      requestFrame();
     };
     const up = (e: PointerEvent) => {
       pointers.delete(e.pointerId);
       if (pointers.size === 0 && dragMoved) {
         rig.current.releaseAt = performance.now() + RELEASE_IDLE_MS;
         dragMoved = false;
+        // Ref-only mutation — the release ease needs its frame.
+        requestFrame();
         // The pile's cover is a button: a touch drag that ENDS on the pile
         // still produces a click. Stamp the drag's end so openPile can tell
         // a tap from a scroll's tail.
@@ -478,7 +493,7 @@ export function ArchiveField({
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
     };
-  }, [gesturesLive, rig]);
+  }, [gesturesLive, rig, requestFrame]);
 
   useEffect(() => {
     if (!gesturesLive) return;
@@ -520,10 +535,12 @@ export function ArchiveField({
         boundsRef.current.min,
         boundsRef.current.max,
       );
+      // Ref-only mutation — the walk's ease needs its frame.
+      requestFrame();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [gesturesLive, fieldSize.h, rig]);
+  }, [gesturesLive, fieldSize.h, rig, requestFrame]);
 
   const openPile = useCallback(
     (ref: string) => {
@@ -536,7 +553,8 @@ export function ArchiveField({
 
   // ── The scene registration — the desk's handshake, unchanged. The empty
   //    field registers NOTHING (there is no scene), exactly like the card
-  //    field's empty state. ──
+  //    field's empty state. The hook returns the same stable `requestFrame`
+  //    the gestures above read through `useWorldFrameRequest`. ──
   const dark = (useTheme().resolvedTheme ?? "dark") !== "light";
   useWorldScene(
     "field",
@@ -649,6 +667,7 @@ function ArchiveScene({
 }) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
   const groupRef = useRef<THREE.Group>(null);
 
   // The clip planes follow the viewport because the camera DISTANCE does —
@@ -741,6 +760,19 @@ function ArchiveScene({
     if (first !== rangeRef.current[0] || last !== rangeRef.current[1]) {
       rangeRef.current = [first, last];
       setRange([first, last]);
+    }
+
+    // Demand cadence (the document pause): while the rig is easing toward
+    // its target, or a rubber-band release is still armed, ask for the next
+    // frame — the gesture handlers start this chain with one request, the
+    // easing re-arms it, and a settled, released rig lets the loop idle
+    // again. Under "always" this is a no-op; under a fullscreen "never"
+    // pause invalidate is dropped, so the frozen frame cannot be disturbed.
+    if (
+      rigNow.target !== rigNow.current ||
+      rigNow.releaseAt > performance.now()
+    ) {
+      invalidate();
     }
   });
 

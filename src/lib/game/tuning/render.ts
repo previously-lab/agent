@@ -102,8 +102,12 @@ export const CORRIDOR_AMBIENT = 0.06;
 export const ROOM_INTERIOR_SUN_FILL = 0.65;
 /** Broad bounced light preserves the room's material colors from the RTS
  *  view. Directional and fixture lights still provide the shaped shadows;
- *  walls facing away from them must not fall into near-black. */
-export const SPACE_AMBIENT_SCALE = 0.45;
+ *  walls facing away from them must not fall into near-black. 0.45 →
+ *  0.65 in the room-polish pass (round 2): with the lamp/window hot pools
+ *  cut, the ambient fill carries the walls' readability (the after
+ *  captures read darker than the reference). A targeted starting value,
+ *  pending the A/B captures — not a measured optimum. */
+export const SPACE_AMBIENT_SCALE = 0.65;
 /** Background/fog/sun lerp rate when a space opens or closes. */
 export const ATMOSPHERE_LERP_RATE = 2.5;
 /** Wade depth below the water plane inside a pool basin. */
@@ -143,9 +147,11 @@ export const SUN_SHADOW_NORMAL_BIAS = 0.02;
 /* ------------------------------------------------------------------ */
 
 /** Soft environment fill and the reflection budget every PBR material
- *  shares. Lifted from 0.12 to 0.20 for the RTS view: walls retain their
- *  hue while the directional and local lights still define the shadows. */
-export const ENV_INTENSITY = 0.20;
+ *  shares. 0.20 → 0.24 in the room-polish pass (visual study 02): the
+ *  interior reads as soft bright diffuse — walls keep their hue with no
+ *  hard hot pool — while the furniture's own contact shadows carry the
+ *  grounding. Directional and fixture lights still define cast shadows. */
+export const ENV_INTENSITY = 0.24;
 /** Env cube-map resolution; the map is a few broad emissive cards, so
  *  256 px is plenty and cheap. */
 export const ENV_RESOLUTION = 256;
@@ -177,7 +183,7 @@ export const ENV_FORMERS: readonly EnvFormerSpec[] = [
   {
     form: "rect",
     color: "#dcebf2",
-    intensity: 2.5,
+    intensity: 2.0,
     position: [-3, 4.6, -1],
     rotation: [-Math.PI / 2, 0, 0],
     scale: [7, 0.4, 1],
@@ -185,7 +191,7 @@ export const ENV_FORMERS: readonly EnvFormerSpec[] = [
   {
     form: "rect",
     color: "#dcebf2",
-    intensity: 2.5,
+    intensity: 2.0,
     position: [3, 4.6, 1],
     rotation: [-Math.PI / 2, 0, 0],
     scale: [7, 0.4, 1],
@@ -193,7 +199,7 @@ export const ENV_FORMERS: readonly EnvFormerSpec[] = [
   {
     form: "rect",
     color: "#ffd9a0",
-    intensity: 1.2,
+    intensity: 1.0,
     position: [-5, 2, 3],
     rotation: [0, Math.PI / 2, 0],
     scale: [4, 2, 1],

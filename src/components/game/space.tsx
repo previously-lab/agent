@@ -112,6 +112,22 @@ import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
 import { RoomPapers, type RoomPaperItem } from "./room-papers";
+import {
+  BookSpines,
+  ChairProp,
+  DeskLampProp,
+  DeskProp,
+  FloorLampProp,
+  BookpileProp,
+  PlantProp,
+  ReadingChairProp,
+  RugProp,
+  SofaProp,
+  BookshelfProp,
+  TvProp,
+  useRoomPropMaterials,
+  type RoomPropMaterials,
+} from "./room-props";
 import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
@@ -317,15 +333,12 @@ import {
   SHELF_WALL_BAY,
   SHELF_WALL_BAY_MAX,
   SHELF_WALL_BOARD,
-  SHELF_WALL_BOARD_COLOR,
   SHELF_WALL_DEPTH,
   SHELF_WALL_HEIGHT,
   SHELF_WALL_MIN_H,
   SHELF_WALL_PLINTH,
-  SHELF_WALL_ROW_COLORS,
   SHELF_WALL_SHELF_GAP,
   SHELF_WALL_STILE,
-  SHELF_WALL_WOOD,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
@@ -1447,8 +1460,9 @@ function PilasterRun({
  * the register existed as a COLOUR only, so the declared book walls never
  * rendered). A low-poly bookcase skin stands on the floor against the
  * wall's inner face — fully opaque, wall-supported (I2), no hanging, no
- * transparency — bays of shelves and book rows in the exact material
- * language of the bookshelf prop (same woods, same three book colours).
+ * transparency — bays of shelves and PER-BOOK instanced rows in the same
+ * material language as the bookshelf prop (the room's shared wood roles
+ * and the muted palette-derived spine palette — no color bands).
  * Only FULL-HEIGHT runs host it (a bookcase rising out of a 1.1m cutaway
  * sill is the niche's "hole in nothing" failure); bays overlapping the
  * window's frame are left open. Where a pilaster rhythm shares the run,
@@ -1461,11 +1475,15 @@ function ShelfWallRun({
   plan,
   wallScale,
   window,
+  mats,
 }: {
   wall: WallSegment;
   height: number;
   plan: RoomPlan;
   wallScale: number;
+  /** The room's shared prop roles — the same woods and spine palette as
+   *  the bookshelf prop (one material set per room). */
+  mats: RoomPropMaterials;
   /** The room's one window — bays under its frame stay empty (the window
    *  never hangs on a feature host run by construction, but a host pool
    *  fallback can still land it beside one; the skip is the backstop). */
@@ -1514,32 +1532,45 @@ function ShelfWallRun({
   for (let i = 0; i <= n; i++) {
     const a = -len / 2 + i * bayW;
     parts.push(
-      <mesh key={`st${i}`} position={pos(a, bookH / 2)} castShadow receiveShadow>
+      <mesh
+        key={`st${i}`}
+        position={pos(a, bookH / 2)}
+        castShadow
+        receiveShadow
+        material={mats.woodBase}
+      >
         <boxGeometry
           args={horizontal ? [stile, bookH, depth] : [depth, bookH, stile]}
         />
-        <meshStandardMaterial color={SHELF_WALL_WOOD} roughness={1} flatShading />
       </mesh>,
     );
   }
   // Run-length boards: plinth, top, and every shelf.
-  const boards: { key: string; y: number; t: number }[] = [
-    { key: "plinth", y: plinth / 2, t: plinth },
-    { key: "top", y: bookH - board / 2, t: board },
-    ...shelfYs.map((y, i) => ({ key: `sh${i}`, y, t: board })),
+  const boards: { key: string; y: number; t: number; material: THREE.MeshStandardMaterial }[] = [
+    { key: "plinth", y: plinth / 2, t: plinth, material: mats.woodDark },
+    { key: "top", y: bookH - board / 2, t: board, material: mats.woodDark },
+    ...shelfYs.map((y, i) => ({ key: `sh${i}`, y, t: board, material: mats.woodTop })),
   ];
   for (const b of boards) {
     parts.push(
-      <mesh key={b.key} position={pos(0, b.y)} castShadow receiveShadow>
+      <mesh
+        key={b.key}
+        position={pos(0, b.y)}
+        castShadow
+        receiveShadow
+        material={b.material}
+      >
         <boxGeometry
           args={horizontal ? [len, b.t, depth] : [depth, b.t, len]}
         />
-        <meshStandardMaterial color={SHELF_WALL_BOARD_COLOR} roughness={1} flatShading />
       </mesh>,
     );
   }
-  // Book rows: one low box per bay per shelf gap, the prop's three colours
-  // cycling, heights alternating like the prop's own rows.
+  // Book rows: PER-BOOK instanced spines (the bookshelf prop's language —
+  // variable widths/heights, muted palette-derived colors), laid per bay
+  // per shelf gap in a k-scaled group rotated to hug the wall. Books never
+  // cast (they would only thicken the shelf's own shadow).
+  const bookDepth = SHELF_WALL_DEPTH * 0.72;
   for (let i = 0; i < n; i++) {
     const a = -len / 2 + (i + 0.5) * bayW;
     if (onThisWall && Math.abs(a - winAlong) < winHalf / 2 + bayW / 2 + 0.35) {
@@ -1550,24 +1581,20 @@ function ShelfWallRun({
       const rowH = gap - board - 0.1 * k - 0.04 * k * (s % 2);
       if (rowH <= 0.05) continue;
       parts.push(
-        <mesh
+        <group
           key={`bk${i}-${s}`}
-          position={pos(a, shelfY + board / 2 + rowH / 2)}
-          castShadow
+          position={pos(a, shelfY + board / 2)}
+          rotation={[0, horizontal ? 0 : Math.PI / 2, 0]}
+          scale={k}
         >
-          <boxGeometry
-            args={
-              horizontal
-                ? [bayW - stile * 2 - 0.04, rowH, depth * 0.72]
-                : [depth * 0.72, rowH, bayW - stile * 2 - 0.04]
-            }
+          <BookSpines
+            seedKey={`shelf-wall:${wall.x.toFixed(1)}:${wall.z.toFixed(1)}:${i}:${s}`}
+            width={(bayW - stile * 2 - 0.04) / k}
+            height={SHELF_WALL_SHELF_GAP - SHELF_WALL_BOARD - 0.1 - 0.04 * (s % 2)}
+            depth={bookDepth}
+            materials={mats}
           />
-          <meshStandardMaterial
-            color={SHELF_WALL_ROW_COLORS[(i + s) % SHELF_WALL_ROW_COLORS.length]}
-            roughness={1}
-            flatShading
-          />
-        </mesh>,
+        </group>,
       );
     }
   }
@@ -2687,20 +2714,27 @@ interface PropPlacement {
 
 /**
  * Low-poly motif geometry for one prop kind, built from primitives at the
- * local origin (the wrapper group positions/rotates/scales it). No textures,
- * no model files — boxes, cones, cylinders, spheres, one torus, low segment
- * counts, flat shading throughout. Dynamic kinds (tv, chandelier) are
- * rendered by their own animated components instead (see MotifProp).
+ * local origin (the wrapper group positions/rotates/scales it). The
+ * high-frequency room furniture (sofa, bookshelf, chairs, desk, rug, plant,
+ * lamps, bookpile, TV) is NOT built here — room-props.tsx owns those, in
+ * the room's shared role materials (wood grain + grunge roughness); this
+ * switch keeps the long tail of outdoor/wonder/kit motifs, still plain
+ * flat-shaded primitives with inline colors. Dynamic kinds (tv, chandelier)
+ * are rendered by their own animated components instead (see MotifProp).
  */
 function MotifGeometry({
   kind,
   accent,
   canopyColor,
+  mats,
 }: {
   kind: MotifKind;
   accent: string;
   canopyColor: THREE.Color;
-}) {
+  /** The room's shared prop materials — the polished furniture cases
+   *  consume these; the remaining cases ignore them. */
+  mats: RoomPropMaterials;
+}): JSX.Element {
   switch (kind) {
     case "ladder":
       return (
@@ -3363,171 +3397,39 @@ function MotifGeometry({
         </group>
       );
     case "tv":
-      // Static fallback — real placements render via the animated TvProp.
+      // Static fallback — real placements render via the animated TvProp
+      // (room-props.tsx); both wear the muted low-saturation screen role.
       return (
         <group>
-          <mesh position={[0, 0.2, 0]}>
+          <mesh position={[0, 0.2, 0]} material={mats.woodDark}>
             <boxGeometry args={[0.5, 0.4, 0.3]} />
-            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 0.95, 0]}>
+          <mesh position={[0, 0.95, 0]} material={mats.metal}>
             <boxGeometry args={[1.25, 0.75, 0.08]} />
-            <meshStandardMaterial
-              color="#101014"
-              emissive={accent}
-              emissiveIntensity={0.7}
-              roughness={1}
-              flatShading
-            />
+          </mesh>
+          <mesh position={[0, 0.95, 0.045]} material={mats.screen}>
+            <boxGeometry args={[1.13, 0.63, 0.012]} />
           </mesh>
         </group>
       );
     case "sofa":
-      return (
-        <group>
-          <mesh position={[0, 0.32, 0]}>
-            <boxGeometry args={[1.9, 0.4, 0.85]} />
-            <meshStandardMaterial color={accent} roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.75, -0.34]}>
-            <boxGeometry args={[1.9, 0.65, 0.22]} />
-            <meshStandardMaterial color={accent} roughness={1} flatShading />
-          </mesh>
-          {[-0.98, 0.98].map((x) => (
-            <mesh key={x} position={[x, 0.55, 0]}>
-              <boxGeometry args={[0.18, 0.65, 0.85]} />
-              <meshStandardMaterial color={accent} roughness={1} flatShading />
-            </mesh>
-          ))}
-        </group>
-      );
+      return <SofaProp mats={mats} />;
     case "rug":
-      return (
-        <mesh position={[0, 0.02, 0]}>
-          <cylinderGeometry args={[1.5, 1.5, 0.04, 20]} />
-          <meshStandardMaterial color={accent} roughness={1} flatShading />
-        </mesh>
-      );
+      return <RugProp mats={mats} />;
     case "bookshelf":
-      return (
-        <group>
-          {[-0.85, 0.85].map((x) => (
-            <mesh key={x} position={[x, 1.1, 0]}>
-              <boxGeometry args={[0.07, 2.2, 0.42]} />
-              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
-            </mesh>
-          ))}
-          <mesh position={[0, 1.1, -0.19]}>
-            <boxGeometry args={[1.77, 2.2, 0.05]} />
-            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
-          </mesh>
-          {[0.5, 1.1, 1.7].map((y, i) => (
-            <group key={y}>
-              <mesh position={[0, y, 0]}>
-                <boxGeometry args={[1.7, 0.05, 0.4]} />
-                <meshStandardMaterial
-                  color="#7a6a55"
-                  roughness={1}
-                  flatShading
-                />
-              </mesh>
-              <mesh position={[0, y + 0.19, 0.02]}>
-                <boxGeometry
-                  args={[1.55, 0.33 - 0.04 * ((i + 1) % 2), 0.3]}
-                />
-                <meshStandardMaterial
-                  color={["#c4553f", "#5a7a44", "#e8c95a"][i % 3]}
-                  roughness={1}
-                  flatShading
-                />
-              </mesh>
-            </group>
-          ))}
-        </group>
-      );
+      return <BookshelfProp mats={mats} />;
     case "readingchair":
-      return (
-        <group>
-          <mesh position={[0, 0.18, 0]}>
-            <cylinderGeometry args={[0.32, 0.36, 0.36, 8]} />
-            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.48, 0]}>
-            <boxGeometry args={[0.72, 0.16, 0.72]} />
-            <meshStandardMaterial color={accent} roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.82, -0.3]} rotation={[-0.16, 0, 0]}>
-            <boxGeometry args={[0.72, 0.62, 0.14]} />
-            <meshStandardMaterial color={accent} roughness={1} flatShading />
-          </mesh>
-        </group>
-      );
+      return <ReadingChairProp mats={mats} />;
     case "desklamp":
-      return (
-        <group>
-          <mesh position={[0, 0.03, 0]}>
-            <cylinderGeometry args={[0.15, 0.18, 0.06, 8]} />
-            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.3, 0]}>
-            <cylinderGeometry args={[0.025, 0.025, 0.55, 5]} />
-            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.62, 0]} rotation={[Math.PI, 0, 0]}>
-            <coneGeometry args={[0.16, 0.22, 8]} />
-            <meshStandardMaterial
-              color="#f2e6c8"
-              emissive="#f2e6c8"
-              emissiveIntensity={0.7}
-              roughness={1}
-              flatShading
-            />
-          </mesh>
-        </group>
-      );
+      return <DeskLampProp mats={mats} />;
     case "chandelier":
       // Static fallback — real placements render via the animated
       // ChandelierProp (slow spin + emissive bulbs).
       return <ChandelierGeometry accent={accent} />;
     case "floorlamp":
-      return (
-        <group>
-          <mesh position={[0, 0.9, 0]}>
-            <cylinderGeometry args={[0.03, 0.05, 1.8, 6]} />
-            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 1.95, 0]}>
-            <coneGeometry args={[0.38, 0.45, 9]} />
-            <meshStandardMaterial
-              color="#f2e6c8"
-              emissive="#f2e6c8"
-              emissiveIntensity={0.55}
-              roughness={1}
-              flatShading
-            />
-          </mesh>
-        </group>
-      );
+      return <FloorLampProp mats={mats} />;
     case "desk":
-      return (
-        <group>
-          <mesh position={[0, 0.76, 0]}>
-            <boxGeometry args={[1.5, 0.08, 0.75]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
-          </mesh>
-          {[
-            [-0.66, -0.28],
-            [0.66, -0.28],
-            [-0.66, 0.28],
-            [0.66, 0.28],
-          ].map(([x, z]) => (
-            <mesh key={`${x}${z}`} position={[x, 0.37, z]}>
-              <boxGeometry args={[0.08, 0.74, 0.08]} />
-              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
-            </mesh>
-          ))}
-        </group>
-      );
+      return <DeskProp mats={mats} />;
     case "giftbox":
       return (
         <group>
@@ -3779,33 +3681,9 @@ function MotifGeometry({
         </group>
       );
     case "chair":
-      // A plain side chair — four legs, seat, backrest. Deliberately
-      // sparer than the cushioned readingchair (cylinder base, wrap back)
-      // so the two never read as the same piece.
-      return (
-        <group>
-          {[-0.18, 0.18].flatMap((x) =>
-            [-0.18, 0.18].map((z) => (
-              <mesh key={`${x}${z}`} position={[x, 0.225, z]}>
-                <boxGeometry args={[0.05, 0.45, 0.05]} />
-                <meshStandardMaterial
-                  color="#6b4f3a"
-                  roughness={1}
-                  flatShading
-                />
-              </mesh>
-            )),
-          )}
-          <mesh position={[0, 0.48, 0]}>
-            <boxGeometry args={[0.44, 0.06, 0.44]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.78, -0.19]}>
-            <boxGeometry args={[0.44, 0.54, 0.06]} />
-            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
-          </mesh>
-        </group>
-      );
+      // A plain side chair — deliberately sparer than the cushioned
+      // readingchair so the two never read as the same piece.
+      return <ChairProp mats={mats} />;
     case "coatstand":
       // Pole on a disc foot, three pegs near the top, a knob.
       return (
@@ -3952,33 +3830,9 @@ function MotifGeometry({
         </group>
       );
     case "bookpile":
-      // A loose stack of books, each rotated a little, one leaning against
-      // the pile — the bookshelf's colors, freed from the shelf.
-      return (
-        <group>
-          {(
-            [
-              [0, 0.025, 0.34, 0.05, 0.26, 0, "#c4553f"],
-              [0.01, 0.075, 0.3, 0.045, 0.24, 0.2, "#5a7a44"],
-              [-0.01, 0.12, 0.32, 0.045, 0.25, -0.15, "#e8c95a"],
-              [0, 0.165, 0.26, 0.04, 0.2, 0.35, "#7a6a55"],
-            ] as const
-          ).map(([x, y, w, h, d, r, color]) => (
-            <mesh key={y} position={[x, y, 0]} rotation={[0, r, 0]}>
-              <boxGeometry args={[w, h, d]} />
-              <meshStandardMaterial
-                color={color}
-                roughness={1}
-                flatShading
-              />
-            </mesh>
-          ))}
-          <mesh position={[0.26, 0.09, 0]} rotation={[0, 0.1, 0.35]}>
-            <boxGeometry args={[0.05, 0.24, 0.2]} />
-            <meshStandardMaterial color="#c4553f" roughness={1} flatShading />
-          </mesh>
-        </group>
-      );
+      // A loose stack of books, one leaning against the pile — the
+      // bookshelf's muted spine language, off the shelf (room-props).
+      return <BookpileProp mats={mats} />;
     /* ------------------------------------------------------------ */
     /* The craft pass (2026-10): finer room dressing. Every piece is  */
     /* real geometry at human scale (the avatar is 1.7m), in the      */
@@ -4056,50 +3910,9 @@ function MotifGeometry({
         </group>
       );
     case "plant":
-      // Potted floor plant: a tapered terracotta pot with its soil disc,
-      // three stems carrying flattened foliage crowns in the room's
-      // canopy color — the cheapest vertical rhythm a room can have.
-      return (
-        <group>
-          <mesh position={[0, 0.18, 0]}>
-            <cylinderGeometry args={[0.17, 0.22, 0.36, 10]} />
-            <meshStandardMaterial color="#9c5f45" roughness={1} flatShading />
-          </mesh>
-          <mesh position={[0, 0.365, 0]}>
-            <cylinderGeometry args={[0.15, 0.15, 0.03, 10]} />
-            <meshStandardMaterial color="#3a2f26" roughness={1} flatShading />
-          </mesh>
-          {(
-            [
-              [0, 0.75, 0, 0.06],
-              [0.1, 0.62, 0.08, -0.12],
-              [-0.11, 0.6, -0.06, 0.14],
-            ] as const
-          ).map(([x, y, z, tilt], i) => (
-            <mesh key={i} position={[x / 2, y / 2 + 0.18, z / 2]} rotation={[tilt, 0, tilt]}>
-              <cylinderGeometry args={[0.018, 0.024, y - 0.36, 5]} />
-              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
-            </mesh>
-          ))}
-          {(
-            [
-              [0, 0.98, 0, 0.34],
-              [0.16, 0.78, 0.12, 0.24],
-              [-0.17, 0.74, -0.1, 0.22],
-              [0.02, 0.82, -0.16, 0.2],
-            ] as const
-          ).map(([x, y, z, r], i) => (
-            <mesh key={i} position={[x, y, z]} scale={[1, 0.72, 1]}>
-              <sphereGeometry args={[r, 8, 6]} />
-              <meshStandardMaterial
-                color={canopyColor}
-                roughness={1}
-                flatShading
-              />
-            </mesh>
-          ))}
-        </group>
-      );
+      // Potted floor plant — ceramic pot (muted clay), soil, wood stems,
+      // instanced leaves in the canopy color (room-props); no ball crown.
+      return <PlantProp mats={mats} />;
     case "pedestal":
       // Display pedestal: stepped base, a slight-entasis shaft, a cap —
       // and the little amphora it exists to show (accent-glazed, the
@@ -5534,58 +5347,27 @@ function ChandelierProp({ accent }: { accent: string }) {
   );
 }
 
-/** Animated TV: the screen flickers (noise-driven emissive intensity) and
- *  slowly cycles its tint — a TV left on in an impossible room. */
-function TvProp({ accent }: { accent: string }) {
-  const screenRef = useRef<THREE.MeshStandardMaterial>(null);
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
-    const m = screenRef.current;
-    if (!m) return;
-    const n =
-      Math.sin(t * 7.3) * Math.sin(t * 3.1 + 1.7) * Math.sin(t * 0.9 + 0.4);
-    m.emissiveIntensity = 0.6 + 0.35 * (0.5 + 0.5 * n);
-    m.emissive.setHSL((t * 0.025) % 1, 0.5, 0.55);
-  });
-  return (
-    <group>
-      <mesh position={[0, 0.2, 0]}>
-        <boxGeometry args={[0.5, 0.4, 0.3]} />
-        <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
-      </mesh>
-      <mesh position={[0, 0.95, 0]}>
-        <boxGeometry args={[1.25, 0.75, 0.08]} />
-        <meshStandardMaterial
-          ref={screenRef}
-          color="#101014"
-          emissive={accent}
-          emissiveIntensity={0.7}
-          roughness={1}
-          flatShading
-        />
-      </mesh>
-    </group>
-  );
-}
-
 /** Dispatch a placement to static geometry or its animated component. */
 function MotifProp({
   kind,
   accent,
   canopyColor,
+  mats,
 }: {
   kind: MotifKind;
   accent: string;
   canopyColor: THREE.Color;
-}) {
+  /** The room's shared prop materials (room-props.tsx). */
+  mats: RoomPropMaterials;
+}): JSX.Element {
   switch (kind) {
     case "tv":
-      return <TvProp accent={accent} />;
+      return <TvProp mats={mats} />;
     case "chandelier":
       return <ChandelierProp accent={accent} />;
     default:
       return (
-        <MotifGeometry kind={kind} accent={accent} canopyColor={canopyColor} />
+        <MotifGeometry kind={kind} accent={accent} canopyColor={canopyColor} mats={mats} />
       );
   }
 }
@@ -8963,6 +8745,10 @@ export function SpaceScene({
       ),
     [recipe],
   );
+  // The room's ONE shared prop-material set (room-props.tsx): created per
+  // mount, disposed on unmount; the fade's WeakMap capture dedups it across
+  // every mesh and instanced fill that references it.
+  const propMaterials = useRoomPropMaterials(recipe.palette, canopyColor);
   const wallColor = useMemo(
     () =>
       // v0.12 P3: a forced skin's wall material wears its authored
@@ -9587,6 +9373,7 @@ export function SpaceScene({
               kind={p.kind}
               accent={recipe.palette.accent}
               canopyColor={canopyColor}
+              mats={propMaterials}
             />
           </Shadowed>
         </group>
@@ -9660,6 +9447,7 @@ export function SpaceScene({
                 kind="column"
                 accent={recipe.palette.accent}
                 canopyColor={canopyColor}
+                mats={propMaterials}
               />
             </Shadowed>
           </group>
@@ -9903,6 +9691,7 @@ export function SpaceScene({
             plan={plan}
             wallScale={wallHeight / WALL_HEIGHT}
             window={fixtures.window}
+            mats={propMaterials}
           />
         ) : null,
       )}
@@ -10098,6 +9887,7 @@ export function SpaceScene({
               kind="column"
               accent={recipe.palette.accent}
               canopyColor={canopyColor}
+              mats={propMaterials}
             />
           </Shadowed>
         </group>

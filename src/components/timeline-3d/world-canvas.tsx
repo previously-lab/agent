@@ -74,13 +74,14 @@ import * as THREE from "three";
 import { Canvas, createPortal, useFrame, useThree } from "@react-three/fiber";
 import { useTheme } from "@teispace/next-themes";
 import { FIELD_FOV, camZFor } from "@/lib/timeline3d/camera";
+import { canvasPolicy, canvasPolicyWorld } from "@/components/timeline-3d/world-contract";
 import {
   WORLD_TRANSITION,
   contractPinAt,
   fieldLayerAlpha,
 } from "@/lib/timeline3d/world-transition";
 import { applyWorldContract, type WorldKind } from "./world-contract";
-import { WorldSceneNodesContext } from "./world-slot";
+import { WorldSceneNodesContext, useWorldFrameRegistration } from "./world-slot";
 import {
   THREADLINE_BASE_Z,
   THREADLINE_FOV,
@@ -107,6 +108,24 @@ function WorldContract({
     if (world === null) return;
     applyWorldContract({ gl, scene }, world);
   }, [world, gl, scene]);
+  return null;
+}
+
+/* ------------------------------------------------------------------------ */
+/* The frame-request bridge — the world-slot channel → R3F invalidate        */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Hands the world-slot channel's `requestFrame` to this canvas's R3F
+ * `invalidate`. The canvas bridges the outer context into fiber itself,
+ * so this component only reads the store hook and registers. Under the
+ * policy (world-contract.ts): "always" needs no requests, "demand" runs
+ * exactly the requested frames, "never" drops them — the bridge never
+ * has to know which mode is live.
+ */
+function FrameRequestBridge(): null {
+  const invalidate = useThree((s) => s.invalidate);
+  useWorldFrameRegistration(invalidate);
   return null;
 }
 
@@ -397,15 +416,24 @@ export interface WorldCanvasProps {
    *  transition. The contract follows the settled world. */
   worlds: readonly WorldKind[];
   /** Freeze the frame loop while the conversation layer is fullscreen
-   *  (§14.1 rule 2): pause, never unmount. */
+   *  (§14.1 rule 2): frameloop "never" — pause, never unmount. This wins
+   *  over `suspended`: a fullscreen pause over the suspended hotel is
+   *  still fully never. */
   paused: boolean;
   /** THE DOCUMENT PAUSE (v0.28 step 1): the steady state after a pause-mode
    *  move — BOTH worlds stay mounted (the game frozen behind the field's
    *  document tier) but no transition is running. The field's GL scene
    *  never paints in this state: the desk/archive content is all DOM and
-   *  sits above the shell's blur layer, so the canvas shows exactly the
-   *  game's frozen frame. The contract follows the game (worlds[0]) — it
-   *  is the only world the GL draws. */
+   *  sits above the shell's blur layer, so the canvas keeps showing exactly
+   *  the game's frozen frame — PRESERVED, not redrawn (the field renderer
+   *  stays gated and the game's composer is disabled, so no demand frame
+   *  repaints it). The contract follows the game (worlds[0]) so the frozen
+   *  frame's renderer values stay its own. The frame loop is "demand" here,
+   *  not "never": the DOM archive reaches the canvas through drei `<Html>`
+   *  portals and its virtual list sets its visible range in a `useFrame`,
+   *  so a cold mount and the ref-only scroll gestures need the finite
+   *  frames requested through the world-slot channel — while idle the loop
+   *  stops and nothing repaints either world. */
   suspended: boolean;
   /** The left band's braid, mounted in the field world only (null in the
    *  game world — the hotel owns the whole viewport). */
@@ -428,11 +456,27 @@ export function WorldCanvas({
   const transitionActive = worlds.length === 2 && !suspended;
   // The settled world's contract applies before its first paint; the
   // compositor owns the renderer for the frames in between. While SUSPENDED
-  // the game (worlds[0]) is the only world the GL draws, so the renderer
-  // wears its values for the whole pause.
+  // no world paints at all — the field renderer is gated and the game's
+  // composer is disabled — so the renderer simply keeps the game's contract
+  // values (worlds[0]) and the frozen hotel frame is never re-rendered
+  // under a foreign mapping.
   const contractWorld: WorldKind | null = transitionActive
     ? null
     : (worlds[0] ?? null);
+  // The DPR cap follows the world whose pixels the canvas keeps: the
+  // entering world during a DISSOLVE, the leaving/frozen world during a
+  // PAUSE move (a DPR change mid-pause would clear the frozen frame — see
+  // canvasPolicyWorld), the settled world otherwise.
+  const policyWorld: WorldKind | null = canvasPolicyWorld(
+    worlds,
+    transitionActive,
+    WORLD_TRANSITION.active && WORLD_TRANSITION.mode === "pause",
+  );
+  const { dpr, frameloop } = canvasPolicy(
+    policyWorld ?? "field",
+    paused,
+    suspended,
+  );
   const fieldMounted = worlds.includes("field");
   const gameMounted = worlds.includes("game");
 
@@ -461,8 +505,8 @@ export function WorldCanvas({
         className="absolute inset-0 z-0"
       >
         <Canvas
-          dpr={[1, 2]}
-          frameloop={paused ? "never" : "always"}
+          dpr={dpr}
+          frameloop={frameloop}
           // The object form (not a boolean) on purpose: fiber maps an omitted
           // /boolean `shadows` to the deprecated THREE.PCFSoftShadowMap, and
           // its Canvas layout effect re-runs configure() on container resizes
@@ -480,6 +524,7 @@ export function WorldCanvas({
           onCreated={(state) => state.gl.setClearColor(0x000000, 0)}
         >
           <WorldContract world={contractWorld} />
+          <FrameRequestBridge />
           {fieldMounted && band !== null && (
             <BraidPortal
               band={band}
