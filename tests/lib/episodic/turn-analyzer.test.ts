@@ -244,6 +244,31 @@ describe("analyzeTurn", () => {
     expect(arg.prompt).toContain('Message: "hello world"');
   });
 
+  it("projects native agent replies in closing excerpts but keeps user words raw", async () => {
+    const agent = `agent before\n\`\`\`html live\n${"<button>generated preference</button>\n".repeat(30)}\`\`\`\nagent after`;
+    const user = "user native\n```html live\n<button>user example</button>\n```";
+    const turns = [
+      { timestamp: "u", role: "user" as const, content: user },
+      { timestamp: "a", role: "agent" as const, content: agent },
+    ];
+    const snapshot = turns.map((turn) => ({ ...turn }));
+    ai.streamText.mockResolvedValue(
+      makeToolCall({
+        intent: { type: "chat", reason: "chat" },
+        memory_worthy: true,
+        emotional_signal: { intensity: "none", register: "neutral", note: "" },
+      }),
+    );
+
+    await analyzeTurn({ model, userMessage: "current", closingSlice: { turns } });
+
+    const arg = ai.streamText.mock.calls.at(-1)?.[0] as { prompt: string };
+    expect(arg.prompt).toContain("agent before\n[Interactive visual omitted]agent after");
+    expect(arg.prompt).not.toContain("generated preference");
+    expect(arg.prompt).toContain(user);
+    expect(turns).toEqual(snapshot);
+  });
+
   it("returns an empty analysis on failure even when a slice is closing", async () => {
     ai.streamText.mockRejectedValue(new Error("boom"));
     const result = await analyzeTurn({

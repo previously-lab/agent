@@ -19,6 +19,8 @@
  *    reserved (the framework adds `$rootRunId`/`$parentRunId` itself).
  */
 
+import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
+
 /** Chunk type carrying the summary run's id on the SPAWNING turn's stream —
  *  transient: it rides to the client's onData only, never a UIMessage part
  *  (the nested-bubble frame precedent, steps.ts emitNestedBubble). */
@@ -346,9 +348,9 @@ export function buildMergeWindow(
       : s;
   const lines: string[] = userTexts.map((t, i) => `${i + 1}. ${userLabel}: ${cap(t)}`);
   for (const r of replies) {
-    lines.push(`${lines.length + 1}. ${answerLabel} (${r.turn}): ${cap(r.text)}`);
+    lines.push(`${lines.length + 1}. ${answerLabel} (${r.turn}): ${cap(projectNativeReplySemantics(r.text, "agent"))}`);
   }
-  lines.push(`${lines.length + 1}. ${ownLabel}: ${cap(ownText)}`);
+  lines.push(`${lines.length + 1}. ${ownLabel}: ${cap(projectNativeReplySemantics(ownText, "agent"))}`);
   return lines.join("\n");
 }
 
@@ -373,10 +375,11 @@ export function buildSummaryWindow(
   return tail
     .map((t, i) => {
       const label = t.role === "user" ? userLabel : answerLabel;
+      const projected = projectNativeReplySemantics(t.content, t.role);
       const content =
-        t.content.length > SUMMARY_WINDOW_TURN_CHARS
-          ? t.content.slice(0, SUMMARY_WINDOW_TURN_CHARS) + "…"
-          : t.content;
+        projected.length > SUMMARY_WINDOW_TURN_CHARS
+          ? projected.slice(0, SUMMARY_WINDOW_TURN_CHARS) + "…"
+          : projected;
       return `${i + 1}. ${label}: ${content}`;
     })
     .join("\n");

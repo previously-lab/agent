@@ -23,9 +23,11 @@ import {
   type DemoTransport,
   type ReadOptions,
 } from "@/lib/cache/data-cache";
+import { getDemoDatasetOrigin } from "@/lib/data-source/demo-origin";
 
-const BENCHMARK_BASE = process.env.BENCHMARK_BASE_URL ?? "";
-const IS_REMOTE = !!BENCHMARK_BASE;
+const DEMO_ORIGIN = getDemoDatasetOrigin();
+const BENCHMARK_BASE = DEMO_ORIGIN.transport === "remote" ? DEMO_ORIGIN.root : "";
+const IS_REMOTE = DEMO_ORIGIN.transport === "remote";
 
 /**
  * Which demo transport this process reads through, named once so the cache TTL
@@ -37,8 +39,7 @@ const IS_REMOTE = !!BENCHMARK_BASE;
  */
 const DEMO_TRANSPORT: DemoTransport = IS_REMOTE ? "remote" : "local";
 
-// Local fallback: look for the `you` dataset repo as a sibling of the project root
-const LOCAL_DATA_DIR = join(process.cwd(), "..", "you");
+const LOCAL_DATA_DIR = DEMO_ORIGIN.root;
 
 const DEFAULT_PERSONA = "user";
 

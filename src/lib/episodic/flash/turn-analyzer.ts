@@ -35,6 +35,7 @@ import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { EmotionalTone, Turn } from "@/lib/episodic/types";
 import type { EmotionalSignal } from "@/lib/turn-priming";
@@ -193,7 +194,7 @@ function compressSliceTurns(turns: Turn[]): string {
   if (turns.length === 0) return "(empty slice)";
   const pick = turns.length <= 11 ? turns : [turns[0], ...turns.slice(-10)];
   const body = pick
-    .map((t) => `${t.role}: ${t.content.slice(0, 300)}`)
+    .map((t) => `${t.role}: ${projectNativeReplySemantics(t.content, t.role).slice(0, 300)}`)
     .join("\n");
   return body.length > 6000 ? body.slice(-6000) : body;
 }

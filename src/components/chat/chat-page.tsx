@@ -2,12 +2,14 @@
 
 import { useDurableChat } from "@/hooks/use-durable-chat";
 import { messagesWithNativeReplay, rememberNativeReplay } from "@/lib/chat/native-replay";
+import { nativeMessageTurnIdentity, visibleAssistantText } from "@/lib/chat/assistant-text";
 import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
 import type { UIMessage } from "@/lib/chat/protocol";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
+import { NativePersonaProvider } from "./native-source-scope";
 import { usePanelTier } from "./conversation-panel";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { DomChatList, type ChatStreamHandle } from "./dom-chat-list";
@@ -171,38 +173,46 @@ export function ChatPage({
   }, [arrivalAttempt]);
   if (arrivalFailed) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-sm text-muted-foreground">{t("arrivalError")}</p>
-        <button
-          type="button"
-          className="rounded-md border border-border px-4 py-2 text-sm"
-          onClick={() => {
-            setArrivalFailed(false);
-            setArrivalAttempt((n) => n + 1);
-          }}
-        >
-          {t("arrivalRetry")}
-        </button>
-      </div>
+      <ComposerHost
+        composer={
+          <div data-chat-arrival-error className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
+            <p role="alert" className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+              {t("arrivalError")}
+            </p>
+            <button
+              type="button"
+              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm"
+              onClick={() => {
+                setArrivalFailed(false);
+                setArrivalAttempt((n) => n + 1);
+              }}
+            >
+              {t("arrivalRetry")}
+            </button>
+          </div>
+        }
+      />
     );
   }
   if (!verdict) return <ChatPageSkeleton />;
   return (
-    <Inner
-      initialConfig={initialConfig}
-      onTurnSettled={onTurnSettled}
-      feed={feed}
-      publishing={publishing}
-      insetTop={insetTop}
-      insetBottom={insetBottom}
-      onComposerClearanceChange={onComposerClearanceChange}
-      onSubtitleLineChange={onSubtitleLineChange}
-      getView={getView}
-      persona={verdict.persona}
-      shouldResume={verdict.shouldResume}
-      initialMessages={verdict.initialMessages}
-      arrival={verdict.arrival}
-    />
+    <NativePersonaProvider value={verdict.persona}>
+      <Inner
+        initialConfig={initialConfig}
+        onTurnSettled={onTurnSettled}
+        feed={feed}
+        publishing={publishing}
+        insetTop={insetTop}
+        insetBottom={insetBottom}
+        onComposerClearanceChange={onComposerClearanceChange}
+        onSubtitleLineChange={onSubtitleLineChange}
+        getView={getView}
+        persona={verdict.persona}
+        shouldResume={verdict.shouldResume}
+        initialMessages={verdict.initialMessages}
+        arrival={verdict.arrival}
+      />
+    </NativePersonaProvider>
   );
 }
 
@@ -896,13 +906,12 @@ function Inner({
     const lastAssistant = [...messages]
       .reverse()
       .find((m) => m.role === "assistant");
-    const mainText = (lastAssistant?.parts ?? [])
-      .filter((p) => p.type === "text")
-      .map((p) => (p as { text?: string }).text ?? "")
-      .join("");
+    const mainText = lastAssistant ? visibleAssistantText(lastAssistant) : "";
     const laneItems: ChatStreamItem[] = [];
     parallelLanes.forEach((lane, i) => {
       if (lane.laneId === "main" && !isStreaming) return;
+      const laneMessage = lane.laneId === "main" ? lastAssistant : lane.message;
+      const laneTurn = laneMessage ? nativeMessageTurnIdentity(laneMessage) : null;
       laneItems.push({
         kind: "parallel-lane",
         key: `pl-${lane.laneId}`,
@@ -910,6 +919,13 @@ function Inner({
         lane: {
           laneId: lane.laneId,
           runId: lane.runId,
+          turnId: laneTurn?.turnId ?? (lane.runId ?? lane.laneId),
+          slotId: lane.laneId === "main"
+            ? laneMessage?.id
+            : lane.runId
+              ? `ans-${lane.runId}`
+              : undefined,
+          provisionalTurnId: laneTurn?.provisionalTurnId,
           userText: lane.userText,
           summary: lane.summary,
           collapsed: i < parallelLanes.length - 1,

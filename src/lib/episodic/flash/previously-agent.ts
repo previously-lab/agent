@@ -66,6 +66,7 @@ import { z } from "zod";
 import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import type { SelfAgent } from "@/lib/evolution/paths";
@@ -466,7 +467,7 @@ function buildUserPrompt(input: PreviouslyAgentInput): string {
   };
 
   const deepNote = closedSliceId
-    ? `\n**DEEP MODE**: slice \`${closedSliceId}\` just closed. Its full conversation is below; its agent timeline (readAgentTimeline) is your process context.`
+    ? `\n**DEEP MODE**: slice \`${closedSliceId}\` just closed. Its conversation excerpt is below; its agent timeline (readAgentTimeline) is your process context.`
     : "";
 
   // The direction rides the prompt two ways: the merged run's EVALUATION
@@ -519,7 +520,7 @@ ${previouslyContent || "(empty — new card. Build it from the structure in your
 ## Recent Conversation (your window into what changed)
 
 ${recentTurns.length > 0
-  ? recentTurns.map((t) => `**${t.role}**: ${t.content}`).join("\n\n")
+  ? recentTurns.map((t) => `**${t.role}**: ${projectNativeReplySemantics(t.content, t.role)}`).join("\n\n")
   : "(No recent conversation provided.)"}`;
 }
 

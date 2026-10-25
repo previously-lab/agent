@@ -821,26 +821,20 @@
   color: inherit;
 }
 
-/* Highlight the newest content during streaming */
-@keyframes text-arrive-glow {
-  0% {
-    background-color: oklch(from var(--brand) l c h / 0.06);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-
-.streaming-content > p:last-child {
-  animation: text-arrive-glow 0.6s ease-out;
-}
-
 /* Other block types arrive with the same soft fade */
 .streaming-content > blockquote,
 .streaming-content > .typeset-scroll,
 .streaming-content > .code-block,
 .streaming-content > hr {
   animation: slide-up-fade 0.3s ease-out both;
+}
+
+.stream-caret {
+  display: block;
+  width: 1.5rem;
+  height: 1px;
+  margin-top: 0.5rem;
+  background: color-mix(in oklab, var(--brand) 55%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

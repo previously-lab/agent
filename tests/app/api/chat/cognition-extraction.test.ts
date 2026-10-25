@@ -252,7 +252,7 @@ describe("extractAllAssistantText", () => {
     expect(result).not.toContain("webSearch");
   });
 
-  it("joins text parts in order within a single multi-part message", () => {
+  it("concatenates text parts within one assistant message exactly, no separator", () => {
     const messages: ModelMessage[] = [
       assistant([
         { type: "text", text: "让我查一下。" },
@@ -261,7 +261,47 @@ describe("extractAllAssistantText", () => {
       ]),
     ];
     const result = extractAllAssistantText(messages);
-    expect(result).toBe("让我查一下。\n\n查到了，答案是 42。");
+    expect(result).toBe("让我查一下。查到了，答案是 42。");
+  });
+
+  it("preserves whitespace inside multi-part responses exactly (no trimming, join \"\")", () => {
+    const messages: ModelMessage[] = [
+      assistant([
+        { type: "text", text: "  leading spaces\nand newline " },
+        { type: "tool-call", toolCallId: "tc1", toolName: "recall", input: { query: "x" } },
+        { type: "text", text: "\n\ttrailing newline\t" },
+      ]),
+    ];
+    expect(extractAllAssistantText(messages)).toBe("  leading spaces\nand newline \n\ttrailing newline\t");
+    // String content is likewise preserved exactly.
+    expect(extractAllAssistantText([assistant("  padded  ")])).toBe("  padded  ");
+  });
+
+  it("keeps a native ```html live fence split across parts byte-exact (CRLF + indentation)", () => {
+    const head = "```html live\r\n  <div class=\"room\">\r\n    <script>const x = 1;</script>\r\n";
+    const tail = "  </div>\r\n```";
+    const messages: ModelMessage[] = [
+      assistant([{ type: "text", text: head }, { type: "text", text: tail }]),
+    ];
+    expect(extractAllAssistantText(messages)).toBe(head + tail);
+    expect(extractAllAssistantText(messages)).not.toContain("\n\n</div>");
+  });
+
+  it("skips whitespace-only messages but keeps exact text of non-whitespace ones", () => {
+    expect(extractAllAssistantText([assistant([{ type: "text", text: "   " }])])).toBe("");
+    expect(extractAllAssistantText([assistant("  \r\n\t  ")])).toBe("");
+    // A whitespace-only part does not void the whole message.
+    expect(extractAllAssistantText([assistant([{ type: "text", text: "   " }, { type: "text", text: "  hi  " }])])).toBe("     hi  ");
+  });
+
+  it("still separates distinct assistant rounds with \\n\\n", () => {
+    const head = "```html live\r\n  <div>\r\n";
+    const tail = "  </div>\r\n```";
+    const messages: ModelMessage[] = [
+      assistant([{ type: "text", text: head }]),
+      assistant([{ type: "text", text: tail }]),
+    ];
+    expect(extractAllAssistantText(messages)).toBe(`${head}\n\n${tail}`);
   });
 
   it("ignores user and tool messages", () => {

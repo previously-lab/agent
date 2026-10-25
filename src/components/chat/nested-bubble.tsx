@@ -189,7 +189,12 @@ export function NestedBubble({
               failure plainly (§3.6), the chip stays the mechanical record. */}
           {shownText && (
             <div className="conversation-prose">
-              <MarkdownRenderer content={shownText} />
+              <MarkdownRenderer
+                content={shownText}
+                isStreaming={frame.status === "running"}
+                nativeMode="interactive"
+                nativeTurnId={frame.turnId}
+              />
             </div>
           )}
       </ConversationTurn>

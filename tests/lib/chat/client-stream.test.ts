@@ -104,6 +104,45 @@ describe("project chat assembly", () => {
     expect(replay.message.parts).toEqual([{ type: "text", text: "Hello world", state: "done" }]);
   });
 
+  it("replays a native ```html live fence split into deltas byte-exactly", () => {
+    const fence = "```html live\r\n  <div class=\"room\">\r\n    <b>你好</b>\r\n  </div>\r\n```";
+    const state = createChatAssembly("fence");
+    for (const delta of [fence.slice(0, 7), fence.slice(7, 40), fence.slice(40)]) {
+      applyChatEvent(state, { type: "text-delta", id: "t", delta });
+    }
+    applyChatEvent(state, { type: "finish" });
+    expect(state.message.parts).toEqual([{ type: "text", text: fence, state: "done" }]);
+  });
+
+  it("decodes byte-split UTF-8 across multibyte characters adjacent to native markers", async () => {
+    const payload =
+      'data: {"type":"text-delta","id":"t","delta":"```html live\\r\\n🌱"}\r\n\r\n' +
+      'data: {"type":"text-delta","id":"t","delta":"你的房间"}\r\n\r\n' +
+      'data: {"type":"text-end","id":"t"}\r\n\r\n' +
+      'data: {"type":"finish"}\r\n\r\n';
+    const state = createChatAssembly("utf8");
+    for await (const event of readChatEvents(bytes(payload, 1))) applyChatEvent(state, event);
+    expect(state.message.parts).toEqual([{ type: "text", text: "```html live\r\n🌱你的房间", state: "done" }]);
+    expect(state.finished).toBe(true);
+  });
+
+  it("keeps an unterminated native fence partial and unfinished after a complete SSE delta", async () => {
+    const state = createChatAssembly("open");
+    for await (const event of readChatEvents(bytes('data: {"type":"text-delta","id":"t","delta":"```html live\\r\\n<div>"}\n\n'))) {
+      applyChatEvent(state, event);
+    }
+    expect(state.finished).toBe(false);
+    expect(state.message.parts).toEqual([{ type: "text", text: "```html live\r\n<div>", state: "streaming" }]);
+  });
+
+  it("keeps data-turn-status parts (with turnId) available in the assembled message", () => {
+    const state = createChatAssembly("status");
+    applyChatEvent(state, { type: "data-turn-status", id: "turn-status", data: { turnId: "turn1", phase: "running" } });
+    applyChatEvent(state, { type: "text-delta", id: "t", delta: "x" });
+    applyChatEvent(state, { type: "finish" });
+    expect(state.message.parts[0]).toEqual({ type: "data-turn-status", id: "turn-status", data: { turnId: "turn1", phase: "running" } });
+  });
+
   it("regeneration retains the original question identity and excludes its previous answer", () => {
     const messages: UIMessage[] = [
       { id: "q1", role: "user", parts: [{ type: "text", text: "question" }] },

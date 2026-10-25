@@ -2,8 +2,43 @@ import { describe, it, expect } from "vitest";
 import {
   decideArrival,
   dropTrailingAssistantMessages,
+  mergeSavedTurns,
 } from "@/lib/chat/reconnect";
 import type { UIMessage } from "@/lib/chat/protocol";
+import type { Turn } from "@/lib/episodic/types";
+
+// A canonical visible turn whose agent content is a native ```html live fence with
+// CRLF and indentation: recovery must surface Turn.content byte-exactly in the
+// rebuilt assistant message so native-replay identity checks stay aligned.
+describe("mergeSavedTurns native fence roundtrip", () => {
+  const fence = "```html live\r\n  <div class=\"room\">\r\n    <script>const x = 1;</script>\r\n  </div>\r\n```";
+  const turns: Turn[] = [
+    { role: "user", content: "question", timestamp: "t1", turnId: "turn1", clientMessageId: "u1" },
+    { role: "agent", content: fence, timestamp: "t2", turnId: "turn1" },
+  ];
+
+  it("rebuilds the assistant message with Turn.content preserved exactly", () => {
+    const merged = mergeSavedTurns([], turns);
+    expect(merged[0].id).toBe("u1");
+    expect(merged[1].id).toBe("saved-agent-turn1");
+    expect(merged[1].parts).toEqual([{ type: "text", text: fence }]);
+  });
+
+  it("keeps recovery identity metadata on the rebuilt pair", () => {
+    const merged = mergeSavedTurns([], turns);
+    expect(merged[0].metadata).toMatchObject({ recoveryTurnId: "turn1" });
+    expect(merged[1].metadata).toMatchObject({ recoveryTurnId: "turn1" });
+  });
+
+  it("does not mutate or duplicate stored messages on replay", () => {
+    const stored: UIMessage[] = [{ id: "u1", role: "user", parts: [{ type: "text", text: "question" }] }];
+    const before = JSON.parse(JSON.stringify(stored));
+    const merged = mergeSavedTurns(stored, turns);
+    expect(stored).toEqual(before);
+    expect(merged.filter((message) => message.id === "u1")).toHaveLength(1);
+    expect(merged).toHaveLength(2);
+  });
+});
 
 // dropTrailingAssistantMessages is the pure half of the reconnect reset: it
 // removes the partial in-flight assistant reply so a startIndex-0 replay

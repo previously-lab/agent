@@ -771,10 +771,14 @@ export function DeskField({
       {/* A record's title is "" (§三: the header carries the identity) —
           no display line opens the transcript. */}
       {displayTitle !== "" && <h1 className="desk-title">{displayTitle}</h1>}
-      <MarkdownRenderer content={model.markdown} />
+      <MarkdownRenderer
+        content={model.markdown}
+        nativeMode="paper"
+        nativeTurnId={docRef}
+      />
         </>
       ) : null,
-    [ready, model.markdown, displayTitle],
+    [ready, model.markdown, displayTitle, docRef],
   );
 
   // THE TRANSFORM STACK (v0.30): three layers, one transform each, so a

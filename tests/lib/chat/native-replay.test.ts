@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { messagesWithNativeReplay, readNativeReplay, rememberNativeReplay, restoreNativeReplay } from "@/lib/chat/native-replay";
-import { recoveryMessages } from "@/lib/chat/reconnect";
+import { mergeSavedTurns, recoveryMessages } from "@/lib/chat/reconnect";
 import { acceptPersistenceRecovery } from "@/lib/chat/persistence";
+import { parseSlice, serializeSlice } from "@/lib/episodic/manager";
 import type { UIMessage } from "@/lib/chat/protocol";
-import type { Turn } from "@/lib/episodic/types";
+import type { TimeSlice, Turn } from "@/lib/episodic/types";
 import type { ModelMessage } from "@/lib/deepseek/types";
 
 const native: ModelMessage[] = [{ role: "assistant", content: "answer", deepseek: { role: "assistant", content: "answer", reasoning_content: "private original reasoning" } }];
@@ -46,10 +47,10 @@ describe("bounded native replay after refresh", () => {
     expect(messagesWithNativeReplay([user(), answer(), user("next")], saved)[1].parts).toHaveLength(2);
   });
 
-  it("matches persisted paragraph boundaries across multiple assistant steps", () => {
+  it("matches exact text within steps and blank lines between assistant steps", () => {
     const streamed: UIMessage = { id: "multi", role: "assistant", parts: [{ type: "text", text: " Checking… " }, replay, { type: "text", text: "Final answer\n" }, { ...replay, id: "native-2" }] };
     rememberNativeReplay([user(), streamed]);
-    const restored = restoreNativeReplay([user(), answer("saved", "Checking…\n\nFinal answer", false)]);
+    const restored = restoreNativeReplay([user(), answer("saved", " Checking… \n\nFinal answer\n", false)]);
     expect(restored[1].parts).toHaveLength(3);
     expect(restored[1].parts.slice(1)).toEqual([replay, { ...replay, id: "native-2" }]);
   });
@@ -87,5 +88,77 @@ describe("bounded native replay after refresh", () => {
     acceptPersistenceRecovery({ records: [{ runId: "run1", record }], activeRunIds: [], savedRunIds: [], unavailableRunIds: [], receipts: [], failures: [] });
     expect(readNativeReplay()[0].parts).toEqual([recovered[1].parts[1]]);
     expect(messagesWithNativeReplay([user("next")], saved)[1].parts[1]).toEqual(recovered[1].parts[1]);
+  });
+
+  it("attaches native parts to a rebuilt fence answer across disk-style outer trimming", () => {
+    const fence = "```html live\r\n  <div class=\"room\">\r\n    <b>你好</b>\r\n  </div>\r\n```";
+    rememberNativeReplay([user(), answer("live", fence)]);
+    const rebuilt: UIMessage = { id: "saved-agent-turn1", role: "assistant", metadata: { recoveryTurnId: "turn1" }, parts: [{ type: "text", text: fence }] };
+    const restored = restoreNativeReplay([user(), rebuilt]);
+    expect(restored[1].parts).toEqual([{ type: "text", text: fence }, replay]);
+    const diskNormalized: UIMessage = { ...rebuilt, id: "disk-normalized", parts: [{ type: "text", text: ` ${fence} ` }] };
+    expect(restoreNativeReplay([user(), diskNormalized])[1].parts).toEqual([{ type: "text", text: ` ${fence} ` }, replay]);
+  });
+
+  it("passes fenced replyText through recovery with nativeMessages checkpoint identity intact", () => {
+    const fence = "```html live\r\n  <div class=\"room\">\r\n  </div>\r\n```";
+    const nativeFence: ModelMessage[] = [{ role: "assistant", content: fence, deepseek: { role: "assistant", content: fence, reasoning_content: "private reasoning" } }];
+    const record = { turnId: "turn1", clientMessageId: "u1", sliceId: "slice", at: "t1", userText: "question", replyText: fence, cognition: "", nativeMessages: nativeFence };
+    const recovered = recoveryMessages([record]);
+    expect(recovered[1].parts[0]).toEqual({ type: "text", text: fence });
+    expect(recovered[1].parts[1]).toEqual({ type: "data-deepseek-step", id: "recovery-native-turn1", data: { messages: nativeFence } });
+    acceptPersistenceRecovery({ records: [{ runId: "run1", record }], activeRunIds: [], savedRunIds: [], unavailableRunIds: [], receipts: [], failures: [] });
+    expect(readNativeReplay()[0].parts).toEqual([recovered[1].parts[1]]);
+  });
+
+  it("restores original checkpoints after a real disk trim without accepting internal or user edits", () => {
+    const original = " \n```html live\r\n  <div class=\"room\">\r\n    <b>fictional</b>\r\n  </div>\r\n```\n";
+    const checkpoint: ModelMessage[] = [{ role: "assistant", content: original, deepseek: { role: "assistant", content: original, reasoning_content: "private original reasoning" } }];
+    const checkpointPart = { type: "data-deepseek-step" as const, id: "disk-native", data: { messages: checkpoint } };
+    const live: UIMessage = { id: "live", role: "assistant", parts: [{ type: "text", text: original }, checkpointPart] };
+    rememberNativeReplay([user(), live]);
+    const cached = readNativeReplay();
+    const rawCache = localStorage.getItem("previously:deepseek-replay:v1");
+    expect(cached[0].assistantText).toBe(original);
+    expect(cached[0].parts).toEqual([checkpointPart]);
+
+    const slice: TimeSlice = {
+      slice_id: "2026-01-01-0000",
+      focus: "fictional replay",
+      status: "closed",
+      start: "2026-01-01T00:00:00.000Z",
+      end: "2026-01-01T00:01:00.000Z",
+      timezone: "UTC",
+      summary: "",
+      open_loops: [],
+      decisions: [],
+      tags: [],
+      related_slices: [],
+      loops: [],
+      turns: [
+        { role: "user", content: "question", timestamp: "2026-01-01T00:00:00.000Z", turnId: "turn1", clientMessageId: "u1" },
+        { role: "agent", content: original, timestamp: "2026-01-01T00:01:00.000Z", turnId: "turn1" },
+      ],
+      estimatedTokens: 0,
+    };
+    const roundTripped = parseSlice(serializeSlice(slice));
+    expect(roundTripped.turns[1].content).toBe(original.trim());
+    expect(slice.turns[1].content).toBe(original);
+    const merged = mergeSavedTurns([], roundTripped.turns);
+    const replayed = messagesWithNativeReplay([], roundTripped.turns);
+
+    expect(replayed[1].parts).toEqual([{ type: "text", text: roundTripped.turns[1].content }, checkpointPart]);
+    expect(readNativeReplay()).toEqual(cached);
+    expect(localStorage.getItem("previously:deepseek-replay:v1")).toBe(rawCache);
+
+    for (const mismatch of [
+      { ...cached[0], userId: "different-user" },
+      { ...cached[0], userText: "edited question" },
+    ]) {
+      expect(restoreNativeReplay(merged, [mismatch])[1].parts).toHaveLength(1);
+    }
+    const internalText = roundTripped.turns[1].content.replace("fictional", "changed");
+    const internalEdit: UIMessage = { ...merged[1], parts: [{ type: "text", text: internalText }] };
+    expect(restoreNativeReplay([merged[0], internalEdit], cached)[1].parts).toHaveLength(1);
   });
 });

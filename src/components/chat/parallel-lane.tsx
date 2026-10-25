@@ -32,6 +32,7 @@ import { rememberSummaryRun } from "@/lib/chat/persistence";
 import { readDurableChat } from "@/lib/chat/client-transport";
 import type { UIMessage } from "@/lib/chat/protocol";
 import { rememberNativeReplay } from "@/lib/chat/native-replay";
+import { visibleAssistantText } from "@/lib/chat/assistant-text";
 import type { ParallelLaneSeat } from "@/lib/chat/stream-items";
 
 /** One lane as the page's side store holds it. The seat the list renders
@@ -74,7 +75,7 @@ export async function readLaneStream(
     assistantId: `ans-${runId}`,
     signal,
     onMessage: (answer) => {
-      onText(answer.parts.filter((part) => part.type === "text").map((part) => part.text.trim()).filter(Boolean).join("\n\n"));
+      onText(visibleAssistantText(answer));
       onMessage?.(answer);
     },
     onData: (chunk) => {
@@ -83,7 +84,7 @@ export async function readLaneStream(
       if (chunk.type === PARALLEL_SUMMARY_CHUNK && typeof data?.text === "string" && data.text.trim()) onMergeLine(typeof data.sliceId === "string" ? data.sliceId : "", data.text);
     },
   });
-  return message.parts.filter((part) => part.type === "text").map((part) => part.text.trim()).filter(Boolean).join("\n\n");
+  return visibleAssistantText(message);
 }
 
 /**
@@ -141,7 +142,10 @@ export function useParallelLaneReaders(
       readLaneStream(lane.runId, {
         signal: ac.signal,
         onText: (text) => patchRef.current(lane.laneId, { text }),
-        onMessage: (message) => { completedMessage = message; },
+        onMessage: (message) => {
+          completedMessage = message;
+          patchRef.current(lane.laneId, { message });
+        },
         onMergeLine: (sliceId, text) => mergeRef.current(sliceId, text),
       })
         .then((text) => {
@@ -234,7 +238,14 @@ export function ParallelLaneView({ lane }: { lane: ParallelLaneSeat }) {
               )}
               {lane.text ? (
                 <div className="conversation-prose">
-                  <MarkdownRenderer content={lane.text} />
+                  <MarkdownRenderer
+                    content={lane.text}
+                    isStreaming={!lane.settled}
+                    nativeMode="interactive"
+                    nativeTurnId={lane.turnId ?? lane.runId ?? lane.laneId}
+                    nativeSlotId={lane.slotId}
+                    nativeProvisionalTurnId={lane.provisionalTurnId}
+                  />
                 </div>
               ) : (
                 !lane.settled && (

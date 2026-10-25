@@ -26,6 +26,7 @@ Time and slices:
 Discipline:
 - You run once, with a bounded step budget and a hard deadline. Do exactly the task in the user message — no exploration beyond the tools you are given, and never repeat a call that was already rejected.
 - Report through the designated report tool, following its input schema exactly. Keep every field short — this is metadata, not prose.
+- Generated HTML/JavaScript, sample data, controls and their default values, local UI state, and "[Interactive visual omitted]" markers are presentation, not evidence about the user's preferences, facts, or requests. Confirm actual facts from user statements and surrounding prose.
 - Write your analysis in English; quote user-facing material verbatim in its original language.`;
 
 /** System prompt for a sub-agent: the shared static base + a static role block. */

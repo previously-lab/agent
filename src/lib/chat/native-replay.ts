@@ -1,6 +1,7 @@
 import type { Turn } from "@/lib/episodic/types";
 import type { UIMessage, UIMessagePart } from "./protocol";
 import { mergeSavedTurns } from "./reconnect";
+import { visibleAssistantText } from "./assistant-text";
 
 const KEY = "previously:deepseek-replay:v1";
 const MAX_ENTRIES = 24;
@@ -13,8 +14,7 @@ export interface NativeReplayEntry {
   parts: ReplayPart[];
 }
 const text = (message: UIMessage) => message.parts.filter((part) => part.type === "text").map((part) => part.text).join("");
-// Match extractAllAssistantText's persisted paragraph boundaries exactly.
-const assistantText = (message: UIMessage) => message.parts.filter((part) => part.type === "text").map((part) => part.text.trim()).filter(Boolean).join("\n\n");
+const assistantText = visibleAssistantText;
 const replayParts = (message: UIMessage) => message.parts.filter((part): part is ReplayPart => part.type === "data-deepseek-step");
 
 /** A local optimization, never an authority for which turns exist. */
@@ -55,13 +55,14 @@ export function rememberNativeReplay(messages: readonly UIMessage[]): void {
 }
 
 /** The caller supplies server-authoritative current-slice history or pending
- * completed run results. IDs AND both visible texts must agree before reuse. */
+ * completed run results. IDs and user text are exact; assistant text alone
+ * tolerates outer trimming from the disk roundtrip, never internal edits. */
 export function restoreNativeReplay(messages: readonly UIMessage[], entries = readNativeReplay()): UIMessage[] {
   let user: UIMessage | undefined;
   return messages.map((message) => {
     if (message.role === "user") { user = message; return message; }
     if (message.role !== "assistant" || !user || replayParts(message).length) return message;
-    const match = entries.find((entry) => entry.userId === user!.id && entry.userText === text(user!) && entry.assistantText === assistantText(message));
+    const match = entries.find((entry) => entry.userId === user!.id && entry.userText === text(user!) && entry.assistantText.trim() === assistantText(message).trim());
     return match ? { ...message, parts: [...message.parts, ...match.parts] } : message;
   });
 }

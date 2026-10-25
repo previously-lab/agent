@@ -51,7 +51,7 @@ export function useDurableChat(options: DurableChatOptions) {
     setStatus("submitted");
     setMessages(base);
     let runId = mode === "resume" ? latest.current.getRunId() : null;
-    const assistantId = crypto.randomUUID();
+    let assistantId = runId ? `assistant-run-${runId}` : crypto.randomUUID();
     try {
       let response: Response | undefined;
       if (mode !== "resume") {
@@ -65,6 +65,7 @@ export function useDurableChat(options: DurableChatOptions) {
         if (!response.ok) throw new Error((await response.text()) || `Chat HTTP ${response.status}`);
         if (!current()) return;
         runId = response.headers.get("x-workflow-run-id");
+        if (runId) assistantId = `assistant-run-${runId}`;
         latest.current.onRunStarted?.(response, chatId.current);
       }
       if (!response && !runId) { if (current()) setStatus("ready"); return; }

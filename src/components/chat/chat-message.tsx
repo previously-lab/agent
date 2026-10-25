@@ -3,7 +3,9 @@
 import { memo, useMemo, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import type { UIMessage } from "@/lib/chat/protocol";
-import { AnimatePresence, motion } from "motion/react";
+import { nativeMessageTurnIdentity, visibleAssistantText } from "@/lib/chat/assistant-text";
+import { parseNativeSections } from "@/lib/markdown/native-sections";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
 import { PhaseIndicator } from "./phase-indicator";
@@ -143,17 +145,35 @@ export const ChatMessage = memo(function ChatMessage({
 }: ChatMessageProps) {
   const t = useTranslations("chat.phase");
   const tChat = useTranslations("chat");
+  const reducedMotion = useReducedMotion() ?? false;
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const parts = useMemo(
     () => (message.parts ?? []) as AnyPart[],
     [message.parts],
   );
+  const nativeTurn = nativeMessageTurnIdentity(message);
 
   const streamItems = useMemo(
     () => (isAssistant ? buildStream(parts, isStreaming ?? false) : []),
     [parts, isAssistant, isStreaming],
   );
+  const lastTextDone = useMemo(() => {
+    for (let index = parts.length - 1; index >= 0; index--) {
+      if (parts[index].type === "text") return parts[index].state === "done";
+    }
+    return false;
+  }, [parts]);
+  const nativeOffsets = useMemo(() => {
+    let count = 0;
+    return streamItems.map((item) => {
+      const offset = count;
+      if (item.kind === "text") {
+        count += parseNativeSections(item.content).filter((section) => section.kind === "native").length;
+      }
+      return offset;
+    });
+  }, [streamItems]);
 
   // ── Live agent-stage pill ─────────────────────────────────────────────
   // Derives what the agent is doing right now (recalling / reasoning /
@@ -187,10 +207,7 @@ export const ChatMessage = memo(function ChatMessage({
   }, [isAssistant, isStreaming]);
 
   // Full text for footer / actions
-  const textContent = streamItems
-    .filter((item) => item.kind === "text")
-    .map((item) => (item as { kind: "text"; content: string }).content)
-    .join("\n");
+  const textContent = isAssistant ? visibleAssistantText(message) : "";
 
   const hasContent = streamItems.length > 0;
   const timestamp = startedAt ? (
@@ -365,14 +382,20 @@ export const ChatMessage = memo(function ChatMessage({
                 return (
                   <motion.div
                     key={key}
-                    initial={{ opacity: 0 }}
+                    initial={reducedMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ duration: 0.15 }}
+                    transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
                     className="conversation-prose"
                   >
                     <MarkdownRenderer
                       content={item.content}
-                      isStreaming={isStreaming && i === streamItems.length - 1}
+                      isStreaming={isStreaming && i === streamItems.length - 1 && !lastTextDone}
+                      nativeMode="interactive"
+                      nativeTurnId={nativeTurn.turnId}
+                      nativeSlotId={message.id}
+                      nativeProvisionalTurnId={nativeTurn.provisionalTurnId}
+                      nativeOrdinalOffset={nativeOffsets[i]}
+                      onNativeRetry={onRegenerate}
                     />
                   </motion.div>
                 );
@@ -383,8 +406,8 @@ export const ChatMessage = memo(function ChatMessage({
         </div>
       )}
 
-      {/* Loading tips are retired for now (content refresh pending) — the
-          streaming turn shows no bottom indicator. */}
+      {/* Generic loading tips stay retired; MarkdownRenderer owns the quiet
+          stream caret and each native block's preparing/fallback state. */}
 
       {/* Silence heartbeat — only when the stream has gone quiet mid-turn */}
       {isStreaming && silent && (

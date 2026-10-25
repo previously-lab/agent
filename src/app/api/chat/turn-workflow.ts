@@ -173,29 +173,29 @@ export function extractAllAssistantText(
   messages: ModelMessage[],
   startIndex = 0,
 ): string {
-  const parts: string[] = [];
+  const messageTexts: string[] = [];
   for (let i = startIndex; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== "assistant") continue;
     if (typeof m.content === "string") {
-      if (m.content.trim()) parts.push(m.content.trim());
+      if (m.content.trim()) messageTexts.push(m.content);
       continue;
     }
     if (Array.isArray(m.content)) {
-      for (const p of m.content) {
-        if (
-          p &&
-          typeof p === "object" &&
-          (p as { type?: string }).type === "text" &&
-          typeof (p as { text?: unknown }).text === "string" &&
-          (p as { text: string }).text.trim()
-        ) {
-          parts.push((p as { text: string }).text.trim());
-        }
-      }
+      const text = m.content
+        .filter(
+          (p): p is { type: "text"; text: string } =>
+            p !== null &&
+            typeof p === "object" &&
+            (p as { type?: string }).type === "text" &&
+            typeof (p as { text?: unknown }).text === "string",
+        )
+        .map((p) => p.text)
+        .join("");
+      if (text.trim()) messageTexts.push(text);
     }
   }
-  return parts.join("\n\n");
+  return messageTexts.join("\n\n");
 }
 
 /**

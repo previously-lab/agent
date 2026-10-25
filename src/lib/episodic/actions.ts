@@ -4,6 +4,7 @@ import { getDemoPersona, listDemoPersonas, setDemoPersona } from "@/lib/demo/dem
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getUserName } from "@/lib/identity";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
+import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { parseSlice, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
 import { readSlicePart, sliceIdToRelPath, slicePartPathCandidates } from "./paths";
 import { getRepoTree } from "@/lib/tools/readFile";
@@ -635,7 +636,10 @@ function truncateFrameTurn(content: string): string {
 function frameTurns(turns: Turn[]): Turn[] {
   return turns
     .slice(0, FRAME_TURN_COUNT)
-    .map((t) => ({ ...t, content: truncateFrameTurn(t.content) }));
+    .map((t) => ({
+      ...t,
+      content: truncateFrameTurn(projectNativeReplySemantics(t.content, t.role)),
+    }));
 }
 
 export async function getSliceContent(

@@ -160,6 +160,23 @@ describe("buildSliceExcerpt", () => {
     expect(excerpt.turnsExcerpt.split("\n")).toHaveLength(8);
     expect(excerpt.turnsExcerpt).toContain("第 11 条 换行");
   });
+
+  it("projects agent native replies before folding and caps, never user words", () => {
+    const agent = `agent before\n\`\`\`html live\n${"<button>generated</button>\n".repeat(30)}\`\`\`\nagent after`;
+    const user = "user native\n```html live\n<button>user example</button>\n```";
+    const turns = [
+      { role: "user", content: user },
+      { role: "agent", content: agent },
+    ];
+    const snapshot = turns.map((turn) => ({ ...turn }));
+
+    const excerpt = buildSliceExcerpt({ turns });
+
+    expect(excerpt.turnsExcerpt).toContain("agent before [Interactive visual omitted]agent after");
+    expect(excerpt.turnsExcerpt).not.toContain("generated");
+    expect(excerpt.turnsExcerpt).toContain("user native ```html live <button>user example</button> ```");
+    expect(turns).toEqual(snapshot);
+  });
 });
 
 // ─── The write ops (§B.3) + the v0.21 write window ──────────────────────────

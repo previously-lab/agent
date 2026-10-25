@@ -7,8 +7,10 @@ import { routing } from "@/i18n/routing";
 import { AppHeader } from "@/components/layout/app-header";
 import { ShellProvider } from "@/components/shell/shell-provider";
 import { ConversationOverlayMount } from "@/components/chat/conversation-overlay-mount";
+import { NativeSourceScopeProvider } from "@/components/chat/native-source-scope";
 import { loadUserConfig } from "@/lib/config/loader";
 import { resolveDataSource } from "@/lib/data-source/resolve";
+import { nativeSourceScopeForDeployment } from "@/lib/chat/native-source-scope.server";
 
 // Explicit viewport: pin the layout width to the device (no automatic
 // minimum-content zoom-out on phones) and extend the page into the notch /
@@ -65,12 +67,14 @@ export default async function LocaleLayout({ children, params }: Props) {
           conversation ability there); the world canvas stays in `/app` and
           talks to the provider through a registered driver — the layout
           converses with the world, it does not own it. */}
-      <ShellProvider>
-        {children}
-        <Suspense fallback={null}>
-          <OverlayLoader />
-        </Suspense>
-      </ShellProvider>
+      <NativeSourceScopeProvider value={nativeSourceScopeForDeployment()}>
+        <ShellProvider>
+          {children}
+          <Suspense fallback={null}>
+            <OverlayLoader />
+          </Suspense>
+        </ShellProvider>
+      </NativeSourceScopeProvider>
     </NextIntlClientProvider>
   );
 }

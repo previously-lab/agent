@@ -40,6 +40,7 @@ import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
@@ -97,7 +98,7 @@ export function buildSliceExcerpt(slice: {
     .map(
       (t) =>
         `${t.role === "user" ? "user" : "agent"}: ` +
-        t.content.replace(/\s+/g, " ").trim().slice(0, 300),
+        projectNativeReplySemantics(t.content, t.role).replace(/\s+/g, " ").trim().slice(0, 300),
     )
     .join("\n");
   return {

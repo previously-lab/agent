@@ -1,6 +1,7 @@
 "use client";
 
 import { MarkdownRenderer } from "./markdown";
+import { nativeSourceVersion } from "@/lib/markdown/native-sections";
 import { CognitionPopover } from "./cognition-popover";
 import { TimeDisplay, sameDay } from "./time-display";
 import { ConversationTurn } from "./conversation-turn";
@@ -43,7 +44,11 @@ export function HistoryTurn({
         <div className="conversation-prose conversation-prose--literal">{content}</div>
       ) : (
         <div className="conversation-prose">
-          <MarkdownRenderer content={content} />
+          <MarkdownRenderer
+            content={content}
+            nativeMode="interactive"
+            nativeTurnId={turnId ?? `${timestamp}:${nativeSourceVersion(content)}`}
+          />
         </div>
       )}
     </ConversationTurn>

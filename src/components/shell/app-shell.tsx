@@ -52,6 +52,7 @@ import {
 import { useTier } from "@/hooks/use-tier";
 import { BoardBar } from "@/components/shell/board-bar";
 import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
+import { NativePersonaProvider } from "@/components/chat/native-source-scope";
 import {
   ArchiveField,
   invalidateArchiveField,
@@ -1081,13 +1082,15 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
             {/* The leaving desk outlives its ref: deskDoc is already null
                 during the return beat, so the desk keeps the last one. */}
             {(deskDoc ?? lastDeskDocRef.current) !== null && (
-              <DeskField
-                docRef={(deskDoc ?? lastDeskDocRef.current)!}
-                camXOffset={0}
-                reducedMotion={reducedMotion}
-                texts={deskTexts}
-                leaving={handoverLeaving}
-              />
+              <NativePersonaProvider value={persona ?? "user"}>
+                <DeskField
+                  docRef={(deskDoc ?? lastDeskDocRef.current)!}
+                  camXOffset={0}
+                  reducedMotion={reducedMotion}
+                  texts={deskTexts}
+                  leaving={handoverLeaving}
+                />
+              </NativePersonaProvider>
             )}
           </motion.div>
         )}

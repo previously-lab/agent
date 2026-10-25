@@ -6,6 +6,8 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  buildMergeWindow,
+  buildSummaryWindow,
   isBurstSibling,
   isLastBurstTurn,
   isLiveParallelSummary,
@@ -202,5 +204,36 @@ describe("isLastBurstTurn — the solo+burstId leg (v0.42 review should-fix 4)",
     expect(
       isLiveParallelSummary(liveSummaryOtherShell, "2026-10-20-0837", "run-own"),
     ).toBe(true);
+  });
+});
+
+describe("native reply semantic excerpts", () => {
+  const user = "user native\n```html live\n<button>user example</button>\n```";
+  const agent = `agent before\n\`\`\`html live\n${"<button>generated</button>\n".repeat(40)}\`\`\`\nagent after`;
+
+  it("projects sibling and own replies before caps but leaves userTexts raw", () => {
+    const result = buildMergeWindow([user], [{ turn: "sibling", text: agent }], agent, "en");
+
+    expect(result).toContain(`1. User: ${user}`);
+    expect(result.split("[Interactive visual omitted]")).toHaveLength(3);
+    expect(result.split("agent after")).toHaveLength(3);
+    expect(result).not.toContain("generated");
+  });
+
+  it("role-guards the legacy summary window and retains post-native prose", () => {
+    const turns = [
+      { role: "user", content: user },
+      { role: "agent", content: agent },
+      { role: "assistant", content: agent },
+    ];
+    const snapshot = turns.map((turn) => ({ ...turn }));
+
+    const result = buildSummaryWindow(turns, "en");
+
+    expect(result).toContain(user);
+    expect(result.split("[Interactive visual omitted]")).toHaveLength(3);
+    expect(result.split("agent after")).toHaveLength(3);
+    expect(result).not.toContain("generated");
+    expect(turns).toEqual(snapshot);
   });
 });

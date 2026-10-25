@@ -490,6 +490,24 @@ describe("getSliceContent", () => {
     expect(content!.totalTurns).toBe(9);
   });
 
+  it("projects native agent replies only in framed excerpts and preserves full reads", async () => {
+    const turns = seedRead(2);
+    const user = "user native\n```html live\n<button>user example</button>\n```";
+    const agent = `agent before\n\`\`\`html live\n${"<button>generated</button>\n".repeat(30)}\`\`\`\nagent after`;
+    turns[0] = { ...turns[0], content: user };
+    turns[1] = { ...turns[1], content: agent };
+
+    const framed = await getSliceContent("2026-08-11-1000");
+
+    expect(framed!.turns[0].content).toBe(user);
+    expect(framed!.turns[1].content).toBe("agent before\n[Interactive visual omitted]agent after");
+
+    const full = await getSliceContent("2026-08-11-1000", undefined, { full: true });
+    expect(full!.turns).toBe(turns);
+    expect(full!.turns[0].content).toBe(user);
+    expect(full!.turns[1].content).toBe(agent);
+  });
+
   it("ships every turn under { full: true }", async () => {
     const turns = seedRead(9);
 

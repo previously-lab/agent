@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useLayoutEffect, type FormEvent, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUp, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
@@ -8,6 +8,7 @@ import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
+import { appendNativeDraft, NATIVE_DRAFT_EVENT } from "@/lib/chat/native-draft";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
 import "./writing.css";
 
@@ -95,6 +96,19 @@ export function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
   const { images, removeImage, clearImages, handlePaste, handleDrop, handleDragOver } = useImageAttachments();
+
+  useEffect(() => {
+    const onDraft = (event: Event): void => {
+      const suggestion = (event as CustomEvent<{ suggestion?: unknown }>).detail?.suggestion;
+      if (typeof suggestion !== "string" || suggestion.length > 2_000) return;
+      setValue((current) => {
+        const next = appendNativeDraft(current, suggestion);
+        return next.length <= 12_000 ? next : current;
+      });
+    };
+    window.addEventListener(NATIVE_DRAFT_EVENT, onDraft);
+    return () => window.removeEventListener(NATIVE_DRAFT_EVENT, onDraft);
+  }, []);
 
   // Expanding the pill mounts a new textarea with the existing draft. Measure
   // after that DOM update as well as after typing, so wrapped text is visible.

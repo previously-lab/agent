@@ -94,6 +94,31 @@ describe("runner wiring", () => {
     expect(opts.prompt).toContain("我周五有个面试");
   });
 
+  it("projects only assistant formatting copy in recent turns without mutating them", async () => {
+    runSubAgentMock.mockResolvedValue({
+      ok: true,
+      report: { reasoning: "nothing new", summary: "" },
+      text: "",
+    });
+    const agent = `agent before\n\`\`\`html live\n${"<button>generated</button>\n".repeat(30)}\`\`\`\nagent after`;
+    const user = "user native\n```html live\n<button>user example</button>\n```";
+    const recentTurns = [
+      { role: "user", content: user },
+      { role: "assistant", content: agent },
+    ];
+    const snapshot = recentTurns.map((turn) => ({ ...turn }));
+
+    await runPreviouslyAgent(baseInput({ recentTurns, closedSliceId: SLICE }));
+
+    const opts = runSubAgentMock.mock.calls[0][0];
+    expect(opts.prompt).toContain("agent before\n[Interactive visual omitted]agent after");
+    expect(opts.prompt).not.toContain("<button>generated</button>");
+    expect(opts.prompt).toContain(user);
+    expect(opts.prompt).toContain("conversation excerpt is below");
+    expect(opts.prompt).not.toContain("full conversation is below");
+    expect(recentTurns).toEqual(snapshot);
+  });
+
   it("forwards the onLine live-line callback straight to the runner", async () => {
     runSubAgentMock.mockResolvedValue({
       ok: true,

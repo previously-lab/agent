@@ -197,6 +197,28 @@
       "expandAll": "展开全部 {count} 行",
       "collapse": "收起"
     },
+    "native": {
+      "controls": "交互内容控制",
+      "generating": "正在准备交互内容…",
+      "incomplete": "此内容在闭合代码围栏前结束，未执行任何代码。",
+      "tooLarge": "此交互内容过大，无法安全渲染。仍可查看源代码。",
+      "source": "源代码",
+      "expand": "展开",
+      "collapse": "收起",
+      "reset": "重置",
+      "retry": "重试",
+      "retryDraft": "请完成上一条回复中未闭合的交互 HTML 内容。",
+      "openInteractive": "打开交互视图",
+      "closeInteractive": "关闭交互视图",
+      "dialogTitle": "第 {index} 个交互回复内容",
+      "frameTitle": "第 {index} 个交互回复内容",
+      "staticFrameTitle": "第 {index} 个回复内容的静态预览",
+      "loadError": "交互内容已停止或未能完成加载。请重置后重试。",
+      "navigationError": "此内容试图跳转到其他页面，因此已被移除。可重置以重新加载原始内容。",
+      "scriptError": "交互内容报告了脚本问题。仍可查看可读回退内容和源代码。",
+      "empty": "此内容暂时没有可读内容。可查看源代码或重置后重试。",
+      "acceptSuggestion": "加入草稿"
+    },
     "evolution": {
       "thoughts": "思考"
     },

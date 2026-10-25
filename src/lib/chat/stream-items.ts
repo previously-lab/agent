@@ -133,6 +133,12 @@ export interface ParallelLaneSeat {
   laneId: string;
   /** The durable run to read (bypass/summary lanes); absent for "main". */
   runId?: string;
+  /** Terminal turn id when the stream has supplied it; run/lane id is the provisional fallback. */
+  turnId?: string;
+  /** Stable logical run identity, independent of the canonical storage alias. */
+  slotId?: string;
+  /** Present only when this lane's terminal chunk confirmed the alias. */
+  provisionalTurnId?: string;
   /** The echoed user message ("" for the summary lane and "main"). */
   userText: string;
   /** The batch-closing lane — renders with the summary label. */
