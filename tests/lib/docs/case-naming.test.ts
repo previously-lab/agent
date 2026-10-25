@@ -8,6 +8,13 @@ import {
 } from "@/lib/docs";
 
 describe("isValidCaseName — the naming red line", () => {
+  it("rejects decodable URI escapes while allowing ordinary percent prose", () => {
+    for (const name of ["%2e%2e%2fpeople%2fuser", "%252e", "费用%20计划", "X%2FY"]) {
+      expect(isValidCaseName(name)).toBe(false);
+      expect(isValidPieceFileName(`2026-10-26-${name}.md`)).toBe(false);
+    }
+    expect(isValidCaseName("完成100%进度")).toBe(true);
+  });
   it("accepts plain (name-only) case names", () => {
     expect(isValidCaseName("陈勇超")).toBe(true);
     expect(isValidCaseName("user")).toBe(true);

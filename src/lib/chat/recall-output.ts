@@ -8,6 +8,7 @@
  * `unknown` and is rendered verbatim, so a wording change degrades to the
  * raw view instead of a wrong state.
  */
+import { unwrapCaseReadEnvelope } from "./case-read-receipt";
 
 export interface ParsedEntry {
   /** YYYY-MM-DD, or undefined when the entry is undated. */
@@ -222,7 +223,7 @@ export function parseRecallOutput(
   output: unknown,
 ): ParsedRecallOutput | null {
   if (typeof output !== "string" || output.length === 0) return null;
-  const text = output;
+  const text = unwrapCaseReadEnvelope(output);
 
   const unavailable = RE_UNAVAILABLE.exec(text);
   if (unavailable) return { kind: "readFailure", note: unavailable[1] };

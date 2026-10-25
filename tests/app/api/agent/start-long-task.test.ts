@@ -77,6 +77,7 @@ import {
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
 import { extractDocMarkers } from "@/lib/episodic/flash/librarian";
+import { readTaskLedger, reconcileLegacyTasks } from "@/lib/tasks/store";
 
 const SLICE = "2026-11-05-2030";
 // v0.19 R2: writes land at the records root (flat HHMM/ layout, no timeline/).
@@ -89,6 +90,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     useGithub: false,
     useDemo: false,
     sliceId: SLICE,
+    turnId: "turn-test",
+    readScopeId: "turn-test",
+    currentUserText: "请查一下屏幕供应商的报价历史",
     recentTurns: [],
     ...overrides,
   };
@@ -109,13 +113,34 @@ afterEach(() => {
 });
 
 describe("startLongTask — the dispatch (v0.21 §2)", () => {
+  it("resolves a legacy needs_review entry only when the user explicitly requests that background task now", async () => {
+    await reconcileLegacyTasks({
+      operationId: "legacy-request-test",
+      now: "2026-10-26T00:00:00.000Z",
+      entries: [{ ref: "tasks/旧调查", summary: "旧调查" }],
+    });
+    const result = await startLongTaskExecute(
+      { task: "旧调查" },
+      opts(makeCtx({ currentUserText: "请继续在后台做旧调查" })),
+    );
+    expect(result).toMatchObject({ ok: true, taskRef: "tasks/旧调查" });
+    const read = await readTaskLedger({ fresh: true });
+    if (read.status !== "ready") throw new Error("missing task ledger");
+    expect(read.ledger.tasks[0]).toMatchObject({ status: "open" });
+    expect(read.ledger.tasks[0].evidence.at(-1)?.statement).toBe("请继续在后台做旧调查");
+  });
+
   it("appends ONE question marker to the live slice's mailbox, THEN starts the question run", async () => {
     const r = await startLongTaskExecute(
       { task: "查一下屏幕供应商的报价历史", note: "线索：2026-10-04-0131 谈过" },
       opts(makeCtx()),
     );
 
-    expect(r).toEqual({ ok: true, runId: "run-question-1" });
+    expect(r).toEqual({
+      ok: true,
+      runId: "run-question-1",
+      taskRef: "tasks/查一下屏幕供应商的报价历史",
+    });
 
     // The marker round-trips the REAL consumer parser — the doc-research
     // pass's agenda is exactly these fields.

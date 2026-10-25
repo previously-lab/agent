@@ -1,4 +1,4 @@
-import type { SummaryRunPayload, SummaryRunOutcome, TurnRunResult } from "./turn-types";
+import type { SummaryRunPayload, SummaryRunOutcome, TurnRunResult, TaskAckSource, VerifiedTaskReply } from "./turn-types";
 import { locateSummaryRecords } from "./summary-records";
 import { COMMIT_PREFIX } from "./commit-contract";
 import {
@@ -23,7 +23,13 @@ async function persistSummaryMembersInView(
   minimal = false,
 ): Promise<SummaryRunOutcome> {
   const members = [...new Map(candidates.map((m) => [m.turnId, m])).values()];
-  const { saved, commitSha: verifiedCommit } = await locateSummaryRecords(payload, members);
+  const nestedIdentities = members.flatMap((member) =>
+    (member.nestedReplies ?? []).map((bubble): TurnRunResult => ({
+      turnId: bubble.turnId, sliceId: member.sliceId, at: member.at,
+      userText: "", replyText: bubble.text, cognition: "",
+    })),
+  );
+  const { saved, commitSha: verifiedCommit } = await locateSummaryRecords(payload, [...members, ...nestedIdentities]);
   if (payload.useGithub && verifiedCommit) {
     batch.baseHeadSha = verifiedCommit;
     seedGitHubReadHead(payload.repo, payload.owner, { headSha: verifiedCommit });
@@ -39,7 +45,27 @@ async function persistSummaryMembersInView(
   if (minimal) body.push("degraded commit - the full summary failed twice; landed the user turn + produced reply only (v0.42 section 5)");
   const touched = new Map<string, TimeSlice>();
   const targets = new Map<string, TimeSlice>();
+  const slicesById = new Map([[defaultSlice.slice_id, defaultSlice]]);
+  const sharedSlice = (slice: TimeSlice): TimeSlice => {
+    const existing = slicesById.get(slice.slice_id);
+    if (existing) return existing;
+    slicesById.set(slice.slice_id, slice);
+    return slice;
+  };
   const agentBodies = new Map<string, string>();
+  const verifiedTaskReplies: VerifiedTaskReply[] = [];
+  const verifyReply = (source: TaskAckSource, turnId: string, text: string, slice: TimeSlice): void => {
+    if (!source.taskAckIntents?.length || !text.trim() || !slice.turns.some((turn) =>
+      turn.role === "agent" && turn.turnId === turnId && turn.content === text
+    )) return;
+    verifiedTaskReplies.push({
+      ...(source.sourceRunId ? { sourceRunId: source.sourceRunId } : {}),
+      ...(source.finishReason ? { finishReason: source.finishReason } : {}),
+      ...(source.error ? { error: source.error } : {}),
+      taskAckIntents: source.taskAckIntents,
+      reply: { status: "persisted", sliceId: slice.slice_id, turnId },
+    });
+  };
   if (landing.sealedEdge) {
     const { edge, signal } = landing.sealedEdge;
     if (!minimal) {
@@ -58,7 +84,7 @@ async function persistSummaryMembersInView(
     body.push(`sealed ${edge.slice_id} (${signal})`);
   }
   for (const m of members) {
-    const slice = saved.get(m.turnId) ?? defaultSlice;
+    const slice = sharedSlice(saved.get(m.turnId) ?? defaultSlice);
     targets.set(m.turnId, slice);
     const burst = m.burstId ?? payload.burstId;
     const lastUser = slice.turns.filter((t) => t.role === "user").at(-1);
@@ -102,6 +128,24 @@ async function persistSummaryMembersInView(
       body.push(`reply ${m.turnId}`);
       touched.set(slice.slice_id, slice);
     }
+    verifyReply(m, m.turnId, m.replyText, slice);
+    for (const bubble of m.nestedReplies ?? []) {
+      const target = sharedSlice(saved.get(bubble.turnId) ?? slice);
+      targets.set(bubble.turnId, target);
+      if (bubble.text && !target.turns.some((turn) => turn.role === "agent" && turn.turnId === bubble.turnId)) {
+        appendTurn(target, {
+          timestamp: bubble.doneAt ?? m.at,
+          role: "agent",
+          content: bubble.finishReason === "stop" ? bubble.text : `[partial] ${bubble.text}`,
+          turnId: bubble.turnId,
+          replyTo: bubble.replyTo,
+          ...(burst ? { burst } : {}),
+        });
+        body.push(`reply ${bubble.turnId}`);
+        touched.set(target.slice_id, target);
+      }
+      verifyReply(bubble, bubble.turnId, bubble.text, target);
+    }
     if (!minimal && m.mergeLine?.trim() && !slice.turns.some((t) => t.turnId === `m${m.turnId}`)) {
       appendTurn(slice, { timestamp: m.at, role: "agent", content: m.mergeLine.trim(), turnId: `m${m.turnId}`, merge: true, ...(burst ? { burst } : {}) });
       body.push(`merge ${m.turnId}`);
@@ -124,10 +168,20 @@ async function persistSummaryMembersInView(
   for (const slice of touched.values()) await saveSliceSnapshot(slice, batch);
   if (touched.size) body.push("snapshot");
   const records = [...new Set([...targets.values()].map((s) => s.slice_id))].map((sliceId) => ({
-    sliceId, turnIds: members.filter((m) => targets.get(m.turnId)?.slice_id === sliceId).map((m) => m.turnId),
+    sliceId, turnIds: [...targets].filter(([, slice]) => slice.slice_id === sliceId).map(([turnId]) => turnId),
   }));
+  const taskProof = verifiedTaskReplies.length > 0 ? { verifiedTaskReplies } : {};
+  const own = payload.own;
+  const ownReply = own.replyText.trim().length > 0 && ownSlice.turns.some((turn) =>
+    turn.role === "agent" && turn.turnId === own.turnId && turn.content === own.replyText
+  )
+    ? { status: "persisted" as const, sliceId: ownSlice.slice_id, turnId: own.turnId }
+    : undefined;
   if (batch.entries.size === 0) {
-    return { kind: "deduped", ...(verifiedCommit ? { receipt: { version: 1 as const, commitSha: verifiedCommit, records } } : {}) };
+    return { kind: "deduped",
+      ...(verifiedCommit ? { receipt: { version: 1 as const, commitSha: verifiedCommit, records } } : {}),
+      ...taskProof,
+      ...(ownReply ? { ownReply } : {}) };
   }
   for (const f of failedTurns) body.push(f.note);
   for (const m of members) {
@@ -140,7 +194,9 @@ async function persistSummaryMembersInView(
   for (const record of records) await deliverReflectionWake(record);
   console.log(`[Summary] ${defaultSlice.slice_id} committed: ${body.join(", ")}`);
   return { kind: "committed", segments: body,
-    ...(commitSha ? { receipt: { version: 1 as const, commitSha, records } } : {}) };
+    ...(commitSha ? { receipt: { version: 1 as const, commitSha, records } } : {}),
+    ...taskProof,
+    ...(ownReply ? { ownReply } : {}) };
 }
 
 export async function persistSummaryMembers(...args: Parameters<typeof persistSummaryMembersInView>): Promise<SummaryRunOutcome> {

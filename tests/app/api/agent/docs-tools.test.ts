@@ -10,6 +10,7 @@
  * map keys.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
 
 const io = vi.hoisted(() => {
   const files = new Map<string, string>();
@@ -92,6 +93,9 @@ function makeCtx(sliceId: string): ToolContext {
     useGithub: false,
     useDemo: false,
     sliceId,
+    turnId: "turn-test",
+    readScopeId: "turn-test",
+    currentUserText: "current user text",
     recentTurns: [],
   };
 }
@@ -252,7 +256,7 @@ describe("recallReadExecute", () => {
       { ref: "research/手机调研" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(out).toBe(INDEX_RAW);
+    expect(unwrapCaseReadEnvelope(out)).toBe(INDEX_RAW);
   });
 
   it("《》 marks and a .md suffix are tolerated", async () => {
@@ -260,7 +264,7 @@ describe("recallReadExecute", () => {
       { ref: "《research/手机调研.md》" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(out).toBe(INDEX_RAW);
+    expect(unwrapCaseReadEnvelope(out)).toBe(INDEX_RAW);
   });
 
   it("records/<slice id> → the slice core; an unknown ref renders the fixed sentence", async () => {
@@ -376,6 +380,9 @@ describe("GitHub backend routing (cached reads)", () => {
       useGithub: true,
       useDemo: false,
       sliceId,
+      turnId: "turn-test",
+      readScopeId: "turn-test",
+      currentUserText: "current user text",
       recentTurns: [],
     };
   }

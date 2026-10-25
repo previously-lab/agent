@@ -25,6 +25,9 @@ const ctx: ToolContext = {
   useGithub: false,
   useDemo: false,
   sliceId: "2026-08-19-1400",
+  turnId: "turn-test",
+  readScopeId: "turn-test",
+  currentUserText: "current user text",
   recentTurns: [],
 };
 

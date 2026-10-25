@@ -14,15 +14,17 @@ import { writePreviously } from "@/lib/episodic";
 import {
   readUserModel,
   readUserProfile,
+  readSelfSopSnapshot,
   writeUserModelCard,
   writeUserModelDirection,
-  writeSelfSop,
+  writeSelfSopVersioned,
   composeUserModel,
 } from "@/lib/evolution/store";
 import {
   newCardTemplate,
   serializeCard,
 } from "@/lib/episodic/previously-format";
+import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 import type { ModelConfig } from "@/lib/models/registry";
 
 vi.mock("@/lib/episodic/flash/previously-agent", () => ({
@@ -30,6 +32,9 @@ vi.mock("@/lib/episodic/flash/previously-agent", () => ({
 }));
 vi.mock("@/lib/episodic", () => ({
   writePreviously: vi.fn(),
+}));
+vi.mock("@/lib/episodic/timeline/enumerate", () => ({
+  enumerateSliceIds: vi.fn(async (): Promise<string[]> => []),
 }));
 // The evolution store boundary (people/user/index.md + self/ writes) is
 // mocked so the tests stay hermetic — the real module would read/write
@@ -40,18 +45,26 @@ vi.mock("@/lib/evolution/store", async (importOriginal) => {
     ...actual,
     readUserModel: vi.fn(),
     readUserProfile: vi.fn(async () => null),
+    readSelfSopSnapshot: vi.fn(async (agent: "search" | "thinkdeep") => ({
+      agent,
+      origin: "legacy" as const,
+      content: `Old full ${agent} SOP`,
+      revision: `${agent}-revision-1`,
+    })),
     writeUserModelCard: vi.fn(async () => {}),
     writeUserModelDirection: vi.fn(async () => {}),
-    writeSelfSop: vi.fn(async () => {}),
+    writeSelfSopVersioned: vi.fn(async () => ({ applied: true as const, revision: "written-revision" })),
   };
 });
 
 const runPreviouslyAgentMock = vi.mocked(runPreviouslyAgent);
 const readModelMock = vi.mocked(readUserModel);
+const readSopMock = vi.mocked(readSelfSopSnapshot);
 const writeCardMock = vi.mocked(writeUserModelCard);
 const writeDirectionMock = vi.mocked(writeUserModelDirection);
-const writeSopMock = vi.mocked(writeSelfSop);
+const writeSopMock = vi.mocked(writeSelfSopVersioned);
 const writeSliceMock = vi.mocked(writePreviously);
+const enumerateMock = vi.mocked(enumerateSliceIds);
 
 const MODEL = {
   id: "deepseek-v4-flash",
@@ -162,7 +175,7 @@ describe("write-back rules", () => {
     expect(runPreviouslyAgentMock.mock.calls[0][0].onLine).toBe(onEvolutionLine);
   });
 
-  it("applies SOP writes through writeSelfSop and surfaces them as playbooks (v0.19 §C.2)", async () => {
+  it("carries the recorded SOP revision into the guarded write and reports only applied writes", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
       reasoning: "search keeps guessing",
@@ -174,18 +187,55 @@ describe("write-back rules", () => {
           content: "Quote the records slice id before answering.",
           evidence: ["2026-08-17-0515"],
           expectedBenefit: "fewer ungrounded answers",
+          applicability: "When citing earlier records",
+          baseRevision: "search-revision-1",
         },
       ],
     });
-    const res = await runCardEvolution(baseInput());
+    const res = await runCardEvolution({ ...baseInput(), allowedSopWrites: ["search"] });
+    expect(readSopMock).toHaveBeenCalledWith("search", undefined);
+    expect(runPreviouslyAgentMock.mock.calls[0][0].sopSnapshots?.search)
+      .toMatchObject({ content: "Old full search SOP", revision: "search-revision-1" });
     expect(writeSopMock).toHaveBeenCalledWith(
       "search",
       "Quote the records slice id before answering.",
+      "search-revision-1",
       undefined,
     );
     expect(res.playbooks).toEqual([
       { agent: "search", summary: "fewer ungrounded answers" },
     ]);
+    expect(res.playbookRejections).toBeUndefined();
+  });
+
+  it("reports a stale SOP write as rejected, never applied", async () => {
+    writeSopMock.mockResolvedValueOnce({
+      applied: false,
+      reason: "stale",
+      diagnostic: "fresh SOP differs from the recorded read",
+    });
+    runPreviouslyAgentMock.mockResolvedValue({
+      updatedCard: BASE,
+      reasoning: "search changed underneath the run",
+      summary: "",
+      mutations: [],
+      sopWrites: [{
+        agent: "search" as const,
+        content: "Stale replacement.",
+        evidence: ["2026-08-17-0515"],
+        expectedBenefit: "benefit",
+        applicability: "when searching",
+        baseRevision: "search-revision-1",
+      }],
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await runCardEvolution({ ...baseInput(), allowedSopWrites: ["search"] });
+    expect(res.playbooks).toBeUndefined();
+    expect(res.playbookRejections).toEqual([{
+      agent: "search",
+      summary: "fresh SOP differs from the recorded read",
+    }]);
+    warn.mockRestore();
   });
 
   it("omits the playbooks field when no SOP mutation landed", async () => {
@@ -311,8 +361,16 @@ describe("the merged direction half (v1.1)", () => {
     expect(writeDirectionMock).not.toHaveBeenCalled();
   });
 
-  it("the inline run's hypothesis TTL cannot retire: the retired timeline catalog leaves only the current slice id (v0.19 degradation, A2 owns the richer trail)", async () => {
+  it("retires on a no-change run after four actual newer scenarios", async () => {
     const current = `${VALID_DIRECTION}\n- [proposed 2026-08-11-0900] The user may prefer voice notes — falsify if: never used`;
+    enumerateMock.mockResolvedValueOnce([
+      "2026/08/12/0900",
+      "2026-08-12-0900",
+      "2026/08/13/0900",
+      "2026/08/14/0900",
+      "2026/08/18/0900",
+      "invalid",
+    ]);
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
       reasoning: "direction holds",
@@ -323,10 +381,60 @@ describe("the merged direction half (v1.1)", () => {
       ...baseInput(),
       directionEval: { ...directionEvalInput(), current },
     });
-    // Only [input.sliceId] is newer than the proposed pointer — below the
-    // TTL of 4 — so the expired guess survives the inline run untouched.
-    expect(res.direction?.outcome).toBe("no_change");
+    expect(enumerateMock).toHaveBeenCalledTimes(1);
+    expect(res.direction).toEqual({
+      outcome: "updated",
+      summary: "Retired 1 expired hypothesis(es)",
+    });
+    expect(writeDirectionMock).toHaveBeenCalledWith(
+      expect.not.stringContaining("prefer voice notes"),
+      undefined,
+    );
+  });
+
+  it("does not count duplicate, malformed, or future scenarios toward TTL", async () => {
+    const current = `${VALID_DIRECTION}\n- [proposed 2026-08-11-0900] The user may prefer voice notes — falsify if: never used`;
+    enumerateMock.mockResolvedValueOnce([
+      "2026/08/12/0900",
+      "2026-08-12-0900",
+      "2026/08/12/0900",
+      "2026-99-99-9999",
+      "2026/08/18/0900",
+    ]);
+    runPreviouslyAgentMock.mockResolvedValue({
+      updatedCard: BASE,
+      reasoning: "direction holds",
+      summary: "",
+      mutations: [],
+    });
+    const res = await runCardEvolution({
+      ...baseInput(),
+      directionEval: { ...directionEvalInput(), current },
+    });
+    expect(res.direction).toEqual({ outcome: "no_change" });
     expect(writeDirectionMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves hypotheses with an explicit diagnostic when enumeration fails", async () => {
+    const current = `${VALID_DIRECTION}\n- [proposed 2026-08-11-0900] The user may prefer voice notes — falsify if: never used`;
+    enumerateMock.mockRejectedValueOnce(new Error("tree unavailable"));
+    runPreviouslyAgentMock.mockResolvedValue({
+      updatedCard: BASE,
+      reasoning: "direction holds",
+      summary: "",
+      mutations: [],
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await runCardEvolution({
+      ...baseInput(),
+      directionEval: { ...directionEvalInput(), current },
+    });
+    expect(res.direction).toEqual({
+      outcome: "no_change",
+      diagnostic: "Hypothesis TTL enumeration unavailable; all hypotheses were preserved: tree unavailable",
+    });
+    expect(writeDirectionMock).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("a write failure surfaces outcome failed — never masquerading as no_change", async () => {

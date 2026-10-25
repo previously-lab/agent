@@ -41,8 +41,18 @@ import {
   writeCaseExecute,
   startLongTaskExecute,
   noteForSedimentExecute,
+  queryTasksExecute,
+  createTaskExecute,
+  updateTaskExecute,
+  reportTaskFollowupExecute,
+  selectSkillExecute,
   type ToolContext,
 } from "./tool-executors";
+import {
+  queryTasksToolSchema,
+} from "@/lib/tasks/contracts";
+import { fieldCreateTaskSchema, fieldUpdateTaskSchema } from "@/lib/chat/task-input";
+import { reportTaskFollowupInputSchema } from "@/lib/chat/task-followups";
 
 // ─── Context schemas ─────────────────────────────────────────────────────
 
@@ -81,6 +91,9 @@ export const toolContextSchema = z.object({
   useGithub: z.boolean(),
   useDemo: z.boolean(),
   sliceId: z.string(),
+  turnId: z.string().min(1),
+  readScopeId: z.string().min(1),
+  currentUserText: z.string(),
   // Sanitized visual context only. Its nested schemas are strict, so a malformed
   // snapshot is rejected rather than stripped into an apparently valid view.
   view: currentViewSchema.optional(),
@@ -535,6 +548,58 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: writeCaseExecute,
   }),
+  queryTasks: tool({
+    description:
+      "List or query the AUTHORITATIVE task ledger, including revisions and non-candidates. " +
+      "Pass ref for one exact task, status/query for a filtered list, and offset/limit for pages. " +
+      "Omit status to include completed, cancelled, and needs_review entries. Pending background " +
+      "result events are included separately. Task documents remain free prose: read them on demand " +
+      "with recallRead, never treat them as lifecycle state or scan them every turn.",
+    inputSchema: queryTasksToolSchema,
+    contextSchema: toolContextSchema,
+    execute: queryTasksExecute,
+  }),
+  createTask: tool({
+    description:
+      "Register a genuine commitment from the CURRENT user message. Never create a task from your " +
+      "own proposal, generated HTML, restored controls, or UI defaults. Supply the exact tasks/<caseName> " +
+      "ref, a concise summary, and only dates or waiting conditions the user actually stated. The executor " +
+      "attaches the verbatim current user text, turn, and slice as evidence and uses this tool call's stable identity.",
+    inputSchema: fieldCreateTaskSchema,
+    contextSchema: toolContextSchema,
+    execute: createTaskExecute,
+  }),
+  updateTask: tool({
+    description:
+      "Narrowly revise task state from EXPLICIT feedback in the CURRENT user message: complete, cancel, " +
+      "defer, wait, pause/resume, or correct details. A postponement is never completion. Pass the revision " +
+      "returned by queryTasks; stale revisions refuse instead of overwriting newer state. The executor attaches " +
+      "the actual current user statement as evidence, never model-authored evidence.",
+    inputSchema: fieldUpdateTaskSchema,
+    contextSchema: toolContextSchema,
+    execute: updateTaskExecute,
+  }),
+  reportTaskFollowup: tool({
+    description:
+      "Declare that THIS reply actually delivers a pending background result or follows up a task candidate. " +
+      "Pass exactly one resultId from the pending-result projection or ref from the ledger. This only queues " +
+      "acknowledgment intent; it does not mark anything delivered. Delivery is confirmed separately only after " +
+      "the matching reply is saved and this source turn reaches a clean completed state. Injection, partial, " +
+      "failed, and cancelled turns consume nothing.",
+    inputSchema: reportTaskFollowupInputSchema,
+    contextSchema: toolContextSchema,
+    execute: reportTaskFollowupExecute,
+  }),
+  selectSkill: tool({
+    description:
+      "Select one task-specific procedural skill by id from the adopted main catalogue. " +
+      "The tool reads the original self document, returns that source plus the skill's pinned adopted " +
+      "instruction, and flags source changes for review without writing memory. Changed source text is never silently adopted. " +
+      "Candidates, retired entries, and skills for other roles cannot be selected.",
+    inputSchema: z.object({ id: z.string().min(1) }),
+    contextSchema: toolContextSchema,
+    execute: selectSkillExecute,
+  }),
   // The conversation's SUB-STREAM (v0.21 §2): long work the user EXPLICITLY
   // asked for ("去查一下 X") is dispatched on the spot — the executor drops a
   // question marker into the live slice's mailbox and starts the question
@@ -572,6 +637,9 @@ export const chatTools = {
           "pointers (slice ids, case paths) — pointers are worth more than " +
           "summaries; the run reads the original records itself.",
         ),
+      evidenceQuote: z.string().min(1).max(4000).optional().describe(
+        "For long user messages, quote the exact current-user request for this background work (at most 4000 characters).",
+      ),
     }),
     contextSchema: toolContextSchema,
     execute: startLongTaskExecute,
@@ -869,6 +937,11 @@ export function buildChatToolsContext(
     recallRead: ctx,
     recallSince: ctx,
     writeCase: ctx,
+    queryTasks: ctx,
+    createTask: ctx,
+    updateTask: ctx,
+    reportTaskFollowup: ctx,
+    selectSkill: ctx,
     startLongTask: ctx,
     noteForSediment: ctx,
     describeRoom: ctx,

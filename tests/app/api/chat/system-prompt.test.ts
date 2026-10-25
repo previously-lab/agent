@@ -34,7 +34,7 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
     const s = build({
       directionBlock: DIRECTION,
       assistingBlock: ASSISTING,
-      dueTasksBlock: DUE,
+      taskContextBlock: DUE,
     });
     expect(s.indexOf(IDENTITY)).toBe(0); // L0 leads the prompt
     expect(s.indexOf(SPACE_FICTION_BLOCK)).toBeGreaterThan(s.indexOf(IDENTITY));
@@ -229,7 +229,8 @@ describe("the field/reflection charter (v0.30)", () => {
     expect(CHARTER_MD).not.toContain("researcher colleague");
     expect(CHARTER_MD).not.toContain("air support");
     // The copy metaphor replaced them.
-    expect(CHARTER_MD).toContain("one of your copies is dispatched");
+    expect(CHARTER_MD).toContain("a think-only copy of yourself");
+    expect(CHARTER_MD).toContain("Adopted guidance is loaded within a role budget");
     expect(CHARTER_MD).toContain("a search-desk copy of yourself");
   });
 
@@ -244,7 +245,8 @@ describe("the field/reflection charter (v0.30)", () => {
     expect(CHARTER_MD).toContain("`updated`, a mechanical stamp");
     // The window decides rewriting: whole-body rewrites only while it is open.
     expect(CHARTER_MD).toContain("**write window**");
-    expect(CHARTER_MD).toContain("each write within 30 minutes of the last");
+    expect(CHARTER_MD).toContain("each body edit within 30 minutes of the last");
+    expect(CHARTER_MD).toContain("without reopening the body");
     expect(CHARTER_MD).toContain("the body may be rewritten whole");
     // Past the window: dated tail lines / new pieces / a pointer at a new document.
     expect(CHARTER_MD).toContain("open a NEW document and leave one line in the original pointing at it");

@@ -16,12 +16,15 @@ import * as os from "node:os";
 let tmpDir: string;
 let origCwd: string;
 let origStorage: string | undefined;
+let origMemoryRoot: string | undefined;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "aftrbrez-evolution-test-"));
   origCwd = process.cwd();
   origStorage = process.env.STORAGE;
+  origMemoryRoot = process.env.MEMORY_ROOT;
   process.env.STORAGE = "local";
+  process.env.MEMORY_ROOT = path.join(tmpDir, "memory");
   process.chdir(tmpDir);
   vi.resetModules();
 });
@@ -33,6 +36,8 @@ afterEach(() => {
   } else {
     delete process.env.STORAGE;
   }
+  if (origMemoryRoot !== undefined) process.env.MEMORY_ROOT = origMemoryRoot;
+  else delete process.env.MEMORY_ROOT;
   if (tmpDir && fs.existsSync(tmpDir)) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -229,5 +234,88 @@ describe("self/ SOP I/O", () => {
     expect(await store.readSelfSop("search")).toContain("New overview");
     // Legacy playbook untouched.
     expect(readOnDisk("memory/agent-playbooks/search.md")).toBe("# Legacy search playbook");
+  });
+
+  it("snapshots the full effective working copy and revisions cover origin/content/absence", async () => {
+    const store = await importFresh();
+    const missing = await store.readSelfSopSnapshot("search");
+    expect(missing).toMatchObject({ origin: "missing", content: null });
+    expect(missing.revision).toBeTruthy();
+
+    const full = `# Legacy search SOP\n\n${"untruncated rule\n".repeat(200)}`;
+    writeOnDisk("memory/agent-playbooks/search.md", full);
+    const legacy = await store.readSelfSopSnapshot("search");
+    expect(legacy).toMatchObject({ origin: "legacy", content: full });
+    expect(legacy.revision).not.toBe(missing.revision);
+
+    writeOnDisk("memory/self/search/index.md", full);
+    const newRoot = await store.readSelfSopSnapshot("search");
+    expect(newRoot).toMatchObject({ origin: "new-root", content: full });
+    expect(newRoot.revision).not.toBe(legacy.revision);
+
+    writeOnDisk("memory/self/search/index.md", `${full}\nAnother rule.`);
+    const changed = await store.readSelfSopSnapshot("search");
+    expect(changed.revision).not.toBe(newRoot.revision);
+  });
+
+  it("rejects a stale version and preserves a concurrent unrelated rule", async () => {
+    writeOnDisk("memory/agent-playbooks/search.md", "Original rule.");
+    const store = await importFresh();
+    const basis = await store.readSelfSopSnapshot("search");
+    writeOnDisk("memory/self/search/index.md", "Concurrent rule that must survive.");
+
+    const result = await store.writeSelfSopVersioned(
+      "search",
+      "Stale replacement.",
+      basis.revision,
+    );
+    expect(result).toMatchObject({ applied: false, reason: "stale" });
+    expect(readOnDisk("memory/self/search/index.md")).toBe("Concurrent rule that must survive.");
+    expect(readOnDisk("memory/agent-playbooks/search.md")).toBe("Original rule.");
+  });
+
+  it("compares the fresh pending batch state and never reports a stale write as applied", async () => {
+    writeOnDisk("memory/agent-playbooks/search.md", "Original rule.");
+    const store = await importFresh();
+    const { createBatch, flushBatch } = await import("@/lib/episodic/io-helpers");
+    const batch = createBatch();
+    const basis = await store.readSelfSopSnapshot("search", batch);
+    const queued = await store.writeSelfSopVersioned(
+      "search",
+      "Original rule.\nFirst pending rule.",
+      basis.revision,
+      batch,
+    );
+    expect(queued.applied).toBe(true);
+
+    const pendingBasis = await store.readSelfSopSnapshot("search", batch);
+    expect(pendingBasis).toMatchObject({ origin: "new-root" });
+    expect(pendingBasis.content).toContain("First pending rule.");
+    const stale = await store.writeSelfSopVersioned(
+      "search",
+      "Stale overwrite.",
+      basis.revision,
+      batch,
+    );
+    expect(stale).toMatchObject({ applied: false, reason: "stale" });
+
+    const applied = await store.writeSelfSopVersioned(
+      "search",
+      "Original rule.\nFirst pending rule.\nSecond pending rule.",
+      pendingBasis.revision,
+      batch,
+    );
+    expect(applied.applied).toBe(true);
+    await flushBatch(batch, "test versioned SOP");
+    expect(readOnDisk("memory/self/search/index.md")).toBe(
+      "Original rule.\nFirst pending rule.\nSecond pending rule.",
+    );
+  });
+
+  it("requires a recorded basis even when the SOP is absent", async () => {
+    const store = await importFresh();
+    const result = await store.writeSelfSopVersioned("search", "New rule.", "");
+    expect(result).toMatchObject({ applied: false, reason: "missing_basis" });
+    expect(readOnDisk("memory/self/search/index.md")).toBeNull();
   });
 });

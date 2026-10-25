@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import git from "isomorphic-git";
+import { caseStorageRevision, serializeCaseCurrent } from "@/lib/docs/case-doc";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
@@ -86,6 +87,72 @@ function makeBackend(files: Record<string, string>): RecallBackend {
     },
   };
 }
+
+describe("case current views and activity", () => {
+  const indexPath = "memory/things/长期案/index.md";
+  const currentPath = "memory/things/长期案/_current.md";
+  const old = "---\nopened: '2026-08-01'\nupdated: '2026-08-01'\n---\n旧解释。共同关键词。\n";
+  const current = (asOf = "2026-10-25") => serializeCaseCurrent({
+    asOf, evidence: ["things/长期案"], body: "当前解释。共同关键词。只在最新认识中出现的线索。",
+    history: "只在旧认识历史里的词。", basis: { indexRevision: caseStorageRevision(old), pieces: [] },
+  });
+
+  it("ranks tail and current activity above newer-born idle cases", async () => {
+    for (const supplement of ["tail", "current"]) {
+      const backend = makeBackend({
+        [indexPath]: supplement === "tail" ? `${old}\n—— 尾部 ——\n2026-10-25：新变化。\n` : old,
+        ...(supplement === "current" ? { [currentPath]: current() } : {}),
+        "memory/things/新生案/index.md": "---\nopened: '2026-10-20'\nupdated: '2026-10-20'\n---\n没有再活动。\n",
+      });
+      const result = await recallRecent(backend, { category: "things", n: 2 });
+      expect(result.kind).toBe("entries");
+      if (result.kind === "entries") expect(result.entries[0]?.ref).toBe("things/长期案");
+      const found = await recallFind(backend, { category: "things", name: "长期案" });
+      if (found.kind !== "entries") throw new Error("expected found case");
+      expect(found.entries[0]?.updated).toBe("2026-10-25");
+    }
+  });
+
+  it("does not make one absent sidecar request per legacy case", async () => {
+    const backend = makeBackend({ [indexPath]: old });
+    const read = vi.spyOn(backend, "readFile");
+    await recallRecent(backend, { category: "things" });
+    await recallRead(backend, { ref: "things/长期案" });
+    expect(read.mock.calls.some(([path]) => path.endsWith("/_current.md"))).toBe(false);
+  });
+
+  it("reports changed own index and new pieces without fetching raw records", async () => {
+    const backend = makeBackend({
+      [indexPath]: old + "新反证。", [currentPath]: current(),
+      "memory/things/长期案/2026-10-26-新材料.md": "新材料。",
+    });
+    const read = vi.spyOn(backend, "readFile");
+    const result = await recallRead(backend, { ref: "things/长期案" });
+    if (result.kind !== "content") throw new Error("expected current view");
+    expect(result.content).toContain("index.md changed");
+    expect(result.content).toContain("piece inventory changed");
+    expect(result.content).not.toContain("只在旧认识历史里的词");
+    expect(read.mock.calls.some(([path]) => path.includes("/records/") || path.endsWith("新材料.md"))).toBe(false);
+  });
+
+  it("searches current prose as its owner case, deduplicates, and excludes archived current history", async () => {
+    const backend = makeBackend({ [indexPath]: old, [currentPath]: current() });
+    const result = await recallSearch(backend, { category: "things", query: "共同关键词", since: "2026-10-24" });
+    if (result.kind !== "entries") throw new Error("expected matched current case");
+    expect(result.entries.map((entry) => entry.ref)).toEqual(["things/长期案"]);
+    expect(result.entries[0]?.updated).toBe("2026-10-25");
+    const archived = await recallSearch(backend, { category: "things", query: "只在旧认识历史里的词" });
+    expect(archived.kind).toBe("fallback");
+  });
+
+  it("maps a changed current sidecar to its owner in recallSince", () => {
+    const result = recallSince({ since: "2026-10-24", until: "2026-10-26", incomplete: false,
+      commits: [{ sha: "a".repeat(40), at: "2026-10-26T00:00:00Z", files: [{ path: currentPath, change: "modified" }] }],
+    }, {});
+    if (result.kind !== "changes") throw new Error("expected changed case");
+    expect(result.entries.map((entry) => entry.ref)).toEqual(["things/长期案"]);
+  });
+});
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -484,6 +551,26 @@ describe("recallRead", () => {
     if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
     expect(r.content).toBe(CASE_INDEX);
     expect(r.path).toBe("memory/research/手机调研/index.md");
+  });
+
+  it("exposes a non-user case's current view beside its unchanged historical index", async () => {
+    const current = `---\nas_of: 2026-10-19\nevidence:\n  - records/2026-10-14-1836\n---\n\n原先认为是电池故障；用户后来的实测是反证。当前更可能是充电线问题，但还没有外部验证。\n`;
+    const withCurrent = makeBackend({
+      ...FILES,
+      "memory/things/老案子/_current.md": current,
+    });
+    const r = await recallRead(withCurrent, { ref: "things/老案子" });
+    if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
+    expect(r.content.startsWith("CURRENT UNDERSTANDING")).toBe(true);
+    expect(r.content).toContain(STALE_BORN_ACTIVE);
+    expect(r.content).toContain("CURRENT UNDERSTANDING (_current.md");
+    expect(r.content).toContain("后来的实测是反证");
+    expect(r.content).toContain("还没有外部验证");
+    expect(r.currentUnderstanding).toEqual({
+      content: current,
+      path: "memory/things/老案子/_current.md",
+    });
+    expect(r.path).toBe("memory/things/老案子/index.md");
   });
 
   it("reads a dated piece by ref", async () => {

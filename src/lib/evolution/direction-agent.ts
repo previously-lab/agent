@@ -103,21 +103,47 @@ export const DIRECTION_HYPOTHESES_MAX = 10;
  */
 export const DIRECTION_HYPOTHESIS_TTL_SLICES = 4;
 
+const TTL_SLICE_ID_RE = /^(\d{4})[-/](\d{2})[-/](\d{2})[-/](\d{4})$/;
+
+function canonicalTtlSliceId(value: string): string | null {
+  const match = value.trim().match(TTL_SLICE_ID_RE);
+  if (!match) return null;
+  const [, year, month, day, time] = match;
+  const hour = Number(time.slice(0, 2));
+  const minute = Number(time.slice(2));
+  if (hour > 23 || minute > 59) return null;
+  const instant = new Date(`${year}-${month}-${day}T${time.slice(0, 2)}:${time.slice(2)}:00.000Z`);
+  if (Number.isNaN(instant.getTime())) return null;
+  if (instant.toISOString().slice(0, 10) !== `${year}-${month}-${day}`) return null;
+  return `${year}-${month}-${day}-${time}`;
+}
+
+/** Canonical, real slice ids only, deduped and bounded to the current scenario. */
+export function normalizeSliceIdsForTtl(
+  sliceIds: readonly string[],
+  currentSliceId?: string,
+): string[] {
+  const canonical = sliceIds
+    .map(canonicalTtlSliceId)
+    .filter((id): id is string => id !== null);
+  const bound = currentSliceId === undefined
+    ? canonical.sort().at(-1)
+    : canonicalTtlSliceId(currentSliceId);
+  if (!bound) return [];
+  return [...new Set(canonical.filter((id) => id <= bound))].sort();
+}
+
 /**
- * The engineering half of the hypothesis lifecycle, applied to a validated
- * proposal BEFORE it lands: deterministically RETIRE every pool line whose
- * `proposed` pointer sits ≥ DIRECTION_HYPOTHESIS_TTL_SLICES slices behind the
- * newest known slice. Slice ids (YYYY-MM-DD-HHMM) sort chronologically as
- * plain strings, so age is a lexicographic count and the proposed id itself
- * need not appear in the catalog. Only `# Hypotheses` bullet lines are
- * eligible — Portrait entries (including this run's promotions) are never
- * touched, and malformed pool lines are left for the validator. Returns the
- * rewritten doc plus the retired lines (for logging).
+ * Retire a hypothesis only after four distinct, real newer scenarios. The
+ * current-slice bound is repeated here so an untrusted catalog cannot refresh
+ * or expire a guess with malformed, duplicate, or future ids.
  */
 export function retireExpiredHypotheses(
   doc: string,
   sliceIds: readonly string[],
+  currentSliceId?: string,
 ): { doc: string; retired: string[] } {
+  const effectiveIds = normalizeSliceIdsForTtl(sliceIds, currentSliceId);
   const retired: string[] = [];
   let inPool = false;
   const kept = doc.split("\n").filter((line) => {
@@ -127,7 +153,7 @@ export function retireExpiredHypotheses(
     const m = trimmed.match(/^-\s*\[proposed\s+(\d{4}-\d{2}-\d{2}-\d{4})\]/i);
     if (!m) return true;
     let newer = 0;
-    for (const id of sliceIds) if (id > m[1]) newer++;
+    for (const id of effectiveIds) if (id > m[1]) newer++;
     if (newer < DIRECTION_HYPOTHESIS_TTL_SLICES) return true;
     retired.push(trimmed);
     return false;

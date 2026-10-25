@@ -67,6 +67,9 @@ function makeCtx(sliceId: string): ToolContext {
     useGithub: false,
     useDemo: false,
     sliceId,
+    turnId: "turn-test",
+    readScopeId: "turn-test",
+    currentUserText: "current user text",
     recentTurns: [],
     // No timezone: the local-time annotation pass is skipped, so assertions
     // run against the raw slice text.

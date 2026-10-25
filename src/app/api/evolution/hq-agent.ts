@@ -46,6 +46,7 @@ import {
   applyCaseWriteIntent,
   buildSliceExcerpt,
   makeCaseReadTool,
+  makeCrossSliceReadTool,
   runLibrarianPass,
   runScribePass,
   type CaseWriteIntent,
@@ -58,18 +59,23 @@ import { sanitizeCaseSegment } from "@/lib/docs/case-naming";
 import { DOC_WRITE_WINDOW_RULE, MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
-import { readUserModel, writeSelfSop } from "@/lib/evolution/store";
+import { readUserModel } from "@/lib/evolution/store";
 import { AGENDA_PATH, type AgendaItem } from "@/lib/evolution/agenda";
 import { detectDirectionMode } from "@/lib/evolution/direction-agent";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import type { ModelConfig } from "@/lib/models/registry";
-import type { EvolutionReason, ScopedSlice } from "./reflection-plan";
+import { skillReviewOfferId, type EvolutionReason, type ScopedSlice } from "./reflection-plan";
 import { REFLECTION_ROUND_TIMEOUT_MS } from "./reflection-contract";
 import {
   backgroundModel,
   buildRunCardReaders,
   buildRunManifest,
 } from "./hq-context";
+import { readTaskLedger, withTaskLedgerBatch, type BatchTaskMutation } from "@/lib/tasks/store";
+import { mutateSkillLedger, readSkillLedger } from "@/lib/evolution/skill-store";
+import type { SkillEntry } from "@/lib/evolution/skill-policy";
+import { buildReflectionLearningTools, createReflectionReadState } from "./reflection-learning-tools";
+import { buildReflectionTaskTools } from "./reflection-task-tools";
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
@@ -104,6 +110,8 @@ export interface ReflectionRoundInput {
   /** Agenda items due by this round's date (§6.2) — delivery really
    *  happens: these ride WITH this round. */
   agendaDue: AgendaItem[];
+  skillReviewDue?: SkillEntry[];
+  skillReviewError?: string;
 }
 
 export interface HqOutcome {
@@ -166,6 +174,12 @@ You decide what to do and in what order. The natural order, when several things 
 1. Verify first (reads before any write).
 2. Cases usually before people/user — the user model should cite the cases the round just wrote, not speak in generalities.
 3. self/ comes last — craft reflections are informed by everything else the round did.
+
+Tasks are user commitments with lifecycle, not merely another prose directory. Query the task ledger for existing identities before creating an action. Read the RAW USER turn with readRound; createTask/updateTask quote that exact turn as evidence. An agent suggestion or a task document's old wording is not user authorization to complete, cancel or reopen anything. Historical task documents enter needs_review until direct evidence resolves them. Task documents may deepen the account; their prose never replaces the ledger's status.
+
+Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Keep competing interpretations, unanswered questions and what would change your mind in natural investigative prose. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
+
+Procedural learning uses readSkillSource/querySkills/manageSkill. New or revised guidance is a candidate until explicitly adopted. Read the current source and raw evidence; preserve a stable id when revising. Expected benefit is a hypothesis, not proof of improvement. Only a later observed applicable scenario can support a positive review; absent one, defer or review inconclusively. Direct SOP rewrites separately require readSelfSop and its baseRevision. A worker's reads are its own, never receipts you may borrow.
 
 A round can end SUPERSEDED — rarely. You read the world fresh as you work; when a read shows the world moved so this round's plan is void (another slice sealed, your agenda changed under you, the slice you were checking is no longer the latest edge), close out early: report disposition "superseded" and let the next round re-plan from the same edge. The note then says why you abandoned and what you had already landed. This is a premise overturned, never "tired, start over" — when in doubt, finish the round.
 
@@ -318,8 +332,22 @@ function buildHqTools(
   model: ModelConfig,
   batch: WriteBatch,
   flags: { evolutionRan: boolean },
+  mutateTask: BatchTaskMutation,
 ) {
+  const readState = createReflectionReadState();
+  const currentManifest = async () => {
+    const manifest = await buildRunManifest();
+    const read = await readTaskLedger({ batch, fresh: true });
+    if (read.status === "ready") {
+      manifest.tree.tasks = [...new Set([
+        ...(manifest.tree.tasks ?? []), ...read.ledger.tasks.map((task) => `${task.ref}/index.md`),
+      ])].sort();
+    }
+    return manifest;
+  };
   return {
+    ...buildReflectionLearningTools(batch, readState),
+    ...buildReflectionTaskTools({ date, batch, rawRecords: readState.rawRecords, mutateTask }),
     survey: tool({
       description:
         "Survey what lives in memory — a compact index by world (category): how many " +
@@ -330,7 +358,7 @@ function buildHqTools(
         "(written or deleted) this round may not appear in it — readCase sees the queue, " +
         "the survey does not.",
       inputSchema: z.object({}),
-      execute: async () => renderSurvey((await buildRunManifest()).tree),
+      execute: async () => renderSurvey((await currentManifest()).tree),
     }),
 
     readRound: tool({
@@ -360,6 +388,7 @@ function buildHqTools(
         for (const { part, label } of parts) {
           try {
             const raw = await readSlicePart(sliceId, part, batch);
+            if (part === "core") readState.recordRound(sliceId, raw);
             sections.push(`## ${part} — ${label}\n\n${raw}`);
           } catch {
             if (part === "core") {
@@ -375,7 +404,8 @@ function buildHqTools(
       },
     }),
 
-    readCase: makeCaseReadTool(batch),
+    readCase: makeCaseReadTool(batch, readState.scope),
+    readSlice: makeCrossSliceReadTool({ batch, scope: readState.scope }),
 
     markOrphan: tool({
       description:
@@ -417,14 +447,14 @@ function buildHqTools(
         "open: new case (category + caseName + body). rewriteIndex: rewrite the body of a case still inside its write window (body; " +
         "pass expectedUpdated = the updated stamp you read from the case header — the rewrite is refused when the case moved since your read). " +
         "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
-        "addPiece: a dated piece (title + body, always allowed). " +
+        "addPiece: a dated piece (title + body). reviseUnderstanding: replace only _current.md with body and evidence refs actually read in this run, preserving the historical index. Read the full target case before any update; survey is not a receipt. " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
         DOC_WRITE_WINDOW_RULE +
         `\n\n${MEMORY_IS_GIT_RULE}`,
       inputSchema: z.object({
-        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece"]),
+        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "reviseUnderstanding"]),
         category: z
           .enum([
             "people",
@@ -447,6 +477,7 @@ function buildHqTools(
         body: z.string().optional(),
         line: z.string().optional(),
         title: z.string().optional(),
+        evidence: z.array(z.string().min(1)).min(1).max(20).optional(),
         expectedUpdated: z
           .string()
           .optional()
@@ -471,6 +502,13 @@ function buildHqTools(
         // writeCase (one schema, two posts).
         const category = (args.category ?? "research") as CaseCategory;
         const base = { category, caseName: sanitizeCaseSegment(args.caseName) };
+        if (category === "self" && ["search", "thinkdeep"].includes(base.caseName)) {
+          return "REJECTED: capability SOPs use readSelfSop/writeSelfSop; generic case writes cannot bypass their revision and evidence gates";
+        }
+        if (category === "tasks" && args.action === "open") {
+          return "REJECTED: createTask records a genuine raw user commitment and materializes its task document atomically; use an existing ledger ref for later narrative updates";
+        }
+        if (args.action === "open" && !readState.hasReadEvidence()) return "REJECTED: readRound/readCase evidence before opening a document; a docket or survey is not evidence";
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "open":
@@ -496,9 +534,13 @@ function buildHqTools(
             if (!args.title || !args.body) return "REJECTED: addPiece requires title and body";
             intent = { action: "addPiece", ...base, title: sanitizeCaseSegment(args.title), body: args.body };
             break;
+          case "reviseUnderstanding":
+            if (!args.body || !args.evidence?.length) return "REJECTED: reviseUnderstanding requires body and evidence read in this run";
+            intent = { action: "reviseUnderstanding", ...base, body: args.body, evidence: args.evidence };
+            break;
         }
         try {
-          const applied = await applyCaseWriteIntent(intent, date, batch);
+          const applied = await applyCaseWriteIntent(intent, date, batch, readState.scope);
           // Queued, NOT committed — the round's single end-of-round flush is
           // the commit. "written" is claimed only after a commit succeeds
           // (v0.37 §7-1): the honest word here is 「已记录，随本轮一次落盘」.
@@ -532,7 +574,7 @@ function buildHqTools(
           model,
           closedSliceId: sliceId,
           excerpt,
-          manifest: await buildRunManifest(),
+          manifest: await currentManifest(),
           date,
           batch,
         });
@@ -647,7 +689,7 @@ function buildHqTools(
           model,
           sliceId,
           excerpt: buildSliceExcerpt(slice),
-          manifest: await buildRunManifest(),
+          manifest: await currentManifest(),
           date,
           batch,
         });
@@ -658,32 +700,6 @@ function buildHqTools(
           `queued (lands when this round commits): ${result.written.join(", ") || "(none)"}\n` +
           `skipped: ${result.skipped.map((s) => `${s.id} (${s.reason})`).join(", ") || "(none)"}`
         );
-      },
-    }),
-
-    writeSelfSop: tool({
-      description:
-        "Rewrite one self/ SOP (search or thinkdeep) — your own craft, the LAST thing a round touches. " +
-        "Evidence discipline: the prose must cite the records slice ids that motivate the rewrite. " +
-        "Style discipline: each rule is a dated, re-checkable account of what happened and the working " +
-        "rule it motivated — an investigator's case note, never the builder's vantage point " +
-        "(no 工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) and never notes addressed to your makers. " +
-        "House style: one sentence one meaning, active voice, no filler — the full rules sit in your role prompt. " +
-        "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter. " +
-        "An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim " +
-        "into the colleague's prompt at spawn, so keep it tight. " +
-        MEMORY_IS_GIT_RULE,
-      inputSchema: z.object({
-        agent: z.enum(["search", "thinkdeep"]),
-        content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),
-      }),
-      execute: async ({ agent, content }) => {
-        // Same evolution lock as evolveProfile above — an SOP rewrite is a
-        // whole-file write that must not interleave with a live turn's run.
-        await withSliceLock("evolution", () =>
-          writeSelfSop(agent, content, batch),
-        );
-        return `OK — 已记录，随本轮一次落盘: memory/self/${agent}/index.md`;
       },
     }),
 
@@ -779,6 +795,10 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     (agendaLines !== null
       ? `Your agenda — due items ride WITH this round (work each, reschedule it, or consume it via setAgenda):\n${agendaLines}\n\n`
       : "") +
+    ((input.skillReviewDue?.length ?? 0) > 0
+      ? `Procedural skill reviews due — independent of the user-model evolution beat. Read their original self documents and later raw records before judging; no later scenario means pending/inconclusive, never verified success:\n${input.skillReviewDue!.map((entry) => `- ${entry.id} (revision ${entry.revision}; ${entry.ref}; due ${entry.reviewDue})`).join("\n")}\n\n`
+      : "") +
+    (input.skillReviewError ? `Skill review state is degraded: ${input.skillReviewError}. Do not treat this as an empty ledger.\n\n` : "") +
     `Read the named slice(s) (core.md for the user's words, agent.md for the field's thinking and work) ` +
     `and anything else the docket implies, then decide what deserves doing. ` +
     `When the round is done (or you decide nothing needs doing), call hqReport.`;
@@ -791,15 +811,24 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   // applies the entries and records one local commit).
   const batch = createBatch();
   batch.baseHeadSha = input.history?.basis;
+  if (!batch.baseHeadSha && (await import("@/lib/data-source/resolve")).resolveDataSource() === "github") {
+    try {
+      const { owner, repo } = (await import("@/lib/capabilities")).getRepoConfig();
+      batch.baseHeadSha = (await (await import("@/lib/github/read-view")).getGitHubReadHead(repo, owner)).headSha;
+    } catch (error) {
+      return { actions: [], note: "", error: `cannot establish the reflection write basis: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
   const flags = { evolutionRan: false };
 
+  return withTaskLedgerBatch(batch, async (mutateTask) => {
   try {
   const result = await runSubAgent<HqReport>({
     role: "reflection",
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,
-    tools: buildHqTools(date, model, batch, flags),
+    tools: buildHqTools(date, model, batch, flags, mutateTask),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
@@ -811,6 +840,24 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     // lands whatever the round's tools already queued.
     timeoutMs: REFLECTION_ROUND_TIMEOUT_MS,
   });
+
+  // A due review was offered, not necessarily completed. Persist that host
+  // receipt only after a clean run, so an unchanged item cannot burn empty laps.
+  if (result.ok && result.report && result.report.disposition !== "superseded") {
+    for (const offered of input.skillReviewDue ?? []) {
+      const read = await readSkillLedger(batch, { fresh: true });
+      if (read.status !== "ok") continue;
+      const current = read.ledger.entries.find((entry) => entry.id === offered.id);
+      if (current?.state !== "adopted" || current.revision !== offered.revision) continue;
+      const receipt = await mutateSkillLedger({
+        kind: "offer_review", id: current.id, expectedRevision: current.revision,
+        operationId: skillReviewOfferId(current),
+      }, batch);
+      if (receipt.status === "corrupt" || receipt.status === "unavailable" || receipt.status === "rejected") {
+        throw new Error(`skill review offer receipt failed: ${receipt.diagnostic}`);
+      }
+    }
+  }
 
   // Flush whatever the round queued — even a failed round keeps whatever
   // its tools landed before the failure (HQ's products are writes). The
@@ -988,5 +1035,6 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     }
     return { actions: landed, note: "", error: msg };
   }
+  });
   }, { fresh: true });
 }

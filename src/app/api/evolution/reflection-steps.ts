@@ -257,13 +257,15 @@ export async function loadReflectionWorld(
     evolutionDue: false,
     evolutionReasons: [],
     agendaDue: [],
+    skillReviewDue: [],
     agendaWakeMs: null,
     logDegraded: true,
   });
   try {
-    const [{ fsReadFile }, { AGENDA_PATH, parseAgenda }] = await Promise.all([
+    const [{ fsReadFile }, { AGENDA_PATH, parseAgenda }, { readSkillLedger }] = await Promise.all([
       import("@/lib/episodic/io-helpers"),
       import("@/lib/evolution/agenda"),
+      import("@/lib/evolution/skill-store"),
     ]);
 
     // The water level (TURN-level, v0.42 §4) + the evolution beat + the
@@ -358,6 +360,18 @@ export async function loadReflectionWorld(
       agendaContent = null;
     }
 
+    const skillRead = await readSkillLedger().catch((error: unknown) => ({
+      status: "unavailable" as const,
+      ledger: null,
+      diagnostic: error instanceof Error ? error.message : String(error),
+    }));
+    const skillLedger = skillRead.status === "ok" || skillRead.status === "missing"
+      ? skillRead.ledger
+      : null;
+    const skillReviewError = skillRead.status === "corrupt" || skillRead.status === "unavailable"
+      ? skillRead.diagnostic
+      : undefined;
+
     const plan = assembleLapPlan({
       nowIso,
       date: lapDate,
@@ -365,6 +379,8 @@ export async function loadReflectionWorld(
       scope,
       lastEvolutionDate,
       agendaContent,
+      skillLedger,
+      ...(skillReviewError ? { skillReviewError } : {}),
     });
 
     // The agenda clock arm (§3.1/§6.2): the earliest FUTURE due date, in ms

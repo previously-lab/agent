@@ -64,7 +64,7 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
         return pending;
       }
       const content = io.files.get(path);
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
       return content;
     },
   ),
@@ -101,6 +101,9 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
 
 vi.mock("@/lib/episodic/slice-mutex", () => ({
   withSliceLock: vi.fn(async (_key: string, fn: () => unknown) => fn()),
+}));
+vi.mock("@/lib/episodic/timeline/enumerate", () => ({
+  enumerateTreePaths: vi.fn(async (root: string) => [...io.files.keys()].filter((path) => path.startsWith(`${root}/`))),
 }));
 
 const episodic = vi.hoisted(() => ({
@@ -189,11 +192,9 @@ vi.mock("@/lib/models/registry", () => ({
   getDefaultModelId: vi.fn(() => "test-model"),
 }));
 
-vi.mock("@/lib/evolution/store", () => ({
+vi.mock("@/lib/evolution/store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/evolution/store")>(),
   readUserModel: vi.fn(async (): Promise<null> => null),
-  writeSelfSop: vi.fn(async (agent: string, content: string) => {
-    io.files.set(`memory/self/${agent}/index.md`, content);
-  }),
   // detectDirectionMode (kept real) needs this from the store module.
   isDirectionTemplate: (current: string | null): boolean =>
     !current || !current.trim(),
@@ -217,6 +218,11 @@ async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
+const RAW_USER_RECORD = `## Turn a1b2c3 — 2026-08-09T13:00:00.000Z (user)\n想换手机\n`;
+async function readEvidence(opts: RunnerOpts, raw = RAW_USER_RECORD, sliceId = SLICE_ID) {
+  episodic.readSlicePart.mockResolvedValueOnce(raw);
+  return callTool(opts, "readRound", { sliceId });
+}
 /** The v0.34 R2 docket input (§5.3) — one sealed boundary slice in scope,
  *  no beat due, no agenda. The tests vary the tools, not the docket. */
 const DOCKET = {
@@ -250,6 +256,178 @@ beforeEach(() => {
     changed: false,
     droppedRecent: 0,
     note: "reviewed",
+  });
+});
+
+describe("HQ evidence, task and learning integration", () => {
+  it("offers a due skill independently and persists only a host offer receipt when no later evidence exists", async () => {
+    const { skillReviewOfferId, assembleLapPlan, lapHasWork } = await import("@/app/api/evolution/reflection-plan");
+    const entry = {
+      id: "check-facts", ref: "self/search/index.md", role: "search" as const, scope: { kind: "general" as const },
+      instruction: "Check the source.", summary: "Check first", applicability: "Before factual advice", sourceRevision: "source-v1",
+      evidence: [SLICE_ID], expectedBenefit: "Accurate claims", reviewDue: DATE, revision: 2, state: "adopted" as const,
+      reviewOutcome: "pending" as const, reviewEvidence: [], reviewNeeded: false, acknowledgedSourceRevision: "source-v1",
+    };
+    io.files.set("memory/config/skill-state.json", JSON.stringify({ schemaVersion: 1, entries: [entry], operations: [] }));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      expect(opts.prompt).toContain("Procedural skill reviews due");
+      expect(opts.prompt).not.toContain("evolution beat is DUE");
+      return { ok: true, report: { actions: [], note: "There is no later applicable scenario yet." }, text: "" };
+    });
+    const result = await handleBrief({ ...DOCKET, scope: [], skillReviewDue: [entry] });
+    expect(result.error).toBeUndefined();
+    expect(passes.runCardEvolution).not.toHaveBeenCalled();
+    const state = JSON.parse(io.files.get("memory/config/skill-state.json")!);
+    expect(state.entries[0]).toEqual(entry);
+    expect(state.operations).toMatchObject([{ operationId: skillReviewOfferId(entry) }]);
+    const next = assembleLapPlan({ date: DATE, nowIso: `${DATE}T15:00:00Z`, cursor: null, scope: [], lastEvolutionDate: null, agendaContent: null, skillLedger: state });
+    expect(lapHasWork(next)).toBe(false);
+  });
+
+  it("refuses unread case updates and uses actual record/index receipts for current understanding", async () => {
+    const path = "memory/research/理解/index.md";
+    const original = "---\nopened: '2026-08-01'\n---\n\nHistorical research remains intact.\n";
+    io.files.set(path, original);
+    runSubAgentMock.mockImplementation(async (opts) => {
+      expect(await callTool(opts, "writeCase", {
+        action: "appendTail", category: "research", caseName: "理解", line: "Unread guess.",
+      })).toContain("no successful full index read");
+      await callTool(opts, "readCase", { ref: "research/理解" });
+      expect(await callTool(opts, "writeCase", {
+        action: "reviseUnderstanding", category: "research", caseName: "理解", body: "A provisional interpretation.", evidence: [`records/${SLICE_ID}`],
+      })).toContain("unread or invalid evidence");
+      await readEvidence(opts);
+      expect(await callTool(opts, "writeCase", {
+        action: "reviseUnderstanding", category: "research", caseName: "理解", body: "A provisional interpretation.", evidence: [`records/${SLICE_ID}`],
+      })).toContain("已记录，随本轮一次落盘");
+      return { ok: true, report: { actions: [], note: "Updated the current interpretation." }, text: "" };
+    });
+    const result = await handleBrief(DOCKET);
+    expect(result.error).toBeUndefined();
+    expect(io.files.get(path)).toBe(original);
+    expect(io.files.get("memory/research/理解/_current.md")).toContain("A provisional interpretation.");
+  });
+
+  it("cannot borrow a previous HQ run's read receipt or bypass SOP writes via generic cases", async () => {
+    io.files.set("memory/self/search/index.md", "Existing rule.");
+    runSubAgentMock.mockImplementationOnce(async (opts) => {
+      await callTool(opts, "readCase", { ref: "self/search" });
+      return { ok: true, report: { actions: [], note: "read only" }, text: "" };
+    });
+    await handleBrief(DOCKET);
+    runSubAgentMock.mockImplementationOnce(async (opts) => {
+      expect(await callTool(opts, "writeCase", { action: "rewriteIndex", category: "self", caseName: "search", body: "Bypass." })).toContain("cannot bypass");
+      expect(await callTool(opts, "writeSelfSop", {
+        agent: "search", content: "Bypass.", baseRevision: "invented", evidence: [SLICE_ID], expectedBenefit: "benefit", applicability: "scope",
+      })).toContain("call readSelfSop in this run");
+      await readEvidence(opts);
+      const basis = JSON.parse(await callTool(opts, "readSelfSop", { agent: "search" }));
+      io.files.set("memory/self/search/index.md", "A concurrent corrected rule.");
+      expect(await callTool(opts, "writeSelfSop", {
+        agent: "search", content: "Stale replacement.", baseRevision: basis.baseRevision,
+        evidence: [SLICE_ID], expectedBenefit: "benefit", applicability: "scope",
+      })).toContain("SOP changed after");
+      return { ok: true, report: { actions: [], note: "Rejected stale changes." }, text: "" };
+    });
+    await handleBrief(DOCKET);
+    expect(io.files.get("memory/self/search/index.md")).toBe("A concurrent corrected rule.");
+  });
+
+  it("creates a task and its document in one commit only from a quoted raw user turn", async () => {
+    const raw = `## Turn u12345 — 2026-08-09T13:00:00.000Z (user)\n我明天去续护照。\n\n## Turn a12345 — 2026-08-09T13:01:00.000Z (agent)\n顺便去办签证。\n`;
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const task = { ref: "tasks/续护照", summary: "续护照", userEvidence: { sliceId: SLICE_ID, turnId: "u12345", statement: "我明天去续护照。" } };
+      expect(await callTool(opts, "createTask", task)).toContain("readRound");
+      await readEvidence(opts, raw);
+      expect(await callTool(opts, "createTask", {
+        ...task, userEvidence: { sliceId: SLICE_ID, turnId: "a12345", statement: "顺便去办签证。" },
+      })).toContain("RAW USER");
+      const created = JSON.parse(await callTool(opts, "createTask", task));
+      expect(created).toMatchObject({ outcome: "applied", queued: true });
+      expect(io.files.has("memory/config/task-state.json")).toBe(false);
+      expect(io.files.has("memory/tasks/续护照/index.md")).toBe(false);
+      const current = JSON.parse(await callTool(opts, "queryTasks", { ref: task.ref }));
+      expect(current.tasks[0]).toMatchObject({ ref: task.ref, status: "open", revision: 1 });
+      expect(await callTool(opts, "updateTask", {
+        ref: task.ref, expectedRevision: 1, changes: { status: "completed" },
+        userEvidence: { sliceId: SLICE_ID, turnId: "u12345", statement: "已经办完了。" },
+      })).toContain("RAW USER");
+      return { ok: true, report: { actions: [], note: "Recorded a commitment." }, text: "" };
+    });
+    expect((await handleBrief(DOCKET)).error).toBeUndefined();
+    expect(io.files.get("memory/tasks/续护照/index.md")).toContain("我明天去续护照。");
+    expect(JSON.parse(io.files.get("memory/config/task-state.json")!).tasks[0].status).toBe("open");
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    expect(commitReflectionRound).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reports a task or its document as landed after the round HEAD conflicts", async () => {
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(commitReflectionRound).mockRejectedValueOnce(Object.assign(new Error("not a fast forward"), { status: 422 }));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      expect(JSON.parse(await callTool(opts, "createTask", {
+        ref: "tasks/换手机", summary: "换手机", userEvidence: { sliceId: SLICE_ID, turnId: "a1b2c3", statement: "想换手机" },
+      })).queued).toBe(true);
+      return { ok: true, report: { actions: ["tasks/换手机/index.md"], note: "queued" }, text: "" };
+    });
+    const result = await handleBrief({ ...DOCKET, history: {
+      version: 1, basis: "1".repeat(40), cursor: null, evolved: null,
+      pending: [{ sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["a1b2c3"] }],
+    } });
+    expect(result.actions).toEqual([]);
+    expect(result.error).toContain("did not persist");
+    expect(commitReflectionRound).toHaveBeenCalledTimes(1);
+    expect(io.files.has("memory/config/task-state.json")).toBe(false);
+    expect(io.files.has("memory/tasks/换手机/index.md")).toBe(false);
+  });
+
+  it("reconciles legacy refs into needs_review and exposes the latest ledger refs", async () => {
+    io.files.set("memory/tasks/历史事项/index.md", "An old document saying nothing about current completion.");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const page = JSON.parse(await callTool(opts, "queryTasks", {}));
+      expect(page.tasks).toMatchObject([{ ref: "tasks/历史事项", status: "needs_review" }]);
+      expect(page.tasks[0].evidence).toEqual([]);
+      return { ok: true, report: { actions: [], note: "Discovered an unreviewed legacy task." }, text: "" };
+    });
+    expect((await handleBrief(DOCKET)).error).toBeUndefined();
+    expect(io.files.get("memory/tasks/历史事项/index.md")).toBe("An old document saying nothing about current completion.");
+  });
+
+  it("requires actual source/raw reads for skill adoption and keeps revised candidates inactive", async () => {
+    io.files.set("memory/self/沟通规范/index.md", "An investigatory source with a conditional working rule.");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const source = JSON.parse(await callTool(opts, "readSkillSource", { ref: "self/沟通规范/index.md" }));
+      const operation = {
+        kind: "propose", operationId: "hq-proposal", expectedRevision: 0,
+        draft: { id: "clarify-boundary", ref: source.ref, role: "main", scope: { kind: "general" },
+          instruction: "Clarify the user's boundary before interpreting motives.", summary: "Clarify first", applicability: "When an interaction feels uncomfortable",
+          sourceRevision: source.revision, evidence: [SLICE_ID], expectedBenefit: "Fewer misplaced interpretations", reviewDue: "2026-11-30" },
+      };
+      expect(await callTool(opts, "manageSkill", operation)).toContain("readRound");
+      await readEvidence(opts);
+      expect(JSON.parse(await callTool(opts, "manageSkill", operation)).entry.state).toBe("candidate");
+      expect(JSON.parse(await callTool(opts, "manageSkill", {
+        kind: "adopt", operationId: "hq-adoption", id: "clarify-boundary", expectedRevision: 1, reviewDue: "2026-11-30",
+      })).entry.state).toBe("adopted");
+      io.files.set("memory/self/沟通规范/index.md", "A later source revision; the adopted instruction must stay pinned.");
+      const changed = JSON.parse(await callTool(opts, "readSkillSource", { ref: source.ref }));
+      expect(changed.skillUpdates).toMatchObject([{ id: "clarify-boundary", revision: 3, reviewNeeded: true }]);
+      const state = JSON.parse(await callTool(opts, "querySkills", {}));
+      expect(state.entries[0]).toMatchObject({ sourceRevision: source.revision, instruction: operation.draft.instruction });
+      expect(await callTool(opts, "manageSkill", {
+        kind: "review", operationId: "hq-review", id: "clarify-boundary", expectedRevision: 3,
+        reviewEvidence: [SLICE_ID], reviewOutcome: "positive", reviewedAt: "2026-10-26", reviewDue: "2026-12-01",
+      })).toContain("positive review needs evidence");
+      const revised = JSON.parse(await callTool(opts, "manageSkill", {
+        kind: "revise", operationId: "hq-revision", id: "clarify-boundary", expectedRevision: 3,
+        changes: { instruction: "Ask a narrower question first.", applicability: "When the boundary is unclear", evidence: [`records/${SLICE_ID}`], sourceRevision: changed.revision },
+      }));
+      expect(revised.entry).toMatchObject({ id: "clarify-boundary", state: "candidate", revision: 4 });
+      return { ok: true, report: { actions: [], note: "A revised candidate awaits adoption." }, text: "" };
+    });
+    expect((await handleBrief(DOCKET)).error).toBeUndefined();
+    expect(JSON.parse(io.files.get("memory/config/skill-state.json")!).entries[0].state).toBe("candidate");
   });
 });
 
@@ -327,6 +505,7 @@ describe("handleBrief (v0.21 §5)", () => {
 
   it("a substantive write lands through the real case machinery", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       const r = await callTool(opts, "writeCase", {
         action: "open",
         category: "research",
@@ -361,6 +540,8 @@ describe("handleBrief (v0.21 §5)", () => {
       "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的正文。\n",
     );
     runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "readCase", { ref: "research/旧案" });
+      await callTool(opts, "readCase", { ref: "research/手机购买调研" });
       // Out of window, no stamp → structured refusal pointing at the tail.
       const r1 = await callTool(opts, "writeCase", {
         action: "rewriteIndex",
@@ -421,6 +602,7 @@ describe("handleBrief (v0.21 §5)", () => {
     const reason =
       "核对了 records/2026/08/09/1300：mailbox 的问题标记所指内容已在 research/手机购买调研 覆盖，决定不再开新 case。";
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       const r = await callTool(opts, "writeCase", {
         action: "open",
         category: "self",
@@ -507,6 +689,7 @@ describe("handleBrief (v0.21 §5)", () => {
 
   it("writeCase refuses people/user — the user model is evolveProfile's, other people/* stay legal", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       const refused = await callTool(opts, "writeCase", {
         action: "open",
         category: "people",
@@ -535,9 +718,13 @@ describe("handleBrief (v0.21 §5)", () => {
 
   it("writeSelfSop rewrites under the evolution lock", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      const basis = JSON.parse(await callTool(opts, "readSelfSop", { agent: "search" }));
       const r = await callTool(opts, "writeSelfSop", {
         agent: "search",
         content: "2026-08-09：读回失败先读回再引用（证据 2026-08-09-1300）。",
+        baseRevision: basis.baseRevision, evidence: [SLICE_ID],
+        expectedBenefit: "Citations stay accurate", applicability: "When quoting past records",
       });
       expect(r).toContain("OK — 已记录，随本轮一次落盘: memory/self/search/index.md");
       return { ok: true, report: { actions: [], note: "sop rewritten" }, text: "" };
@@ -924,6 +1111,7 @@ describe("handleBrief (v0.21 §5)", () => {
 
   it("v0.42 §5 d. an UNEXPECTED throw after tools queued → the queued writes land as a DEGRADED commit, the cursor holds (NO seen line)", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       // The unit produced a write, then the platform blew up mid-round —
       // before any hqReport, before the settle.
       await callTool(opts, "writeCase", {
@@ -955,6 +1143,7 @@ describe("handleBrief (v0.21 §5)", () => {
     // the round must not report actions:[] — a failed round with landed
     // writes is not an empty round.
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       const r = await callTool(opts, "writeCase", {
         action: "open",
         category: "research",
@@ -985,6 +1174,7 @@ describe("handleBrief (v0.21 §5)", () => {
     const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
     vi.mocked(commitReflectionRound).mockRejectedValueOnce(new Error("disk full"));
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       await callTool(opts, "writeCase", {
         action: "open",
         category: "research",
@@ -1015,6 +1205,7 @@ describe("handleBrief (v0.21 §5)", () => {
       new Error("GitHub circuit breaker open — failing fast for 36s more"),
     );
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       await callTool(opts, "writeCase", {
         action: "open",
         category: "research",
@@ -1050,6 +1241,7 @@ describe("handleBrief (v0.21 §5)", () => {
 describe("read-your-writes — the round's batch rides every read (v0.37 §5)", () => {
   it("writeCase(open) → readCase reads the QUEUED case back — no dead link on a case this round created", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
       const ok = await callTool(opts, "writeCase", {
         action: "open",
         category: "research",
@@ -1080,6 +1272,7 @@ describe("read-your-writes — the round's batch rides every read (v0.37 §5)", 
       "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n旧正文。\n",
     );
     runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "readCase", { ref: "research/手机调研" });
       await callTool(opts, "writeCase", {
         action: "appendTail",
         category: "research",
@@ -1199,7 +1392,7 @@ describe("the batch-threading mechanical audit (v0.37 §5 — 漏接即红)", ()
     // loadSlice pre-reads (markOrphan / archiveRound / evolveProfile /
     // noteQuestions); the user-model read; the card readers.
     expect(hqSrc).toContain("readSlicePart(sliceId, part, batch)");
-    expect(hqSrc).toContain("makeCaseReadTool(batch)");
+    expect(hqSrc).toContain("makeCaseReadTool(batch, readState.scope)");
     expect(hqSrc).toContain("readUserModel(batch)");
     expect(hqSrc).toContain("buildRunCardReaders(batch)");
     expect(hqSrc.match(/loadSlice\(sliceId, batch\)/g)?.length).toBe(4);

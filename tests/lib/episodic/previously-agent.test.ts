@@ -46,7 +46,7 @@ async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<
 }
 
 function baseInput(overrides: Partial<PreviouslyAgentInput> = {}): PreviouslyAgentInput {
-  return {
+  const input: PreviouslyAgentInput = {
     signal: "new_observation",
     note: "Auto-review of latest conversation.",
     model: MODEL,
@@ -59,6 +59,15 @@ function baseInput(overrides: Partial<PreviouslyAgentInput> = {}): PreviouslyAge
     readPreviouslyFn: async () => "(none)",
     ...overrides,
   };
+  if (input.allowedSopWrites && !input.sopSnapshots) {
+    input.sopSnapshots = Object.fromEntries(input.allowedSopWrites.map((agent) => [agent, {
+      agent,
+      origin: "legacy" as const,
+      content: `Old ${agent} SOP — preserve this unrelated rule.`,
+      revision: `test-${agent}-revision-1`,
+    }]));
+  }
+  return input;
 }
 
 beforeEach(() => {
@@ -214,39 +223,93 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
         content: "Quote the slice id before answering.",
         evidence: ["2026-08-20-1430"],
         expectedBenefit: "fewer ungrounded answers",
+        applicability: "When citing prior conversations",
       });
       return { ok: true, report: { reasoning: "tried", summary: "" }, text: "" };
     });
-    // allowedSopWrites absent entirely — the explicit memory_update channel.
     const out = await runPreviouslyAgent(baseInput());
     expect(rejection).toContain("REJECTED");
     expect(rejection).toContain("not writable this run");
     expect(out.sopWrites).toBeUndefined();
   });
 
-  it("ACCEPTS a write for an allowlisted colleague and stages the FULL text (no cap) for the caller", async () => {
+  it("shows the FULL old SOP and stages applicability plus its recorded revision", async () => {
+    const oldSop = `# Legacy search SOP\n\n${"whole old rule\n".repeat(100)}`;
     runSubAgentMock.mockImplementation(async (opts) => {
+      expect(opts.prompt).toContain(oldSop);
+      expect(opts.prompt).toContain("effective origin: legacy");
       const ok = await callTool(opts, "writeSop", {
         agent: "search",
         content: "Quote the slice id before answering.",
         evidence: ["2026-08-20-1430", ""],
         expectedBenefit: "fewer ungrounded answers",
+        applicability: "When citing prior conversations",
       });
       expect(ok).toContain("OK");
       return { ok: true, report: { reasoning: "done", summary: "", expectedBenefit: "fewer ungrounded answers" }, text: "" };
     });
-    const out = await runPreviouslyAgent(
-      baseInput({ allowedSopWrites: ["search"] }),
-    );
+    const out = await runPreviouslyAgent(baseInput({
+      allowedSopWrites: ["search"],
+      sopSnapshots: {
+        search: { agent: "search", origin: "legacy", content: oldSop, revision: "legacy-revision-1" },
+      },
+    }));
     expect(out.sopWrites).toEqual([
       {
         agent: "search",
         content: "Quote the slice id before answering.",
-        evidence: ["2026-08-20-1430"], // blank evidence entries dropped
+        evidence: ["2026-08-20-1430"],
         expectedBenefit: "fewer ungrounded answers",
+        applicability: "When citing prior conversations",
+        baseRevision: "legacy-revision-1",
       },
     ]);
     expect(out.expectedBenefit).toBe("fewer ungrounded answers");
+  });
+
+  it("rejects empty or malformed evidence, expected benefit, or applicability", async () => {
+    const rejections: string[] = [];
+    runSubAgentMock.mockImplementation(async (opts) => {
+      for (const args of [
+        { evidence: [], expectedBenefit: "benefit", applicability: "when searching" },
+        { evidence: ["nonsense"], expectedBenefit: "benefit", applicability: "when searching" },
+        { evidence: ["2026-02-30-1000"], expectedBenefit: "benefit", applicability: "when searching" },
+        { evidence: ["2026-10-26-2460"], expectedBenefit: "benefit", applicability: "when searching" },
+        { evidence: ["2026-08-20-1430"], expectedBenefit: " ", applicability: "when searching" },
+        { evidence: ["2026-08-20-1430"], expectedBenefit: "benefit", applicability: " " },
+      ]) {
+        rejections.push(await callTool(opts, "writeSop", {
+          agent: "search",
+          content: "Whole replacement rule.",
+          ...args,
+        }));
+      }
+      return { ok: true, report: { reasoning: "done", summary: "" }, text: "" };
+    });
+    const out = await runPreviouslyAgent(baseInput({ allowedSopWrites: ["search"] }));
+    expect(rejections).toHaveLength(6);
+    expect(rejections.every((rejection) => rejection.includes("REJECTED"))).toBe(true);
+    expect(out.sopWrites).toBeUndefined();
+  });
+
+  it("rejects a write without the recorded full-read basis", async () => {
+    let rejection = "";
+    runSubAgentMock.mockImplementation(async (opts) => {
+      rejection = await callTool(opts, "writeSop", {
+        agent: "search",
+        content: "Whole replacement rule.",
+        evidence: ["2026-08-20-1430"],
+        expectedBenefit: "benefit",
+        applicability: "when searching",
+      });
+      return { ok: true, report: { reasoning: "done", summary: "" }, text: "" };
+    });
+    const out = await runPreviouslyAgent(baseInput({
+      allowedSopWrites: ["search"],
+      sopSnapshots: {},
+    }));
+    expect(rejection).toContain("no recorded full read basis");
+    expect(out.sopWrites).toBeUndefined();
   });
 
   it("the writeSop schema no longer offers the retired recall colleague", async () => {
@@ -258,8 +321,9 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
         t.inputSchema.safeParse({
           agent: "recall",
           content: "x",
-          evidence: [],
+          evidence: ["2026-08-20-1430"],
           expectedBenefit: "y",
+          applicability: "when searching",
         }).success,
       ).toBe(false);
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
@@ -273,8 +337,9 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
       rejection = await callTool(opts, "writeSop", {
         agent: "thinkdeep",
         content: "x",
-        evidence: [],
+        evidence: ["2026-08-20-1430"],
         expectedBenefit: "y",
+        applicability: "when thinking deeply",
       });
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
     });
@@ -288,14 +353,16 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
       await callTool(opts, "writeSop", {
         agent: "search",
         content: "first draft",
-        evidence: [],
+        evidence: ["2026-08-20-1430"],
         expectedBenefit: "a",
+        applicability: "when searching",
       });
       await callTool(opts, "writeSop", {
         agent: "search",
         content: "second draft",
-        evidence: [],
+        evidence: ["2026-08-20-1430"],
         expectedBenefit: "b",
+        applicability: "when searching",
       });
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
     });

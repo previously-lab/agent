@@ -39,12 +39,17 @@ async function fresh() {
 let tmpDir: string;
 let origCwd: string;
 let origStorage: string | undefined;
+let originalRoots: Record<string, string | undefined>;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "aftrbrez-attachments-test-"));
   origCwd = process.cwd();
   origStorage = process.env.STORAGE;
+  originalRoots = Object.fromEntries(["MEMORY_ROOT", "TASKS_ROOT", "SESSIONS_ROOT"].map((key) => [key, process.env[key]]));
   process.env.STORAGE = "local";
+  process.env.MEMORY_ROOT = path.join(tmpDir, "memory");
+  process.env.TASKS_ROOT = path.join(tmpDir, "tasks");
+  process.env.SESSIONS_ROOT = path.join(tmpDir, "sessions");
   process.chdir(tmpDir);
   vi.resetModules();
   vision.describeImage.mockReset();
@@ -54,6 +59,10 @@ afterEach(() => {
   process.chdir(origCwd);
   if (origStorage !== undefined) process.env.STORAGE = origStorage;
   else delete process.env.STORAGE;
+  for (const [key, value] of Object.entries(originalRoots)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -232,6 +241,7 @@ describe("reading: the viewImage doc: source", () => {
       { context: {
           repo: "local", owner: "local", useGithub: false, useDemo: false,
           sliceId: "2026-09-05-1030", recentTurns: [],
+          turnId: "attachment-user", readScopeId: "attachment-read", currentUserText: "看看这张图片",
         }, toolCallId: "tc1" },
     );
     expect(out).toContain("a photo");
@@ -251,6 +261,7 @@ describe("reading: the viewImage doc: source", () => {
       { context: {
           repo: "local", owner: "local", useGithub: false, useDemo: false,
           sliceId: "2026-09-05-1030", recentTurns: [],
+          turnId: "attachment-user", readScopeId: "attachment-read", currentUserText: "看看这张图片",
         }, toolCallId: "tc1" },
     );
     expect(out).toMatch(/^ERROR:/);

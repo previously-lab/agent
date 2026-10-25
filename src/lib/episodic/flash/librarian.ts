@@ -11,9 +11,9 @@
  * prompt, the writer reads the current text of the cases it judges relevant
  * via the readCase tool, then returns write-intents that engineering applies
  * through the case write ops (§B.3 — open / rewriteIndex / appendTail /
- * addPiece; close retired with the v0.21 write window) under the per-case
- * lock. It has no write tools — the old "blind description" disease cannot
- * recur.
+ * addPiece / reviseUnderstanding) under the per-case lock. Successful full
+ * reads, not manifest membership, authorize updates. It has no write tools —
+ * the old "blind description" disease cannot recur.
  *
  * THE SCRIBE (书记段序 7, §A.2.2): picks up the structured one-line markers
  * the reply segment drops into the slice's agent.md and writes them into
@@ -30,8 +30,8 @@
  * "question" markers are NOT the scribe's — they route to the research pass
  * (flash/doc-research.ts).
  *
- * Evidence-while-writing: the triggering slice id is stamped mechanically
- * into every landed body — the model can no more forget it than forge it.
+ * Evidence-while-writing: historical writes carry the triggering slice id;
+ * _current.md carries only evidence refs successfully read in the run scope.
  *
  * Never throws at the top level: every failure degrades to a skipped item in
  * the result, so the caller is never taken down by a document write.
@@ -43,6 +43,9 @@ import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { ModelConfig } from "@/lib/models/registry";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getRepoConfig } from "@/lib/capabilities";
+import { getGitHubReadHead } from "@/lib/github/read-view";
 import {
   CASE_CATEGORIES,
   appendTail,
@@ -68,11 +71,29 @@ import {
 import {
   fsReadFile,
   fsWriteFile,
+  fsListFiles,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import { readSlicePart, readSlicePartResolved } from "../paths";
+import {
+  applyRange,
+  parseSliceId,
+  parseTurns,
+  reassembleSlice,
+} from "@/lib/episodic/turn-parser";
+import {
+  caseCurrentPath,
+  isSameCaseCurrent,
+  parseCaseCurrent,
+  renderCaseWithCurrent,
+  reviseCaseCurrent,
+  serializeCaseCurrent,
+  caseStorageRevision,
+  caseCurrentFreshnessWarnings,
+  type CaseCurrentBasis,
+} from "@/lib/docs/case-doc";
 
 // ─── Shared bits ───────────────────────────────────────────────────────────
 
@@ -81,31 +102,248 @@ export interface SliceExcerpt {
   focus: string;
   summary: string;
   turnsExcerpt: string;
+  /** Explicit coverage/cap notice; optional for older callers' literal excerpts. */
+  notice?: string;
+  totalTurns?: number;
+  includedTurns?: number;
 }
 
-/**
- * Excerpt a slice for a writer pass: its archived marks plus a bounded tail
- * of the conversation. The excerpt is the pass's READ of the slice — bounded
- * so the prompt stays small, but real content, never bare ids.
- */
+const SLICE_EXCERPT_REFERENCE_NOTICE =
+  "This is a compact excerpt, not complete slice evidence. Use readSlice with zero-based turn ranges and explicit cursor continuation for the original semantic record.";
+
+export function sliceExcerptNotice(excerpt: SliceExcerpt): string {
+  return excerpt.notice ?? SLICE_EXCERPT_REFERENCE_NOTICE;
+}
+
+/** Excerpt a slice without pretending that its bounded tail is the whole record. */
 export function buildSliceExcerpt(slice: {
+  slice_id?: string;
   focus?: string;
   summary?: string;
   turns: Array<{ role: string; content: string }>;
 }): SliceExcerpt {
+  const totalTurns = slice.turns.length;
+  const firstIncluded = Math.max(0, totalTurns - 8);
+  let cappedTurns = 0;
   const turnsExcerpt = slice.turns
     .slice(-8)
-    .map(
-      (t) =>
-        `${t.role === "user" ? "user" : "agent"}: ` +
-        projectNativeReplySemantics(t.content, t.role).replace(/\s+/g, " ").trim().slice(0, 300),
-    )
+    .map((t) => {
+      const projected = projectNativeReplySemantics(t.content, t.role)
+        .replace(/\s+/g, " ")
+        .trim();
+      if (projected.length > 300) cappedTurns += 1;
+      return `${t.role === "user" ? "user" : "agent"}: ${projected.slice(0, 300)}`;
+    })
     .join("\n");
+  const coverage = totalTurns === 0
+    ? "no turns"
+    : `zero-based turns ${firstIncluded}-${totalTurns - 1} of 0-${totalTurns - 1}`;
+  const completeness = firstIncluded > 0
+    ? `INCOMPLETE: ${firstIncluded} earlier turn(s) are omitted`
+    : "all turns are represented";
+  const capNotice = cappedTurns > 0
+    ? `${cappedTurns} turn(s) are capped at 300 characters`
+    : "no shown turn hit the 300-character cap";
   return {
     focus: slice.focus ?? "",
     summary: slice.summary ?? "",
     turnsExcerpt,
+    notice:
+      `Compact excerpt (${coverage}; ${completeness}; ${capNotice}). ` +
+      `Native generated sections are omission-marked in this derived-memory view only; the raw record is unchanged. ` +
+      `Use readSlice${slice.slice_id ? ` for ${slice.slice_id}` : ""} with zero-based turn ranges and cursor continuation for complete semantic evidence.`,
+    totalTurns,
+    includedTurns: totalTurns - firstIncluded,
   };
+}
+
+export type SliceEvidenceRange =
+  | { type: "turns"; indices: number[] }
+  | { type: "last"; count: number }
+  | { type: "date"; after: string };
+
+export interface SliceEvidencePageInput {
+  range?: SliceEvidenceRange;
+  cursor?: number;
+  maxChars?: number;
+  revision?: string;
+}
+
+export interface SliceEvidencePage {
+  content: string;
+  start: number;
+  end: number;
+  totalChars: number;
+  nextCursor: number | null;
+  selectedTurns: number;
+  totalTurns: number;
+  revision: string;
+  containsTurnContent: boolean;
+}
+
+export const SLICE_EVIDENCE_DEFAULT_PAGE_CHARS = 12_000;
+export const SLICE_EVIDENCE_MAX_PAGE_CHARS = 24_000;
+
+/** Page the semantic projection, never the stored record, with explicit continuation. */
+export function readSliceEvidencePage(
+  raw: string,
+  input: SliceEvidencePageInput = {},
+): SliceEvidencePage {
+  const { frontmatter, turns } = parseTurns(raw);
+  const revision = caseStorageRevision(raw);
+  if ((input.cursor ?? 0) > 0 && input.revision !== revision) {
+    throw new Error("source revision changed or is missing; re-read from cursor 0 before continuing");
+  }
+  const projected = turns.map((turn) => ({
+    ...turn,
+    content: projectNativeReplySemantics(
+      turn.content,
+      /\((\w+)\)/.exec(turn.header)?.[1] ?? "",
+    ),
+  }));
+  const selected = input.range ? applyRange(projected, input.range) : projected;
+  const selectedRaw = reassembleSlice(frontmatter, selected);
+  const totalChars = selectedRaw.length;
+  const start = input.cursor ?? 0;
+  if (!Number.isInteger(start) || start < 0 || start > totalChars) {
+    throw new Error(`cursor ${start} is outside the selected evidence length ${totalChars}`);
+  }
+  const maxChars = Math.min(
+    SLICE_EVIDENCE_MAX_PAGE_CHARS,
+    Math.max(2, Math.floor(input.maxChars ?? SLICE_EVIDENCE_DEFAULT_PAGE_CHARS)),
+  );
+  let end = Math.min(totalChars, start + maxChars);
+  if (
+    end < totalChars &&
+    end > start &&
+    /[\uD800-\uDBFF]/.test(selectedRaw[end - 1]!) &&
+    /[\uDC00-\uDFFF]/.test(selectedRaw[end]!)
+  ) {
+    end -= 1;
+  }
+  let turnOffset = frontmatter.length;
+  let containsTurnContent = false;
+  for (const turn of selected) {
+    const contentStart = turnOffset + 2 + turn.header.length + 1;
+    const contentEnd = contentStart + turn.content.length;
+    if (selectedRaw.slice(Math.max(start, contentStart), Math.min(end, contentEnd)).trim() &&
+        Math.max(start, contentStart) < Math.min(end, contentEnd)) containsTurnContent = true;
+    turnOffset = contentEnd;
+  }
+  return {
+    content: selectedRaw.slice(start, end),
+    start,
+    end,
+    totalChars,
+    nextCursor: end < totalChars ? end : null,
+    selectedTurns: selected.length,
+    totalTurns: turns.length,
+    revision,
+    containsTurnContent,
+  };
+}
+
+const sliceEvidenceRangeSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("turns"),
+    indices: z.array(z.number().int().nonnegative()).min(1).max(50),
+  }),
+  z.object({ type: z.literal("last"), count: z.number().int().positive().max(50) }),
+  z.object({
+    type: z.literal("date"),
+    after: z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), {
+      message: "after must be a parseable date or datetime",
+    }),
+  }),
+]);
+
+const sliceEvidencePageSchema = z.object({
+  revision: z.string().regex(/^[0-9a-f]{64}$/).optional().describe(
+    "Source revision returned by the first page; REQUIRED with any non-zero cursor",
+  ),
+  range: sliceEvidenceRangeSchema.optional().describe(
+    "turns uses zero-based ordinal indices; last selects the newest N; date selects turns at/after a timestamp",
+  ),
+  cursor: z.number().int().nonnegative().optional().describe(
+    "The nextCursor returned by the previous page; repeat the same range",
+  ),
+  maxChars: z.number().int().min(2).max(SLICE_EVIDENCE_MAX_PAGE_CHARS).optional(),
+});
+
+export type SliceRawReader = (sliceId: string, batch?: WriteBatch) => Promise<string>;
+
+const defaultSliceRawReader: SliceRawReader = (sliceId, batch) =>
+  readSlicePart(sliceId, "core", batch);
+
+export interface SliceEvidenceToolOptions {
+  batch?: WriteBatch;
+  scope?: CaseReadScope;
+  reader?: SliceRawReader;
+}
+
+async function executeSliceEvidenceRead(
+  sliceId: string,
+  args: SliceEvidencePageInput,
+  options: SliceEvidenceToolOptions,
+): Promise<string> {
+  let raw: string;
+  try {
+    raw = await (options.reader ?? defaultSliceRawReader)(sliceId, options.batch);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return isAbsentReadError(error)
+      ? `(slice ${sliceId} was not found; no evidence was read)`
+      : `(slice ${sliceId} could not be read: ${message}; this is a read failure, not absence)`;
+  }
+  try {
+    const page = readSliceEvidencePage(raw, args);
+    if (page.containsTurnContent) {
+      options.scope?.recordEvidence(`records/${sliceId}`, {
+        revision: page.revision, coverage: "range",
+        rangeKey: JSON.stringify(args.range ?? null),
+        start: page.start, end: page.end, totalChars: page.totalChars,
+      });
+    }
+    const continuation = page.nextCursor === null
+      ? "COMPLETE: the selected evidence has been returned in full"
+      : `INCOMPLETE: call readSlice with the same range, revision=${page.revision} and cursor=${page.nextCursor}`;
+    return (
+      `Slice ${sliceId} — original semantic evidence (native generated sections omission-marked; stored raw record unchanged).\n` +
+      `Selected ${page.selectedTurns} of ${page.totalTurns} turns. Page characters [${page.start}, ${page.end}) of ${page.totalChars}.\n` +
+      `Source revision: ${page.revision}.\n` +
+      `${continuation}.\n\n${page.content}`
+    );
+  } catch (error) {
+    return `(invalid readSlice request: ${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+/** A fixed-slice reader: the model can page/range, never choose a filesystem path. */
+export function makeSliceReadTool(options: SliceEvidenceToolOptions & { sliceId: string }) {
+  return tool({
+    description:
+      "Read this pass's original slice evidence with bounded pages. Select zero-based turns, the last N, or a date range. " +
+      "Every page says COMPLETE or gives an explicit cursor; continue until complete when the evidence matters.",
+    inputSchema: sliceEvidencePageSchema,
+    execute: async (args: SliceEvidencePageInput) =>
+      executeSliceEvidenceRead(options.sliceId, args, options),
+  });
+}
+
+/** The research pass's id-based variant; ids still resolve only through slice paths. */
+export function makeCrossSliceReadTool(options: SliceEvidenceToolOptions = {}) {
+  return tool({
+    description:
+      "Read original slice evidence by slice id with bounded turn ranges and explicit cursor continuation. " +
+      "Concrete facts may come only from evidence actually returned by this tool or readCase.",
+    inputSchema: sliceEvidencePageSchema.extend({
+      sliceId: z.string().describe("YYYY-MM-DD-HHMM"),
+    }),
+    execute: async ({ sliceId, ...args }: SliceEvidencePageInput & { sliceId: string }) => {
+      if (!parseSliceId(sliceId)) return `(malformed slice id ${JSON.stringify(sliceId)})`;
+      return executeSliceEvidenceRead(sliceId, args, options);
+    },
+  });
 }
 
 /** Evidence-while-writing, mechanical: the triggering slice id rides every landed body. */
@@ -230,17 +468,200 @@ export function extractProcessedMarkerIds(agentMd: string, prefix: string): Set<
  *   that differs means the case moved under the caller: the rewrite is
  *   refused, structured (`rewrite_conflict`). Absent the parameter, the
  *   window rule alone decides.
- * - `appendTail` and `addPiece` are always allowed; `open` creates a new
- *   file. `close` is RETIRED — sealing is the window closing, nobody's act.
+ * - `appendTail` grows settled history without reopening it; `addPiece`
+ *   creates a NEW file and refuses same-date/title collisions; `open` creates
+ *   a new case. `close` is RETIRED — sealing is the window closing, time's act.
  * - `open` refuses a `hypotheses` case whose body carries no falsification
  *   condition (§B.6) — the entry guard owns the check so every writer
  *   (field, HQ, the passes) meets the same bar.
  * - `appendTail` normalizes its line to ONE line (whitespace collapse) and
  *   reports the collapse in the outcome's warnings.
  *
- * EVERY write restamps `updated` to the write instant (ISO) — the model
- * never touches the stamp.
+ * Open and whole-index rewrites restamp `updated`; tail supplements and
+ * _current.md revisions deliberately do not reopen the historical body window.
  */
+export interface CaseIndexRead {
+  category: CaseCategory;
+  caseName: string;
+  path: string;
+  currentPath: string;
+  content: string;
+  currentContent: string | null;
+  /** Full-fidelity content version: the exact index bytes read, not a timestamp. */
+  revision: string;
+  currentRevision?: string | null;
+  /** null means unavailable, never an empty case. */
+  pieceInventory?: string[] | null;
+}
+
+export interface CaseEvidenceRead {
+  revision: string;
+  coverage: "full" | "range";
+  path?: string;
+  rangeKey?: string;
+  start?: number;
+  end?: number;
+  totalChars?: number;
+}
+
+/** Run-local receipts produced only by successful storage reads. */
+export interface CaseReadScope {
+  recordIndexRead(read: CaseIndexRead): void;
+  getIndexRead(category: CaseCategory, caseName: string): CaseIndexRead | undefined;
+  recordEvidence(ref: string, proof?: CaseEvidenceRead): void;
+  hasEvidence(ref: string): boolean;
+  getEvidenceReads(ref: string): CaseEvidenceRead[];
+}
+
+export function createCaseReadScope(): CaseReadScope {
+  const reads = new Map<string, CaseIndexRead>();
+  const evidence = new Set<string>();
+  const proofs = new Map<string, CaseEvidenceRead[]>();
+  return {
+    recordIndexRead(read) {
+      reads.set(`${read.category}/${read.caseName}`, read);
+      evidence.add(`${read.category}/${read.caseName}`);
+      proofs.set(`${read.category}/${read.caseName}`, [{ revision: read.revision, coverage: "full", path: read.path }]);
+    },
+    getIndexRead(category, caseName) {
+      return reads.get(`${category}/${caseName}`);
+    },
+    recordEvidence(ref, proof) {
+      const normalized = normalizeEvidenceRef(ref);
+      if (normalized) {
+        evidence.add(normalized);
+        if (proof) {
+          const previous = proofs.get(normalized) ?? [];
+          proofs.set(normalized, [...previous.filter((entry) => entry.revision === proof.revision), proof]);
+        }
+      }
+    },
+    hasEvidence(ref) {
+      const normalized = normalizeEvidenceRef(ref);
+      return normalized !== null && evidence.has(normalized);
+    },
+    getEvidenceReads(ref) {
+      const normalized = normalizeEvidenceRef(ref);
+      return normalized ? [...(proofs.get(normalized) ?? [])] : [];
+    },
+  };
+}
+
+export function requireCaseIndexRead(
+  scope: CaseReadScope,
+  category: CaseCategory,
+  caseName: string,
+): CaseIndexRead {
+  const read = scope.getIndexRead(category, caseName);
+  if (!read) {
+    throw new Error(
+      `case ${category}/${caseName} has no successful full index read in this run — ` +
+      "call readCase first; manifest membership and model-supplied receipts are not proof",
+    );
+  }
+  return read;
+}
+
+function normalizeEvidenceRef(ref: string): string | null {
+  const text = ref.trim();
+  if (!text || /[\r\n]/.test(text)) return null;
+  const recordId = text.startsWith("records/") ? text.slice("records/".length) : text;
+  if (parseSliceId(recordId) && (text === recordId || text.startsWith("records/"))) {
+    return `records/${recordId}`;
+  }
+  const parsed = parseCaseRef(text);
+  if (!parsed) return null;
+  if (parsed.kind === "case") return `${parsed.category}/${parsed.caseName}`;
+  if (parsed.kind === "piece") {
+    return `${parsed.category}/${parsed.caseName}/${parsed.pieceFileName.replace(/\.md$/, "")}`;
+  }
+  return `legacy/${parsed.name}`;
+}
+
+function isAbsentReadError(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === "ENOENT") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /^(File not found|Directory not found)/.test(message) || /\bENOENT\b/.test(message);
+}
+
+async function readOptionalCaseFile(
+  path: string,
+  batch: WriteBatch | undefined,
+  fresh: boolean,
+): Promise<string | null> {
+  try {
+    return await fsReadFile(path, batch, { fresh });
+  } catch (error) {
+    if (isAbsentReadError(error)) return null;
+    throw error;
+  }
+}
+
+/** Read the complete index plus its current view; only success becomes a receipt. */
+export async function readCaseIndexForScope(input: {
+  category: CaseCategory;
+  caseName: string;
+  batch?: WriteBatch;
+  scope?: CaseReadScope;
+  fresh?: boolean;
+}): Promise<CaseIndexRead> {
+  const path = caseIndexPath(input.category, input.caseName);
+  const currentPath = caseCurrentPath(input.category, input.caseName);
+  const content = await fsReadFile(path, input.batch, { fresh: input.fresh === true });
+  const currentContent = await readOptionalCaseFile(
+    currentPath,
+    input.batch,
+    input.fresh === true,
+  );
+  const read: CaseIndexRead = {
+    category: input.category,
+    caseName: input.caseName,
+    path,
+    currentPath,
+    content,
+    currentContent,
+    revision: caseStorageRevision(content),
+    currentRevision: currentContent === null ? null : caseStorageRevision(currentContent),
+    pieceInventory: await readCasePieceInventory(input.category, input.caseName, input.batch),
+  };
+  input.scope?.recordIndexRead(read);
+  return read;
+}
+
+/** Tree-backed on GitHub; no per-piece content fetches. */
+async function readCasePieceInventory(category: CaseCategory, caseName: string, batch?: WriteBatch): Promise<string[] | null> {
+  const directory = caseIndexPath(category, caseName).replace(/\/index\.md$/, "");
+  let paths: string[];
+  try {
+    paths = (await fsListFiles(directory)).filter((entry) => entry.type === "file")
+      .map((entry) => `${directory}/${entry.name}`);
+  } catch (error) {
+    if (isAbsentReadError(error)) paths = [];
+    else return null;
+  }
+  const isPiece = (path: string) => /^\d{4}-\d{2}-\d{2}-.+\.md$/.test(path.slice(directory.length + 1));
+  const pieces = new Set(paths.filter(isPiece));
+  for (const [path, content] of batch?.entries ?? []) {
+    if (!path.startsWith(`${directory}/`) || path.slice(directory.length + 1).includes("/") || !isPiece(path)) continue;
+    if (content === null) pieces.delete(path); else pieces.add(path);
+  }
+  return [...pieces].sort();
+}
+
+function currentReadBasis(read: CaseIndexRead, scope?: CaseReadScope): CaseCurrentBasis {
+  return {
+    indexRevision: read.revision,
+    pieces: (read.pieceInventory ?? []).map((path) => {
+      const ref = path.replace(/^memory\//, "").replace(/\.md$/, "");
+      const proof = scope?.getEvidenceReads(ref).find((entry) => entry.coverage === "full");
+      return { path, revision: proof?.revision ?? null };
+    }),
+  };
+}
+
 export type CaseWriteIntent =
   | { action: "open"; category: CaseCategory; caseName: string; body: string }
   | {
@@ -248,36 +669,83 @@ export type CaseWriteIntent =
       category: CaseCategory;
       caseName: string;
       body: string;
-      /** Optimistic concurrency: the `updated` stamp the caller based its
-       *  rewrite on. A different stamp on disk → structured refusal. */
       expectedUpdated?: string;
+      /** Exact index bytes read before drafting; scoped model writes always use it. */
+      expectedRevision?: string;
     }
-  | { action: "appendTail"; category: CaseCategory; caseName: string; line: string }
-  | { action: "addPiece"; category: CaseCategory; caseName: string; title: string; body: string };
+  | {
+      action: "appendTail";
+      category: CaseCategory;
+      caseName: string;
+      line: string;
+      expectedRevision?: string;
+    }
+  | {
+      action: "addPiece";
+      category: CaseCategory;
+      caseName: string;
+      title: string;
+      body: string;
+      expectedRevision?: string;
+    }
+  | {
+      action: "reviseUnderstanding";
+      category: CaseCategory;
+      caseName: string;
+      body: string;
+      evidence: string[];
+      expectedRevision?: string;
+    };
 
 export interface CaseWriteOutcome {
   /** The repo-relative path written. */
   path: string;
-  /** True when a new file was created (open / addPiece). */
+  /** True when a new file was created (open / addPiece / first current view). */
   created: boolean;
+  /** True when an identical retry required no write. */
+  noop?: boolean;
   /** Non-fatal write-time adjustments the caller may surface — e.g. a tail
    *  line whose line breaks were collapsed to keep it one line. */
   warnings?: string[];
 }
 
+const pendingCaseBatchBases = new WeakMap<WriteBatch, Promise<void>>();
+
+/** Pin before fresh comparisons; flush must never rebase validated old bytes onto a newer HEAD. */
+async function ensureCaseBatchBasis(batch?: WriteBatch): Promise<void> {
+  if (resolveDataSource() !== "github") return;
+  if (!batch) {
+    throw new WriteRefusal("commit_failed", "GitHub case writes require an explicit batch with a guarded HEAD basis; queue and flush the batch instead of writing directly");
+  }
+  if (batch.baseHeadSha !== undefined) {
+    if (!batch.baseHeadSha.trim()) throw new WriteRefusal("commit_failed", "The case write batch has an empty HEAD basis");
+    return;
+  }
+  const existing = pendingCaseBatchBases.get(batch);
+  if (existing) return existing;
+  const pending = (async () => {
+    const { repo, owner } = getRepoConfig();
+    const head = await getGitHubReadHead(repo, owner, { fresh: true });
+    if (!head.headSha?.trim()) throw new WriteRefusal("commit_failed", "The GitHub HEAD basis could not be resolved; no case write was queued");
+    // Another subsystem may have pinned the shared batch while this read was in flight.
+    if (batch.baseHeadSha === undefined) batch.baseHeadSha = head.headSha;
+  })();
+  pendingCaseBatchBases.set(batch, pending);
+  try { await pending; } finally { pendingCaseBatchBases.delete(batch); }
+}
+
 /**
  * Apply one write intent: per-case lock (`doc:<分类>/<case名>`, §A.3.4), a
- * FRESH read of the case's index.md inside the lock, the time guards
- * (optimistic `expectedUpdated` check first, then the write window), the
- * pure op, a mechanical `updated` restamp, serialize, write through the
- * batch-aware fs. Throws on every contract violation — the caller records
- * the refusal as a visible skip (a CaseWriteRefusal carries a structured
- * `code`; any other Error is a plain contract violation).
+ * FRESH read of the case's index.md inside the lock, exact-content/read-scope
+ * guards, the time guards, then the pure op and batch-aware write. Full-body
+ * writes restamp `updated`; supplements/current views do not. Violations throw;
+ * the caller records the refusal (structured code, or a plain contract Error).
  */
 export async function applyCaseWriteIntent(
   intent: CaseWriteIntent,
   date: string,
   batch?: WriteBatch,
+  readScope?: CaseReadScope,
 ): Promise<CaseWriteOutcome> {
   const { category, caseName } = intent;
   if (!isCaseCategory(category)) {
@@ -293,18 +761,27 @@ export async function applyCaseWriteIntent(
   const indexPath = caseIndexPath(category, caseName);
 
   return withSliceLock(`doc:${identity}`, async () => {
+    await ensureCaseBatchBasis(batch);
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
-    let currentRaw: string | null = null;
-    try {
-      currentRaw = await fsReadFile(indexPath, batch, { fresh: true });
-    } catch {
-      currentRaw = null; // no index.md yet — the case does not exist (in this root)
+    const scopedRead = intent.action === "open" || !readScope
+      ? undefined
+      : requireCaseIndexRead(readScope, category, caseName);
+    const expectedRevision = scopedRead?.revision ??
+      ("expectedRevision" in intent ? intent.expectedRevision : undefined);
+    const currentRaw = await readOptionalCaseFile(indexPath, batch, true);
+    const current = currentRaw === null
+      ? null
+      : parseCaseDoc(currentRaw, { category, caseName, fileName: "index.md" });
+
+    if (intent.action !== "open" && expectedRevision !== undefined &&
+        (currentRaw === null || caseStorageRevision(currentRaw) !== expectedRevision)) {
+      throw new CaseWriteRefusal(
+        "rewrite_conflict",
+        `${intent.action} refused: ${identity} changed since its successful full index read. ` +
+        "Read the current index with readCase and base the write on that fresh content; never force the old basis.",
+      );
     }
-    const current =
-      currentRaw === null
-        ? null
-        : parseCaseDoc(currentRaw, { category, caseName, fileName: "index.md" });
 
     switch (intent.action) {
       case "open": {
@@ -322,7 +799,7 @@ export async function applyCaseWriteIntent(
           );
         }
         const doc = createCase({ category, caseName, opened: date, body: intent.body });
-        await fsWriteFile(indexPath, serializeCaseDoc({ ...doc, updated: nowIso }), batch);
+        await fsWriteFile(indexPath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), batch);
         return { path: indexPath, created: true };
       }
       case "rewriteIndex": {
@@ -332,8 +809,6 @@ export async function applyCaseWriteIntent(
             `case ${identity} does not exist — open it first (action: open) with the full body.`,
           );
         }
-        // Optimistic concurrency (ETag on the resolved stamp — surrounding
-        // quotes tolerated: callers copy the value out of a raw header).
         if (intent.expectedUpdated !== undefined) {
           const expected = intent.expectedUpdated.trim().replace(/^['"]|['"]$/g, "");
           if (current.updated !== expected) {
@@ -345,18 +820,16 @@ export async function applyCaseWriteIntent(
             );
           }
         }
-        // The write window: a whole-body rewrite lands only while the case
-        // is still being worked on. Past the window the 正文 is settled.
-        if (!isWithinWriteWindow(current.updated, nowMs)) {
+        if (!isWithinWriteWindow(current.bodyUpdated, nowMs)) {
           throw new CaseWriteRefusal(
             "rewrite_window_closed",
             `rewriteIndex refused: ${identity} is outside its write window ` +
-              `(last write ${current.updated || "unknown"}). The body is settled — ` +
-              "re-read it, then append a dated correction/supplement (appendTail) or open a new piece (addPiece).",
+              `(last full-body write ${current.updated || "unknown"}). The body is settled — ` +
+              "re-read it, then append a dated correction/supplement (appendTail), open a new piece (addPiece), or revise _current.md.",
           );
         }
         const next = rewriteBody(current, intent.body);
-        await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso }), batch);
+        await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso, bodyUpdated: nowIso }), batch);
         return { path: indexPath, created: false };
       }
       case "appendTail": {
@@ -366,16 +839,13 @@ export async function applyCaseWriteIntent(
             `case ${identity} does not exist — open it first (action: open) with the full body.`,
           );
         }
-        // Always allowed — past the window the tail is the only in-place
-        // growth; inside the window a dated line is harmless. The line is
-        // normalized to ONE line: a multi-line line would corrupt the
-        // dated-tail serialization on the next parse.
         const { line, collapsed } = normalizeTailLine(intent.line);
         if (!line) {
           throw new Error(`appendTail refused: ${identity} — the line is empty once flattened to one line`);
         }
         const next = appendTail(current, { date, text: line });
-        await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso }), batch);
+        // A supplement never restamps the body window: settled history stays settled.
+        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
         return {
           path: indexPath,
           created: false,
@@ -391,15 +861,129 @@ export async function applyCaseWriteIntent(
             `case ${identity} does not exist — open it first (action: open) with the full body.`,
           );
         }
-        // Always allowed (a NEW file). buildPieceFileName inside createDoc
-        // throws on an illegal title.
         const doc = createDoc({ category, caseName, date, title: intent.title, body: intent.body });
         const piecePath = casePiecePath(category, caseName, doc.fileName);
-        await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso }), batch);
+        const existingRaw = await readOptionalCaseFile(piecePath, batch, true);
+        if (existingRaw !== null) {
+          const existing = parseCaseDoc(existingRaw, {
+            category,
+            caseName,
+            fileName: doc.fileName,
+          });
+          const same = existing.opened === doc.opened &&
+            existing.closed === doc.closed &&
+            existing.body === doc.body &&
+            existing.preserved === doc.preserved &&
+            JSON.stringify(existing.tail) === JSON.stringify(doc.tail);
+          if (same) return { path: piecePath, created: false, noop: true };
+          throw new WriteRefusal(
+            "already_exists",
+            `piece ${piecePath} already exists with different content; it was not overwritten. ` +
+            "Choose a new piece title or read the existing piece and cite it in a dated tail supplement.",
+          );
+        }
+        await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), batch);
         return { path: piecePath, created: true };
+      }
+      case "reviseUnderstanding": {
+        if (!current) {
+          throw new WriteRefusal(
+            "not_found_on_update",
+            `case ${identity} does not exist — open it first (action: open) with the full body.`,
+          );
+        }
+        if (!readScope || !scopedRead) {
+          throw new Error(
+            `reviseUnderstanding refused: ${identity} requires a run-local read scope and a successful full index read`,
+          );
+        }
+        const normalized = intent.evidence.map(normalizeEvidenceRef);
+        const unread = intent.evidence.filter((ref, index) =>
+          normalized[index] === null || !readScope.hasEvidence(ref)
+        );
+        if (intent.evidence.length === 0 || unread.length > 0) {
+          throw new Error(
+            `reviseUnderstanding refused: ${identity} has unread or invalid evidence refs: ` +
+            `${unread.join(", ") || "(none supplied)"}. Read each records/... or case ref with readSlice/readCase first; user text is not a receipt.`,
+          );
+        }
+        const evidence = normalized.filter((ref): ref is string => ref !== null);
+        const previousRaw = await readOptionalCaseFile(scopedRead.currentPath, batch, true);
+        const previousRevision = previousRaw === null ? null : caseStorageRevision(previousRaw);
+        const expectedCurrentRevision = scopedRead.currentRevision === undefined
+          ? scopedRead.currentContent === null ? null : caseStorageRevision(scopedRead.currentContent)
+          : scopedRead.currentRevision;
+        if (previousRevision !== expectedCurrentRevision) {
+          throw new CaseWriteRefusal(
+            "rewrite_conflict",
+            `reviseUnderstanding refused: ${identity}/_current.md changed since it was read. ` +
+            "Read the case again so the previous current view is preserved as history before revising it.",
+          );
+        }
+        const previous = previousRaw === null ? null : parseCaseCurrent(previousRaw);
+        const inventory = await readCasePieceInventory(category, caseName, batch);
+        if (inventory === null || scopedRead.pieceInventory == null) {
+          throw new Error("reviseUnderstanding refused: case piece inventory is unavailable; read the case again before updating its current basis");
+        }
+        if (JSON.stringify(inventory) !== JSON.stringify(scopedRead.pieceInventory)) {
+          throw new CaseWriteRefusal("rewrite_conflict", "case piece inventory changed; read the case again before revising current understanding");
+        }
+        const nextInput = { asOf: date, evidence, body: intent.body, basis: currentReadBasis(scopedRead, readScope) };
+        if (previous && isSameCaseCurrent(previous, nextInput)) {
+          return { path: scopedRead.currentPath, created: false, noop: true };
+        }
+        const next = reviseCaseCurrent(previous, nextInput);
+        await fsWriteFile(scopedRead.currentPath, serializeCaseCurrent(next), batch);
+        return { path: scopedRead.currentPath, created: previousRaw === null };
       }
     }
   });
+}
+
+export const currentUnderstandingSchema = z.object({
+  body: z.string().min(1).describe("Free-prose current understanding, with uncertainty and competing explanations labeled"),
+  evidence: z.array(z.string().min(1)).min(1).max(20).describe(
+    "records/YYYY-MM-DD-HHMM or case refs actually returned by readSlice/readCase in this run",
+  ),
+});
+
+export type CurrentUnderstandingReport = z.infer<typeof currentUnderstandingSchema>;
+
+/** Apply an optional report field, refreshing the basis after a primary index write. */
+export async function applyCaseCurrentUnderstanding(input: {
+  category: CaseCategory;
+  caseName: string;
+  current: CurrentUnderstandingReport;
+  date: string;
+  batch?: WriteBatch;
+  scope: CaseReadScope;
+  refreshRead?: boolean;
+}): Promise<CaseWriteOutcome> {
+  if (!isCaseCategory(input.category) || !isValidCaseName(input.caseName)) {
+    throw new Error("reviseUnderstanding requires a canonical case identity before any storage access");
+  }
+  await ensureCaseBatchBasis(input.batch);
+  if (input.refreshRead) {
+    await readCaseIndexForScope({
+      category: input.category,
+      caseName: input.caseName,
+      batch: input.batch,
+      scope: input.scope,
+      fresh: true,
+    });
+  }
+  return applyCaseWriteIntent(
+    {
+      action: "reviseUnderstanding",
+      category: input.category,
+      caseName: input.caseName,
+      body: input.current.body,
+      evidence: input.current.evidence,
+    },
+    input.date,
+    input.batch,
+    input.scope,
+  );
 }
 
 /**
@@ -410,28 +994,53 @@ export async function applyCaseWriteIntent(
  * (read-your-writes) — a case opened earlier this round reads back, and a
  * case queued for deletion reports itself as gone.
  */
-export function makeCaseReadTool(batch?: WriteBatch) {
+export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
   return tool({
     description:
-      "Read a case by its two-segment reference: 'category/caseName' → the case's index.md; " +
-      "'category/caseName/pieceTitle' → one dated piece. Returns the full text, or a dead-link note.",
+      "Read a case by 'category/caseName' (full index.md) or 'category/caseName/pieceTitle'. " +
+      "An existing _current.md appears first; the unchanged full historical index follows under its own label. " +
+      "Only a successful full new-root index read is an update receipt; dead links and read failures are not.",
     inputSchema: z.object({ ref: z.string() }),
     execute: async ({ ref }: { ref: string }) => {
       const parsed = parseCaseRef(ref);
       if (!parsed) return `(unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>])`;
       for (const path of resolveCaseRefPaths(parsed)) {
         try {
-          return await fsReadFile(path, batch);
+          if (parsed.kind === "case" && path === caseIndexPath(parsed.category, parsed.caseName)) {
+            const read = await readCaseIndexForScope({
+              category: parsed.category,
+              caseName: parsed.caseName,
+              batch,
+              scope,
+            });
+            const warnings = read.currentContent === null ? [] : caseCurrentFreshnessWarnings(
+              parseCaseCurrent(read.currentContent), currentReadBasis(read, scope),
+            );
+            if (read.pieceInventory === null) warnings.push("case piece inventory is unavailable; freshness cannot be verified");
+            return renderCaseWithCurrent(read.content, read.currentContent, { freshnessWarnings: warnings });
+          }
+          const content = await fsReadFile(path, batch);
+          if (parsed.kind === "case") {
+            scope?.recordEvidence(`${parsed.category}/${parsed.caseName}`);
+          } else if (parsed.kind === "piece") {
+            scope?.recordEvidence(
+              `${parsed.category}/${parsed.caseName}/${parsed.pieceFileName.replace(/\.md$/, "")}`,
+              { revision: caseStorageRevision(content), coverage: "full", path },
+            );
+          } else {
+            scope?.recordEvidence(`legacy/${parsed.name}`);
+          }
+          return content;
         } catch (e) {
-          // A queued DELETE shadows the file for this round — say so plainly
-          // (a dead link would send the model hunting for a rename).
           if (e instanceof Error && e.message.includes("deleted in this batch")) {
             return `(deleted in this round: ${ref} was queued for deletion — treat it as gone; do not cite or update it.)`;
           }
-          continue;
+          if (!isAbsentReadError(e)) {
+            return `(read failure for ${ref} at ${path}: ${e instanceof Error ? e.message : String(e)}; this is not absence and is not a read receipt)`;
+          }
         }
       }
-      return `(dead link: ${ref} — found under neither the new nor the legacy root; it is not in the current manifest.)`;
+      return `(dead link: ${ref} — found under neither the new nor the legacy root; no successful read was recorded.)`;
     },
   });
 }
@@ -491,22 +1100,23 @@ const caseWriterSchema = z.object({
     .array(
       z.object({
         action: z
-          .enum(["skip", "open", "updateIndex", "appendTail", "addPiece"])
+          .enum(["skip", "open", "updateIndex", "appendTail", "addPiece", "reviseUnderstanding"])
           .describe(
-            "skip: nothing worth writing (a legal, often correct answer). " +
-            "open: create a NEW case (must not exist yet). " +
-            "updateIndex: rewrite the body of an EXISTING case still inside its write window (body = the new full understanding). " +
-            "appendTail: ONE dated supplement line — the only in-place growth once the write window has closed. " +
-            "addPiece: a dated piece inside the case (always allowed).",
+            "skip: nothing worth writing (a legal answer; may still carry currentUnderstanding). " +
+            "open: create a NEW case. updateIndex: rewrite an existing in-window index. " +
+            "appendTail: ONE dated supplement that never reopens the settled body. " +
+            "addPiece: a dated piece. reviseUnderstanding: change only _current.md (requires currentUnderstanding).",
           ),
         category: z.enum(CASE_CATEGORIES),
         caseName: z.string().describe("The case name — legal: no 4-digit lead, no separators/traversal/edge whitespace."),
-        /** open/updateIndex/addPiece: the body (updateIndex = the WHOLE new body). */
+        /** open/updateIndex/addPiece: the historical body (updateIndex = the WHOLE new body). */
         body: z.string().optional(),
         /** appendTail only. */
         line: z.string().optional(),
         /** addPiece only — the piece title (date is stamped mechanically). */
         title: z.string().optional(),
+        /** Optional independent current view; may accompany any historical action or skip. */
+        currentUnderstanding: currentUnderstandingSchema.optional(),
       }),
     )
     .max(20),
@@ -517,22 +1127,24 @@ const CASE_WRITER_SYSTEM = buildSubAgentSystem(`You are the case writer of a per
 
 ${MEMORY_IS_GIT_RULE}
 
-A conversation slice just closed. You are shown its content (excerpt) and the case manifest (the whole memory tree, paths only). Judge for yourself WHICH cases this slice touched — read the current text of the ones you consider via readCase BEFORE naming them in a write. You have no write tools: you return write-intents that engineering validates and applies.
+A conversation slice just closed. You have a compact excerpt plus readSlice for its original semantic evidence, and the case manifest for discovery. readSlice is bound to this slice: use zero-based turn ranges and follow every continuation cursor when a turning point or long message matters. Judge WHICH cases this slice touched, but call readCase successfully on every existing target BEFORE naming it in a write. Manifest membership is not a read receipt. You return write-intents; engineering validates and applies them.
 
 ## Task
 
 Per case you judge touched:
-- The case does not exist and this slice's content deserves a durable home → open (body = the index.md body: what it is, what this slice established).
-- The case exists and is still inside its write window (check the header's updated stamp) → updateIndex: rewrite the body with the case's CURRENT full understanding (this slice's news merged in).
-- The case's write window has closed → appendTail: ONE dated line (when it fits in a sentence) or addPiece (when it stands as a piece of its own).
-- Nothing worth writing → skip. Skipping EVERYTHING is a legal, often correct outcome: restraint is the default, a case is long-term memory, not a chat log.
+- A new durable home → open (body = the historical index.md body).
+- An existing in-window index → updateIndex with the whole new historical body.
+- A settled index → appendTail or addPiece; neither reopens the historical body for rewriting.
+- Revise the independent current view → reviseUnderstanding with currentUnderstanding { body, evidence }. You may also attach currentUnderstanding to another action or skip. This writes free-prose _current.md, never the frozen index. Its as-of date is mechanical, and the previous current view becomes dated history.
+- Nothing worth writing → skip (an empty run is legal).
 
 ## Rules
 
-1. Ground every write in the slice excerpt and what you actually read (readCase). No speculation, no boilerplate.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence slice ids are stamped mechanically.
-3. Names are permanent: a case name is born fixed. Content beyond a case's scope → open a NEW case (and say so in reasoning), never stretch a name.
-4. ${DOC_WRITE_WINDOW_RULE} Never restate history a case already carries — fold it in silently.
+1. Ground facts in evidence actually returned by readSlice/readCase. Interpretations, questions, and competing explanations are allowed when labeled; do not invent evidence.
+2. currentUnderstanding.evidence must name only records/... or case refs you actually read in this run. It works for every category, not only people; use free prose, not a trait template.
+3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping. Cite evidence refs explicitly for a current view.
+4. Names are permanent: content beyond a case's scope → open a NEW case, never stretch a name.
+5. ${DOC_WRITE_WINDOW_RULE} Tail supplements and current-view revisions never reopen a settled index.
 
 ## Output
 
@@ -586,9 +1198,9 @@ export async function runLibrarianPass(
   const { model, closedSliceId, excerpt, date, batch } = input;
   const manifest = input.manifest ?? { truncated: false, tree: {} };
   const skipped: Array<{ name: string; reason: string }> = [];
-  // The update gate sees BOTH the round-start manifest AND this round's queued
-  // writes — a case opened earlier this round is updateable in the same round
-  // (readCase(batch) already reads it back; the gate must not contradict it).
+  const scope = createCaseReadScope();
+  // Manifest + batch are used only to reject an accidental open of an existing
+  // case. Every update separately requires a successful read in this scope.
   const existing = new Set([
     ...caseIdentsOfManifest(manifest.tree),
     ...caseIdentsOfBatch(batch),
@@ -599,9 +1211,11 @@ export async function runLibrarianPass(
 focus: ${excerpt.focus || "(none)"}
 summary: ${excerpt.summary || "(none)"}
 
+${sliceExcerptNotice(excerpt)}
+
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
-## Case manifest (the full survey — judging which cases this slice touched is your job; readCase the ones you may write)
+## Case manifest (paths are discovery only, never read receipts; readCase every existing target)
 
 ${renderManifest(manifest.tree)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
@@ -614,7 +1228,8 @@ Report one decision per case as instructed.`;
     prompt,
     maxSteps: 50,
     tools: {
-      readCase: makeCaseReadTool(batch),
+      readCase: makeCaseReadTool(batch, scope),
+      readSlice: makeSliceReadTool({ sliceId: closedSliceId, batch, scope }),
       caseWriterOutput: tool({
         description: "Report the per-case write decisions.",
         inputSchema: caseWriterSchema,
@@ -636,49 +1251,65 @@ Report one decision per case as instructed.`;
 
   const written: string[] = [];
   for (const op of result.report.cases) {
-    if (op.action === "skip") continue;
-    // Names arrive from the model — normalize to a portable form BEFORE any
-    // lookup or validation (2026-10-12 discipline; sanitizeCaseSegment maps
-    // ":" to the full-width "：" and strips the other Windows-invalid set).
-    // The identity below therefore names the case as it will exist on disk.
+    if (op.action === "skip" && !op.currentUnderstanding) continue;
     const caseName = sanitizeCaseSegment(op.caseName);
     const identity = `${op.category}/${caseName}`;
-    // Read-before-write, structural: updating a case that is not in the
-    // manifest means the writer never saw its current state.
-    if (op.action !== "open" && !existing.has(identity)) {
-      skipped.push({ name: identity, reason: "case not in the manifest — readCase it first (dead link?)" });
-      continue;
-    }
     if (op.action === "open" && existing.has(identity)) {
-      skipped.push({ name: identity, reason: "case already exists — use updateIndex / appendTail / addPiece" });
+      skipped.push({ name: identity, reason: "case already exists — readCase it, then updateIndex / appendTail / addPiece / reviseUnderstanding" });
       continue;
     }
+    let primary: CaseWriteIntent | null = null;
     try {
-      let intent: CaseWriteIntent;
       switch (op.action) {
         case "open":
           if (!op.body?.trim()) throw new Error("open requires a body (the index.md body)");
-          intent = { action: "open", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "open", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "updateIndex":
           if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new body)");
-          intent = { action: "rewriteIndex", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "rewriteIndex", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "appendTail":
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
-          intent = { action: "appendTail", category: op.category, caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
+          primary = { action: "appendTail", category: op.category, caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
           break;
         case "addPiece":
           if (!op.title?.trim() || !op.body?.trim()) {
             throw new Error("addPiece requires a title and a body");
           }
-          intent = { action: "addPiece", category: op.category, caseName, title: sanitizeCaseSegment(op.title), body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "addPiece", category: op.category, caseName, title: sanitizeCaseSegment(op.title), body: stampEvidence(op.body, closedSliceId) };
+          break;
+        case "reviseUnderstanding":
+          if (!op.currentUnderstanding) {
+            throw new Error("reviseUnderstanding requires currentUnderstanding { body, evidence }");
+          }
+          break;
+        case "skip":
           break;
       }
-      const applied = await applyCaseWriteIntent(intent, date, batch);
-      written.push(applied.path.replace(/^memory\//, ""));
+      if (primary) {
+        const applied = await applyCaseWriteIntent(primary, date, batch, scope);
+        if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
+      }
     } catch (e) {
       skipped.push({ name: identity, reason: e instanceof Error ? e.message : String(e) });
+      continue;
+    }
+    if (op.currentUnderstanding) {
+      try {
+        const applied = await applyCaseCurrentUnderstanding({
+          category: op.category,
+          caseName,
+          current: op.currentUnderstanding,
+          date,
+          batch,
+          scope,
+          refreshRead: primary !== null,
+        });
+        if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
+      } catch (e) {
+        skipped.push({ name: `${identity}/_current.md`, reason: e instanceof Error ? e.message : String(e) });
+      }
     }
   }
 
@@ -693,7 +1324,8 @@ const scribeSchema = z.object({
       z.object({
         id: z.string().describe("The marker id this entry answers."),
         /** The case's new full body (open/updateIndex) or ONE dated tail line. */
-        body: z.string().describe("The prose, grounded in the slice excerpt and the marker note."),
+        body: z.string().describe("The historical prose, grounded in actual evidence and the marker note."),
+        currentUnderstanding: currentUnderstandingSchema.optional(),
       }),
     )
     .max(20),
@@ -704,21 +1336,19 @@ const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memo
 
 ${MEMORY_IS_GIT_RULE}
 
-You are shown: the slice excerpt, and per marker the marker itself plus the CURRENT index.md of its target case when one exists. You have already read everything you may write about.
+You are shown: a compact slice excerpt, and per marker the marker itself plus the full current index.md and any _current.md of its target. Those successful preloads are your case read receipts. readSlice is bound to this slice for any earlier turn, long message, or turning point the excerpt omitted; use ranges and continuation explicitly.
 
 ## Task
 
-One entry per marker — the body is:
-- a NEW case's opening body (what it is, what this slice established — tasks state WHAT, the date anchor, background);
-- or, for an EXISTING case still inside its write window (check the header's updated stamp), its new full body — the current understanding with this slice's news folded in (rewrite whole, do not append);
-- or, for a case whose write window has closed, ONE dated supplement line.
+One entry per marker — body is the NEW case's opening historical text, an IN-WINDOW case's whole new historical text, or a SETTLED case's ONE dated supplement. Optionally add currentUnderstanding { body, evidence } to revise only _current.md; the previous current view becomes dated history and the index stays separate.
 
 ## Rules
 
-1. Ground every entry in the slice excerpt and the marker note. No invention.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence slice ids are stamped mechanically.
-3. Never contradict shown existing text — fold the new fact in with its sense preserved.
-4. ${DOC_WRITE_WINDOW_RULE}
+1. Ground facts in the marker, the preloaded case text, and evidence actually returned by readSlice. Do not invent evidence; label interpretation, counterevidence, questions, and unknowns honestly.
+2. currentUnderstanding.evidence may cite only the preloaded target case or records/... read through readSlice in this run. Any category may have a free-prose current view.
+3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping; cite current-view evidence explicitly.
+4. Never contradict shown existing text silently — preserve contrary evidence and label your interpretation.
+5. ${DOC_WRITE_WINDOW_RULE} Tail supplements and current-view revisions never reopen a settled index.
 
 ## Output
 
@@ -741,6 +1371,7 @@ interface ScribeTarget {
   caseName: string;
   existed: boolean;
   currentText: string | null;
+  displayText: string | null;
 }
 
 /**
@@ -810,6 +1441,7 @@ export interface ScribePassResult {
 export async function runScribePass(input: ScribePassInput): Promise<ScribePassResult> {
   const { model, sliceId, excerpt, date, batch } = input;
   const skipped: Array<{ id: string; reason: string }> = [];
+  const scope = createCaseReadScope();
 
   let agentMd: string;
   try {
@@ -835,14 +1467,25 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
       continue;
     }
     let currentText: string | null = null;
+    let displayText: string | null = null;
     try {
-      currentText = await fsReadFile(
-        caseIndexPath(resolved.category, resolved.caseName),
+      const read = await readCaseIndexForScope({
+        category: resolved.category,
+        caseName: resolved.caseName,
         batch,
-        { fresh: true },
-      );
-    } catch {
-      currentText = null; // does not exist yet — will be opened
+        scope,
+        fresh: true,
+      });
+      currentText = read.content;
+      displayText = renderCaseWithCurrent(read.content, read.currentContent);
+    } catch (error) {
+      if (!isAbsentReadError(error)) {
+        skipped.push({
+          id: marker.id,
+          reason: `target read failed (not absence): ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
     }
     targets.push({
       marker,
@@ -850,19 +1493,20 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
       caseName: resolved.caseName,
       existed: currentText !== null,
       currentText,
+      displayText,
     });
   }
   if (targets.length === 0) return { ran: false, written: [], skipped };
 
   const markerBlocks = targets
-    .map(({ marker, category, caseName, existed, currentText }) => {
+    .map(({ marker, category, caseName, existed, displayText }) => {
       const head =
         `### marker ${marker.id} (kind=${marker.kind}${marker.docType ? `/${marker.docType}` : ""}` +
         `${marker.entityKind ? `/${marker.entityKind}` : ""})\n` +
         `title: ${marker.title}\nnote: ${marker.note || "(none)"}` +
         `${marker.dateAnchor ? `\ndateAnchor: ${marker.dateAnchor}` : ""}\n` +
-        `target case: ${category}/${caseName} (${existed ? "exists — current index.md below" : "to be opened"})`;
-      return currentText ? `${head}\n\n${currentText.trim()}` : head;
+        `target case: ${category}/${caseName} (${existed ? "exists — full index and current view below" : "to be opened"})`;
+      return displayText ? `${head}\n\n${displayText.trim()}` : head;
     })
     .join("\n\n");
 
@@ -872,6 +1516,8 @@ focus: ${excerpt.focus || "(none)"}
 summary: ${excerpt.summary || "(none)"}
 
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
+
+${sliceExcerptNotice(excerpt)}
 
 ## Markers to write (targets read before writing)
 
@@ -886,6 +1532,7 @@ Report one entry per marker as instructed.`;
     prompt,
     maxSteps: 50,
     tools: {
+      readSlice: makeSliceReadTool({ sliceId, batch, scope }),
       scribeOutput: tool({
         description: "Report the per-marker case entries.",
         inputSchema: scribeSchema,
@@ -938,16 +1585,12 @@ Report one entry per marker as instructed.`;
       if (!target.existed) {
         intent = { action: "open", category, caseName, body: stamped };
       } else {
-        // The write window decides the shape: inside → whole-body rewrite
-        // (with the scribe's pre-read stamp as the optimistic ETag); outside
-        // → one dated tail line. The in-lock guards are the backstop when
-        // the case moved between the pre-read and this write.
         const current = parseCaseDoc(target.currentText ?? "", {
           category,
           caseName,
           fileName: "index.md",
         });
-        intent = isWithinWriteWindow(current.updated, Date.now())
+        intent = isWithinWriteWindow(current.bodyUpdated, Date.now())
           ? {
               action: "rewriteIndex",
               category,
@@ -957,14 +1600,31 @@ Report one entry per marker as instructed.`;
             }
           : { action: "appendTail", category, caseName, line: stamped };
       }
-      const applied = await applyCaseWriteIntent(intent, date, batch);
-      written.push(applied.path.replace(/^memory\//, ""));
-      recordLines.push(
-        `${SCRIBE_RECORD_PREFIX} {"id":${JSON.stringify(entry.id)},"doc":${JSON.stringify(`${category}/${caseName}`)}}`,
-      );
+      const applied = await applyCaseWriteIntent(intent, date, batch, scope);
+      if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
     } catch (e) {
       skipped.push({ id: entry.id, reason: e instanceof Error ? e.message : String(e) });
+      continue;
     }
+    if (entry.currentUnderstanding) {
+      try {
+        const applied = await applyCaseCurrentUnderstanding({
+          category,
+          caseName,
+          current: entry.currentUnderstanding,
+          date,
+          batch,
+          scope,
+          refreshRead: true,
+        });
+        if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
+      } catch (e) {
+        skipped.push({ id: `${entry.id} (_current.md)`, reason: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    recordLines.push(
+      `${SCRIBE_RECORD_PREFIX} {"id":${JSON.stringify(entry.id)},"doc":${JSON.stringify(`${category}/${caseName}`)}}`,
+    );
   }
 
   // The mailbox bookkeeping: processed markers get a record line in the SAME

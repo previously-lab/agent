@@ -4,6 +4,7 @@
  * docs-tools.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
 
 const local = vi.hoisted(() => {
   const files = new Map<string, string>();
@@ -141,6 +142,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     useGithub: false,
     useDemo: false,
     sliceId: "2026-08-11-1115",
+    turnId: "turn-test",
+    readScopeId: "turn-test",
+    currentUserText: "current user text",
     recentTurns: [],
     timezone: "Asia/Shanghai",
     ...overrides,
@@ -169,7 +173,7 @@ describe("recallReadExecute — the user card and historical snapshots", () => {
     // The frozen legacy file exists on disk — the executor must NOT read it.
     local.files.set("memory/episodic/current-previously.md", "FROZEN legacy card");
     const out = await recallReadExecute({ ref: "people/user" }, opts());
-    expect(out).toBe(
+    expect(unwrapCaseReadEnvelope(out)).toBe(
       "## User profile\n\n- 自称 Dream\n\n## Self-model\n\nlive card.",
     );
   });

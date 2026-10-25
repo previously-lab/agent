@@ -36,7 +36,8 @@ import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type { InnerTurnInput, InnerTurnReport } from "@/lib/chat/turn-types";
-import { closeChildStream, reportInnerBubble } from "./steps";
+import { closeChildStream, ownRunId, reportInnerBubble } from "./steps";
+import { collectTaskAckIntents, type TaskAckIntent } from "@/lib/chat/task-followups";
 
 /**
  * The instance's answer = all assistant text the RUN produced (everything
@@ -87,6 +88,8 @@ export async function innerTurnWorkflow(
 
   let text = "";
   let finishReason = "error";
+  let error: string | undefined;
+  let taskAckIntents: TaskAckIntent[] = [];
   try {
     // The child's own stream — sendFinish:false + preventClose keep it open
     // until closeChildStream writes the lifecycle tail below, so the client's
@@ -101,6 +104,7 @@ export async function innerTurnWorkflow(
     });
     text = extractChildAnswer(result.messages, input.messages.length);
     finishReason = result.finishReason;
+    taskAckIntents = collectTaskAckIntents(result.messages.slice(1 + input.messages.length));
   } catch (err) {
     // The child never throws its way out of existence silently: the
     // orchestrator learns the failure as a `failed` bubble (finishReason
@@ -111,6 +115,7 @@ export async function innerTurnWorkflow(
     );
     text = "";
     finishReason = "error";
+    error = err instanceof Error ? err.message : String(err);
   }
 
   // Stream tail first, then the report: a client reading the child stream
@@ -122,6 +127,11 @@ export async function innerTurnWorkflow(
     replyTo: input.replyTo,
     text,
     finishReason,
+    ...(error ? { error } : {}),
+    ...(taskAckIntents.length > 0 ? {
+      sourceRunId: await ownRunId(),
+      taskAckIntents,
+    } : {}),
   };
   await reportInnerBubble(input.inboxToken, { kind: "bubble", ...report });
   // The return value is the report's channel of record (v0.32): the

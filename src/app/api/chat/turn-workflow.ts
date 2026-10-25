@@ -70,6 +70,7 @@ import {
   pollInnerRunReports,
 } from "./steps";
 import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
+import { collectTaskAckIntents, parseTaskAckMetadata, type TaskAckIntent } from "@/lib/chat/task-followups";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
 
@@ -79,13 +80,18 @@ export function buildTurnToolContext(
   sliceId: string,
   systemPrompt: string,
   includeImageAttachments: boolean,
+  scope?: { turnId: string; currentUserText: string },
 ): ToolContext {
+  const turnId = scope?.turnId ?? input.turnId;
   return {
     repo: input.repo,
     owner: input.owner,
     useGithub: input.useGithub,
     useDemo: input.useDemo,
     sliceId,
+    turnId,
+    readScopeId: turnId,
+    currentUserText: scope?.currentUserText ?? input.lastUserMessage,
     recentTurns: input.recentTurns,
     baseSystemPrompt: systemPrompt,
     mainModel: input.modelConfig,
@@ -759,11 +765,9 @@ The user and Previously built this space together: they look back, discuss, and 
  *   L3 sliceHeadBlock  — slice-start snapshot: local time, date anchors,
  *                        birth continuity, birth-evolution summary, drift hint
  *   L5 demoNotice      — static
- *   L6 dueTasksBlock   — the background stream's completion statements (tasks/
- *                        tail lines dated the user's local today); the LEAST
- *                        stable block (it can appear mid-slice when background
- *                        work lands), so it rides the tail where a change
- *                        costs the least prefix
+ *   L6 taskContextBlock — authoritative task candidates and pending results;
+ *                        reviewed on every turn without becoming mandatory
+ *                        nagging; the least stable block, so it rides the tail
  *
  * There is no L2 static-rules layer: the card/direction contract and the
  * GROUNDING RULE live in the charter in full, and each tool description
@@ -797,18 +801,16 @@ export function assembleSystemPrompt(opts: {
    * by splitIdentityPrompt; ""/undefined omits the layer entirely.
    */
   assistingBlock?: string;
+  /** Bounded adopted main-role craft; thinkDeep strips this role-specific block. */
+  craftBlock?: string;
   /**
    * Pre-built people/user/profile.md block (L1c — the user's OWN
    * self-description; its text states the precedence discipline), from
    * housekeeping; undefined omits the layer entirely.
    */
   userProfileBlock?: string;
-  /**
-   * Pre-built §A.3.3 delivery block (the background stream's completion
-   * statements — tasks/ tail lines dated the user's local today), from
-   * housekeeping; undefined omits the layer entirely.
-   */
-  dueTasksBlock?: string;
+  /** Authoritative task candidates and pending background result events. */
+  taskContextBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
   sliceHeadBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
@@ -821,8 +823,9 @@ export function assembleSystemPrompt(opts: {
     previouslyContent,
     directionBlock,
     assistingBlock,
+    craftBlock,
     userProfileBlock,
-    dueTasksBlock,
+    taskContextBlock,
     sliceHeadBlock,
     demoNotice,
     dateAnchor,
@@ -832,12 +835,13 @@ export function assembleSystemPrompt(opts: {
     SPACE_FICTION_BLOCK,
     directionBlock ?? "",
     assistingBlock ?? "",
+    craftBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
     userProfileBlock ?? "",
     sliceHeadBlock,
     demoNotice,
-    dueTasksBlock ?? "",
+    taskContextBlock ?? "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -955,14 +959,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // turn is what the NEXT turn sees; within a slice without an evolution
     // the layer is byte-stable.
     directionBlock: directionBlock ?? "",
+    craftBlock: hk.craftBlock,
     // L1c — the user's own self-description (people/user/profile.md), read in
     // housekeeping this turn; its block text states the precedence discipline
     // (on conflict the self-description wins). Absent when no profile exists.
     userProfileBlock,
-    // §A.3.3 — the background stream's completion statements (tasks/ tail
-    // lines dated today), read in housekeeping this turn; the block's own
-    // text carries the "state, never promise" discipline.
-    dueTasksBlock: hk.dueTasksBlock,
+    // Authoritative task candidates and pending results, read once this turn.
+    taskContextBlock: hk.taskContextBlock,
     sliceHeadBlock,
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`
@@ -1174,6 +1177,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         status: "queued" | "running" | "done" | "failed";
         text?: string;
         finishReason?: string;
+        error?: string;
+        taskAckIntents?: TaskAckIntent[];
         /** The answering child run — the client attaches to its stream. */
         runId?: string;
         /** The first instance's frames carry the client message id, so the
@@ -1196,6 +1201,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             text: i.text ?? "",
             finishReason:
               i.finishReason ?? (i.status === "done" ? "stop" : "error"),
+            ...(i.runId ? { sourceRunId: i.runId } : {}),
+            ...(i.error ? { error: i.error } : {}),
+            ...(i.taskAckIntents?.length ? { taskAckIntents: i.taskAckIntents } : {}),
           }));
         if (bubbles.length === 0 && !mergeSummary) return undefined;
         return { bubbles, ...(mergeSummary ? { mergeSummary } : {}) };
@@ -1210,10 +1218,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         row: InstanceRow,
         text: string,
         finishReason: string,
+        metadata: ReturnType<typeof parseTaskAckMetadata> = {},
       ): Promise<void> => {
         if (row.status !== "queued" && row.status !== "running") return;
         row.status = text ? "done" : "failed";
         row.finishReason = finishReason;
+        row.error = metadata.error;
+        row.taskAckIntents = metadata.taskAckIntents;
         if (text) row.text = text;
         await emitNestedBubble({
           replyTo: row.replyTo,
@@ -1329,6 +1340,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
                   slice.slice_id,
                   systemPrompt,
                   first,
+                  { turnId: bubbleTurnId, currentUserText: u.text },
                 ),
               };
               // Step-backed spawn (workflow-v5 composition, start.mdx); the
@@ -1401,6 +1413,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
                     row,
                     poll.report.text,
                     poll.report.finishReason,
+                    parseTaskAckMetadata(poll.report),
                   );
                 } else {
                   // Terminal without a usable report (failed/cancelled run, or
@@ -1458,7 +1471,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             if (ev.kind === "bubble") {
               const row = instances.get(ev.replyTo);
               if (row && row.turnId === ev.turnId) {
-                await settleInstance(row, ev.text, ev.finishReason);
+                await settleInstance(row, ev.text, ev.finishReason, parseTaskAckMetadata(next));
               }
               // A duplicate/unknown bubble is ignored — the loop only exits
               // idle when nothing is in flight, so a late report cannot race
@@ -1774,11 +1787,18 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // The incremental summary owns passive persistence. Carry this turn's
   // complete produced record before closing the stream. Completed sibling
   // results can enhance the batch, but never replace this durable payload.
+  const taskAckIntents = collectTaskAckIntents(producedMessages);
+  const sourceRunId = taskAckIntents.length > 0 ? await ownRunId() : undefined;
   const turnResult: TurnRunResult = {
     ...(producedMessages.length ? {nativeMessages: producedMessages} : {}),
     turnId: input.turnId,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.regenerate ? { regenerate: true } : {}),
+    ...(sourceRunId ? { sourceRunId } : {}),
+    finishReason: outcome.finishReason,
+    ...(outcome.error ? { error: outcome.error } : {}),
+    ...(taskAckIntents.length > 0 ? { taskAckIntents } : {}),
+    ...(nestedTail?.bubbles.length ? { nestedReplies: nestedTail.bubbles } : {}),
     sliceId: hk.slice.slice_id,
     at: input.startedAtIso,
     userText: input.lastUserMessage,

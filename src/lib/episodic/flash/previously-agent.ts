@@ -42,7 +42,8 @@
  * the write with a finish-now instruction. Untouched entries are preserved by
  * construction. The direction side's frequency protection is likewise in code:
  * the proposal is validated before being applied, the card mutations keep the
- * CardSession caps, and writeSop stays hard-gated on the run's allowlist.
+ * CardSession caps, and writeSop stays hard-gated on the run's allowlist,
+ * recorded full-read basis, and nonempty evidence / benefit / applicability.
  *
  * Each evolution pass is INCREMENTAL: it evaluates only the new evidence (the
  * recent exchange, or the just-closed slice) against the current card and
@@ -70,6 +71,8 @@ import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semanti
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import type { SelfAgent } from "@/lib/evolution/paths";
+import type { SelfSopSnapshot } from "@/lib/evolution/store";
+import { canonicalScenarioFromRef } from "@/lib/evolution/slice-ref";
 import {
   renderDirectionAnalysis,
   renderDirectionMarkings,
@@ -122,11 +125,13 @@ export type PreviouslySignal =
  */
 export interface SopWrite {
   agent: SelfAgent;
-  /** The FULL new SOP — loaded verbatim into the sub-agent's system prompt at
-   *  spawn (no injection cap; the length discipline is the writer's). */
+  /** The full proposed replacement; spawn injection is separately bounded. */
   content: string;
   evidence: string[];
   expectedBenefit: string;
+  applicability: string;
+  /** Recorded full-read basis, compared with fresh effective state on write. */
+  baseRevision: string;
 }
 
 /**
@@ -198,6 +203,8 @@ export interface PreviouslyAgentInput {
    * writes REJECTED.
    */
   allowedSopWrites?: SelfAgent[];
+  /** Complete old working copies and opaque read bases for every writable SOP. */
+  sopSnapshots?: Partial<Record<SelfAgent, SelfSopSnapshot>>;
 
   // ── Tool implementations (callbacks provided by the executor) ──────
 
@@ -324,7 +331,7 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 | \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Durable fact ("still true in 3 years"), ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
 | \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
 | \`addHorizon(text, by, refs)\` / \`resolveHorizon(match, note?)\` | Open loop, ≤ ${HORIZON_ITEM_MAX_CHARS} chars, \`by: YYYY-MM-DD\` + refs required, ≤ ${HORIZON_MAX} total. Resolve removes it — the ONLY way a Horizon item leaves. |
-| \`writeSop(agent, content, evidence, expectedBenefit)\` | Rewrite a self/ colleague's SOP (agent ∈ search / thinkdeep). GATED: accepted ONLY when that colleague is listed as allowed this run — otherwise REJECTED. Evidence MUST cite records slice ids. |
+| \`writeSop(agent, content, evidence, expectedBenefit, applicability)\` | Rewrite a self/ colleague's SOP from its recorded full read (agent ∈ search / thinkdeep). GATED by the allowlist and read basis. Evidence, expected benefit, and applicability must each be nonempty. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
 | \`readAgentTimeline(sliceId)\` | Read agent.md — the reasoning + tool calls. Process context for judging how interactions went. |
 | \`readPreviously(sliceId)\` | Read a past slice's card snapshot. Check how long a fact has been held. |
@@ -347,15 +354,15 @@ Compare the conversation in the task against the current card. Incorporate anyth
 
 ## self/ — SOPs and self-assessment
 
-You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documents loaded IN FULL into the search / thinkdeep sub-agents' system prompts at spawn (e.g. "on emotional topics, read the full slice before concluding"). An SOP write is a MUTATION with a hard gate: \`writeSop\` is accepted ONLY for a colleague the task lists as allowed this run, and every write must carry its evidence — **cite the records slice ids in the prose itself** ("because slice 2026-08-07-0709 showed …") — and its expected benefit.
+You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documents. The task includes each allowed document's COMPLETE old working copy and its recorded read basis. Preserve unrelated still-valid rules. \`writeSop\` is accepted only for an allowed colleague with that recorded read; evidence, expected benefit, and applicability are all required. Spawn injection is bounded separately, so keep the document tight and readable as whole rules.
 
-**Evidence discipline**: with fitness scoring gone, your only credential is the record. An SOP change without slice-id citations is worthless — never propose one.
+**Evidence discipline**: with fitness scoring gone, your only credential is the record. Cite the records slice ids in the prose itself ("because slice 2026-08-07-0709 showed …") and in the evidence array. An SOP change without slice-id citations is worthless — never propose one. Applicability says exactly when the rule applies; expected benefit is a hypothesis to review, not verified improvement.
 
 **Style discipline — the investigator's account, never the work order**: every SOP rule and every self-assessment line is anchored in ONE thing that happened — the date and the slice, what observably happened (a fact anyone can re-check against the record), and the working rule adopted because of it. The builder's vantage point is banned: no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报, and no English equivalents (engineering, the code, implementation, defect, fix, escalate). When a read or a tool misbehaves, record the reproducible phenomenon and the rule you now follow — "2026-10-05：以全角冒号引用一份中文长名的案件时，清单里看得到，读回却失败；此后引用前先读回，读不回就不引用。" — never a diagnosis of how the agent is built or a request that someone fix it. No architecture explanations, no notes addressed to the agent's makers: the SOP says what you encountered and what you learned.
 
 **Self-assessment**: dissatisfaction with your own craft ("three searches this week missed, the order is suspect") lands as DATED PROSE at the tail of the relevant self/ case's index.md — no thresholds, no scores. When you rewrite an SOP, fold or supersede the stale self-assessment lines it answers.
 
-An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim, so keep it tight.
+An SOP is short guidance, not an archive — rewrite it in place from the full old copy; never invent a basis or submit a partial rule.
 
 ## Identity head — stable, minimal
 
@@ -484,13 +491,26 @@ ${input.direction.trim()}`
       : "";
 
   const allowedSops = input.allowedSopWrites ?? [];
+  const sopWorkingCopies = allowedSops.map((agent) => {
+    const snapshot = input.sopSnapshots?.[agent];
+    if (!snapshot) {
+      return `### ${agent} — READ UNAVAILABLE\n\n(no recorded full read; writeSop will be rejected)`;
+    }
+    return `### ${agent} — effective origin: ${snapshot.origin}\n\n${snapshot.content ?? "(missing on both the new and legacy roots; the working copy is empty)"}`;
+  }).join("\n\n");
   const sopSection =
     allowedSops.length > 0
       ? `
 
 ## self/ SOPs writable this run
 
-These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write cites its records slice ids in the prose and reads as a dated factual account of what happened plus the rule it motivated — never builder vocabulary (工程侧 / 代码 / 缺陷 / 修复 / 上报).`
+These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write requires nonempty evidence, expected benefit, and applicability, cites its records slice ids in the prose, and reads as a dated factual account — never builder vocabulary (工程侧 / 代码 / 缺陷 / 修复 / 上报).
+
+### Complete old working copies (the only recorded write bases)
+
+${sopWorkingCopies}
+
+Preserve unrelated still-valid rules. The staged write carries the recorded revision; engineering compares it with fresh effective state and rejects a stale overwrite.`
       : "";
 
   const profileSection = input.userProfile?.trim()
@@ -729,30 +749,29 @@ function buildTools(
     // here and is persisted by the caller next to the card write-back) ──
     writeSop: tool({
       description:
-        "Rewrite a self/ colleague's SOP (the document loaded in full into its " +
-        "system prompt at spawn) — agent ∈ search / thinkdeep. HARD GATE: " +
-        "accepted ONLY when that colleague is listed as allowed this run; otherwise " +
-        "REJECTED. Carry the evidence (slice ids cited in the prose) and the " +
-        "expected benefit — a mutation without them is not archivable. The prose " +
-        "reads as a dated investigator's account of what happened and the rule it " +
-        "motivated — never builder vocabulary (工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) " +
-        "or notes addressed to the agent's makers. Self-assessment (dated prose " +
-        "about what disappointed you) belongs at the tail of the same document.",
+        "Rewrite a self/ colleague's SOP from the COMPLETE old working copy in the task — " +
+        "agent ∈ search / thinkdeep. The allowlist and recorded read basis are hard gates. " +
+        "Evidence, expected benefit, and applicability must all be nonempty. The caller " +
+        "compares the recorded revision with fresh effective state; a stale write is rejected. " +
+        "The prose reads as a dated investigator's account, never builder vocabulary " +
+        "(工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) or notes addressed to the agent's makers.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
         content: z
           .string()
-          .describe("The FULL new SOP — short behavioral guidance rewritten in place: dated, re-checkable accounts with the rules they motivated, slice ids cited in the prose, no builder vocabulary."),
+          .describe("The FULL proposed SOP, preserving unrelated still-valid rules from the recorded old copy."),
         evidence: z
           .array(z.string())
-          .describe("Slice pointers / verbatim user quotes backing this change."),
+          .min(1)
+          .describe("Nonempty record slice pointers backing this change."),
         expectedBenefit: z
           .string()
-          .describe("One line: what improves if this SOP holds."),
+          .describe("Nonempty expected improvement to check later; not verified improvement."),
+        applicability: z
+          .string()
+          .describe("Nonempty statement of exactly when this SOP applies."),
       }),
-      execute: async ({ agent, content, evidence, expectedBenefit }) => {
-        // Code-level gate: not allowlisted → no SOP write, with the reason
-        // spelled out (the model sees this and moves on).
+      execute: async ({ agent, content, evidence, expectedBenefit, applicability }) => {
         const allowed = input.allowedSopWrites ?? [];
         if (!allowed.includes(agent)) {
           return (
@@ -761,24 +780,34 @@ function buildTools(
             "through HQ / an evolution run, not this one; leave the SOP as it is."
           );
         }
-        if (!content.trim()) {
-          return "REJECTED — SOP content is empty.";
+        const readBasis = input.sopSnapshots?.[agent];
+        if (!readBasis) {
+          return `REJECTED — no recorded full read basis for the ${agent} SOP.`;
         }
+        if (!content.trim()) return "REJECTED — SOP content is empty.";
+        const cleanEvidence = evidence.map((item) => item.trim()).filter(Boolean);
+        if (cleanEvidence.length === 0) return "REJECTED — SOP evidence is empty.";
+        const invalidEvidence = cleanEvidence.find((ref) => canonicalScenarioFromRef(ref) === null);
+        if (invalidEvidence) {
+          return `REJECTED — SOP evidence "${invalidEvidence}" is not a valid canonical slice or slice-turn ref.`;
+        }
+        if (!expectedBenefit.trim()) return "REJECTED — SOP expectedBenefit is empty.";
+        if (!applicability.trim()) return "REJECTED — SOP applicability is empty.";
         const trimmed = content.trim();
-        // One write per agent per pass: a rewrite replaces this pass's earlier
-        // draft (the SOP is a whole-document overwrite anyway).
         const existingIdx = sopWrites.findIndex((w) => w.agent === agent);
         const write: SopWrite = {
           agent,
           content: trimmed,
-          evidence: evidence.filter((e) => e.trim().length > 0),
+          evidence: cleanEvidence,
           expectedBenefit: expectedBenefit.trim(),
+          applicability: applicability.trim(),
+          baseRevision: readBasis.revision,
         };
         if (existingIdx >= 0) sopWrites.splice(existingIdx, 1, write);
         else sopWrites.push(write);
         return (
-          `OK — ${agent} SOP staged (${trimmed.length} chars). ` +
-          "It is applied when this pass ends."
+          `OK — ${agent} SOP staged from the recorded read (${trimmed.length} chars). ` +
+          "The caller must still accept the fresh revision comparison."
         );
       },
     }),

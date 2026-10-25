@@ -12,10 +12,10 @@
  *     it. On conflict with index.md the self-description wins — that
  *     discipline is stated at the injection site (steps.ts), not enforced
  *     here.
- *   - self/<name>/index.md — per-capability SOPs. Spawn loading reads them in
- *     FULL (no injection cap — the length discipline is the writer's); the
- *     evolution writer must cite records slice ids in the prose (the evidence
- *     discipline that replaced fitness scoring).
+ *   - self/<name>/index.md — per-capability SOPs. Evolution writers receive
+ *     the full effective working copy plus an opaque revision; versioned writes
+ *     compare fresh state before replacing it. Spawn injection is bounded by
+ *     the procedural-skill prompt policy, with original-source refs.
  *
  * Dual-root discipline (§D.1): every READ checks the new root first and falls
  * back to the legacy root (current-previously.md / evolution/direction.md /
@@ -44,6 +44,7 @@ import {
   legacyPlaybookPath,
   type SelfAgent,
 } from "./paths";
+import { opaqueContentRevision } from "./skill-revision";
 
 // ─── people/user/index.md — the folded user model (§B.7) ──────────────────
 
@@ -189,30 +190,105 @@ export function isDirectionTemplate(content: string | null): boolean {
 
 // ─── self/ SOPs (§C.2) ─────────────────────────────────────────────────────
 
-/**
- * Read a sub-agent's SOP. New root `self/<name>/index.md` first, legacy
- * `agent-playbooks/<name>.md` on a miss. Returns null when missing/blank —
- * the caller then omits the injection block entirely. NO length cap: the
- * spawn contract loads the FULL document (§C.2), and the length discipline
- * is the writer's (the SOP is an overview, not an archive).
- */
-export async function readSelfSop(agent: SelfAgent): Promise<string | null> {
-  for (const path of [selfSopPath(agent), legacyPlaybookPath(agent)] as const) {
-    try {
-      const content = await fsReadFile(path);
-      if (content.trim()) return content;
-    } catch {
-      // absent on this root — try the next
-    }
-  }
-  return null;
+export type SelfSopOrigin = "new-root" | "legacy" | "missing";
+
+export interface SelfSopSnapshot {
+  agent: SelfAgent;
+  origin: SelfSopOrigin;
+  /** The complete effective working copy; null means no SOP on either root. */
+  content: string | null;
+  /** Opaque read basis. It changes with the effective origin or full content. */
+  revision: string;
+}
+
+export type VersionedSelfSopWriteResult =
+  | { applied: true; revision: string }
+  | {
+      applied: false;
+      reason: "missing_basis" | "stale" | "unavailable" | "invalid";
+      diagnostic: string;
+    };
+
+function isMissingFileError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as Error & { status?: unknown }).status;
+  const code = (error as Error & { code?: unknown }).code;
+  return status === 404 || code === "ENOENT" || error.message.startsWith("File not found:");
+}
+
+function sopRevision(origin: SelfSopOrigin, content: string | null): string {
+  return opaqueContentRevision("sop", origin, content);
 }
 
 /**
- * Overwrite a sub-agent's SOP. New-root write only (§D.1); the evolution
- * agent is the only writer, and every rewrite must cite its evidence slice
- * ids in the prose (the prompt-level discipline in previously-agent.ts).
+ * Fresh, batch-aware read of the complete effective SOP and its write basis.
+ * Only a genuine miss falls through to the legacy root; an unavailable root is
+ * not absence and must never authorize an overwrite.
  */
+export async function readSelfSopSnapshot(
+  agent: SelfAgent,
+  batch?: WriteBatch,
+  options?: { fresh?: boolean },
+): Promise<SelfSopSnapshot> {
+  const roots = [
+    { origin: "new-root" as const, path: selfSopPath(agent) },
+    { origin: "legacy" as const, path: legacyPlaybookPath(agent) },
+  ];
+  for (const root of roots) {
+    try {
+      const content = await fsReadFile(root.path, batch, { fresh: options?.fresh !== false });
+      if (content.trim()) {
+        return { agent, origin: root.origin, content, revision: sopRevision(root.origin, content) };
+      }
+    } catch (error) {
+      if (!isMissingFileError(error)) throw error;
+    }
+  }
+  return { agent, origin: "missing", content: null, revision: sopRevision("missing", null) };
+}
+
+export async function readSelfSop(
+  agent: SelfAgent,
+  batch?: WriteBatch,
+): Promise<string | null> {
+  return (await readSelfSopSnapshot(agent, batch, { fresh: false })).content;
+}
+
+/** Compare a recorded read basis with fresh effective state before writing. */
+export async function writeSelfSopVersioned(
+  agent: SelfAgent,
+  content: string,
+  expectedRevision: string,
+  batch?: WriteBatch,
+): Promise<VersionedSelfSopWriteResult> {
+  if (!expectedRevision.trim()) {
+    return { applied: false, reason: "missing_basis", diagnostic: `${agent} SOP write has no recorded read basis` };
+  }
+  if (!content.trim()) {
+    return { applied: false, reason: "invalid", diagnostic: `${agent} SOP content is empty` };
+  }
+  let current: SelfSopSnapshot;
+  try {
+    current = await readSelfSopSnapshot(agent, batch);
+  } catch (error) {
+    return {
+      applied: false,
+      reason: "unavailable",
+      diagnostic: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (current.revision !== expectedRevision) {
+    return {
+      applied: false,
+      reason: "stale",
+      diagnostic: `${agent} SOP changed after the recorded ${expectedRevision} read; fresh revision is ${current.revision}`,
+    };
+  }
+  await fsWriteFile(selfSopPath(agent), content, batch);
+  return { applied: true, revision: sopRevision("new-root", content) };
+}
+
+/** Legacy compatibility for the old HQ caller; new model-writable paths use the guarded writer. */
 export async function writeSelfSop(
   agent: SelfAgent,
   content: string,

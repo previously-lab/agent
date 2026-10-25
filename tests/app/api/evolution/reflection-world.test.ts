@@ -23,6 +23,7 @@
  *      burn).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SkillEntry } from "@/lib/evolution/skill-policy";
 
 const h = vi.hoisted(() => ({
   cursor: { sliceId: null as string | null, degraded: false },
@@ -36,7 +37,9 @@ const h = vi.hoisted(() => ({
   heads: {} as Record<string, { closed_by?: string }>,
   agenda: "",
   lastEvolutionDate: null as string | null,
+  skillRead: { status: "missing", ledger: { schemaVersion: 1, entries: [], operations: [] } } as unknown,
 }));
+vi.mock("@/lib/evolution/skill-store", () => ({ readSkillLedger: vi.fn(async () => h.skillRead) }));
 
 vi.mock("@/lib/chat/hq-log", () => ({
   readReflectionWorldLog: vi.fn(async () => ({
@@ -89,6 +92,7 @@ vi.mock("@/lib/episodic/timeline/store", () => ({
 import { loadReflectionWorld } from "@/app/api/evolution/reflection-steps";
 
 beforeEach(() => {
+  h.skillRead = { status: "missing", ledger: { schemaVersion: 1, entries: [], operations: [] } };
   vi.clearAllMocks();
   h.cursor = { sliceId: null, degraded: false };
   h.reflectionLogAvailable = true;
@@ -100,6 +104,28 @@ beforeEach(() => {
   h.heads = {};
   h.agenda = "";
   h.lastEvolutionDate = null;
+});
+
+describe("skill review world-read wiring", () => {
+  it("delivers a real ledger entry independently of user evolution", async () => {
+    const entry: SkillEntry = {
+      id: "check-facts", ref: "self/search/index.md", role: "search", scope: { kind: "general" },
+      instruction: "Check the original source.", summary: "Check first", applicability: "Before factual advice",
+      sourceRevision: "source-v1", evidence: ["2026-10-20-1000"], expectedBenefit: "Fewer unsupported claims",
+      reviewDue: "2026-10-21", state: "adopted", revision: 2, reviewOutcome: "pending", reviewEvidence: [],
+      reviewNeeded: false, acknowledgedSourceRevision: "source-v1",
+    };
+    h.skillRead = { status: "ok", ledger: { schemaVersion: 1, entries: [entry], operations: [] } };
+    const docket = await loadReflectionWorld("2026-10-22");
+    expect(docket.skillReviewDue).toEqual([entry]);
+    expect(docket.evolutionDue).toBe(false);
+  });
+  it("carries corrupt skill state as degraded instead of resetting it", async () => {
+    h.skillRead = { status: "corrupt", ledger: null, diagnostic: "truncated ledger" };
+    const docket = await loadReflectionWorld("2026-10-22");
+    expect(docket.skillReviewDue).toEqual([]);
+    expect(docket.skillReviewError).toBe("truncated ledger");
+  });
 });
 
 describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level level + closedBy)", () => {

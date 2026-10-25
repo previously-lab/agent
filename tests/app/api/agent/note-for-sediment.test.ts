@@ -69,6 +69,9 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
     useGithub: false,
     useDemo: false,
     sliceId: SLICE,
+    turnId: "turn-test",
+    readScopeId: "turn-test",
+    currentUserText: "current user text",
     recentTurns: [],
     ...overrides,
   };

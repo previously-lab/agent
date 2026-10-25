@@ -7,8 +7,10 @@ import { getWritable } from "workflow";
 import type { z } from "zod";
 import { FIXED_MODEL, type ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
-import { readSelfSop } from "@/lib/evolution/store";
+import { readSelfSopSnapshot } from "@/lib/evolution/store";
 import type { SelfAgent } from "@/lib/evolution/paths";
+import { readSkillLedger } from "@/lib/evolution/skill-store";
+import { renderRoleSkillGuidance, type SkillRole } from "@/lib/evolution/skill-policy";
 import { shouldEmitProgress, type ProgressLine, type ProgressWriteState, type ToolProgressStage } from "@/lib/chat/progress-throttle";
 export async function resolveSubAgentModel(_ctx?: { mainModel?: ModelConfig }): Promise<ModelConfig> { return FIXED_MODEL; }
 export interface SubAgentProgressRef {
@@ -103,7 +105,7 @@ export function extractToolReport<S extends z.ZodType>(
 export interface RunSubAgentOptions<Report> {
   model?: ModelConfig;
   role?: DeepSeekRole;
-  system?: string; selfSop?: SelfAgent; prompt: string; tools: ToolSet;
+  system?: string; selfSop?: SelfAgent; skillRole?: SkillRole; prompt: string; tools: ToolSet;
   toolChoice?: "auto" | "required" | "none";
   reportToolName?: string; reportSchema?: z.ZodType<Report>; maxSteps?: number;
   prepareStep?: PrepareStepFunction<ToolSet>;
@@ -118,9 +120,39 @@ export interface SubAgentResult<Report> {
   timedOut?: boolean; error?: string;
 }
 export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Report>): Promise<SubAgentResult<Report>> {
-  const sop = opts.selfSop ? await readSelfSop(opts.selfSop).catch(() => null) : null;
-  const sopSystem = sop?.trim() ? (opts.system ?? "") + `\n\n## Your SOP (self/${opts.selfSop}/index.md — follow it unless it conflicts with the task)\n\n` + sop.trim() : opts.system;
-  const system = opts.reportToolName ? (sopSystem ?? "") + `\n\nFinish by calling ${opts.reportToolName} with the structured report. Do not substitute a prose-only answer for that report.` : sopSystem;
+  const skillRole = opts.skillRole ?? opts.selfSop;
+  const [sop, skillState] = await Promise.all([
+    opts.selfSop
+      ? readSelfSopSnapshot(opts.selfSop, undefined, { fresh: false }).catch(() => null)
+      : Promise.resolve(null),
+    skillRole
+      ? readSkillLedger().catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const guidance = skillRole
+    ? renderRoleSkillGuidance({
+        role: skillRole,
+        hostReservedChars: 2,
+        ledger: skillState?.status === "ok" ? skillState.ledger : null,
+        legacySop: sop?.content?.trim() && opts.selfSop
+          ? {
+              content: sop.content,
+              ref: sop.origin === "legacy"
+                ? `agent-playbooks/${opts.selfSop}.md`
+                : `self/${opts.selfSop}/index.md`,
+            }
+          : null,
+        stateDiagnostic: skillState?.status === "corrupt"
+          ? "Skill ledger is corrupt; adopted skills were not injected and the ledger was not reset."
+          : skillState?.status === "unavailable"
+            ? "Skill ledger is unavailable; adopted skills were not injected."
+            : undefined,
+      })
+    : { text: "" };
+  const guidedSystem = guidance.text
+    ? (opts.system ?? "") + `\n\n${guidance.text}`
+    : opts.system;
+  const system = opts.reportToolName ? (guidedSystem ?? "") + `\n\nFinish by calling ${opts.reportToolName} with the structured report. Do not substitute a prose-only answer for that report.` : guidedSystem;
   const emitter = createProgressEmitter(opts.progress);
   if (opts.startLine) emitter.emit(opts.startLine, "running");
   let text = "", reasoning = "";

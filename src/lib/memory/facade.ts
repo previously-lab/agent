@@ -39,7 +39,14 @@ import { getMemoryRoot } from "@/lib/whitelist";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
 import { CASE_CATEGORIES, MEMORY_ROOT_DIR } from "@/lib/docs/paths";
 import type { CaseCategory } from "@/lib/docs/paths";
-import { parseCaseDoc } from "@/lib/docs/case-doc";
+import {
+  caseCurrentPath,
+  parseCaseDoc,
+  renderCaseWithCurrent,
+  parseCaseCurrent,
+  caseStorageRevision,
+  caseCurrentFreshnessWarnings,
+} from "@/lib/docs/case-doc";
 import {
   parseCaseRef,
   resolveCaseRefPaths,
@@ -137,6 +144,10 @@ export type RecallReadResult =
       path: string;
       /** The ref actually read when it was resolved approximately. */
       matchedRef?: string;
+      /** Case indexes only: the separate current view, also labeled in content. */
+      currentUnderstanding?: { content: string; path: string };
+      /** Hash of the exact full index bytes rendered by this read. */
+      caseRevision?: string;
     }
   | {
       /** outline: true — the document's heading skeleton, not its body. */
@@ -187,7 +198,7 @@ export interface RecallBackend {
 /** True when a thrown read error means "absent", not "unreadable". */
 function isAbsentError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
-  return /^(File not found|Directory not found|Access denied)|is (a directory, not a file|not a regular file)/.test(
+  return /^(File not found|Directory not found)|is (a directory, not a file|not a regular file)/.test(
     msg,
   );
 }
@@ -276,6 +287,7 @@ interface CaseNode {
   treeDir: string;
   caseName: string;
   indexPath: string | null;
+  currentPath?: string;
   /** Repo-relative dated piece paths, ascending. */
   pieces: string[];
 }
@@ -338,6 +350,11 @@ export function buildTreeIndex(paths: string[]): MemoryTreeIndex {
     const indexMatch = CASE_INDEX_RE.exec(path);
     if (indexMatch) {
       nodeFor(indexMatch[1]!, indexMatch[2]!).indexPath = path;
+      continue;
+    }
+    const currentMatch = /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/_current\.md$/.exec(path);
+    if (currentMatch) {
+      nodeFor(currentMatch[1]!, currentMatch[2]!).currentPath = path;
       continue;
     }
     const segs = path.split("/");
@@ -453,7 +470,18 @@ async function buildCaseEntry(
     caseName: node.caseName,
     fileName: "index.md",
   });
-  const activity = maxDate(doc.updated.slice(0, 10), latestPieceDate(node));
+  let activity = doc.tail.reduce((at, tail) => maxDate(at, tail.date),
+    maxDate(doc.updated.slice(0, 10), latestPieceDate(node)));
+  let currentBody: string | undefined;
+  if (node.currentPath) {
+    try {
+      const current = parseCaseCurrent(await backend.readFile(node.currentPath));
+      activity = maxDate(activity, current.asOf);
+      currentBody = current.body;
+    } catch {
+      // A failed sidecar read cannot make a known historical case disappear.
+    }
+  }
   const category = nodeCategory(node);
   return {
     entry: {
@@ -462,8 +490,8 @@ async function buildCaseEntry(
       kind: nodeKind(node),
       title: node.caseName,
       date: doc.opened || activity,
-      excerpt: truncateExcerpt(caseIndexExcerpt(doc.body)),
-      updated: doc.updated,
+      excerpt: truncateExcerpt(caseIndexExcerpt(currentBody ?? doc.body)),
+      updated: maxDate(doc.updated, activity),
     },
     activity: activity || doc.opened,
   };
@@ -1067,7 +1095,12 @@ async function gatherSearchUnits(
             caseName: node.caseName,
             fileName: "index.md",
           });
-          caseActivity = maxDate(doc.updated.slice(0, 10), caseActivity);
+          caseActivity = doc.tail.reduce((at, tail) => maxDate(at, tail.date),
+            maxDate(doc.updated.slice(0, 10), caseActivity));
+          if (node.currentPath) {
+            const current = parseCaseCurrent(await backend.readFile(node.currentPath));
+            caseActivity = maxDate(caseActivity, current.asOf);
+          }
         } catch {
           // header unreadable — fall back to the piece-date sort key
         }
@@ -1090,11 +1123,17 @@ async function gatherSearchUnits(
                 title: node.caseName,
                 date: doc.opened || caseActivity,
                 excerpt: "",
-                updated: doc.updated,
+                updated: maxDate(doc.updated, caseActivity),
               },
               activity: caseActivity,
             };
           },
+        });
+      }
+      if (node.currentPath) {
+        out.push({
+          docPath: node.currentPath, activity: caseActivity, sliceHeadOnly: false,
+          build: async () => buildCaseEntry(backend, node),
         });
       }
       for (const piecePath of node.pieces) {
@@ -1237,6 +1276,7 @@ export async function recallSearch(
         return { failed: true, entry: null };
       }
       if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
+      if (unit.docPath.endsWith("/_current.md")) raw = parseCaseCurrent(raw).body;
       const segments = splitParagraphs(raw);
       const found = segmentSearch(segments, keywords, 1, 1);
       if (found.length === 0) return { failed: false, entry: null };
@@ -1247,9 +1287,13 @@ export async function recallSearch(
     },
   );
   let readFailures = 0;
+  const hitRefs = new Set<string>();
   for (const r of scannedUnits) {
     if (r.failed) readFailures += 1;
-    else if (r.entry) hits.push(r.entry);
+    else if (r.entry && !hitRefs.has(r.entry.ref)) {
+      hitRefs.add(r.entry.ref);
+      hits.push(r.entry);
+    }
   }
 
   if (hits.length === 0) {
@@ -1489,6 +1533,45 @@ export function parseDocumentOutline(raw: string): {
   return { totalLines: lines.length, headings };
 }
 
+async function withCaseCurrent(
+  backend: RecallBackend,
+  result: Extract<RecallReadResult, { kind: "content" }>,
+): Promise<RecallReadResult> {
+  const index = CASE_INDEX_RE.exec(result.path);
+  if (!index) return result;
+  result = { ...result, caseRevision: caseStorageRevision(result.content) };
+  const category = index[1] as CaseCategory;
+  const caseName = index[2]!;
+  const currentPath = caseCurrentPath(category, caseName);
+  let files: string[];
+  try {
+    files = await backend.listMemoryFiles();
+  } catch (error) {
+    return { kind: "unavailable", note: error instanceof Error ? error.message : String(error) };
+  }
+  if (!files.includes(currentPath)) return result;
+  let current: string;
+  try {
+    current = await backend.readFile(currentPath);
+  } catch (error) {
+    return isAbsentError(error)
+      ? result
+      : { kind: "unavailable", note: error instanceof Error ? error.message : String(error) };
+  }
+  return {
+    ...result,
+    content: renderCaseWithCurrent(result.content, current, {
+      freshnessWarnings: caseCurrentFreshnessWarnings(parseCaseCurrent(current), {
+        indexRevision: caseStorageRevision(result.content),
+        pieces: files.filter((path) => path.startsWith(`memory/${category}/${caseName}/`) &&
+          /^\d{4}-\d{2}-\d{2}-.+\.md$/.test(path.slice(`memory/${category}/${caseName}/`.length)))
+          .map((path) => ({ path, revision: null })),
+      }),
+    }),
+    currentUnderstanding: { content: current, path: currentPath },
+  };
+}
+
 export async function recallRead(
   backend: RecallBackend,
   input: RecallReadInput,
@@ -1549,7 +1632,7 @@ async function recallReadBody(
   if (!candidates) return { kind: "not_found" };
   const direct = await readFirstCandidate(backend, candidates);
   if (direct.kind === "content") {
-    return { kind: "content", content: direct.content, path: direct.path };
+    return withCaseCurrent(backend, direct);
   }
   if (direct.kind === "unavailable") return direct;
 
@@ -1562,12 +1645,12 @@ async function recallReadBody(
   if (fuzzy.matched) {
     const retry = await readFirstCandidate(backend, fuzzy.matched.candidates);
     if (retry.kind === "content") {
-      return {
+      return withCaseCurrent(backend, {
         kind: "content",
         content: retry.content,
         path: retry.path,
         matchedRef: fuzzy.matched.ref,
-      };
+      });
     }
     if (retry.kind === "unavailable") return retry;
     // the adopted candidate vanished mid-flight — fall through to near misses
@@ -1725,7 +1808,8 @@ function classifyChangedPath(
   if (path === "memory/people/user/profile.md") {
     return { ref: "people/user/profile", category: "people" };
   }
-  const index = CHANGED_CASE_INDEX_RE.exec(path);
+  const index = CHANGED_CASE_INDEX_RE.exec(path) ??
+    /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/_current\.md$/.exec(path);
   if (index) {
     const category = facadeCategoryForTreeDir(index[1]!);
     return { ref: `${category}/${index[2]}`, category };

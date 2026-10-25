@@ -13,8 +13,28 @@
  *  4. an index written by another writer still parses (plain body, no fields).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ModelMessage } from "@/lib/deepseek/types";
+import { parseCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
 
-const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
+const io = vi.hoisted(() => ({ files: new Map<string, string>(), cachedReads: new Map<string, string>() }));
+
+vi.mock("@/lib/tools/local-fs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tools/local-fs")>(),
+  readFileLocal: vi.fn(async (path: string) => {
+    const value = io.cachedReads.get(path) ?? io.files.get(path);
+    if (value === undefined) throw new Error(`File not found: ${path}`);
+    return value;
+  }),
+  listFilesLocal: vi.fn(async (directory: string) => {
+    const names = new Map<string, "file" | "dir">();
+    for (const path of io.files.keys()) {
+      if (!path.startsWith(`${directory}/`)) continue;
+      const relative = path.slice(directory.length + 1);
+      names.set(relative.split("/")[0], relative.includes("/") ? "dir" : "file");
+    }
+    return [...names].map(([name, type]) => ({ name, type, path: `${directory}/${name}` }));
+  }),
+}));
 
 vi.mock("@/lib/episodic/io-helpers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/episodic/io-helpers")>();
@@ -32,22 +52,26 @@ vi.mock("@/lib/episodic/io-helpers", async (importOriginal) => {
         batch.entries.clear();
       },
     ),
-    fsReadFile: vi.fn(async (path: string) => {
-      const content = io.files.get(path);
+    fsReadFile: vi.fn(async (path: string, batch?: { entries: Map<string, string | null> }) => {
+      const content = batch?.entries.has(path) ? batch.entries.get(path) : io.files.get(path);
+      if (content === null) throw new Error(`File not found: ${path} (deleted in this batch)`);
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
       return content;
     }),
-    fsWriteFile: vi.fn(async (path: string, content: string) => {
-      io.files.set(path, content);
+    fsWriteFile: vi.fn(async (path: string, content: string, batch?: { entries: Map<string, string | null> }) => {
+      if (batch) batch.entries.set(path, content); else io.files.set(path, content);
       return { path, created: true };
     }),
+    fsListFiles: vi.fn(async (directory: string) => [...io.files.keys()]
+      .filter((path) => path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes("/"))
+      .map((path) => ({ path, name: path.slice(directory.length + 1), type: "file" as const }))),
   };
 });
 
-import { writeCaseExecute, type ToolContext } from "@/app/api/agent/tool-executors";
+import { writeCaseExecute, recallReadExecute, type ToolContext } from "@/app/api/agent/tool-executors";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { caseIndexPath } from "@/lib/docs";
-import { createCase, serializeCaseDoc } from "@/lib/docs/case-doc";
+import { createCase, serializeCaseDoc, caseStorageRevision } from "@/lib/docs/case-doc";
 
 const ctx: ToolContext = {
   repo: "local",
@@ -55,19 +79,35 @@ const ctx: ToolContext = {
   useGithub: false,
   useDemo: false,
   sliceId: "2026-10-04-0131",
+  turnId: "turn-test",
+  readScopeId: "turn-test",
+  currentUserText: "请写下这段内容",
   recentTurns: [],
   timezone: "UTC",
 };
 
-function call(
+async function actualRead(ref: string, context = ctx): Promise<{ messages: ModelMessage[]; output: string }> {
+  const toolCallId = "real-read-1";
+  const output = await recallReadExecute({ ref }, { context, toolCallId });
+  return { output, messages: [
+    { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: "recallRead", input: { ref } }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: "recallRead", output: { type: "text", value: output } }] },
+  ] };
+}
+
+async function call(
   input: { category?: string; caseName: string; body: string; pieceTitle?: string },
   toolCallId = "call-1",
 ) {
-  return writeCaseExecute(input, { context: ctx, toolCallId });
+  const ref = `${input.category ?? "research"}/${input.caseName}`;
+  const messages = input.pieceTitle && io.files.has(`memory/${ref}/index.md`)
+    ? (await actualRead(ref)).messages : [];
+  return writeCaseExecute(input, { context: ctx, toolCallId, messages });
 }
 
 beforeEach(() => {
   io.files.clear();
+  io.cachedReads.clear();
   vi.clearAllMocks();
 });
 
@@ -168,6 +208,75 @@ describe("writeCase — the category set", () => {
 });
 
 describe("writeCase — addPiece on an existing case", () => {
+  it("restores a real read result through JSON checkpoints and a continuation nudge", async () => {
+    await call({ caseName: "真实收据案", body: "真实历史原文。" });
+    const { messages, output } = await actualRead("research/真实收据案");
+    expect(parseCaseReadEnvelope(output)?.receipt.coverage).toBe("full-index");
+    const restored = JSON.parse(JSON.stringify(messages)) as ModelMessage[];
+    restored.push({ role: "user", content: "Continue the interrupted run." });
+    const result = await writeCaseExecute({ caseName: "真实收据案", body: "后续证据。", pieceTitle: "后续证据" },
+      { context: ctx, toolCallId: "write-after-continuation", messages: restored });
+    expect(result).toMatchObject({ ok: true, action: "addPiece" });
+    expect([...io.files.values()].some((raw) => raw.includes("后续证据。"))).toBe(true);
+  });
+
+  it("refuses a cached old read against fresh changed storage, even with the same timestamp", async () => {
+    const path = "memory/research/缓存案/index.md";
+    const old = "---\nopened: '2026-10-24'\nupdated: '2026-10-24T12:00:00Z'\n---\n旧的完整证据。\n";
+    const fresh = old.replace("旧的完整证据", "新的完整反证");
+    io.files.set(path, fresh);
+    io.cachedReads.set(path, old);
+    const { messages, output } = await actualRead("research/缓存案");
+    const parsed = parseCaseReadEnvelope(output)!;
+    expect(parsed.body).toContain("旧的完整证据");
+    expect(parsed.body).not.toContain("新的完整反证");
+    expect(parsed.receipt.revision).toBe(caseStorageRevision(old));
+    const result = await writeCaseExecute({ caseName: "缓存案", body: "依旧读草拟的篇章。", pieceTitle: "错误补充" },
+      { context: ctx, toolCallId: "write-cached", messages });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("changed since");
+    expect(io.files.get(path)).toBe(fresh);
+    expect([...io.files.keys()].some((name) => name.includes("错误补充"))).toBe(false);
+  });
+
+  it("refuses a same-timestamp edit that happens after the actual read", async () => {
+    await call({ caseName: "写入竞争案", body: "最初原文。" });
+    const { messages } = await actualRead("research/写入竞争案");
+    const path = "memory/research/写入竞争案/index.md";
+    io.files.set(path, io.files.get(path)!.replace("最初原文", "并发反证"));
+    const result = await writeCaseExecute({ caseName: "写入竞争案", body: "旧草稿", pieceTitle: "后续" },
+      { context: ctx, toolCallId: "raced-write", messages });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("changed since");
+  });
+
+  it("does not accept another child scope or a user-pasted copy of an authentic envelope", async () => {
+    await call({ caseName: "域隔离案", body: "历史原文。" });
+    const read = await actualRead("research/域隔离案");
+    const input = { caseName: "域隔离案", body: "新篇", pieceTitle: "越权新篇" };
+    const otherScope = await writeCaseExecute(input,
+      { context: { ...ctx, readScopeId: "different-child" }, toolCallId: "other-scope", messages: read.messages });
+    expect(otherScope.ok).toBe(false);
+    const pasted = await writeCaseExecute(input,
+      { context: ctx, toolCallId: "pasted-proof", messages: [{ role: "user", content: read.output }] });
+    expect(pasted.ok).toBe(false);
+    expect([...io.files.keys()].some((name) => name.includes("越权新篇"))).toBe(false);
+  });
+
+  it("does not grant a write from an actual outline result", async () => {
+    await call({ caseName: "提纲案", body: "## 一节\n原文。" });
+    const ref = "research/提纲案";
+    const output = await recallReadExecute({ ref, outline: true }, { context: ctx, toolCallId: "outline-read" });
+    expect(parseCaseReadEnvelope(output)).toBeNull();
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "outline-read", toolName: "recallRead", input: { ref, outline: true } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "outline-read", toolName: "recallRead", output: { type: "text", value: output } }] },
+    ];
+    const result = await writeCaseExecute({ caseName: "提纲案", body: "新篇", pieceTitle: "后续" },
+      { context: ctx, toolCallId: "write-from-outline", messages });
+    expect(result.ok).toBe(false);
+  });
+
   it("second call with pieceTitle adds a dated piece; the index is byte-identical", async () => {
     await call({ caseName: "手机调研", body: "首篇内容。" }, "call-1");
     const indexBefore = io.files.get("memory/research/手机调研/index.md")!;
@@ -254,14 +363,14 @@ describe("writeCase — one commit per call (open + first piece coalesced)", () 
     // An illegal pieceTitle (four-digit lead) makes createDoc throw AFTER the
     // open was queued — the old unconditional flush committed the open anyway
     // and the model, told the call failed, retried into extra commits. (This
-    // harness's fsWriteFile writes through at queue time, so the commit
-    // boundary under test is flushBatch itself.)
+    // harness keeps queued files private until flush, matching production.)
     const r = await call(
       { caseName: "半截案", body: "正文。", pieceTitle: "2026新品" },
       "call-11",
     );
     expect(r.ok).toBe(false);
     expect(vi.mocked(flushBatch)).not.toHaveBeenCalled();
+    expect(io.files.has("memory/research/半截案/index.md")).toBe(false);
   });
 });
 

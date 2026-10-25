@@ -8,6 +8,11 @@ import {
   appendTail,
   type CaseDoc,
 } from "@/lib/docs";
+import {
+  parseCaseCurrent,
+  reviseCaseCurrent,
+  serializeCaseCurrent,
+} from "@/lib/docs/case-doc";
 
 const PIECE = {
   category: "research" as const,
@@ -371,5 +376,34 @@ describe("the write ops — pure, clock-free (time guards live in the write entr
     expect(raw).not.toContain("2026-10-03：2026-10-03：");
     // a line that is ONLY the date prefix is empty once normalized — refused
     expect(() => appendTail(living, { date: "2026-10-03", text: "2026-10-03：" })).toThrow();
+  });
+});
+
+describe("independent current understanding", () => {
+  it("roundtrips a generic non-user view with counterevidence and preserves dated history", () => {
+    const first = reviseCaseCurrent(null, {
+      asOf: "2026-10-18",
+      evidence: ["records/2026-10-14-1836"],
+      body: "初步解释：可能是电池故障。这个解释还没有外部验证。",
+    });
+    const firstRoundtrip = parseCaseCurrent(serializeCaseCurrent(first));
+    expect(firstRoundtrip.body).toContain("电池故障");
+    expect(firstRoundtrip.asOf).toBe("2026-10-18");
+    expect(firstRoundtrip.evidence).toEqual(["records/2026-10-14-1836"]);
+
+    const second = reviseCaseCurrent(firstRoundtrip, {
+      asOf: "2026-10-19",
+      evidence: ["records/2026-10-14-1836", "things/老案子"],
+      body: "用户的后续实测是反证。当前有两种解释：充电线接触不良，或电源管理设置；前者更吻合记录，但仍属解释而非外部验证。",
+    });
+    const roundtrip = parseCaseCurrent(serializeCaseCurrent(second));
+    expect(roundtrip.body).toContain("后续实测是反证");
+    expect(roundtrip.body).toContain("两种解释");
+    expect(roundtrip.body).not.toContain("Traits & cognitive style");
+    expect(roundtrip.history).toContain("## 2026-10-19 — previous understanding");
+    expect(roundtrip.history).toContain("初步解释：可能是电池故障");
+    expect(roundtrip.history).toContain("as-of: 2026-10-18");
+    expect(roundtrip.history).toContain("evidence: records/2026-10-14-1836");
+    expect(roundtrip.evidence).toContain("things/老案子");
   });
 });

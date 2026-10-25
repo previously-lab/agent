@@ -12,6 +12,7 @@
  */
 
 import { streamText } from "@/lib/deepseek/generate";
+import type { ModelMessage } from "@/lib/deepseek/types";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
@@ -44,7 +45,36 @@ import {
   extractSliceIds,
 } from "@/lib/episodic/rework-signal";
 import { questionRun } from "@/app/api/evolution/question-run";
-import { readSelfSop } from "@/lib/evolution/store";
+import { readSelfSopSnapshot } from "@/lib/evolution/store";
+import {
+  TaskLedgerError,
+  taskRefForCase,
+  type TaskEvidence,
+  type TaskQuery,
+} from "@/lib/tasks/contracts";
+import { queryTasks } from "@/lib/tasks/ledger";
+import {
+  readTaskLedger,
+  updateTaskFromUserFeedback,
+} from "@/lib/tasks/store";
+import { registerTaskWithDocument } from "@/lib/tasks/registration";
+import { fieldCreateTaskSchema, fieldUpdateTaskSchema, type FieldCreateTaskInput, type FieldUpdateTaskInput } from "@/lib/chat/task-input";
+import { listPendingTaskResults } from "@/lib/tasks/selector";
+import type {
+  ReportTaskFollowupInput,
+  ReportTaskFollowupResult,
+} from "@/lib/chat/task-followups";
+import { stableTaskOperationId } from "@/lib/chat/task-identity";
+import {
+  createCaseReadEnvelope,
+} from "@/lib/chat/case-read-receipt";
+import { reconstructCaseReadScope } from "@/lib/agents/case-read-proof";
+import { replaceMainCraftBlock } from "@/lib/chat/craft-prompt";
+import {
+  readSkillLedger,
+  readSkillSource,
+} from "@/lib/evolution/skill-store";
+import { renderRoleSkillGuidance } from "@/lib/evolution/skill-policy";
 
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
@@ -127,6 +157,12 @@ export interface ToolContext {
   useDemo: boolean;
   /** The current conversation's persistence slice id. */
   sliceId: string;
+  /** The user turn this executor answers, including an episode bubble's own id. */
+  turnId: string;
+  /** Run-local evidence scope; continuations retain the original value. */
+  readScopeId: string;
+  /** Exact current user text, never a continuation nudge or generated UI state. */
+  currentUserText: string;
   /** The validated room/card the reader is looking at; visual context only. */
   view?: CurrentView;
   /** Recent conversation turns (last exchange + current user msg). */
@@ -172,6 +208,7 @@ export interface ToolContext {
 type ExecuteOpts<C> = {
   context: C;
   toolCallId: string;
+  messages?: ModelMessage[];
 };
 
 /**
@@ -399,7 +436,7 @@ export async function recallReadExecute(
     range?: RecallReadRange;
     outline?: boolean;
   },
-  { context: ctx }: ExecuteOpts<ToolContext>,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
   const ref = input.ref?.trim();
@@ -430,6 +467,27 @@ export async function recallReadExecute(
       }
     } else if (!recordsMatch && result.path.startsWith("memory/")) {
       recordDocRead(ctx.sliceId, result.path, extractSliceIds(result.content));
+    }
+    const caseMatch = !input.outline && !input.range
+      ? /^memory\/([^/]+)\/([^/]+)\/index\.md$/.exec(result.path)
+      : null;
+    if (caseMatch && isCaseCategory(caseMatch[1]) && result.caseRevision) {
+      try {
+        return createCaseReadEnvelope({
+          scopeId: ctx.readScopeId,
+          toolCallId,
+          requestedRef: ref,
+          category: caseMatch[1],
+          caseName: caseMatch[2]!,
+          revision: result.caseRevision,
+          rendered: renderRecallReadResult(result, ref),
+        });
+      } catch (error) {
+        return renderRecallReadResult({
+          kind: "unavailable",
+          note: error instanceof Error ? error.message : String(error),
+        }, ref);
+      }
     }
   }
   return renderRecallReadResult(result, ref);
@@ -702,7 +760,7 @@ function userLocalDate(timezone: string | undefined): string {
  */
 export async function writeCaseExecute(
   input: { category?: string; caseName: string; body: string; pieceTitle?: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
+  { context: ctx, messages }: ExecuteOpts<ToolContext>,
 ): Promise<WriteCaseResult> {
   "use step";
   if (ctx.useDemo) {
@@ -769,7 +827,17 @@ export async function writeCaseExecute(
   try {
     await fsReadFile(indexPath, undefined, { fresh: true });
     exists = true;
-  } catch {
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    const status = error && typeof error === "object" && "status" in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code !== "ENOENT" && status !== 404 && !/^(File not found|Directory not found)/.test(message) && !/\bENOENT\b/.test(message)) {
+      return { ok: false, reason: `case read failed before writing (not absence): ${message}` };
+    }
     exists = false;
   }
 
@@ -805,10 +873,22 @@ export async function writeCaseExecute(
     };
   }
   try {
+  const readScope = exists
+    ? await reconstructCaseReadScope({ messages: messages ?? [], scopeId: ctx.readScopeId, category, caseName, batch })
+    : undefined;
+  if (exists && !readScope) {
+    return {
+      ok: false,
+      reason:
+        `addPiece refused: ${category}/${caseName} requires a successful full recallRead ` +
+        "in this run's read scope. An outline, error, other turn, or unpaired JSON is not proof.",
+    };
+  }
     const applied = await applyCaseWriteIntent(
       { action: "addPiece", category, caseName, title: pieceTitle, body },
       date,
       batch,
+      readScope ?? undefined,
     );
     return { ok: true, action: "addPiece", path: applied.path };
   } catch (e) {
@@ -822,10 +902,232 @@ export async function writeCaseExecute(
 }
 
 
+// ─── Authoritative task state and delivery intent ─────────────────────────
+
+export type QueryTasksToolResult =
+  | {
+      status: "ready";
+      tasks: ReturnType<typeof queryTasks>["tasks"];
+      total: number;
+      offset: number;
+      hasMore: boolean;
+      pendingResults: ReturnType<typeof listPendingTaskResults>;
+    }
+  | { status: "missing" | "unavailable" | "corrupt"; message?: string };
+
+export async function queryTasksExecute(
+  input: TaskQuery,
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<QueryTasksToolResult> {
+  "use step";
+  void ctx;
+  const read = await readTaskLedger();
+  if (read.status !== "ready") {
+    return read.status === "missing"
+      ? { status: "missing" }
+      : { status: read.status, message: read.message };
+  }
+  const page = queryTasks(read.ledger, { ...input, limit: Math.min(input.limit ?? 30, 50) });
+  return {
+    status: "ready",
+    ...page,
+    pendingResults: listPendingTaskResults(read.ledger, {
+      ...(input.ref ? { taskRef: input.ref } : {}),
+      limit: 30,
+    }),
+  };
+}
+
+export type TaskMutationToolResult =
+  | {
+      ok: true;
+      outcome: "applied" | "deduped";
+      attempts: number;
+      task: ReturnType<typeof queryTasks>["tasks"][number];
+    }
+  | { ok: false; reason: string };
+
+function currentTaskEvidence(ctx: ToolContext, quote?: string): TaskEvidence {
+  if (!ctx.currentUserText.trim()) {
+    throw new TaskLedgerError(
+      "invalid_operation",
+      "The current user message is empty; task evidence must be an actual user statement",
+    );
+  }
+  if (quote !== undefined && (!quote.trim() || quote.length > 4000 || !ctx.currentUserText.includes(quote))) {
+    throw new TaskLedgerError("invalid_operation", "evidenceQuote must be an exact nonempty excerpt of the current user message, at most 4000 characters");
+  }
+  if (!quote && ctx.currentUserText.length > 4000) {
+    throw new TaskLedgerError("invalid_operation", "For a long current message, provide evidenceQuote quoting the actual task commitment or correction (at most 4000 characters)");
+  }
+  return {
+    sliceId: ctx.sliceId,
+    turnId: ctx.turnId,
+    statement: quote ?? ctx.currentUserText,
+  };
+}
+
+function taskMutationFailure(error: unknown): TaskMutationToolResult {
+  if (error instanceof TaskLedgerError) {
+    return { ok: false, reason: `${error.code}: ${error.message}` };
+  }
+  throw error;
+}
+
+export async function createTaskExecute(
+  input: FieldCreateTaskInput,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<TaskMutationToolResult> {
+  "use step";
+  try {
+    const parsed = fieldCreateTaskSchema.safeParse(input);
+    if (!parsed.success) throw new TaskLedgerError("invalid_operation", parsed.error.message);
+    const { evidenceQuote, ...task } = parsed.data;
+    const result = await registerTaskWithDocument({
+      operationId: stableTaskOperationId("field:create-task", [ctx.readScopeId, toolCallId]),
+      now: new Date().toISOString(),
+      task,
+      userCommitment: currentTaskEvidence(ctx, evidenceQuote),
+    });
+    return {
+      ok: true,
+      outcome: result.outcome,
+      attempts: result.attempts,
+      task: result.ledger.tasks.find((task) => task.ref === input.ref)!,
+    };
+  } catch (error) {
+    return taskMutationFailure(error);
+  }
+}
+
+export async function updateTaskExecute(
+  input: FieldUpdateTaskInput,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<TaskMutationToolResult> {
+  "use step";
+  try {
+    const parsed = fieldUpdateTaskSchema.safeParse(input);
+    if (!parsed.success) throw new TaskLedgerError("invalid_operation", parsed.error.message);
+    const { evidenceQuote, ...update } = parsed.data;
+    const result = await updateTaskFromUserFeedback({
+      operationId: stableTaskOperationId("field:update-task", [ctx.readScopeId, toolCallId]),
+      now: new Date().toISOString(),
+      ...update,
+      evidence: currentTaskEvidence(ctx, evidenceQuote),
+    });
+    return {
+      ok: true,
+      outcome: result.outcome,
+      attempts: result.attempts,
+      task: result.ledger.tasks.find((task) => task.ref === input.ref)!,
+    };
+  } catch (error) {
+    return taskMutationFailure(error);
+  }
+}
+
+export async function reportTaskFollowupExecute(
+  input: ReportTaskFollowupInput,
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<ReportTaskFollowupResult> {
+  "use step";
+  void ctx;
+  const read = await readTaskLedger();
+  if (read.status !== "ready") {
+    return {
+      ok: false,
+      reason: read.status === "missing"
+        ? "The task ledger is missing; there is no confirmed result or task to report"
+        : `The task ledger is ${read.status}: ${read.message}`,
+    };
+  }
+  if ("ref" in input) {
+    const task = read.ledger.tasks.find((item) => item.ref === input.ref);
+    if (!task) return { ok: false, reason: `Unknown task: ${input.ref}` };
+    if (task.status === "completed" || task.status === "cancelled") {
+      return { ok: false, reason: `${input.ref} is already ${task.status}` };
+    }
+    return {
+      ok: true,
+      ackIntent: {
+        kind: "task",
+        followup: { ref: task.ref, expectedRevision: task.revision },
+      },
+    };
+  }
+  const result = read.ledger.results.find((item) => item.id === input.resultId);
+  if (!result) return { ok: false, reason: `Unknown task result: ${input.resultId}` };
+  if (result.delivery.state !== "pending") {
+    return { ok: false, reason: `Task result ${input.resultId} was already delivered` };
+  }
+  return {
+    ok: true,
+    ackIntent: {
+      kind: "result",
+      resultId: result.id,
+      expectedRevision: result.revision,
+    },
+  };
+}
+
+async function registerLongTaskCommitment(
+  ctx: ToolContext,
+  toolCallId: string,
+  task: string,
+  evidenceQuote?: string,
+): Promise<{ ok: true; taskRef: string } | { ok: false; reason: string }> {
+  const caseName = sanitizeCaseSegment(task);
+  if (!caseName || !isValidCaseName(caseName)) {
+    return { ok: false, reason: `The task title cannot form a legal task case: ${JSON.stringify(task)}` };
+  }
+  const taskRef = taskRefForCase(caseName);
+  try {
+    const evidence = currentTaskEvidence(ctx, evidenceQuote);
+    await registerTaskWithDocument({
+      operationId: stableTaskOperationId("field:long-task:create", [ctx.readScopeId, toolCallId]),
+      now: new Date().toISOString(),
+      task: { ref: taskRef, summary: task },
+      userCommitment: evidence,
+    });
+    return { ok: true, taskRef };
+  } catch (error) {
+    if (error instanceof TaskLedgerError && error.code !== "task_exists") return { ok: false, reason: `${error.code}: ${error.message}` };
+    if (!(error instanceof TaskLedgerError) || error.code !== "task_exists") throw error;
+  }
+  const read = await readTaskLedger({ fresh: true });
+  if (read.status !== "ready") {
+    return { ok: false, reason: `Cannot verify existing ${taskRef}: ledger ${read.status}` };
+  }
+  const existing = read.ledger.tasks.find((item) => item.ref === taskRef);
+  if (!existing) return { ok: false, reason: `${taskRef} disappeared while being verified` };
+  if (existing.status === "completed" || existing.status === "cancelled") {
+    return {
+      ok: false,
+      reason: `${taskRef} is already ${existing.status}; use a new specific title instead of reopening it`,
+    };
+  }
+  try {
+    await updateTaskFromUserFeedback({
+      operationId: stableTaskOperationId("field:long-task:evidence", [ctx.readScopeId, toolCallId]),
+      now: new Date().toISOString(),
+      ref: taskRef,
+      expectedRevision: existing.revision,
+      changes: existing.status === "needs_review" ? { status: "open" } : {},
+      evidence: currentTaskEvidence(ctx, evidenceQuote),
+    });
+    return { ok: true, taskRef };
+  } catch (error) {
+    if (error instanceof TaskLedgerError) {
+      return { ok: false, reason: `${error.code}: ${error.message}` };
+    }
+    throw error;
+  }
+}
+
 // ─── startLongTask — the conversation's sub-stream, dispatched on the spot ──
 
 export type StartLongTaskResult =
-  | { ok: true; runId: string }
+  | { ok: true; runId: string; taskRef: string }
   | { ok: false; reason: string };
 
 /**
@@ -847,7 +1149,7 @@ export type StartLongTaskResult =
  * duplicated RUN is absorbed by the pass's own processed-marker record.
  */
 export async function startLongTaskExecute(
-  input: { task: string; note?: string },
+  input: { task: string; note?: string; evidenceQuote?: string },
   { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<StartLongTaskResult> {
   "use step";
@@ -860,6 +1162,8 @@ export async function startLongTaskExecute(
   }
   const task = input.task?.trim() ?? "";
   if (!task) return { ok: false, reason: "task must not be empty." };
+  const registered = await registerLongTaskCommitment(ctx, toolCallId, task, input.evidenceQuote);
+  if (!registered.ok) return registered;
 
   const posted = await appendDocMarker(ctx, {
     v: 1,
@@ -867,6 +1171,7 @@ export async function startLongTaskExecute(
     kind: "question",
     title: task,
     note: input.note?.trim() ?? "",
+    target: registered.taskRef,
     topics: [],
   });
   if (!posted.ok) return { ok: false, reason: posted.reason };
@@ -878,7 +1183,7 @@ export async function startLongTaskExecute(
       [{ sliceId: ctx.sliceId, date: userLocalDate(ctx.timezone) }],
       { region: "hkg1" },
     );
-    return { ok: true, runId: run.runId };
+    return { ok: true, runId: run.runId, taskRef: registered.taskRef };
   } catch (e) {
     // The marker is already on disk — the question stays in the record; but
     // with the close-scan route retired nothing re-fires the run, so the
@@ -1342,6 +1647,51 @@ export async function describeRoomExecute(
  */
 const STEP_TOTAL_MS = 295_000;
 
+export type SelectSkillResult =
+  | {
+      status: "selected";
+      id: string;
+      instruction: string;
+      applicability: string;
+      source: { ref: string; content: string; revision: string };
+      reviewNeeded: boolean;
+    }
+  | { status: "error"; reason: string };
+
+export async function selectSkillExecute(
+  input: { id: string },
+  _options: ExecuteOpts<ToolContext>,
+): Promise<SelectSkillResult> {
+  "use step";
+  const state = await readSkillLedger();
+  if (state.status === "corrupt" || state.status === "unavailable") {
+    return { status: "error", reason: state.diagnostic };
+  }
+  const entry = state.ledger.entries.find((item) =>
+    item.id === input.id && item.state === "adopted" && item.role === "main"
+  );
+  if (!entry) {
+    return { status: "error", reason: `No adopted main skill named ${input.id}` };
+  }
+  const source = await readSkillSource(entry.ref);
+  if (source.status !== "ok") {
+    return {
+      status: "error",
+      reason: source.status === "missing"
+        ? `Skill source is missing: ${entry.ref}`
+        : source.diagnostic,
+    };
+  }
+  return {
+    status: "selected",
+    id: entry.id,
+    instruction: entry.instruction,
+    applicability: entry.applicability,
+    source: { ref: entry.ref, content: source.content ?? "", revision: source.revision },
+    reviewNeeded: entry.reviewNeeded || source.revision !== entry.acknowledgedSourceRevision,
+  };
+}
+
 /** Guidance the main agent reads when a reasoning fragment is interrupted. */
 const SUB_AGENT_TIMEOUT_NOTE =
   "The reasoning fragment was interrupted before finishing. The `answer` holds " +
@@ -1496,14 +1846,29 @@ async function runThinkDeepFragment(
   // Thinking is always requested for a reasoning fragment; the injector owns
   // the provider-specific effort mapping.
 
-  // self/ SOP spawn loading (v0.19 §C.2): the thinkdeep SOP rides the SYSTEM
-  // prompt in FULL (this fragment runner predates the shared runSubAgent, so
-  // it loads directly). Absent/unreadable → no block, never a failed spawn.
-  const sop = await readSelfSop("thinkdeep").catch(() => null);
-  const baseSystem = buildSubAgentSystemPrompt(baseSystemPrompt);
-  const system = sop?.trim()
-    ? `${baseSystem}\n\n## Your SOP (self/thinkdeep/index.md — follow it unless it conflicts with the question)\n\n${sop.trim()}`
-    : baseSystem;
+  const [sop, skillState] = await Promise.all([
+    readSelfSopSnapshot("thinkdeep", undefined, { fresh: false }).catch(() => null),
+    readSkillLedger().catch(() => null),
+  ]);
+  const guidance = renderRoleSkillGuidance({
+    role: "thinkdeep",
+    hostReservedChars: 2,
+    ledger: skillState?.status === "ok" ? skillState.ledger : null,
+    legacySop: sop?.content?.trim()
+      ? {
+          content: sop.content,
+          ref: sop.origin === "legacy" ? "agent-playbooks/thinkdeep.md" : "self/thinkdeep/index.md",
+        }
+      : null,
+    stateDiagnostic: skillState?.status === "corrupt"
+      ? "Skill ledger is corrupt; adopted skills were not injected and the ledger was not reset."
+      : skillState?.status === "unavailable"
+        ? "Skill ledger is unavailable; adopted skills were not injected."
+        : undefined,
+  });
+  const inherited = replaceMainCraftBlock(baseSystemPrompt, "");
+  const baseSystem = buildSubAgentSystemPrompt(inherited);
+  const system = guidance.text ? `${baseSystem}\n\n${guidance.text}` : baseSystem;
   const dateAnchor = new Date().toISOString().slice(0, 10);
 
   const userPrompt = [

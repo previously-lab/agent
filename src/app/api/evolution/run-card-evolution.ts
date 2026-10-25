@@ -25,6 +25,9 @@
  * applies through writeUserModelDirection — the direction half of the folded
  * index.md. A rejected doc is logged and skipped, never fatal; the verdict
  * rides the result's `direction` field for the terminal data-evolution frame.
+ * TTL aging uses one authoritative slice enumeration per run; enumeration
+ * failure preserves the pool with an explicit diagnostic. SOP rewrites carry
+ * their recorded full-read revision back through a fresh-state write guard.
  *
  * Streaming is surfaced via the optional `onProgress` callback (phase steps)
  * and `onEvolutionLine` (the Previously Agent's live thinking/writing lines)
@@ -41,12 +44,19 @@ import type { ModelConfig } from "@/lib/models/registry";
 import {
   readUserModel,
   readUserProfile,
+  readSelfSopSnapshot,
   writeUserModelCard,
   writeUserModelDirection,
-  writeSelfSop,
+  writeSelfSopVersioned,
+  type SelfSopSnapshot,
 } from "@/lib/evolution/store";
 import type { SelfAgent } from "@/lib/evolution/paths";
-import { validateDirectionProposal, retireExpiredHypotheses } from "@/lib/evolution/direction-agent";
+import {
+  normalizeSliceIdsForTtl,
+  validateDirectionProposal,
+  retireExpiredHypotheses,
+} from "@/lib/evolution/direction-agent";
+import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 
 export interface CardEvolutionReaders {
   readSlice: (sliceId: string, range?: {
@@ -128,6 +138,10 @@ export interface RunCardEvolutionResult {
    *  the one-line expected benefit. Surfaced on the terminal data-evolution
    *  frame. */
   playbooks?: Array<{ agent: SelfAgent; summary: string }>;
+  /** Proposed SOP writes rejected by their fresh-read guard or write failure. */
+  playbookRejections?: Array<{ agent: SelfAgent; summary: string }>;
+  /** Non-fatal degraded reads (for example an unavailable SOP working copy). */
+  diagnostics?: string[];
   /** v1.1: the direction half's verdict (merged run only — absent when no
    *  directionEval was carried). "failed" covers a write error; a REJECTED
    *  proposal reports outcome "rejected" with the validation reason (never
@@ -136,6 +150,8 @@ export interface RunCardEvolutionResult {
   direction?: {
     outcome: "no_change" | "updated" | "failed" | "rejected";
     summary?: string;
+    /** TTL enumeration failure preserves every hypothesis and is explicit. */
+    diagnostic?: string;
   };
 }
 
@@ -154,8 +170,9 @@ export async function runCardEvolution(
   // the agent's working copy; tolerant read falls back to the legacy roots.
   const model = await readUserModel(input.batch);
   const baseCard = model?.card ?? "";
-  const signal: PreviouslySignal = VALID_SIGNALS.includes(input.signal ?? "new_observation")
-    ? (input.signal as PreviouslySignal)
+  const requestedSignal = input.signal ?? "new_observation";
+  const signal: PreviouslySignal = VALID_SIGNALS.includes(requestedSignal)
+    ? requestedSignal
     : "new_observation";
 
   const note =
@@ -168,6 +185,19 @@ export async function runCardEvolution(
         : input.focus
           ? `User explicitly requested a memory update: ${input.focus}`
           : "Auto-review of latest conversation.";
+
+  const allowedSops = [...new Set(input.allowedSopWrites ?? [])];
+  const sopSnapshots: Partial<Record<SelfAgent, SelfSopSnapshot>> = {};
+  const diagnostics: string[] = [];
+  await Promise.all(allowedSops.map(async (agent) => {
+    try {
+      sopSnapshots[agent] = await readSelfSopSnapshot(agent, input.batch);
+    } catch (error) {
+      diagnostics.push(
+        `${agent} SOP working copy unavailable; its writes are disabled: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }));
 
   // "reviewing" covers the agent run itself — the phase frame must go out
   // BEFORE it starts (it used to fire after, a ~ms flash before the terminal
@@ -186,7 +216,8 @@ export async function runCardEvolution(
     direction: input.direction,
     directionEval: input.directionEval,
     userProfile: await readUserProfile(input.batch).catch(() => null),
-    allowedSopWrites: input.allowedSopWrites,
+    allowedSopWrites: allowedSops,
+    sopSnapshots,
     readSliceFn: input.readers.readSlice,
     readAgentTimelineFn: input.readers.readAgentTimeline,
     readPreviouslyFn: input.readers.readPreviously,
@@ -196,7 +227,14 @@ export async function runCardEvolution(
   // A FAILED worker (unreachable / timed out) must not be presented as
   // "checked, no updates" — surface the failure as an error.
   if (result.failed) {
-    return { ran: true, changed: false, droppedRecent: 0, note: result.reasoning, error: result.reasoning };
+    return {
+      ran: true,
+      changed: false,
+      droppedRecent: 0,
+      note: result.reasoning,
+      error: result.reasoning,
+      ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    };
   }
 
   // ── v1.1 direction half — the merged run edits direction.md through ATOMIC
@@ -212,15 +250,25 @@ export async function runCardEvolution(
   let directionMoved = false;
   if (input.directionEval) {
     const currentDir = input.directionEval.current;
-    // The hypothesis TTL needs a slice-id trail to age against; the timeline
-    // catalog projection is retired (v0.19 A1), so the current slice is the
-    // only certain id any caller has today.
-    const sliceIds = [input.sliceId];
+    let ttlDiagnostic: string | undefined;
+    let sliceIds: string[] = [];
+    try {
+      const enumerated = await enumerateSliceIds();
+      sliceIds = normalizeSliceIdsForTtl([...enumerated, input.sliceId], input.sliceId);
+    } catch (error) {
+      ttlDiagnostic = `Hypothesis TTL enumeration unavailable; all hypotheses were preserved: ${error instanceof Error ? error.message : String(error)}`;
+      console.warn(`[Evolution] ${ttlDiagnostic}`);
+    }
+    const withTtlDiagnostic = (
+      outcome: NonNullable<RunCardEvolutionResult["direction"]>,
+    ): NonNullable<RunCardEvolutionResult["direction"]> =>
+      ttlDiagnostic ? { ...outcome, diagnostic: ttlDiagnostic } : outcome;
     const proposal = result.direction;
     if (!proposal) {
-      // No agent move — engineering still retires expired hypotheses.
-      if (currentDir?.trim()) {
-        const aged = retireExpiredHypotheses(currentDir.trim(), sliceIds);
+      // No agent move — engineering still retires expired hypotheses, but an
+      // enumeration failure must never turn into a destructive guessed trail.
+      if (currentDir?.trim() && !ttlDiagnostic) {
+        const aged = retireExpiredHypotheses(currentDir.trim(), sliceIds, input.sliceId);
         if (aged.retired.length > 0) {
           try {
             await writeUserModelDirection(aged.doc, input.batch);
@@ -232,15 +280,16 @@ export async function runCardEvolution(
             console.log(
               `[Evolution] direction: retired ${aged.retired.length} expired hypothesis(es) (no-change run)`,
             );
-          } catch (e) {
-            console.warn(
-              "[Evolution] direction TTL write failed:",
-              e instanceof Error ? e.message : e,
-            );
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            console.warn("[Evolution] direction TTL write failed:", reason);
+            directionOutcome = { outcome: "failed", summary: reason };
           }
         }
       }
-      if (!directionOutcome) directionOutcome = { outcome: "no_change" };
+      if (!directionOutcome) {
+        directionOutcome = withTtlDiagnostic({ outcome: "no_change" });
+      }
     } else {
       const validation = validateDirectionProposal(
         proposal.doc,
@@ -248,18 +297,15 @@ export async function runCardEvolution(
         { mode: input.directionEval.mode },
       );
       if (!validation.ok) {
-        // A rejection is NOT "no_change": the doc keeps its old skeleton, so
-        // the migrate/bootstrap gate would otherwise re-fire the full merged
-        // run on EVERY remaining turn of this slice. The distinct outcome lets
-        // housekeeping back the gate off (per-slice) and lets the terminal
-        // frame show the rejection instead of a fake "checked, unchanged".
         console.warn(`[Evolution] direction proposal rejected: ${validation.reason}`);
-        directionOutcome = { outcome: "rejected", summary: validation.reason };
+        directionOutcome = withTtlDiagnostic({ outcome: "rejected", summary: validation.reason });
       } else {
         const summary =
           proposal.summary.trim() || "Direction updated (merged evolution run)";
         try {
-          const aged = retireExpiredHypotheses(proposal.doc.trim(), sliceIds);
+          const aged = ttlDiagnostic
+            ? { doc: proposal.doc.trim(), retired: [] }
+            : retireExpiredHypotheses(proposal.doc.trim(), sliceIds, input.sliceId);
           if (aged.retired.length > 0) {
             console.log(
               `[Evolution] direction: retired ${aged.retired.length} expired hypothesis(es)`,
@@ -267,12 +313,12 @@ export async function runCardEvolution(
           }
           await writeUserModelDirection(aged.doc, input.batch);
           directionMoved = true;
-          directionOutcome = { outcome: "updated", summary };
+          directionOutcome = withTtlDiagnostic({ outcome: "updated", summary });
           console.log(`[Evolution] direction updated: ${summary}`);
-        } catch (e) {
-          const reason = e instanceof Error ? e.message : String(e);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
           console.warn("[Evolution] direction write failed:", reason);
-          directionOutcome = { outcome: "failed", summary: reason };
+          directionOutcome = withTtlDiagnostic({ outcome: "failed", summary: reason });
         }
       }
     }
@@ -284,24 +330,15 @@ export async function runCardEvolution(
   // finish.
   const resultNote = result.partial ? `[partial] ${result.reasoning}` : result.reasoning;
 
-  if (!result.updatedCard.trim()) {
-    return {
-      ran: true,
-      changed: false,
-      droppedRecent: 0,
-      note: resultNote,
-      ...(result.partial ? { partial: true } : {}),
-      ...(directionOutcome ? { direction: directionOutcome } : {}),
-    };
-  }
-
   // The agent's session serialized the final card; substance comparison
   // decides whether anything actually moved (stamps refresh on every pass and
   // are ignored). Skip BOTH writes on a no-op pass — writing an unchanged card
   // would produce an empty commit entry for nothing. (The live model IS
   // people/user/index.md; the per-turn snapshots are written by the turn
   // pipeline — see steps.ts, §B.7.)
-  const changed = !sameCardSubstance(parseCard(baseCard), parseCard(result.updatedCard));
+  const changed = result.updatedCard.trim()
+    ? !sameCardSubstance(parseCard(baseCard), parseCard(result.updatedCard))
+    : false;
   if (changed) {
     // The folded model — the next turn's conversation reads this. The
     // direction half is preserved inside index.md by the store helper.
@@ -316,27 +353,30 @@ export async function runCardEvolution(
     }
   }
 
-  // ── SOP write-back — the evolution agent is the single writer of card /
-  // direction / self/ SOPs (v0.19 §C.2). The SOPs that actually landed are
-  // surfaced on the terminal evolution frame so the UI can tell the "what
-  // changed" story. ────────────────────────────────────────────────────────
+  // Every proposed SOP gets its own fresh revision comparison. Only an actual
+  // guarded write is reported as applied; stale, unavailable, and failed
+  // writes remain visible as rejections and never stop the other SOP writes.
   const sopWrites = result.sopWrites ?? [];
   const appliedPlaybooks: Array<{ agent: SelfAgent; summary: string }> = [];
-  if (!result.failed) {
+  const playbookRejections: Array<{ agent: SelfAgent; summary: string }> = [];
+  for (const sw of sopWrites) {
     try {
-      for (const sw of sopWrites) {
-        await writeSelfSop(sw.agent, sw.content, input.batch);
-        appliedPlaybooks.push({
-          agent: sw.agent,
-          summary:
-            sw.expectedBenefit.trim() || `Rewrote the ${sw.agent} SOP`,
-        });
-      }
-    } catch (e) {
-      console.warn(
-        "[Evolution] SOP write failed (the card write landed):",
-        e instanceof Error ? e.message : e,
+      const writeResult = await writeSelfSopVersioned(
+        sw.agent,
+        sw.content,
+        sw.baseRevision,
+        input.batch,
       );
+      if (!writeResult.applied) {
+        playbookRejections.push({ agent: sw.agent, summary: writeResult.diagnostic });
+        console.warn(`[Evolution] ${sw.agent} SOP rejected: ${writeResult.diagnostic}`);
+        continue;
+      }
+      appliedPlaybooks.push({ agent: sw.agent, summary: sw.expectedBenefit });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      playbookRejections.push({ agent: sw.agent, summary: reason });
+      console.warn(`[Evolution] ${sw.agent} SOP write failed:`, reason);
     }
   }
 
@@ -357,6 +397,8 @@ export async function runCardEvolution(
       ? summarizeCardChanges(baseCard, result.updatedCard, 0)
       : undefined,
     ...(appliedPlaybooks.length > 0 ? { playbooks: appliedPlaybooks } : {}),
+    ...(playbookRejections.length > 0 ? { playbookRejections } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
     ...(directionOutcome ? { direction: directionOutcome } : {}),
   };
 }

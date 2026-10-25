@@ -13,12 +13,15 @@ vi.mock("@/lib/episodic/flash/turn-analyzer", () => ({ analyzeTurn: async () => 
 const env = { STORAGE: process.env.STORAGE, GITHUB_REPO_OWNER: process.env.GITHUB_REPO_OWNER, GITHUB_REPO_NAME: process.env.GITHUB_REPO_NAME };
 beforeAll(() => { createNextDataCacheContext(); });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
 describe("GitHub summary writes with real transport and ref conflicts", () => {
   it("reassembles from the new HEAD after a concurrent writer, then dedupes replay", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-22T08:02:00Z"));
     process.env.STORAGE = "github"; process.env.GITHUB_REPO_OWNER = "fixture"; process.env.GITHUB_REPO_NAME = "records";
     vi.resetModules();
     vi.spyOn(console, "log").mockImplementation(() => {});

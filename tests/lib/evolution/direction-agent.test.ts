@@ -324,6 +324,28 @@ describe("retireExpiredHypotheses (the engineering TTL)", () => {
     expect(out).toContain("a guess without its proposed marker");
     expect(retired).toHaveLength(1);
   });
+
+  it("dedups canonical slash paths and ignores invalid or future ids", () => {
+    const duplicates = [
+      "2026/08/02/0900",
+      "2026-08-02-0900",
+      "2026/08/02/0900",
+      "not-a-slice",
+      "2026-99-99-9999",
+      "2026-08-06-0900",
+    ];
+    expect(retireExpiredHypotheses(DOC, duplicates, "2026-08-05-0900").retired)
+      .toHaveLength(0);
+
+    const fourRealNewer = [
+      ...duplicates,
+      "2026/08/03/0900",
+      "2026-08-04-0900",
+      "2026/08/05/0900",
+    ];
+    expect(retireExpiredHypotheses(DOC, fourRealNewer, "2026-08-05-0900").retired)
+      .toHaveLength(1);
+  });
 });
 
 describe("applyDirectionOps (the atomic write path)", () => {

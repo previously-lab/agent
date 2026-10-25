@@ -29,13 +29,15 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
       batch.entries.clear();
     },
   ),
-  fsReadFile: vi.fn(async (path: string) => {
-    const content = io.files.get(path);
+  fsReadFile: vi.fn(async (path: string, batch?: { entries: Map<string, string | null> }) => {
+    const content = batch?.entries.has(path) ? batch.entries.get(path) : io.files.get(path);
     if (content === undefined) throw new Error(`ENOENT: ${path}`);
+    if (content === null) throw new Error(`ENOENT: ${path}`);
     return content;
   }),
-  fsWriteFile: vi.fn(async (path: string, content: string) => {
-    io.files.set(path, content);
+  fsWriteFile: vi.fn(async (path: string, content: string, batch?: { entries: Map<string, string | null> }) => {
+    if (batch) batch.entries.set(path, content);
+    else io.files.set(path, content);
     return { path, created: true };
   }),
   fsListFiles: vi.fn(async (path: string) => {
@@ -51,10 +53,6 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
         };
       });
   }),
-}));
-
-vi.mock("@/lib/episodic/slice-mutex", () => ({
-  withSliceLock: vi.fn(async (_key: string, fn: () => unknown) => fn()),
 }));
 
 const episodic = vi.hoisted(() => ({
@@ -91,10 +89,16 @@ vi.mock("@/lib/models/registry", () => ({
 }));
 
 import { executeQuestionRun } from "@/app/api/evolution/background-steps";
-import { parseCaseDoc } from "@/lib/docs";
+import { parseTaskLedger } from "@/lib/tasks/ledger";
+import { TASK_LEDGER_PATH } from "@/lib/tasks/contracts";
+import { createTask } from "@/lib/tasks/store";
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
+const Q1_PRODUCT = {
+  markerId: "q-1", caseRef: "research/手机话题演变",
+  productRef: "research/手机话题演变/index.md", outcome: "written" as const,
+};
 
 function seedSlice(overrides: Record<string, unknown> = {}) {
   episodic.loadSlice.mockResolvedValue({
@@ -117,87 +121,173 @@ beforeEach(() => {
   passes.calls.length = 0;
   passes.runDocResearchPass.mockImplementation(async () => {
     passes.calls.push("research");
-    return { ran: true, written: [], skipped: [] };
+    return { ran: true, written: [], skipped: [], productsByQuestion: [] };
   });
   seedSlice();
 });
 
-describe("executeQuestionRun (§A.2.3-b)", () => {
+describe("executeQuestionRun — durable result events", () => {
   const QUESTION_MAILBOX =
     '[doc-marker] {"v":1,"id":"q-1","kind":"question","title":"手机话题这一年的演变","note":""}\n';
 
-  it("no unanswered question markers → idle, no pass, no notice", async () => {
-    io.files.set(`${SLICE_ID}:agent`, "");
+  beforeEach(() => {
+    episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX);
+  });
+
+  it("no unanswered question markers means no research and no result event", async () => {
     episodic.readSlicePart.mockResolvedValue("");
     const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
     expect(outcome.ran).toBe(false);
     expect(passes.runDocResearchPass).not.toHaveBeenCalled();
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/tasks/"))).toBe(false);
+    expect(io.files.has(TASK_LEDGER_PATH)).toBe(false);
   });
 
-  it("research that lands posts a §A.3.3 completion notice (real task case, dated tail line, declarative statement)", async () => {
-    episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX);
-    passes.runDocResearchPass.mockImplementation(async () => {
-      passes.calls.push("research");
-      return {
-        ran: true,
-        written: ["research/手机话题演变/index.md"],
-        skipped: [],
-      };
-    });
-
-    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
-
-    expect(outcome.ran).toBe(true);
-    expect(outcome.noticePath).toBe("memory/tasks/后台回复/index.md");
-    const raw = io.files.get("memory/tasks/后台回复/index.md");
-    expect(raw).toBeDefined();
-    const doc = parseCaseDoc(raw!, {
-      category: "tasks",
-      caseName: "后台回复",
-      fileName: "index.md",
-    });
-    // The completion credential: a declarative statement as today's tail line
-    // (close is retired — nobody seals; the dated line IS the record).
-    expect(doc.closed).toBeNull();
-    const closing = doc.tail.find((l) => l.date === DATE);
-    expect(closing).toBeDefined();
-    expect(closing!.text).toContain("手机话题这一年的演变");
-    expect(closing!.text).toContain("research/手机话题演变/index.md");
-  });
-
-  it("a pass that wrote nothing posts no notice (conservative agenda)", async () => {
-    episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX);
-    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
-    expect(outcome.ran).toBe(true);
-    expect(outcome.noticePath).toBeUndefined();
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/tasks/"))).toBe(false);
-  });
-
-  it("a second notice on the same day appends a tail line instead of failing", async () => {
-    episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX);
-    passes.runDocResearchPass.mockImplementation(async () => ({
+  it("commits a stable pending result with the research, reconciling the legacy task honestly", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
       ran: true,
       written: ["research/手机话题演变/index.md"],
       skipped: [],
-    }));
-    await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
-    // Second run, another landing — the case already exists, the tail grows.
-    passes.runDocResearchPass.mockImplementation(async () => ({
-      ran: true,
-      written: ["research/另一问题/index.md"],
-      skipped: [],
-    }));
+      productsByQuestion: [Q1_PRODUCT],
+    });
+
     const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
 
-    expect(outcome.noticePath).toBe("memory/tasks/后台回复/index.md");
-    const doc = parseCaseDoc(io.files.get("memory/tasks/后台回复/index.md")!, {
-      category: "tasks",
-      caseName: "后台回复",
-      fileName: "index.md",
+    expect(outcome).toEqual({
+      ran: true,
+      written: ["research/手机话题演变/index.md"],
+      resultIds: [`question-result:${SLICE_ID}:q-1`],
     });
-    const todayLines = doc.tail.filter((l) => l.date === DATE);
-    expect(todayLines).toHaveLength(2);
-    expect(todayLines[1].text).toContain("research/另一问题/index.md");
+    expect(io.files.has("memory/tasks/后台回复/index.md")).toBe(false);
+    const ledger = parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!);
+    expect(ledger.tasks).toHaveLength(1);
+    expect(ledger.tasks[0]).toMatchObject({
+      ref: "tasks/手机话题这一年的演变",
+      status: "needs_review",
+    });
+    expect(ledger.results).toHaveLength(1);
+    expect(ledger.results[0]).toMatchObject({
+      id: `question-result:${SLICE_ID}:q-1`,
+      taskRef: "tasks/手机话题这一年的演变",
+      delivery: { state: "pending" },
+    });
+    expect(ledger.results[0].evidence.statement).toContain("research/手机话题演变/index.md");
+  });
+
+  it("a pass that wrote nothing records no result", async () => {
+    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    expect(outcome.ran).toBe(true);
+    expect(outcome.resultIds).toBeUndefined();
+    expect(io.files.has(TASK_LEDGER_PATH)).toBe(false);
+  });
+
+  it("the same slice and marker stay one event across a later-day retry", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true,
+      written: ["research/手机话题演变/index.md"],
+      skipped: [],
+      productsByQuestion: [Q1_PRODUCT],
+    });
+    const first = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    const second = await executeQuestionRun({ sliceId: SLICE_ID, date: "2026-08-10" });
+
+    expect(second.resultIds).toEqual(first.resultIds);
+    const ledger = parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!);
+    expect(ledger.results).toHaveLength(1);
+    expect(ledger.operations.filter((op) => op.kind === "record_result")).toHaveLength(1);
+  });
+
+  it("a failed commit rejects instead of reporting results, with no internal stale-ledger retry", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true,
+      written: ["research/手机话题演变/index.md"],
+      skipped: [],
+      productsByQuestion: [Q1_PRODUCT],
+    });
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(flushBatch).mockRejectedValueOnce(new Error("not a fast forward"));
+
+    await expect(executeQuestionRun({ sliceId: SLICE_ID, date: DATE })).rejects.toThrow(
+      "not a fast forward",
+    );
+    expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(1);
+    expect(io.files.has(TASK_LEDGER_PATH)).toBe(false);
+
+    const recovered = await executeQuestionRun({ sliceId: SLICE_ID, date: "2026-08-10" });
+    expect(recovered.resultIds).toEqual([`question-result:${SLICE_ID}:q-1`]);
+    expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(2);
+    const ledger = parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!);
+    expect(ledger.results).toHaveLength(1);
+  });
+
+  it("records only a mapped successful question, not another question that failed", async () => {
+    episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX +
+      '[doc-marker] {"v":1,"id":"q-2","kind":"question","title":"另一问尚未解决","note":""}\n');
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true, written: [Q1_PRODUCT.productRef],
+      skipped: [{ id: "q-2", reason: "No accepted evidence" }],
+      productsByQuestion: [Q1_PRODUCT],
+    });
+    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    expect(outcome.resultIds).toEqual([`question-result:${SLICE_ID}:q-1`]);
+    const ledger = parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!);
+    expect(ledger.results).toHaveLength(1);
+    expect(ledger.results[0]!.evidence.statement).not.toContain("另一问");
+    expect(ledger.tasks.map((task) => task.ref)).not.toContain("tasks/另一问尚未解决");
+  });
+
+  it("delivers an accepted existing product even when no new document was written", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true, written: [], skipped: [],
+      productsByQuestion: [{ ...Q1_PRODUCT, outcome: "existing" }],
+    });
+    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    expect(outcome.written).toEqual([]);
+    expect(outcome.resultIds).toEqual([`question-result:${SLICE_ID}:q-1`]);
+    expect(parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!).results[0]!.delivery.state).toBe("pending");
+  });
+
+  it("does not infer a question result from unmapped global writing", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true, written: [Q1_PRODUCT.productRef], skipped: [], productsByQuestion: [],
+    });
+    const outcome = await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    expect(outcome.resultIds).toBeUndefined();
+    expect(io.files.has(TASK_LEDGER_PATH)).toBe(false);
+  });
+
+  it("holds the local task lock through the research commit so a field write survives", async () => {
+    passes.runDocResearchPass.mockResolvedValue({
+      ran: true, written: [Q1_PRODUCT.productRef], skipped: [], productsByQuestion: [Q1_PRODUCT],
+    });
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    const flush = vi.mocked(flushBatch);
+    const original = flush.getMockImplementation()!;
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const flushing = new Promise<void>((resolve) => { entered = resolve; });
+    flush.mockImplementationOnce(async (batch, message) => {
+      entered();
+      await barrier;
+      return original(batch, message);
+    });
+    const background = executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
+    await flushing;
+    let fieldFinished = false;
+    const field = createTask({
+      operationId: "concurrent-field", now: "2026-08-09T14:00:00.000Z",
+      task: { ref: "tasks/同时登记的任务", summary: "不能被覆盖" },
+      userCommitment: { sliceId: SLICE_ID, turnId: "field-user", statement: "请记住这个任务" },
+    }).then(() => { fieldFinished = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fieldFinished).toBe(false);
+    } finally {
+      release();
+      await Promise.all([background, field]);
+    }
+    const ledger = parseTaskLedger(io.files.get(TASK_LEDGER_PATH)!);
+    expect(ledger.tasks.map((task) => task.ref)).toContain("tasks/同时登记的任务");
+    expect(ledger.results).toHaveLength(1);
   });
 });

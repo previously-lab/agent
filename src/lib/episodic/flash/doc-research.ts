@@ -13,10 +13,11 @@
  * - writer-is-reader: the case manifest enters the prompt, and the pass gets
  *   READ tools (readCase / readSlice) for cross-record digging — it is a
  *   reader before it is a writer.
- * - evidence-while-writing: the triggering slice id is stamped mechanically.
+ * - evidence-while-writing: historical writes carry the trigger mechanically;
+ *   current views accept only refs successfully read in the run-local scope.
  * - writes are validated intents applied through the case write ops (§B.3 —
- *   open / rewriteIndex / appendTail / addPiece; close retired with the
- *   v0.21 write window) under the per-case lock. A hypothesis whose body
+ *   open / rewriteIndex / appendTail / addPiece / reviseUnderstanding) under
+ *   the per-case lock. A hypothesis whose body
  *   carries no falsification condition is REFUSED (§B.6: 无证伪条件拒开) —
  *   the refusal is recorded, visible.
  *
@@ -40,16 +41,20 @@ import {
   fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
-import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import { readSlicePart, readSlicePartResolved } from "../paths";
 import {
   RESEARCH_RECORD_PREFIX,
   applyCaseWriteIntent,
+  applyCaseCurrentUnderstanding,
+  createCaseReadScope,
+  currentUnderstandingSchema,
   extractDocMarkers,
   extractProcessedMarkerIds,
   hasFalsificationCondition,
   makeCaseReadTool,
+  makeCrossSliceReadTool,
   renderManifest,
+  sliceExcerptNotice,
   type CaseWriterManifest,
   type DocMarker,
   type SliceExcerpt,
@@ -59,21 +64,32 @@ import {
 
 const writeOpSchema = z.object({
   action: z
-    .enum(["open", "updateIndex", "appendTail", "addPiece"])
+    .enum(["open", "updateIndex", "appendTail", "addPiece", "reviseUnderstanding"])
     .describe(
-      "open: a NEW case (category + caseName; body = the index.md body). " +
-      "updateIndex: rewrite the body of an EXISTING case still inside its write window. " +
-      "appendTail: ONE dated line — the only in-place growth once the write window has closed. " +
-      "addPiece: a dated piece inside an existing case (always allowed).",
+      "open: a NEW case. updateIndex: rewrite an existing in-window index. " +
+      "appendTail: ONE dated line that never reopens the settled body. addPiece: a dated piece. " +
+      "reviseUnderstanding: change only _current.md (requires currentUnderstanding).",
     ),
   category: z.enum(CASE_CATEGORIES),
   caseName: z.string().describe("The case name — permanent at birth; legal per the red-line rule."),
-  /** open/updateIndex/addPiece: the body (updateIndex = the WHOLE new body). */
+  /** open/updateIndex/addPiece: the historical body (updateIndex = the WHOLE new body). */
   body: z.string().optional(),
   /** appendTail only. */
   line: z.string().optional(),
   /** addPiece only — the piece title. */
   title: z.string().optional(),
+  currentUnderstanding: currentUnderstandingSchema.optional(),
+  /** The exact current question marker id(s) this write answers. */
+  questionIds: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Exact marker id(s) from the current question agenda that this write answers. " +
+        "A shared write serving several questions must list every one of them. " +
+        "Unknown or already-processed ids are rejected wholesale. " +
+        "With exactly one question on the agenda it may be omitted (then inferred); " +
+        "with several, omitting it means the write still lands globally but answers no question.",
+    ),
 });
 
 const researchSchema = z.object({
@@ -85,22 +101,25 @@ const RESEARCH_SYSTEM = buildSubAgentSystem(`You are the question-run researcher
 
 ${MEMORY_IS_GIT_RULE}
 
-You are shown: the triggering question markers, the slice they came from, and the case manifest (the whole memory tree, paths only). Read what you need with readCase (case documents) and readSlice (the L0 evidence — concrete facts live ONLY there).
+You are shown: the triggering question markers, a compact slice excerpt, and the case manifest. Use readCase for full case history and readSlice for original semantic records. Slice reads accept ids, zero-based turn ranges, and bounded pages; follow every continuation cursor needed for the question. Every existing write target requires its own successful full readCase in this run — manifest membership and a claimed read are not receipts.
 
 ## Task
 
 Per question, judge: is there enough in the record to write something durable?
-- research: answer a question. A case's index.md carries what is known and where it stands; pieces hold dated expansions. New evidence continuing the SAME question updates the case inside its write window, or appends a dated line once the window has closed; a changed scope means a NEW case (names are permanent).
-- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused. Evidence entries accumulate as dated lines; the outcome (confirmed / refuted / retired) is stated in prose the same way.
+- research: answer a question. Historical index.md text and dated pieces keep the record; update an in-window index or append once settled, and never reopen settled history through a tail.
+- hypothesis: a guess WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused.
+- current understanding: use reviseUnderstanding with currentUnderstanding { body, evidence }, or attach that field to another write. It changes only free-prose _current.md, archives the previous view as dated history, and works for any category without a trait template.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
 
 ## Rules
 
-1. Ground everything in what you actually read (cases, slices). Cite slice ids in the prose when a fact comes from one.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence stamps are mechanical.
-3. ${DOC_WRITE_WINDOW_RULE} Never restate what a case already carries.
-4. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
+1. Ground facts in evidence actually returned by readCase/readSlice. Label user report, direct observation, external verification, interpretation, counterevidence, and unknowns honestly; grounded competing explanations are welcome.
+2. currentUnderstanding.evidence must contain only records/... or case refs actually read in this run. Do not invent evidence or verification.
+3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping; cite current-view evidence explicitly.
+4. ${DOC_WRITE_WINDOW_RULE} Tail supplements and current-view revisions never reopen a settled index.
+5. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
+6. Every write names the question(s) it answers via \`questionIds\` — the exact marker ids shown above. A shared write serving several questions must list every one of them; unknown or already-processed ids are rejected wholesale, so never invent or reuse an old id. With exactly one question on the agenda you may omit \`questionIds\` (it is inferred); with several, omitting it means the write still lands in the case tree but is credited to no question.
 
 ## Output
 
@@ -124,10 +143,19 @@ export interface DocResearchPassInput {
   strands?: unknown;
 }
 
+export interface DocResearchQuestionProduct {
+  markerId: string;
+  caseRef: string;       // `${category}/${caseName}`
+  productRef: string;    // applied.path with leading `memory/` removed
+  outcome: "written" | "existing";
+}
+
 export interface DocResearchPassResult {
   ran: boolean;
   written: string[];
   skipped: Array<{ id: string; reason: string }>;
+  /** Per-question accepted products — the basis for the processed records. */
+  productsByQuestion: DocResearchQuestionProduct[];
 }
 
 /**
@@ -142,6 +170,7 @@ export async function runDocResearchPass(
   const { model, sliceId, excerpt, date, batch } = input;
   const manifest = input.manifest ?? { truncated: false, tree: {} };
   const skipped: Array<{ id: string; reason: string }> = [];
+  const scope = createCaseReadScope();
 
   let agentMd: string;
   try {
@@ -149,14 +178,14 @@ export async function runDocResearchPass(
     // root move lives under the legacy slices root.
     agentMd = await readSlicePart(sliceId, "agent", batch);
   } catch {
-    return { ran: false, written: [], skipped };
+    return { ran: false, written: [], skipped, productsByQuestion: [] };
   }
 
   const processed = extractProcessedMarkerIds(agentMd, RESEARCH_RECORD_PREFIX);
   const questions = extractDocMarkers(agentMd).filter(
     (m) => m.kind === "question" && !processed.has(m.id),
   );
-  if (questions.length === 0) return { ran: false, written: [], skipped };
+  if (questions.length === 0) return { ran: false, written: [], skipped, productsByQuestion: [] };
 
   const questionBlocks = (questions as DocMarker[])
     .map(
@@ -170,35 +199,23 @@ export async function runDocResearchPass(
 focus: ${excerpt.focus || "(none)"}
 summary: ${excerpt.summary || "(none)"}
 
+${sliceExcerptNotice(excerpt)}
+
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
 ## The user's questions (the pass's whole agenda — conservative: research nothing beyond them)
 
 ${questionBlocks}
 
-## Case manifest (the full survey — the catalog of what exists)
+## Case manifest (discovery paths only, never read receipts)
 
 ${renderManifest(manifest.tree)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
 Gather evidence with readCase / readSlice, then report the writes as instructed.`;
 
   const tools = {
-    readCase: makeCaseReadTool(batch),
-    readSlice: tool({
-      description:
-        "Read a slice's core.md by slice id (YYYY-MM-DD-HHMM) — the L0 evidence. " +
-        "Concrete facts (numbers, dates, quotes) may ONLY come from here.",
-      inputSchema: z.object({ sliceId: z.string() }),
-      execute: async ({ sliceId: id }: { sliceId: string }) => {
-        try {
-          // Dual-root read (v0.19 R2): evidence slices may predate the
-          // records root move.
-          return await readSlicePart(id, "core", batch);
-        } catch {
-          return `(slice ${id} does not exist or is unreadable)`;
-        }
-      },
-    }),
+    readCase: makeCaseReadTool(batch, scope),
+    readSlice: makeCrossSliceReadTool({ batch, scope }),
     docResearchOutput: tool({
       description: "Report the research/hypothesis writes (or empty) + reasoning.",
       inputSchema: researchSchema,
@@ -222,12 +239,54 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
       ran: true,
       written: [],
       skipped: [...skipped, { id: "*", reason: result.error ?? "no research report" }],
+      productsByQuestion: [],
     };
   }
 
   const written: string[] = [];
+  const products = new Map<string, DocResearchQuestionProduct>();
+  const currentIds = new Set(questions.map((q) => q.id));
+
+  const recordProduct = (
+    markerIds: string[],
+    caseRef: string,
+    applied: { path: string; noop?: boolean },
+  ): void => {
+    const productRef = applied.path.replace(/^memory\//, "");
+    if (!applied.noop && !written.includes(productRef)) written.push(productRef);
+    for (const markerId of markerIds) {
+      const key = JSON.stringify([markerId, productRef]);
+      const previous = products.get(key);
+      products.set(key, {
+        markerId,
+        caseRef,
+        productRef,
+        outcome: previous?.outcome === "written" || !applied.noop
+          ? "written"
+          : "existing",
+      });
+    }
+  };
 
   for (const op of result.report.writes) {
+    // Resolve the question mapping BEFORE any write: an explicit list that
+    // carries an unknown / not-current id refuses the whole intent — no file,
+    // no product, no processed record. Absent ids infer the marker only when
+    // exactly one question is current; with several, no guessing.
+    let mappedIds: string[] = [];
+    if (op.questionIds) {
+      const unknown = op.questionIds.filter((id) => !currentIds.has(id));
+      if (unknown.length > 0) {
+        skipped.push({
+          id: "?",
+          reason: `unknown or not-current questionIds: ${JSON.stringify(unknown)}`,
+        });
+        continue;
+      }
+      mappedIds = [...new Set(op.questionIds)];
+    } else if (questions.length === 1) {
+      mappedIds = [questions[0].id];
+    }
     const caseName = sanitizeCaseSegment(op.caseName);
     const identity = `${op.category}/${caseName}`;
     if (!caseName || !isValidCaseName(caseName)) {
@@ -254,13 +313,13 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
     }
 
     try {
-      let applied: { path: string };
+      let applied: { path: string; noop?: boolean } | null = null;
       switch (op.action) {
         case "open": {
           if (!op.body?.trim()) throw new Error("open requires a body");
           applied = await applyCaseWriteIntent(
             { action: "open", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
-            date, batch,
+            date, batch, scope,
           );
           break;
         }
@@ -268,7 +327,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
           if (!op.body?.trim()) throw new Error("updateIndex requires a body");
           applied = await applyCaseWriteIntent(
             { action: "rewriteIndex", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
-            date, batch,
+            date, batch, scope,
           );
           break;
         }
@@ -276,7 +335,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
           applied = await applyCaseWriteIntent(
             { action: "appendTail", category, caseName, line: `${op.line.trim()} (refs: ${sliceId})` },
-            date, batch,
+            date, batch, scope,
           );
           break;
         }
@@ -286,44 +345,72 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
           }
           applied = await applyCaseWriteIntent(
             { action: "addPiece", category, caseName, title: sanitizeCaseSegment(op.title), body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
-            date, batch,
+            date, batch, scope,
           );
           break;
         }
+        case "reviseUnderstanding": {
+          if (!op.currentUnderstanding) {
+            throw new Error("reviseUnderstanding requires currentUnderstanding { body, evidence }");
+          }
+          break;
+        }
       }
-      written.push(applied.path.replace(/^memory\//, ""));
+      if (applied) recordProduct(mappedIds, identity, applied);
     } catch (e) {
       skipped.push({ id: "?", reason: e instanceof Error ? e.message : String(e) });
+      continue;
+    }
+    if (op.currentUnderstanding) {
+      try {
+        const applied = await applyCaseCurrentUnderstanding({
+          category,
+          caseName,
+          current: op.currentUnderstanding,
+          date,
+          batch,
+          scope,
+          refreshRead: op.action !== "reviseUnderstanding",
+        });
+        recordProduct(mappedIds, identity, applied);
+      } catch (e) {
+        skipped.push({ id: `${identity}/_current.md`, reason: e instanceof Error ? e.message : String(e) });
+      }
     }
   }
 
-  // Every question marker this pass SAW is recorded as processed — the pass
-  // is single-shot per run (the boundary concept is retired; the caller is
-  // HQ); an unanswered question stays visible in
-  // reasoning, not as a growing backlog.
-  const recordLines: string[] = [];
-  for (const q of questions) {
-    recordLines.push(
-      `${RESEARCH_RECORD_PREFIX} {"id":${JSON.stringify(q.id)},"docs":${JSON.stringify(written)}}`,
-    );
-  }
-  if (recordLines.length > 0) {
+  // A processed marker needs an accepted product mapped to THAT question.
+  // Refused, unanswered, and multi-question unmapped writes stay actionable.
+  const productsByQuestion = [...products.values()];
+  if (productsByQuestion.length > 0) {
     try {
       // Dual-root read (the slice may predate the root move), and the record
       // append goes back to the root the mailbox was actually read from —
       // splitting markers (legacy) from records (new) would re-see every
       // question on the next pass.
-      const resolved = await readSlicePartResolved(sliceId, "agent", batch).catch(() => null);
-      const fresh = resolved?.content ?? "";
+      const resolved = await readSlicePartResolved(sliceId, "agent", batch);
+      if (!resolved) throw new Error("Question mailbox could not be read back");
+      const fresh = resolved.content;
+      const alreadyProcessed = extractProcessedMarkerIds(fresh, RESEARCH_RECORD_PREFIX);
+      const recordLines = questions.flatMap((question) => {
+        if (alreadyProcessed.has(question.id)) return [];
+        const docs = productsByQuestion
+          .filter((product) => product.markerId === question.id)
+          .map((product) => product.productRef);
+        return docs.length > 0
+          ? [`${RESEARCH_RECORD_PREFIX} ${JSON.stringify({ id: question.id, docs })}`]
+          : [];
+      });
+      if (recordLines.length === 0) return { ran: true, written, skipped, productsByQuestion };
       const next = fresh.trimEnd()
         ? `${fresh.trimEnd()}\n\n${recordLines.join("\n")}\n`
         : `${recordLines.join("\n")}\n`;
-      await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next, batch);
+      await fsWriteFile(resolved.path, next, batch);
     } catch {
       // record loss → a question may be re-seen; the case tail is append-only,
       // keeping that a duplicate dated line: visible, non-fatal.
     }
   }
 
-  return { ran: true, written, skipped };
+  return { ran: true, written, skipped, productsByQuestion };
 }

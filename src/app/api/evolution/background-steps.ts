@@ -31,14 +31,16 @@
 import { loadSlice, readSlicePart } from "@/lib/episodic";
 import {
   buildSliceExcerpt,
-  applyCaseWriteIntent,
   extractDocMarkers,
   extractProcessedMarkerIds,
   RESEARCH_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import { createBatch, flushBatch } from "@/lib/episodic/io-helpers";
-import { isRefConflictError } from "@/lib/tools/batch-write";
+import { withTaskLedgerBatch } from "@/lib/tasks/store";
+import { isValidTaskRef, taskRefForCase } from "@/lib/tasks/contracts";
+import { isValidCaseName, sanitizeCaseSegment } from "@/lib/docs/case-naming";
+import { stableTaskOperationId } from "@/lib/chat/task-identity";
 // A step module may export ONLY step functions — the run-shared helpers
 // therefore live in their own module (see hq-context.ts for the rule).
 import { backgroundModel, buildRunManifest } from "./hq-context";
@@ -54,14 +56,12 @@ export interface QuestionRunInput {
 
 // ─── The question run (§A.2.3-b) ───────────────────────────────────────────
 
-/** The standing notification case: background findings to tell the user. */
-const NOTICE_CASE = { category: "tasks", caseName: "后台回复" } as const;
-
 export interface QuestionRunOutcome {
   ran: boolean;
+  /** Persisted research paths, reported only after the batch flush succeeds. */
   written: string[];
-  /** The tasks/ case path carrying the completion statement, when posted. */
-  noticePath?: string;
+  /** Stable slice+marker result events committed in the same batch. */
+  resultIds?: string[];
 }
 
 export async function executeQuestionRun(
@@ -113,80 +113,56 @@ export async function executeQuestionRun(
   console.log(
     `[QuestionRun] research: ${result.written.length} written, ${result.skipped.length} skipped`,
   );
-  if (!result.ran || result.written.length === 0) {
-    return { ran: result.ran, written: result.written };
-  }
+  if (!result.ran) return { ran: false, written: [] };
 
-  // §A.3.3 notification: the payload is a REAL task case whose dated tail
-  // lines are the completion credential; the statement is declarative
-  // only (a mechanical template — no promises are structurally possible).
-  // The next turn's reply segment picks up today's tail lines and states them.
-  const statement =
-    `查了：${questions.map((q) => q.title).join("；")} —— ` +
-    `结果已写入 ${result.written.join("、")}。`;
-  let noticePath: string | undefined;
-  try {
-    await applyCaseWriteIntent(
-      {
-        action: "open",
-        category: NOTICE_CASE.category,
-        caseName: NOTICE_CASE.caseName,
-        body:
-          "问题 run 是这场对话的子流；这是它的完成通知册——每当问题 run 的研究落地，" +
-          "结案行进尾部；下一回合的回复段读到当天的尾部行后向用户陈述。",
-      },
-      date,
-      batch,
-    );
-  } catch {
-    // already exists — the notice goes to the tail below either way
+  const agenda = questions.flatMap((question) => {
+    const products = result.productsByQuestion.filter((product) => product.markerId === question.id);
+    if (products.length === 0) return [];
+    const derived = sanitizeCaseSegment(question.title);
+    const caseName = isValidCaseName(derived) ? derived : `问题-${derived}`;
+    const taskRef = question.target && isValidTaskRef(question.target)
+      ? question.target
+      : taskRefForCase(caseName);
+    return [{ question, taskRef, products }];
+  });
+  if (agenda.length === 0) {
+    // Unmapped durable writing may still be useful, but it completes no
+    // particular question and must never create a guessed result event.
+    await flushBatch(batch, `Question run — ${sliceId}`);
+    return { ran: true, written: result.written };
   }
-  try {
-    const applied = await applyCaseWriteIntent(
-      {
-        action: "appendTail",
-        category: NOTICE_CASE.category,
-        caseName: NOTICE_CASE.caseName,
-        line: statement,
-      },
-      date,
-      batch,
-    );
-    noticePath = applied.path;
-  } catch (e) {
-    console.warn(
-      "[QuestionRun] completion notice failed:",
-      e instanceof Error ? e.message : e,
-    );
-  }
-  // The run's ONE commit. A bounded PLAIN retry covers a ref that moved
-  // under us: commitBatchToGitHub re-reads HEAD per attempt, so a retry
-  // rebases our tree onto the moved ref. The run writes only case/mailbox
-  // files — never the live slice's core.md — so no merge-on-conflict is
-  // needed (the R6 reasoning lives in hq-agent.ts). A lost flush costs the
-  // run's writes, never the run.
-  let flushAttempts = 0;
-  for (;;) {
-    try {
-      await flushBatch(batch, `Question run — ${sliceId}`);
-      break;
-    } catch (err) {
-      if (!isRefConflictError(err) || flushAttempts >= 2) {
-        console.warn(
-          "[QuestionRun] flush failed (queued writes lost):",
-          err instanceof Error ? err.message : err,
-        );
-        break;
-      }
-      flushAttempts += 1;
-      console.warn(
-        `[QuestionRun] flush conflict — rebasing onto the moved ref (retry ${flushAttempts}/2):`,
-        err instanceof Error ? err.message : err,
-      );
+  const now = new Date().toISOString();
+  const resultIds = await withTaskLedgerBatch(batch, async (mutate) => {
+    await mutate({
+      type: "reconcile_legacy",
+      operationId: stableTaskOperationId("question:reconcile", [sliceId, ...questions.map((q) => q.id)]),
+      now,
+      entries: agenda.map(({ question, taskRef }) => ({ ref: taskRef, summary: question.title })),
+    });
+    const ids: string[] = [];
+    for (const { question, taskRef, products } of agenda) {
+      const id = stableTaskOperationId("question-result", [sliceId, question.id]);
+      await mutate({
+        type: "record_result",
+        operationId: stableTaskOperationId("question:record", [sliceId, question.id]),
+        now,
+        result: {
+          id,
+          taskRef,
+          evidence: {
+            producerRunId: `executeQuestionRun:${sliceId}:${question.id}`,
+            statement: `查了：${question.title} —— 结果见 ${[...new Set(products.map((product) => product.productRef))].join("、")}。`,
+          },
+        },
+      });
+      ids.push(id);
     }
-  }
-  if (noticePath) {
-    console.log(`[QuestionRun] completion notice → ${noticePath}`);
-  }
-  return { ran: true, written: result.written, ...(noticePath ? { noticePath } : {}) };
+    // The local lock must protect the full read/modify/commit, too. A
+    // conflict rejects for a fresh whole-run retry; never rebase old JSON.
+    await flushBatch(batch, `Question run — ${sliceId}`);
+    return ids;
+  });
+
+  console.log(`[QuestionRun] committed ${resultIds.length} result event(s)`);
+  return { ran: true, written: result.written, resultIds };
 }

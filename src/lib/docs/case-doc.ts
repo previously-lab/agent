@@ -5,10 +5,10 @@
  *
  *   ---
  *   opened: 2026-09-05              # birth date (YYYY-MM-DD) — immutable
- *   updated: 2026-09-05T13:22:10.000Z   # last-write stamp (ISO) — restamped
- *   ---                             #   mechanically on EVERY write
+ *   updated: 2026-09-05T13:22:10.000Z   # last FULL-BODY write stamp (ISO)
+ *   ---                             #   restamped on open/rewrite, not on tail
  *
- *   正文：一次写完整的完整文本——这份文档当下的全部认识。
+ *   正文：一次写完整的历史正文；独立的当下认识在 _current.md。
  *
  *   —— 尾部 ——
  *   2026-10-02：文中价格已过时，最新见 …。
@@ -16,10 +16,11 @@
  *
  * Rules (structure, not suggestion):
  * - Header = `opened` + `updated`, nothing else. `updated` is a MACHINE
- *   timestamp (ISO, UTC): the write entry restamps it on every write; the
- *   model never touches it. It anchors the WRITE WINDOW (see
- *   write-window.ts): within the window the 正文 may be rewritten whole;
- *   past it the document grows only by dated tail lines / new pieces.
+ *   timestamp (ISO, UTC): open and whole-body rewrite restamp it; appendTail
+ *   preserves it so a supplement cannot reopen settled history. The model
+ *   never touches it. It anchors the WRITE WINDOW (see write-window.ts):
+ *   within the window the 正文 may be rewritten whole; past it the document
+ *   grows only by dated tail lines / new pieces / independent _current.md.
  * - `closed` is RETIRED (v0.21): no op produces it and no guard consults
  *   it — sealing is the window closing, produced by time alone. The READ
  *   side stays tolerant: a historical `closed:` line parses without error
@@ -43,13 +44,19 @@
  * which owns the fresh-read-inside-the-lock and the wall clock.
  */
 import matter from "gray-matter";
+import { createHash } from "node:crypto";
 import { isValidDate } from "./naming";
 import {
   buildPieceFileName,
   isValidCaseName,
   parsePieceFileName,
 } from "./case-naming";
-import type { CaseCategory } from "./paths";
+import { caseDirPath, type CaseCategory } from "./paths";
+
+/** Compact, stable revision of the exact UTF-8 storage bytes. */
+export function caseStorageRevision(raw: string): string {
+  return createHash("sha256").update(raw, "utf8").digest("hex");
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -74,20 +81,24 @@ export interface CaseDoc {
    */
   opened: string;
   /**
-   * Last-write stamp (ISO datetime on new writes; a legacy date-only value
-   * is tolerated), RESOLVED: the header's `updated`, falling back to
-   * `opened` for documents written before the field existed (their last
-   * known write is their birth). "" when neither exists — reads as
-   * out-of-window everywhere.
+   * Last FULL-BODY write stamp (ISO datetime on new writes; a legacy date-only
+   * value is tolerated), RESOLVED: the header's `updated`, falling back to
+   * `opened` for documents written before the field existed. Unknown legacy
+   * times stay conservatively out of window. Tail/current writes do not restamp it.
    */
   updated: string;
+  /**
+   * Explicit body-write control for the window guard. New full-body writes
+   * stamp body_updated; legacy tail/history without it is conservatively settled.
+   */
+  bodyUpdated: string;
   /**
    * RETIRED (v0.21) — the historical seal date, parse-tolerated and
    * round-tripped verbatim for old files. Never produced by any op, never
    * consulted by any guard: sealing is the write window closing.
    */
   closed: string | null;
-  /** 正文 — the complete current text, written whole. */
+  /** 正文 — the historical index/piece text, written whole; current view lives separately. */
   body: string;
   /** 尾部 — dated supplement lines, append-only. */
   tail: TailLine[];
@@ -172,7 +183,8 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
   }
 
   const unknownFields = Object.keys(data).filter(
-    (k) => k !== "opened" && k !== "updated" && k !== "closed" && k !== "status",
+    (k) =>
+      !["opened", "updated", "body_updated", "closed", "status"].includes(k),
   );
   if (unknownFields.length > 0) {
     warnings.push(`忽略未知 header 字段: ${unknownFields.join(", ")}`);
@@ -200,17 +212,23 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
     warnings.push(`opened "${opened}" 不是合法 YYYY-MM-DD 日期`);
   }
 
-  // ── updated: the last-write stamp (ISO on new writes, legacy date-only
-  // tolerated). Absent on every pre-window document — falls back to opened
-  // silently (their last known write is their birth); that is history, not
-  // a problem, so no warning. A present-but-unparseable value warns and
-  // falls back the same way.
+  // ── updated: the last full-body write stamp (ISO on new writes, legacy
+  // date-only tolerated). Absent on pre-window documents — fall back to opened
+  // silently; unknown legacy times remain conservatively settled. A present-
+  // but-unparseable value warns and falls back the same way.
   let updated = normalizeStampValue(data.updated);
   if (updated && Number.isNaN(new Date(updated).getTime())) {
     warnings.push(`updated "${updated}" 不是合法时间戳，按 opened 处理`);
     updated = "";
   }
   if (!updated) updated = opened;
+
+  const hasBodyUpdated = data.body_updated !== undefined;
+  let bodyUpdatedHeader = normalizeStampValue(data.body_updated);
+  if (bodyUpdatedHeader && Number.isNaN(new Date(bodyUpdatedHeader).getTime())) {
+    warnings.push(`body_updated "${bodyUpdatedHeader}" 不是合法时间戳，历史正文按 settled 处理`);
+    bodyUpdatedHeader = "";
+  }
 
   // ── closed (RETIRED, read-tolerant): a historical seal date is parsed and
   // surfaced verbatim, but nothing consults it. Accept Date / string /
@@ -320,6 +338,9 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
     caseName,
     opened,
     updated,
+    bodyUpdated:
+      bodyUpdatedHeader ||
+      (!hasBodyUpdated && tail.length === 0 && preservedLines.length === 0 ? updated : ""),
     closed,
     body: bodyLines.join("\n").trim(),
     tail,
@@ -341,6 +362,7 @@ export function serializeCaseDoc(doc: CaseDoc): string {
   const fm: Record<string, unknown> = {};
   if (doc.opened) fm.opened = doc.opened;
   if (doc.updated) fm.updated = doc.updated;
+  if (doc.bodyUpdated) fm.body_updated = doc.bodyUpdated;
   if (doc.closed) fm.closed = doc.closed;
 
   const parts: string[] = [doc.body];
@@ -375,6 +397,7 @@ function baseDoc(
     caseName: input.caseName,
     opened,
     updated: opened,
+    bodyUpdated: opened,
     closed: null,
     body: "",
     tail: [],
@@ -447,4 +470,231 @@ export function appendTail(doc: CaseDoc, line: { date: string; text: string }): 
     .trim();
   if (!text) throw new Error("appendTail requires non-empty text");
   return { ...doc, tail: [...doc.tail, { date: line.date, text }] };
+}
+
+// ─── Independent current understanding (_current.md) ───────────────────────
+
+export const CASE_CURRENT_FILE_NAME = "_current.md";
+const CASE_CURRENT_HISTORY_MARKER = "—— 认识历史 ——";
+export interface CaseCurrentPieceBasis {
+  path: string;
+  /** Present only when the piece's exact bytes were actually read. */
+  revision: string | null;
+}
+
+export interface CaseCurrentBasis {
+  indexRevision: string;
+  pieces: CaseCurrentPieceBasis[];
+}
+
+export interface CaseCurrentDoc {
+  /** User-local as-of date. Empty only on tolerant reads of legacy/free text. */
+  asOf: string;
+  /** Canonical records/... or case references actually read by the writer. */
+  evidence: string[];
+  /** The current free-prose view; no category-specific trait schema. */
+  body: string;
+  /** Own-case sources whose changes the current view incorporates. */
+  basis: CaseCurrentBasis | null;
+  /** Earlier current views, each archived with its supersession date. */
+  history: string;
+}
+
+export interface CaseCurrentInput {
+  asOf: string;
+  evidence: string[];
+  body: string;
+  basis?: CaseCurrentBasis | null;
+}
+
+export function caseCurrentPath(category: CaseCategory, caseName: string): string {
+  return `${caseDirPath(category, caseName)}/${CASE_CURRENT_FILE_NAME}`;
+}
+
+function parseCurrentBasis(value: unknown): CaseCurrentBasis | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const indexRevision = typeof (raw.index ?? raw.indexRevision) === "string"
+    ? String(raw.index ?? raw.indexRevision).trim()
+    : "";
+  if (!indexRevision) return null;
+  const rawPieces = Array.isArray(raw.pieces) ? raw.pieces : [];
+  const pieces = rawPieces.flatMap((item): CaseCurrentPieceBasis[] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const piece = item as Record<string, unknown>;
+    if (typeof piece.path !== "string" || !piece.path.trim()) return [];
+    return [{
+      path: piece.path.trim(),
+      revision: typeof piece.revision === "string" && piece.revision.trim()
+        ? piece.revision.trim()
+        : null,
+    }];
+  });
+  return { indexRevision, pieces };
+}
+
+/** Parse current prose tolerantly. Unknown/frontmatter-free text remains the body. */
+export function parseCaseCurrent(raw: string): CaseCurrentDoc {
+  let data: Record<string, unknown> = {};
+  let content = raw;
+  try {
+    const parsed = matter(raw);
+    data = parsed.data as Record<string, unknown>;
+    content = parsed.content;
+  } catch {
+    // A broken header must not make the current view unreadable.
+  }
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const marker = lines.findIndex((line) => line.trim() === CASE_CURRENT_HISTORY_MARKER);
+  const body = (marker >= 0 ? lines.slice(0, marker) : lines).join("\n").trim();
+  const history = marker >= 0 ? lines.slice(marker + 1).join("\n").trim() : "";
+  const rawEvidence = data.evidence;
+  const evidence = (Array.isArray(rawEvidence) ? rawEvidence : [rawEvidence])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return {
+    asOf: normalizeDateValue(data.as_of ?? data.asOf),
+    evidence,
+    body,
+    basis: parseCurrentBasis(data.basis),
+    history,
+  };
+}
+
+export function serializeCaseCurrent(doc: CaseCurrentDoc): string {
+  const fm: Record<string, unknown> = {};
+  if (doc.asOf) fm.as_of = doc.asOf;
+  if (doc.evidence.length > 0) fm.evidence = doc.evidence;
+  if (doc.basis) {
+    fm.basis = {
+      index: doc.basis.indexRevision,
+      pieces: doc.basis.pieces.map((piece) => ({
+        path: piece.path,
+        ...(piece.revision ? { revision: piece.revision } : {}),
+      })),
+    };
+  }
+  const parts = [doc.body.trim()];
+  if (doc.history.trim()) {
+    parts.push(`${CASE_CURRENT_HISTORY_MARKER}\n${doc.history.trim()}`);
+  }
+  return matter.stringify(parts.filter(Boolean).join("\n\n") + "\n", fm);
+}
+
+function sameBasis(a: CaseCurrentBasis | null, b: CaseCurrentBasis | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.indexRevision !== b.indexRevision || a.pieces.length !== b.pieces.length) return false;
+  const sortPieces = (pieces: CaseCurrentPieceBasis[]) =>
+    [...pieces].sort((x, y) => x.path.localeCompare(y.path));
+  const aa = sortPieces(a.pieces);
+  const bb = sortPieces(b.pieces);
+  return aa.every((piece, index) =>
+    piece.path === bb[index]?.path && piece.revision === bb[index]?.revision
+  );
+}
+
+function sameCurrentText(doc: CaseCurrentDoc, input: CaseCurrentInput): boolean {
+  const evidence = input.evidence.map((ref) => ref.trim()).filter(Boolean);
+  return (
+    doc.asOf === input.asOf &&
+    doc.body === input.body.trim() &&
+    doc.evidence.length === evidence.length &&
+    doc.evidence.every((ref) => evidence.includes(ref))
+  );
+}
+
+/** Replace only the current view; prior prose and its basis remain as dated history. */
+export function reviseCaseCurrent(
+  previous: CaseCurrentDoc | null,
+  input: CaseCurrentInput,
+): CaseCurrentDoc {
+  assertDate(input.asOf, "asOf");
+  const body = input.body.trim();
+  const evidence = input.evidence.map((ref) => ref.trim()).filter(Boolean);
+  if (!body) throw new Error("reviseUnderstanding requires non-empty current prose");
+  if (evidence.length === 0) {
+    throw new Error("reviseUnderstanding requires at least one evidence reference");
+  }
+  const basis = input.basis === undefined ? previous?.basis ?? null : input.basis;
+  if (previous && sameCurrentText(previous, { ...input, body, evidence })) {
+    return sameBasis(previous.basis, basis) ? previous : { ...previous, basis };
+  }
+  const archive = previous?.body
+    ? [
+        `## ${input.asOf} — previous understanding`,
+        `as-of: ${previous.asOf || "unknown"}`,
+        `evidence: ${previous.evidence.join(", ") || "not recorded"}`,
+        `basis-index: ${previous.basis?.indexRevision || "unknown"}`,
+        `basis-pieces: ${previous.basis?.pieces.map((piece) => `${piece.path}@${piece.revision ?? "unread"}`).join(", ") || "none recorded"}`,
+        "",
+        previous.body,
+      ].join("\n")
+    : "";
+  const history = [archive, previous?.history.trim() ?? ""].filter(Boolean).join("\n\n");
+  return { asOf: input.asOf, evidence, body, basis, history };
+}
+
+export function isSameCaseCurrent(doc: CaseCurrentDoc, input: CaseCurrentInput): boolean {
+  const basis = input.basis === undefined ? doc.basis : input.basis;
+  return sameCurrentText(doc, input) && sameBasis(doc.basis, basis);
+}
+
+/** Report own-case changes that the current view does not incorporate or cannot verify. */
+export function caseCurrentFreshnessWarnings(
+  current: CaseCurrentDoc,
+  actual: CaseCurrentBasis,
+): string[] {
+  if (!current.basis) {
+    return ["the current view has no recorded index/piece basis; later case changes are unverified"];
+  }
+  const warnings: string[] = [];
+  if (current.basis.indexRevision !== actual.indexRevision) {
+    warnings.push("index.md changed after the current view's basis");
+  }
+  const actualByPath = new Map(actual.pieces.map((piece) => [piece.path, piece.revision]));
+  const basisPaths = current.basis.pieces.map((piece) => piece.path).sort();
+  const actualPaths = [...actualByPath.keys()].sort();
+  if (JSON.stringify(basisPaths) !== JSON.stringify(actualPaths)) {
+    warnings.push("the case piece inventory changed after the current view's basis");
+  }
+  for (const piece of current.basis.pieces) {
+    if (!piece.revision) continue;
+    const actualRevision = actualByPath.get(piece.path);
+    if (actualRevision === undefined) continue;
+    if (actualRevision === null) {
+      warnings.push(`${piece.path} has not been re-read; its content freshness is unverified`);
+    } else if (actualRevision !== piece.revision) {
+      warnings.push(`${piece.path} changed after the current view's basis`);
+    }
+  }
+  return warnings;
+}
+
+/** Current body first; preserved historical index bytes second; history opt-in only. */
+export function renderCaseWithCurrent(
+  indexRaw: string,
+  currentRaw: string | null,
+  options: { includeHistory?: boolean; freshnessWarnings?: string[] } = {},
+): string {
+  if (currentRaw === null) return indexRaw;
+  const current = parseCaseCurrent(currentRaw);
+  const metadata = [
+    `as-of: ${current.asOf || "unknown"}`,
+    `evidence: ${current.evidence.join(", ") || "not recorded"}`,
+  ];
+  if (options.freshnessWarnings?.length) {
+    metadata.push(
+      "FRESHNESS WARNING — this current view does not incorporate or cannot verify later case changes: " +
+      options.freshnessWarnings.join("; "),
+    );
+  }
+  const sections = [
+    `CURRENT UNDERSTANDING (_current.md)\n${metadata.join("\n")}\n\n${current.body || "(empty current understanding)"}`,
+  ];
+  if (options.includeHistory && current.history) {
+    sections.push(`CURRENT-VIEW HISTORY (earlier revisions)\n\n${current.history}`);
+  }
+  sections.push(`PRESERVED HISTORICAL INDEX (index.md; original bytes below)\n\n${indexRaw}`);
+  return `${sections.join("\n\n---\n\n")}\n`;
 }

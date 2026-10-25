@@ -553,38 +553,31 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     }
   });
 
-  it("§A.3.3: a tasks/ tail line dated today becomes the dueTasksBlock; yesterday's does not", async () => {
-    const { createCase, appendTail, serializeCaseDoc } = await import("@/lib/docs");
-    const todayCase = appendTail(
-      createCase({
-        category: "tasks",
-        caseName: "后台回复",
-        opened: "2026-07-14",
-        body: "后台流的完成通知册。",
-      }),
-      { date: "2026-07-14", text: "查了：手机话题 —— 结果已写入 research/手机话题演变/index.md。" },
-    );
+  it("reads due tasks and undelivered cross-day results from the ledger without treating today's prose as completion", async () => {
+    const { applyTaskOperation, emptyTaskLedger, serializeTaskLedger } = await import("@/lib/tasks/ledger");
+    const { TASK_LEDGER_PATH } = await import("@/lib/tasks/contracts");
     fakeDisk.taskDirs.add("后台回复");
-    fakeDisk.files.set("memory/tasks/后台回复/index.md", serializeCaseDoc(todayCase));
-    const yesterdayCase = appendTail(
-      createCase({
-        category: "tasks",
-        caseName: "旧账",
-        opened: "2026-07-10",
-        body: "旧任务。",
-      }),
-      { date: "2026-07-13", text: "昨天的结案行不该再陈述。" },
-    );
-    fakeDisk.taskDirs.add("旧账");
-    fakeDisk.files.set("memory/tasks/旧账/index.md", serializeCaseDoc(yesterdayCase));
+    fakeDisk.files.set("memory/tasks/后台回复/index.md", "—— 尾部 ——\n2026-07-14：今天没做，延期到下周。\n");
+    let ledger = applyTaskOperation(emptyTaskLedger(), {
+      type: "create", operationId: "fixture-task", now: "2026-07-13T08:00:00.000Z",
+      task: { ref: "tasks/后台研究", summary: "研究手机话题", dueOn: "2026-07-14" },
+      userCommitment: { sliceId: "2026-07-13-0800", turnId: "user-task", statement: "帮我研究手机话题" },
+    }).ledger;
+    ledger = applyTaskOperation(ledger, {
+      type: "record_result", operationId: "fixture-result", now: "2026-07-13T09:00:00.000Z",
+      result: { id: "yesterday-result", taskRef: "tasks/后台研究", evidence: {
+        producerRunId: "research-source", statement: "昨天已完成研究，还没有向用户交付。",
+      } },
+    }).ledger;
+    fakeDisk.files.set(TASK_LEDGER_PATH, serializeTaskLedger(ledger));
 
     const hk = await housekeeping(makeInput("hi"));
 
-    expect(hk.dueTasksBlock).toBeDefined();
-    expect(hk.dueTasksBlock).toContain("tasks/后台回复");
-    expect(hk.dueTasksBlock).toContain("查了：手机话题");
-    expect(hk.dueTasksBlock).toContain("state it, don't promise");
-    expect(hk.dueTasksBlock).not.toContain("旧账");
+    expect(hk.taskContextBlock).toContain("tasks/后台研究");
+    expect(hk.taskContextBlock).toContain("due 2026-07-14");
+    expect(hk.taskContextBlock).toContain("yesterday-result");
+    expect(hk.taskContextBlock).not.toContain("今天没做");
+    expect(ioHelpers.fsListFiles).not.toHaveBeenCalledWith("memory/tasks");
   });
 
   it("v0.39 待裁决 3: the 暂存 rides the result, now read from the COMMIT LOG (reflectionNote)", async () => {

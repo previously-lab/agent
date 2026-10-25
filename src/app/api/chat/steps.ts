@@ -91,20 +91,29 @@ import {
 } from "@/lib/episodic/turn-merge";
 import { isRefConflictError } from "@/lib/tools/batch-write";
 import { getRepoConfig } from "@/lib/capabilities";
-import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
+import { fsListFiles } from "@/lib/episodic/io-helpers";
 import {
   dataUrlToBuffer,
   persistEvidenceAttachments,
   type EvidenceAttachmentInput,
 } from "@/lib/tools/attachments";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
-import { MEMORY_ROOT_DIR, caseIndexPath } from "@/lib/docs/paths";
-import { parseCaseDoc } from "@/lib/docs";
 import {
   readUserModel,
   readUserProfile,
 } from "@/lib/evolution/store";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
+import {
+  acknowledgeTaskFollowups,
+  confirmTaskResultDelivery,
+  readTaskLedger,
+} from "@/lib/tasks/store";
+import { TaskLedgerError, type PersistedReply } from "@/lib/tasks/contracts";
+import { buildTaskContextBlock } from "@/lib/chat/task-context";
+import { stableTaskOperationId } from "@/lib/chat/task-identity";
+import { createMainCraftBlock, MAIN_CRAFT_HOST_RESERVED_CHARS } from "@/lib/chat/craft-prompt";
+import { readSkillLedger } from "@/lib/evolution/skill-store";
+import { renderRoleSkillGuidance } from "@/lib/evolution/skill-policy";
 
 
 import {
@@ -126,7 +135,10 @@ import type {
   SummaryRunOutcome,
   SummaryRunPayload,
   TurnRunResult,
+  TaskAckSettlement,
+  VerifiedTaskReply,
 } from "@/lib/chat/turn-types";
+import { parseTaskAckMetadata } from "@/lib/chat/task-followups";
 import { deriveTurnStatus, PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
 import {
   NESTED_BUBBLE_CHUNK,
@@ -568,46 +580,6 @@ async function readPrevClosedSlice(
   return findClosed(all);
 }
 
-
-/**
- * The §A.3.3 delivery surface: tasks/ tail lines dated TODAY are the
- * background stream's completion statements (a question run's notice, a
- * task case closed today). Mechanical: parse each task case's index.md,
- * collect the tail lines stamped with the user's local today. One-day
- * window by construction — no delivery ledger.
- */
-async function scanTodayTaskStatements(
-  todayLocal: string,
-  batch: WriteBatch,
-): Promise<Array<{ path: string; statement: string }>> {
-  const out: Array<{ path: string; statement: string }> = [];
-  let entries: Awaited<ReturnType<typeof fsListFiles>>;
-  try {
-    entries = await fsListFiles(`${MEMORY_ROOT_DIR}/tasks`);
-  } catch {
-    return out; // no tasks shelf yet
-  }
-  for (const e of entries) {
-    if (e.type !== "dir") continue;
-    try {
-      const raw = await fsReadFile(caseIndexPath("tasks", e.name), batch);
-      const doc = parseCaseDoc(raw, {
-        category: "tasks",
-        caseName: e.name,
-        fileName: "index.md",
-      });
-      for (const line of doc.tail) {
-        if (line.date === todayLocal) {
-          out.push({ path: `tasks/${e.name}`, statement: line.text });
-        }
-      }
-    } catch {
-      // unreadable / unparseable case — skip
-    }
-  }
-  return out;
-}
-
 // ─── Step 1: Housekeeping (进场那一拍 — the entry beat) ───────────────────
 
 /**
@@ -972,21 +944,22 @@ export async function housekeeping(
       ].join("\n")
     : undefined;
 
-  // ── §A.3.3 delivery — HQ's completions, stated ────────────────────────
-  // Tasks/ tail lines dated TODAY (a question run's notice, a task case
-  // closed today) are declarative statements the reply owes the user. The
-  // block's own text carries the discipline: state, never promise.
-  // (todayLocal was computed above, before the reckoning.)
-  const taskStatements = await scanTodayTaskStatements(todayLocal, batch);
-  const dueTasksBlock =
-    taskStatements.length > 0
-      ? [
-          "## Completed background work — state it, don't promise",
-          "",
-          "The background stream completed these since (each line is the dated closing note of a real task case). Tell the user naturally, in their language; state facts only — do NOT promise any future work.",
-          ...taskStatements.map((s) => `- ${s.path}: ${s.statement}`),
-        ].join("\n")
-      : undefined;
+  const skillState = await readSkillLedger(batch);
+  const craftBlock = createMainCraftBlock(renderRoleSkillGuidance({
+    role: "main",
+    hostReservedChars: MAIN_CRAFT_HOST_RESERVED_CHARS,
+    ledger: skillState.status === "ok" ? skillState.ledger : null,
+    stateDiagnostic: skillState.status === "corrupt" || skillState.status === "unavailable"
+      ? `Skill ledger is ${skillState.status}; adopted skills were not injected and the ledger was not reset. ${skillState.diagnostic}`
+      : undefined,
+  }).text);
+
+  // One small authoritative read feeds both candidate review and pending
+  // result delivery. No task document is scanned on the turn path.
+  const taskContextBlock = buildTaskContextBlock(
+    await readTaskLedger({ batch }),
+    { todayLocal },
+  );
 
   // ── v0.30 §2.4 暂存 — the reflection unit's staged note ────────────────
   // Read at the entry beat so the workflow can carry it on the OUTBOUND tail
@@ -1018,8 +991,9 @@ export async function housekeeping(
     sliceOnDisk: !!diskSlice,
 
     ...(directionBlock ? { directionBlock } : {}),
+    ...(craftBlock ? { craftBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
-    ...(dueTasksBlock ? { dueTasksBlock } : {}),
+    ...(taskContextBlock ? { taskContextBlock } : {}),
     ...(reflectionNote ? { reflectionNote } : {}),
     ...(parallelSiblings ? { parallelSiblings } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
@@ -1484,6 +1458,115 @@ export async function ownRunId(): Promise<string> {
   return getWorkflowMetadata().workflowRunId;
 }
 
+export async function readSourceRunStatusForAck(runId: string): Promise<string> {
+  "use step";
+  try {
+    return await getRun(runId).status;
+  } catch (error) {
+    console.warn(
+      `[Summary] source run ${runId} status unavailable for task acknowledgment:`,
+      error instanceof Error ? error.message : error,
+    );
+    return "unavailable";
+  }
+}
+
+function samePersistedReply(
+  left: { sliceId: string; turnId: string },
+  right: PersistedReply,
+): boolean {
+  return left.sliceId === right.sliceId && left.turnId === right.turnId;
+}
+
+export async function acknowledgeSavedTaskFollowups(
+  verified: VerifiedTaskReply,
+  clientTimezone: string,
+): Promise<TaskAckSettlement[]> {
+  "use step";
+  const own = verified;
+  const reply = verified.reply;
+  if (!own.sourceRunId || own.finishReason !== "stop" || own.error) return [];
+  const intents = own.taskAckIntents ?? [];
+  const followups = intents.flatMap((intent) =>
+    intent.kind === "task" ? [intent.followup] : []
+  );
+  const results = intents.flatMap((intent) =>
+    intent.kind === "result" ? [intent] : []
+  );
+  const settlements: TaskAckSettlement[] = [];
+  const now = new Date().toISOString();
+  const todayLocal = localDateKey(now, clientTimezone) ?? now.slice(0, 10);
+
+  if (followups.length > 0) {
+    try {
+      const mutation = await acknowledgeTaskFollowups({
+        operationId: stableTaskOperationId("summary:followups", [own.sourceRunId]),
+        now,
+        todayLocal,
+        outcome: reply,
+        followups,
+      });
+      if (mutation.outcome === "skipped") throw new Error("persisted reply was rejected");
+      for (const followup of followups) {
+        const task = mutation.ledger.tasks.find((item) => item.ref === followup.ref);
+        const saved = task?.lastFollowup?.revision === followup.expectedRevision &&
+          samePersistedReply(task.lastFollowup.reply, reply);
+        settlements.push({
+          kind: "task",
+          id: followup.ref,
+          status: saved ? "acknowledged" : "skipped",
+          ...(saved ? {} : { detail: "The task revision changed or another reply already consumed this follow-up" }),
+        });
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      for (const followup of followups) {
+        settlements.push({ kind: "task", id: followup.ref, status: "failed", detail });
+      }
+    }
+  }
+
+  for (const intent of results) {
+    try {
+      const mutation = await confirmTaskResultDelivery({
+        operationId: stableTaskOperationId("summary:result", [own.sourceRunId, intent.resultId]),
+        now,
+        resultId: intent.resultId,
+        expectedRevision: intent.expectedRevision,
+        outcome: reply,
+      });
+      if (mutation.outcome === "skipped") throw new Error("persisted reply was rejected");
+      const result = mutation.ledger.results.find((item) => item.id === intent.resultId);
+      const saved = result?.delivery.state === "delivered" &&
+        samePersistedReply(result.delivery.reply, reply);
+      settlements.push({
+        kind: "result",
+        id: intent.resultId,
+        status: saved ? "acknowledged" : "failed",
+        ...(saved ? {} : { detail: "The ledger did not record this reply as the result delivery" }),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      let repaired = false;
+      if (error instanceof TaskLedgerError) {
+        const read = await readTaskLedger({ fresh: true }).catch(() => null);
+        const result = read?.status === "ready"
+          ? read.ledger.results.find((item) => item.id === intent.resultId)
+          : undefined;
+        repaired = result?.delivery.state === "delivered" &&
+          samePersistedReply(result.delivery.reply, reply);
+      }
+      settlements.push({
+        kind: "result",
+        id: intent.resultId,
+        status: repaired ? "acknowledged" : "failed",
+        ...(repaired ? {} : { detail }),
+      });
+    }
+  }
+  return settlements;
+}
+
 /**
  * The drain loop's clock (v0.31 — the instance watchdog): the workflow body
  * has no Date (the sandbox provisions no clock — timestamps are stamped inside
@@ -1651,6 +1734,8 @@ export async function pollInnerRunReports(
                 replyTo: rv.replyTo,
                 text: rv.text,
                 finishReason: rv.finishReason,
+                sourceRunId: runId,
+                ...parseTaskAckMetadata(rv),
               },
             };
           }

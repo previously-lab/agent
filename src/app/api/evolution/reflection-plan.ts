@@ -41,6 +41,11 @@ import {
   parseAgenda,
   type AgendaItem,
 } from "@/lib/evolution/agenda";
+import {
+  listDueSkillReviews,
+  type SkillEntry,
+  type SkillLedger,
+} from "@/lib/evolution/skill-policy";
 
 /** §3.3 — the scope cap: oldest 5 slices per lap. */
 export const REFLECTION_SCOPE_MAX = 5;
@@ -91,6 +96,8 @@ export interface LapPlan {
   evolutionDue: boolean;
   evolutionReasons: EvolutionReason[];
   agendaDue: AgendaItem[];
+  skillReviewDue: SkillEntry[];
+  skillReviewError?: string;
   retireAt?: string;
 }
 
@@ -106,7 +113,15 @@ export interface LapPlanInput {
   lastEvolutionDate: string | null;
   /** Raw memory/self/agenda.md content (null when absent) — parsed here. */
   agendaContent: string | null;
+  skillLedger?: SkillLedger | null;
+  skillReviewError?: string;
   retireAt?: string;
+}
+
+export function skillReviewOfferId(
+  entry: Pick<SkillEntry, "id" | "revision" | "reviewDue">,
+): string {
+  return `hq:skill-review-offered:${entry.id}:${entry.revision}:${entry.reviewDue}`;
 }
 
 /**
@@ -205,7 +220,8 @@ export function judgeEvolutionBeat(input: {
  */
 export function lapHasWork(plan: LapPlan): boolean {
   return (
-    plan.scope.length > 0 || plan.evolutionDue || plan.agendaDue.length > 0
+    plan.scope.length > 0 || plan.evolutionDue || plan.agendaDue.length > 0 ||
+    plan.skillReviewDue.length > 0
   );
 }
 
@@ -222,6 +238,15 @@ export function assembleLapPlan(input: LapPlanInput): LapPlan {
     lastEvolutionDate: input.lastEvolutionDate,
     agendaDue,
   });
+  const offered = new Set(
+    (input.skillLedger?.operations ?? []).map((operation) => operation.operationId),
+  );
+  const skillReviewDue = (input.skillLedger
+    ? listDueSkillReviews(input.skillLedger, input.date)
+    : []
+  ).filter((entry) =>
+    input.scope.length > 0 || !offered.has(skillReviewOfferId(entry))
+  );
   return {
     nowIso: input.nowIso,
     date: input.date,
@@ -230,6 +255,8 @@ export function assembleLapPlan(input: LapPlanInput): LapPlan {
     evolutionDue: beat.due,
     evolutionReasons: beat.reasons,
     agendaDue,
+    skillReviewDue,
+    ...(input.skillReviewError ? { skillReviewError: input.skillReviewError } : {}),
     ...(input.retireAt !== undefined ? { retireAt: input.retireAt } : {}),
   };
 }

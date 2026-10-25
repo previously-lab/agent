@@ -37,6 +37,7 @@ function hasUnsafeShape(name: string): boolean {
     name.includes("/") ||
     name.includes("\\") ||
     name.includes("\0") ||
+    /%[0-9a-f]{2}/i.test(name) ||
     name === "." ||
     name === ".." ||
     name.includes("..") ||

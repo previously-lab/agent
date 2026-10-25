@@ -20,6 +20,8 @@ import type { ModelConfig } from "@/lib/models/registry";
 import type { CurrentView } from "@/lib/chat/current-view";
 import type { SliceLandingConfig } from "@/lib/chat/slice-landing";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
+import type { PersistedReply } from "@/lib/tasks/contracts";
+import type { TaskAckIntent } from "@/lib/chat/task-followups";
 
 /**
  * Everything a turn needs, built once in `start-turn.ts` (the only place real
@@ -216,6 +218,8 @@ export interface HousekeepingResult {
    * awaiting migration.
    */
   directionBlock?: string;
+  /** Bounded adopted main-role procedural guidance, never candidates/retired notes. */
+  craftBlock?: string;
   /**
    * people/user/profile.md block (v0.19 §B.7): the user's OWN self-description,
    * injected every turn right after the user model. Only the user writes it;
@@ -230,7 +234,7 @@ export interface HousekeepingResult {
    * own text carries the "state, never promise" discipline. Absent when no
    * background work completed today.
    */
-  dueTasksBlock?: string;
+  taskContextBlock?: string;
   /**
    * Checkpoint carry-over: when the slice was born from a time_cap/capacity
    * close (`slice.continuesFrom`), the previous slice's trailing turns read
@@ -377,7 +381,15 @@ export interface InnerTurnInput {
  *     the disk for arrivals (D1/D2), is the queue of record.
  * Must stay JSON-serializable (it is a workflow return value).
  */
-export interface InnerTurnReport {
+export interface TaskAckSource {
+  sourceRunId?: string;
+  finishReason?: string;
+  /** A graceful workflow return can still carry a failed answer. */
+  error?: string;
+  taskAckIntents?: TaskAckIntent[];
+}
+
+export interface InnerTurnReport extends TaskAckSource {
   /** The inner instance's own id (= the bubble frame's turnId). */
   turnId: string;
   /** The user turn the instance answered. */
@@ -403,6 +415,9 @@ export interface NestedTurnTail {
     replyTo: string;
     text: string;
     finishReason: string;
+    sourceRunId?: string;
+    error?: string;
+    taskAckIntents?: TaskAckIntent[];
     /** Terminal stamp (the frame-write time, stamped in a step). */
     doneAt?: string;
   }>;
@@ -451,7 +466,7 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
  * into an incremental summary run; completed siblings may enhance that batch.
  * Legacy runs returned a bare reply string, which readers still tolerate.
  */
-export interface TurnRunResult {
+export interface TurnRunResult extends TaskAckSource {
   /** Exact current-turn replay, kept in Workflow/client state rather than GitHub memory files. */
   nativeMessages?: ModelMessage[];
   /** This turn's id (the turn headers + dedupe keys carry it). */
@@ -460,6 +475,14 @@ export interface TurnRunResult {
   regenerate?: boolean;
   /** Durable persistence dependency, absent on older runs. */
   summaryRunId?: string;
+  /** Original answering workflow; acknowledgment never uses the summary run id. */
+  sourceRunId?: string;
+  /** Clean delivery requires stop; partial/error/cancelled turns never consume. */
+  finishReason?: string;
+  /** Trusted intents collected only from this run's server-produced tool messages. */
+  taskAckIntents?: TaskAckIntent[];
+  /** Child answers and their server-produced acknowledgment metadata. */
+  nestedReplies?: NestedTurnTail["bubbles"];
   /** The slice this turn attached to. */
   sliceId: string;
   /** The user-clock/UTC stamp of this turn's start (the appended turns' time). */
@@ -519,6 +542,19 @@ export interface SummaryRunPayload {
   locale: string;
 }
 
+export interface TaskAckSettlement {
+  kind: "task" | "result" | "source";
+  id: string;
+  status: "acknowledged" | "pending" | "skipped" | "failed";
+  detail?: string;
+}
+
+/** Exact saved reply plus the answering workflow's acknowledgment evidence. */
+export interface VerifiedTaskReply extends TaskAckSource {
+  reply: PersistedReply;
+  taskAckIntents: TaskAckIntent[];
+}
+
 /** What the summary run reports back (observability; the turn never waits). */
 export interface SummaryRunOutcome {
   /** "deduped" = requested material already exists in verified records. */
@@ -527,6 +563,12 @@ export interface SummaryRunOutcome {
   segments?: string[];
   error?: string;
   receipt?: PersistenceReceipt;
+  /** Proof that the exact own agent reply, not merely its user turn, is saved. */
+  ownReply?: PersistedReply;
+  /** Includes every saved burst member and nested child with an intent. */
+  verifiedTaskReplies?: VerifiedTaskReply[];
+  /** Separate post-save/post-source-completion acknowledgment outcomes. */
+  acknowledgements?: TaskAckSettlement[];
 }
 
 export interface PersistenceReceipt {

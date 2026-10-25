@@ -58,6 +58,7 @@ import {
 } from "@/lib/episodic/flash/librarian";
 import { CaseWriteRefusal, WriteRefusal, parseCaseDoc } from "@/lib/docs";
 import type { ModelConfig } from "@/lib/models/registry";
+import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
 
 function streamWith(toolCalls: Array<{ toolName: string; input: unknown }>) {
   return {
@@ -75,6 +76,20 @@ function writerCall(cases: unknown[], reasoning = "r") {
     toolName: "caseWriterOutput",
     input: { cases, reasoning },
   };
+}
+
+function mockWriterRun(cases: unknown[], readRefs: string[] = []) {
+  ai.streamText.mockImplementation(async (options: RunSubAgentOptions<unknown>) => {
+    for (const ref of readRefs) {
+      const readCase = options.tools.readCase;
+      if (!readCase?.execute) throw new Error("readCase tool missing");
+      await readCase.execute(
+        { ref },
+        { toolCallId: `read-${ref}`, messages: [], context: undefined },
+      );
+    }
+    return streamWith([writerCall(cases)]);
+  });
 }
 
 const model: ModelConfig = {
@@ -159,6 +174,10 @@ describe("buildSliceExcerpt", () => {
     expect(excerpt.focus).toBe("f");
     expect(excerpt.turnsExcerpt.split("\n")).toHaveLength(8);
     expect(excerpt.turnsExcerpt).toContain("第 11 条 换行");
+    expect(excerpt.notice).toContain("INCOMPLETE: 4 earlier turn(s)");
+    expect(excerpt.notice).toContain("readSlice");
+    expect(excerpt.totalTurns).toBe(12);
+    expect(excerpt.includedTurns).toBe(8);
   });
 
   it("projects agent native replies before folding and caps, never user words", () => {
@@ -248,15 +267,17 @@ describe("applyCaseWriteIntent", () => {
       DATE,
     );
     expect(piece.created).toBe(true);
-    // …and every write restamps `updated`, re-opening the window.
-    expect(io.files.get("memory/research/旧案/index.md")).toMatch(
-      /updated: '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+    // Tail/piece growth does NOT restamp the historical body or reopen its window.
+    expect(io.files.get("memory/research/旧案/index.md")).toContain(
+      "updated: '2026-08-01T00:00:00.000Z'",
     );
-    await applyCaseWriteIntent(
-      { action: "rewriteIndex", category: "research", caseName: "旧案", body: "窗口重开后的整篇重写。" },
+    const stillRefused = await applyCaseWriteIntent(
+      { action: "rewriteIndex", category: "research", caseName: "旧案", body: "不应落盘的重写。" },
       DATE,
-    );
-    expect(io.files.get("memory/research/旧案/index.md")).toContain("窗口重开后的整篇重写。");
+    ).catch((e) => e);
+    expect(stillRefused).toBeInstanceOf(CaseWriteRefusal);
+    expect(stillRefused.code).toBe("rewrite_window_closed");
+    expect(io.files.get("memory/research/旧案/index.md")).not.toContain("不应落盘的重写");
   });
 
   it("expectedUpdated: a moved case refuses the rewrite (rewrite_conflict); a match proceeds", async () => {
@@ -414,17 +435,16 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
       "memory/research/手机调研/index.md",
       `---\nopened: '2026-08-01'\nupdated: '${new Date().toISOString()}'\n---\n\n旧认识。\n`,
     );
-    ai.streamText.mockResolvedValue(
-      streamWith([
-        writerCall([
-          {
-            action: "updateIndex",
-            category: "research",
-            caseName: "手机调研",
-            body: "旧认识 + 这片的新结论。",
-          },
-        ]),
-      ]),
+    mockWriterRun(
+      [
+        {
+          action: "updateIndex",
+          category: "research",
+          caseName: "手机调研",
+          body: "旧认识 + 这片的新结论。",
+        },
+      ],
+      ["research/手机调研"],
     );
     const result = await runLibrarianPass({
       model,
@@ -444,17 +464,16 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
       "memory/research/手机调研/index.md",
       "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的旧认识。\n",
     );
-    ai.streamText.mockResolvedValue(
-      streamWith([
-        writerCall([
-          {
-            action: "updateIndex",
-            category: "research",
-            caseName: "手机调研",
-            body: "想整篇重写。",
-          },
-        ]),
-      ]),
+    mockWriterRun(
+      [
+        {
+          action: "updateIndex",
+          category: "research",
+          caseName: "手机调研",
+          body: "想整篇重写。",
+        },
+      ],
+      ["research/手机调研"],
     );
     const result = await runLibrarianPass({
       model,
@@ -469,11 +488,16 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
     expect(io.files.get("memory/research/手机调研/index.md")).toContain("沉淀的旧认识。");
   });
 
-  it("structurally refuses a write to a case that is NOT in the manifest (writer never read it)", async () => {
+  it("rejects a manifest-listed existing-case update when readCase never succeeded", async () => {
+    const path = "memory/research/清单外/index.md";
+    io.files.set(
+      path,
+      `---\nopened: '2026-08-09'\nupdated: '${new Date().toISOString()}'\n---\n\n未读旧正文。\n`,
+    );
     ai.streamText.mockResolvedValue(
       streamWith([
         writerCall([
-          { action: "updateIndex", category: "research", caseName: "清单外", body: "x" },
+          { action: "updateIndex", category: "research", caseName: "清单外", body: "无读据重写" },
         ]),
       ]),
     );
@@ -481,12 +505,13 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
       model,
       closedSliceId: SLICE_ID,
       excerpt: EXCERPT,
-      manifest: MANIFEST,
+      manifest: { truncated: false, tree: { research: ["research/清单外/index.md"] } },
       date: DATE,
     });
     expect(result.written).toEqual([]);
-    expect(result.skipped[0]?.reason).toContain("not in the manifest");
-    expect(io.files.size).toBe(0);
+    expect(result.skipped[0]?.reason).toContain("no successful full index read");
+    expect(io.files.get(path)).toContain("未读旧正文");
+    expect(io.files.get(path)).not.toContain("无读据重写");
   });
 
   it("refuses open on an existing case; skip is a legal empty run", async () => {
@@ -823,17 +848,16 @@ describe("the manifest gate sees this round's batch (v0.37 §5 — S4 fix)", () 
       ]),
       encodings: new Map<string, "base64">(),
     };
-    ai.streamText.mockResolvedValue(
-      streamWith([
-        writerCall([
-          {
-            action: "updateIndex",
-            category: "research",
-            caseName: "本轮新案",
-            body: "本轮新建的正文 + 这片的新结论。",
-          },
-        ]),
-      ]),
+    mockWriterRun(
+      [
+        {
+          action: "updateIndex",
+          category: "research",
+          caseName: "本轮新案",
+          body: "本轮新建的正文 + 这片的新结论。",
+        },
+      ],
+      ["research/本轮新案"],
     );
     const result = await runLibrarianPass({
       model,

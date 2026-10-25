@@ -881,6 +881,54 @@ describe("shouldStartSummary — 每一轮都唤起总结流，总结流只做�
 });
 
 describe("summary persistence identity regressions", () => {
+  it("returns exact saved task proofs for every burst member, including an earlier sibling", async () => {
+    const sibling = ownRecord({
+      turnId: "sibling-with-intent", at: "2026-10-20T18:39:00.000Z", cognition: "",
+      replyText: "Earlier member delivered its result.", finishReason: "stop", sourceRunId: "source-sibling",
+      taskAckIntents: [{ kind: "result", resultId: "earlier-result", expectedRevision: 1 }],
+    });
+    io.registry.push(turnRun("source-sibling", sibling.turnId, "completed"));
+    io.returnValues.set("source-sibling", sibling);
+    const input = payload({ own: ownRecord({ cognition: "", taskAckIntents: [] }) });
+    const saved = await persistTurnSummary(input);
+    expect(saved.kind).toBe("committed");
+    expect(saved.verifiedTaskReplies).toEqual([{
+      reply: { status: "persisted", sliceId: SLICE_ID, turnId: sibling.turnId },
+      sourceRunId: "source-sibling", finishReason: "stop", taskAckIntents: sibling.taskAckIntents,
+    }]);
+    expect(io.files.get(CORE_PATH)).toContain(sibling.replyText);
+    const replay = await persistTurnSummary(input);
+    expect(replay.kind).toBe("deduped");
+    expect(replay.verifiedTaskReplies).toEqual(saved.verifiedTaskReplies);
+  });
+
+  it("preserves nested child task metadata only after its exact answer is saved", async () => {
+    const child = {
+      turnId: "nested-task-answer", replyTo: "nested-question", text: "The child delivered the result.",
+      sourceRunId: "source-nested", finishReason: "stop",
+      taskAckIntents: [{ kind: "result" as const, resultId: "nested-result", expectedRevision: 1 }],
+    };
+    const input = payload({ own: ownRecord({ cognition: "", nestedReplies: [child] }) });
+    const saved = await persistTurnSummary(input);
+    expect(saved.kind).toBe("committed");
+    expect(saved.verifiedTaskReplies).toEqual([{
+      reply: { status: "persisted", sliceId: SLICE_ID, turnId: child.turnId },
+      sourceRunId: child.sourceRunId, finishReason: "stop", taskAckIntents: child.taskAckIntents,
+    }]);
+    expect(io.files.get(CORE_PATH)).toContain(child.text);
+    expect(saved.receipt?.records[0]?.turnIds).toContain(child.turnId);
+    const replay = await persistTurnSummary(input);
+    expect(replay.kind).toBe("deduped");
+    expect(replay.verifiedTaskReplies).toEqual(saved.verifiedTaskReplies);
+
+    // The same id with a different answer is not proof of that new text.
+    const mismatch = await persistTurnSummary({ ...input, own: {
+      ...input.own, nestedReplies: [{ ...child, text: "Never actually saved" }],
+    } });
+    expect(mismatch.verifiedTaskReplies).toBeUndefined();
+    expect(io.files.get(CORE_PATH)).not.toContain("Never actually saved");
+  });
+
   it("does not copy a saved burst member when the next member crosses capacity", async () => {
     const first = ownRecord({ turnId: "first1", cognition: "", burstId: "b1" });
     const slicing = { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 3 };

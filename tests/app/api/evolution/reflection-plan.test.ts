@@ -30,9 +30,18 @@ import {
   type ScopedSlice,
   type SummaryHead,
 } from "@/app/api/evolution/reflection-plan";
+import { skillReviewOfferId } from "@/app/api/evolution/reflection-plan";
+import type { SkillEntry, SkillLedger } from "@/lib/evolution/skill-policy";
 
 const CURSOR = "2026-10-14-1858";
 const DATE = "2026-10-16";
+const DUE_SKILL: SkillEntry = {
+  id: "verify-first", ref: "self/search/index.md", role: "search", scope: { kind: "general" },
+  instruction: "Read before quoting.", summary: "Read first", applicability: "When citing records",
+  sourceRevision: "source-v1", evidence: ["2026-10-14-1858"], expectedBenefit: "Accurate citations",
+  reviewDue: DATE, revision: 2, state: "adopted", reviewEvidence: [], reviewOutcome: "pending",
+  reviewNeeded: false, acknowledgedSourceRevision: "source-v1", checkedSourceRevision: "source-v1",
+};
 
 function scoped(
   sliceId: string,
@@ -59,6 +68,26 @@ function plan(overrides: Partial<LapPlanInput> = {}) {
     ...overrides,
   });
 }
+
+describe("procedural skill review opportunity", () => {
+  it("offers a due skill as work without forcing a user-profile evolution pass", () => {
+    const state: SkillLedger = { schemaVersion: 1, entries: [DUE_SKILL], operations: [] };
+    const docket = plan({ skillLedger: state });
+    expect(docket.skillReviewDue).toEqual([DUE_SKILL]);
+    expect(docket.evolutionDue).toBe(false);
+    expect(docket.evolutionReasons).toEqual([]);
+    expect(lapHasWork(docket)).toBe(true);
+  });
+  it("does not repeat an unchanged empty-scope offer, but new evidence offers it again", () => {
+    const state: SkillLedger = { schemaVersion: 1, entries: [DUE_SKILL], operations: [
+      { operationId: skillReviewOfferId(DUE_SKILL), fingerprint: "host-offer" },
+    ] };
+    const idle = plan({ skillLedger: state });
+    expect(idle.skillReviewDue).toEqual([]);
+    expect(lapHasWork(idle)).toBe(false);
+    expect(plan({ skillLedger: state, scope: [scoped("2026-10-16-1000", ["newturn"])] }).skillReviewDue).toEqual([DUE_SKILL]);
+  });
+});
 
 describe("scopeFromSummaries — §3.5/§4's scope assembly (range ∪ log, coverage-filtered)", () => {
   const NO_COVERAGE: ScopeCoverage | null = null;

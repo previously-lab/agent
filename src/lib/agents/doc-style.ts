@@ -21,6 +21,11 @@ export const DOC_LANGUAGE_RULE =
   "Write every memory document in the user's own language — never mix " +
   "languages within one document. Your analysis and report fields stay English.";
 
+/** The shared epistemic contract for every memory-document writer. */
+export const DOC_EPISTEMIC_RULE = `## Evidence and uncertainty
+
+Distinguish what the user reported, what the record directly shows, what an external source verified, your interpretation, and what remains unknown. Grounded questions, competing explanations, and honest first-person concern are welcome when their status is clear; never present an interpretation as an observed fact. Do not invent evidence or external verification. Do not perform emotion, and do not force a rigid research template. Every case category can hold this kind of understanding, not only people. Claims about the user must trace to the user's raw records, not to derived memory alone.`;
+
 /** How a memory document reads — the six rules plus the two before/after pairs. */
 export const DOC_HOUSE_STYLE = `## Document house style — how memory documents read
 
@@ -36,4 +41,6 @@ WRONG: Regarding the previously discussed matter, it should be noted that the ve
 RIGHT: 2026-10-05: the panel vendor quoted USD 40/unit (slice 2026-10-04-0610). The quote expires 2026-10-20 — re-confirm before ordering.
 
 WRONG: 用户在沟通中提出了一个想法，agent 经过仔细认真的分析研究之后，觉得可以尝试一下之前被提到过的那个通道，结果发现它其实是可行的，这不是没有意义的。
-RIGHT: 2026-10-05：用户让实测读片的 range 过滤。对 2026-10-04-0610 取第 3–5 轮，返回恰好三条——行为与文档一致，已记入 self/工具笔记。`;
+RIGHT: 2026-10-05：用户让实测读片的 range 过滤。对 2026-10-04-0610 取第 3–5 轮，返回恰好三条——行为与文档一致，已记入 self/工具笔记。
+
+${DOC_EPISTEMIC_RULE}`;
