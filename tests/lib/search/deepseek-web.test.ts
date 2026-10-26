@@ -28,6 +28,33 @@ describe("DeepSeek native Search API", () => {
     expect(credentials.key).toHaveBeenCalledTimes(1);
   });
 
+  it("sends a bounded original-question hint without changing the query", async () => {
+    fetchMock.mockImplementation(async () => response());
+    await deepseekWebSearch(
+      { query: "focused query" },
+      undefined,
+      { originalQuestion: "  What\t\n is   new?  " },
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({
+      query: "focused query",
+      count: 10,
+      need_content: false,
+      ori_question: "What is new?",
+    });
+
+    await deepseekWebSearch(
+      { query: "q" },
+      undefined,
+      { originalQuestion: "😀".repeat(130) },
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string).ori_question).toBe("😀".repeat(128));
+  });
+
+  it("omits a blank original-question hint", async () => {
+    await deepseekWebSearch({ query: "q" }, undefined, { originalQuestion: " \n\t " });
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).not.toHaveProperty("ori_question");
+  });
+
   it("treats an empty result set as a normal success without retries", async () => {
     fetchMock.mockResolvedValue(new Response('{"results":[]}'));
     expect(await deepseekWebSearch({ query: "q", count: 1 })).toEqual({ results: [] });

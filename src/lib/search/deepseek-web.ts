@@ -61,17 +61,37 @@ function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Optional per-call hints. `originalQuestion` is sent as `ori_question` —
+ * the question that triggered the search, to help the provider rank results.
+ * It is whitespace-collapsed and truncated to 128 Unicode characters; blank
+ * values are omitted. The actual `query` is never truncated or altered here.
+ */
+export interface DeepSeekWebSearchOptions {
+  originalQuestion?: string;
+}
+
+/** Bound the triggering question to what `ori_question` accepts: whitespace
+ * collapses to single spaces and the first 128 Unicode characters remain
+ * (astral-safe — DeepSeek counts Unicode characters, not UTF-16 units). */
+function boundedOriginalQuestion(question: string | undefined): string | undefined {
+  const collapsed = question?.replace(/\s+/gu, " ").trim() ?? "";
+  if (collapsed.length === 0) return undefined;
+  return Array.from(collapsed).slice(0, 128).join("");
+}
+
 /** Read-only native Search API; credentials are resolved at each HTTP boundary.
  * Contract: https://api-docs.deepseek.com/guides/search/
  * Page content stays behind the researcher's separate guarded webFetch quota.
- * Only explicit retryable HTTP failures are retried; successful paid requests,
- * invalid responses, auth/balance failures and ambiguous network failures are not.
+ * Only explicit retryable HTTP failures are retried. HTTP 200 responses (even
+ * malformed ones), network failures and deterministic HTTP failures are not.
  */
 export async function deepseekWebSearch(
   input: z.infer<typeof webSearchInputSchema>,
   signal?: AbortSignal,
+  options?: DeepSeekWebSearchOptions,
 ): Promise<DeepSeekSearchResult> {
   const { query, count = 10 } = webSearchInputSchema.parse(input);
+  const oriQuestion = boundedOriginalQuestion(options?.originalQuestion);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     signal?.throwIfAborted();
     const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
@@ -81,13 +101,18 @@ export async function deepseekWebSearch(
         Authorization: `Bearer ${deepseekApiKey()}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ query, count, need_content: false }),
+      body: JSON.stringify({
+        query,
+        count,
+        need_content: false,
+        ...(oriQuestion === undefined ? {} : { ori_question: oriQuestion }),
+      }),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       // Never forward the credential to a redirected endpoint.
       redirect: "error",
     });
     if (response.ok) {
-      // A malformed successful response must not be billed a second time.
+      // Never automatically retry an ambiguous HTTP 200, even with a malformed body.
       return responseSchema.parse(await response.json());
     }
     const retryable = response.status === 408 || response.status === 429 || response.status >= 500;

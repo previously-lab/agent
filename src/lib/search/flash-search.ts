@@ -4,7 +4,13 @@
  */
 import { tool } from "@/lib/deepseek/tools";
 import type { PrepareStepFunction, ToolSet } from "@/lib/deepseek/types";
-import { deepseekWebSearch, webSearchInputSchema } from "@/lib/search/deepseek-web";
+import { webSearchInputSchema } from "@/lib/search/deepseek-web";
+import {
+  SearchRunPolicy,
+  SCOUT_SEARCH_OPERATION_LIMIT,
+  STANDARD_SEARCH_OPERATION_LIMIT,
+  type SearchRunStats,
+} from "@/lib/search/search-policy";
 import { z } from "zod";
 import {
   runSubAgent,
@@ -36,6 +42,12 @@ export interface WebSearchResult {
   /** Pages worth a follow-up look (the main agent's own verification, or a
    *  link to hand the user). */
   suggestedReads: Array<{ url: string; title: string; reason: string }>;
+  /** Per-run accounting supplied by searchViaFlash. Legacy outer fallbacks
+   *  omit it because their request counts are unknown. */
+  searchStats?: SearchRunStats;
+  /** True iff a NEW request was rejected by the per-run operation cap. Optional
+   *  for the same legacy fallbacks; actual searchViaFlash results supply it. */
+  truncated?: boolean;
 }
 
 /** Search calls allowed per query. Page reads, total steps and the outer
@@ -175,10 +187,10 @@ const searchReportSchema = tool({
 });
 
 /** Total model steps for the research loop: search rounds + page reads + the
- *  final report. Deliberately loose (200): with 50 search rounds permitted,
- *  the search cap must bind BEFORE this step count — the step wall exists to
- *  catch the "never filed the report" case, not to ration research. */
-const MAX_SEARCH_STEPS = 200;
+ *  final report. The paid-search and page/image quotas fit with synthesis
+ *  headroom; the final report-only step also catches duplicate/no-op loops
+ *  before they can consume the whole run without filing a report. */
+const MAX_SEARCH_STEPS = 32;
 
 /**
  * prepareStep factory: the step wall is the classic "never filed the report"
@@ -206,27 +218,33 @@ function finalStepReportDirective(
 
 /**
  * Build the research sub-agent's role block for a specific run mode. The
- * system prompt is `buildSubAgentSystem(buildSearchRole(r, p))` (shared static
- * base + this block). The shared base is fully static, so provider prompt
- * caches still hit across runs of the SAME mode; only the effective cap
- * numbers differ between standard and scout runs. The per-call `Today is …`
- * date anchor, the scout scoping note, and the query live in the user prompt.
+ * system prompt is `buildSubAgentSystem(buildSearchRole(r, p, o))` (shared
+ * static base + this block). The shared base is fully static, so provider
+ * prompt caches still hit across runs of the SAME mode; only the effective
+ * cap numbers differ between standard and scout runs. The per-call
+ * `Today is …` date anchor, the scout scoping note, and the query live in
+ * the user prompt.
  */
 function buildSearchRole(
   maxSearchRounds: number,
   maxPageReads: number,
+  maxSearchOperations: number,
 ): string {
   return `You are an independent researcher: the main agent hands you a topic, and you come back with a real answer.
 
 You both search AND read. web_search returns DeepSeek Search result titles, URLs and summaries; webFetch reads the most promising pages yourself — the search digest alone is often too thin to answer well. Pages come back as Markdown (headings, lists, links and tables preserved). You may read at most ${maxPageReads} pages per run — spend them on the strongest sources. When a promising page's key content is an image, viewImage can look at it for you (up to ${MAX_IMAGE_READS} images per run).
 
+Budgets: you may issue up to ${maxSearchRounds} web_search rounds AND start at most ${maxSearchOperations} NEW search operations per run. Repeating the exact normalized query with the same result count reuses that earlier successful result for free (quoted phrases stay exact). A different count, including a larger request, is a new operation rather than free reuse. Prefer complementary, independent sources over more hits on the same site, and preserve your operator intent (site:, -site:, lang:, after:, before:, OR, quotes, negation) through reformulations. When you have enough evidence to answer, stop searching and start writing — extra rounds rarely change the answer.
+
 Process:
-1. Plan your search: each query must contain 1-128 Unicode characters; reformulate long topics into focused queries. You may use up to ${maxSearchRounds} search rounds. Round 1 may use the query as-is; every later round must either reformulate based on what you have learned or chase a new lead discovered in the material you have already read. Before issuing a new search round, state (in thinking) what is still missing.
+1. Plan your search: each query must contain 1-128 Unicode characters; reformulate long topics into focused queries. Round 1 may use the query as-is; every later round must either reformulate based on what you have learned or chase a new lead discovered in the material you have already read. Before issuing a new search round, state (in thinking) what is still missing.
 2. Search, then read the most promising pages with webFetch between rounds when it sharpens your next query (use its range filters to keep reads focused).
 3. When you have enough, call searchReport with:
    - answer: a real answer to the query (2-5 paragraphs), synthesizing what you found with your own knowledge. Every claim that comes from the web must mention its source. Answer in the query's language — it reaches the user, so it overrides the shared base's English default.
    - recommendation: your researcher's assessment — how confident you are, what is solid, what is uncertain or conflicting between sources.
    - suggested_reads: 0-3 pages worth a follow-up look (your colleague's own verification, or further reading for the user).
+
+If the new-search-operation budget runs out, web_search tells you so: do not keep re-trying fresh queries — synthesize your report from the evidence you have already gathered, and note in the report that coverage is limited to that evidence and a separate, deliberately scoped follow-up run is needed for deeper coverage. Reserve your last steps for synthesis: a report filed beats a perfect search lost.
 
 searchReport is the ONLY channel your work reaches the main agent through — a prose final message is thrown away. Every run MUST end with a searchReport call, even a partial one: if you are running out of steps, time, or search rounds, stop researching and report what you already have. A thin report beats a lost one.
 
@@ -256,6 +274,13 @@ export async function searchViaFlash(
   // and fewer search rounds; standard mode keeps the exported constants.
   const effectiveMaxSearchRounds = scout ? 20 : MAX_SEARCHES_PER_QUERY;
   const effectiveMaxPageReads = scout ? 3 : MAX_PAGE_READS;
+  // New-search-operation cap: a fresh policy instance per run — no module or
+  // cross-run state. Reusing a successfully-searched query stays free after
+  // the cap; only NEW operations consume slots.
+  const effectiveSearchOperationLimit = scout
+    ? SCOUT_SEARCH_OPERATION_LIMIT
+    : STANDARD_SEARCH_OPERATION_LIMIT;
+  const searchPolicy = new SearchRunPolicy(effectiveSearchOperationLimit, query);
 
   const today = new Date().toISOString().slice(0, 10);
   const scoutBlock = scout
@@ -268,7 +293,7 @@ export async function searchViaFlash(
   // Per-run image-read quota (MAX_IMAGE_READS).
   let imageReads = 0;
   const systemPrompt = buildSubAgentSystem(
-    buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
+    buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads, effectiveSearchOperationLimit),
   );
   const res = await runSubAgent<SearchReport>({
     role: "search",
@@ -278,20 +303,23 @@ export async function searchViaFlash(
     tools: {
       web_search: tool({
         description: "Search the web with DeepSeek. Returns source URLs, titles and summaries. " +
-          `Up to ${effectiveMaxSearchRounds} searches per run; use webFetch for page contents.`,
+          `Up to ${effectiveMaxSearchRounds} search rounds per run, of which at most ` +
+          `${effectiveSearchOperationLimit} may be NEW search operations — repeating the ` +
+          "same normalized query with the same effective result count reuses that successful result. " +
+          "A larger count may expand within the remaining budget. Use webFetch for page contents.",
         inputSchema: webSearchInputSchema,
         execute: async (input, options) => {
           if (searchRounds >= effectiveMaxSearchRounds) {
             return { results: [], note: "Search quota exhausted. Report what you have already found." };
           }
           searchRounds += 1;
-          const result = await deepseekWebSearch(input, options?.abortSignal);
-          for (const source of result.results) {
+          const out = await searchPolicy.search(input, options?.abortSignal);
+          for (const source of out.results) {
             if (!observedSources.has(source.url)) {
               observedSources.set(source.url, { title: source.title || source.url, url: source.url });
             }
           }
-          return result;
+          return out;
         },
       }),
       webFetch: tool({
@@ -390,8 +418,33 @@ export async function searchViaFlash(
     progress,
     onToolProgress: ({ toolName, input: toolInput }) => {
       if (toolName === "web_search") {
+        // Progress uses the same normalized-query-plus-count identity as the
+        // policy, so a count expansion is never mislabeled as free reuse.
+        const q =
+          typeof toolInput === "object" && toolInput !== null && "query" in toolInput
+            ? String((toolInput as { query?: unknown }).query ?? "")
+            : "";
+        const count =
+          typeof toolInput === "object" && toolInput !== null && "count" in toolInput &&
+          typeof (toolInput as { count?: unknown }).count === "number"
+            ? (toolInput as { count: number }).count
+            : undefined;
+        const round = Math.min(searchRounds + 1, effectiveMaxSearchRounds);
+        if (searchPolicy.hasSeen(q, count)) {
+          return {
+            line: `Searching the web (round ${round}, reusing an earlier result — no new search operation)…`,
+            stage: "running",
+          };
+        }
+        const operationsStarted = searchPolicy.getStats().operationsStarted;
+        if (operationsStarted >= effectiveSearchOperationLimit) {
+          return {
+            line: `Search operation budget exhausted; round ${round} will not start a new search…`,
+            stage: "running",
+          };
+        }
         return {
-          line: `Searching the web (round ${Math.min(searchRounds + 1, effectiveMaxSearchRounds)})…`,
+          line: `Searching the web (round ${round}, new search operation ${operationsStarted + 1} of ${effectiveSearchOperationLimit})…`,
           stage: "running",
         };
       }
@@ -422,6 +475,22 @@ export async function searchViaFlash(
   });
 
   const sources = [...observedSources.values()];
+  const searchStats = searchPolicy.getStats();
+  const truncated = searchStats.exhausted;
+  // Appended to the recommendation whenever the run ended with the
+  // new-search-operation cap rejecting a query: the answer is limited to the
+  // evidence already gathered, and it must never read as an ordinary result.
+  const exhaustionLimitation = truncated
+    ? "Search budget exhausted during this run — the answer is limited to " +
+      "the evidence already gathered; a separate, deliberately scoped " +
+      "follow-up research run is needed for deeper coverage."
+    : "";
+  const withLimitation = (recommendation: string): string =>
+    exhaustionLimitation
+      ? recommendation
+        ? `${recommendation}\n\n${exhaustionLimitation}`
+        : exhaustionLimitation
+      : recommendation;
 
   if (!res.ok) {
     // Soft-timeout degradation, aligned with recall: a run cut off
@@ -435,10 +504,13 @@ export async function searchViaFlash(
         console.warn(`[WebSearch] ${res.error}`);
         return {
           answer: partial,
-          recommendation:
+          recommendation: withLimitation(
             "The research run hit its time budget and was cut off — this answer was recovered from the interrupted run's partial text; treat it as lower-confidence and unverified.",
+          ),
           suggestedReads: [],
           sources,
+          searchStats,
+          truncated,
         };
       }
     }
@@ -449,7 +521,7 @@ export async function searchViaFlash(
   if (report) {
     return {
       answer: report.answer ?? res.text ?? "",
-      recommendation: report.recommendation ?? "",
+      recommendation: withLimitation(report.recommendation ?? ""),
       suggestedReads: (report.suggested_reads ?? [])
         .filter((s) => typeof s?.url === "string" && s.url.length > 0)
         .slice(0, 3)
@@ -459,6 +531,8 @@ export async function searchViaFlash(
           reason: typeof s.reason === "string" ? s.reason : "",
         })),
       sources,
+      searchStats,
+      truncated,
     };
   }
 
@@ -471,11 +545,14 @@ export async function searchViaFlash(
   );
   return {
     answer: res.text ?? "",
-    recommendation:
+    recommendation: withLimitation(
       "The researcher ended its run without filing the structured searchReport — " +
       "this answer was recovered verbatim from its final message; treat it as " +
       "lower-confidence and unverified.",
+    ),
     suggestedReads: [],
     sources,
+    searchStats,
+    truncated,
   };
 }
