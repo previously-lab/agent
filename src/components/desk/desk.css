@@ -714,3 +714,82 @@
   .desk-tool-close { width: 40px; height: 40px; }
   .desk-page-position { min-width: 36px; }
 }
+
+/* Dated reading views live inside the same fixed paper frame. Their controls
+   never change the A4 page box or the markdown's print geometry. */
+.desk-reading-views {
+  position: absolute;
+  inset: 45mm 22mm auto;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(var(--desk-mm) * 3);
+  font-family: var(--font-sans, sans-serif);
+  font-size: calc(var(--desk-mm) * 2.8);
+  line-height: 1;
+}
+
+.desk-reading-views button {
+  padding: calc(var(--desk-mm) * 1.2) 0;
+  border-bottom: 1px solid transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.desk-reading-views button[aria-pressed="true"] {
+  border-bottom-color: currentColor;
+  color: var(--color-foreground);
+  font-weight: 600;
+}
+
+.desk-reading-views button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.desk-reading-views button:focus-visible,
+.desk-current-source-list button:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: calc(var(--desk-mm) * 0.8);
+}
+
+.desk-current-provenance {
+  margin: 0 0 calc(var(--desk-mm) * 4);
+  padding: 0 0 calc(var(--desk-mm) * 3);
+  border-bottom: 1px solid var(--paper-line);
+  font-family: var(--font-sans, sans-serif);
+  font-size: calc(var(--desk-mm) * 3);
+  line-height: 1.55;
+}
+
+.desk-current-cue {
+  margin: 0 0 calc(var(--desk-mm) * 1.5);
+  font-family: var(--font-sans, sans-serif);
+  font-size: calc(var(--desk-mm) * 3);
+  line-height: 1.55;
+}
+
+.desk-current-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--desk-mm) * 2);
+}
+
+.desk-current-source-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: calc(var(--desk-mm) * 2);
+}
+
+.desk-current-source-list button {
+  padding: 0;
+  border-bottom: 1px solid var(--paper-line);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.desk-current-source-list button:hover {
+  border-bottom-color: currentColor;
+}

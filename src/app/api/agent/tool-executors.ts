@@ -75,6 +75,8 @@ import {
   readSkillSource,
 } from "@/lib/evolution/skill-store";
 import { renderRoleSkillGuidance } from "@/lib/evolution/skill-policy";
+import { runScenarioRecall, type ScenarioRecallResult } from "@/lib/agents/scenario-recall";
+import { scenarioRecallRequestSchema, type ScenarioRecallRequest } from "@/lib/chat/scenario-recall-contract";
 
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
@@ -209,6 +211,7 @@ type ExecuteOpts<C> = {
   context: C;
   toolCallId: string;
   messages?: ModelMessage[];
+  abortSignal?: AbortSignal;
 };
 
 /**
@@ -435,6 +438,7 @@ export async function recallReadExecute(
     part?: "core" | "agent" | "previously";
     range?: RecallReadRange;
     outline?: boolean;
+    includeHistory?: boolean;
   },
   { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
@@ -454,6 +458,7 @@ export async function recallReadExecute(
     ...(input.part ? { part: input.part } : {}),
     ...(input.range ? { range: input.range } : {}),
     ...(input.outline ? { outline: true } : {}),
+    ...(input.includeHistory ? { includeHistory: true } : {}),
     ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
   });
 
@@ -494,6 +499,41 @@ export async function recallReadExecute(
 }
 
 // ─── recallSince — the differential view (v0.11) ──────────────────────────
+
+/** Question-conditioned recollection, with verified excerpts from original records. */
+export async function recallScenarioExecute(
+  input: ScenarioRecallRequest,
+  { context: ctx, toolCallId, abortSignal }: ExecuteOpts<ToolContext>,
+): Promise<ScenarioRecallResult> {
+  "use step";
+  const request = scenarioRecallRequestSchema.parse(input);
+  await emitToolProgress(toolCallId, "recallScenario", "Recollecting the conversation…", "running");
+  const result = await runScenarioRecall({
+    ...request,
+    backend: createRecallBackend(ctx),
+    model: ctx.mainModel,
+    timezone: ctx.timezone,
+    signal: abortSignal,
+  });
+  if (result.evidence.length > 0) {
+    const seen = new Set<string>();
+    const references = result.evidence.flatMap((evidence) => {
+      const sliceId = evidence.ref.replace(/^records\//, "");
+      if (!parseSliceId(sliceId) || seen.has(sliceId)) return [];
+      seen.add(sliceId);
+      return [{ slice_id: sliceId, note: evidence.note }];
+    });
+    try {
+      const writer = getWritable<UIMessageChunk>().getWriter();
+      try { await writer.write({ type: "data-recall-references", data: { references } } as UIMessageChunk); }
+      finally { writer.releaseLock(); }
+    } catch { /* Evidence remains in the durable tool result if the live stream closed. */ }
+  }
+  await emitToolProgress(toolCallId, "recallScenario", result.evidence.length > 0
+    ? `Recovered ${result.evidence.length} verified excerpt(s).`
+    : "Recollection finished with no verified excerpt.", "done");
+  return result;
+}
 //
 // "自某天以来变了什么" — the commit history IS the diff: the read comes from
 // the ledger (facade.readChangesSince), never from a new store. This executor

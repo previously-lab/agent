@@ -6,7 +6,7 @@
  */
 import { normalizeCaseRefText, parseCaseRef } from "@/lib/docs/case-refs";
 import type { CaseCategory } from "@/lib/docs";
-import type { CaseDocContent } from "@/lib/episodic/actions";
+import type { CaseCurrentRead, CaseDocContent } from "@/lib/episodic/actions";
 import {
   parseDossierRef,
   parseRecordRef,
@@ -49,6 +49,10 @@ export interface DeskPaperModel {
   timezone: string | null;
   /** Dossier papers: which self-document (drives the fixed English name). */
   dossier: DossierDocName | null;
+  /** The dated current understanding — a NEW-ROOT CASE index with a
+   *  successful `_current.md` read; null everywhere else (pieces, legacy,
+   *  records, dossiers, dead links). */
+  current: DeskCurrentModel | null;
 }
 
 /** The record read carries the turn count and the timezone beyond the case
@@ -128,6 +132,7 @@ export function deskPaperModel(
       turnCount: doc?.turnCount ?? null,
       timezone: doc?.timezone ?? null,
       dossier: null,
+      current: null,
     };
   }
   const dossier = parseDossierRef(ref);
@@ -142,6 +147,7 @@ export function deskPaperModel(
       turnCount: null,
       timezone: null,
       dossier: dossier.name,
+      current: null,
     };
   }
 
@@ -177,7 +183,106 @@ export function deskPaperModel(
     turnCount: null,
     timezone: null,
     dossier: null,
+    // Only a case INDEX carries the dated view — pieces and legacy docs
+    // stay original-only, whatever the read returned.
+    current:
+      kind === "case" && doc?.current ? deskCurrentModel(doc.current) : null,
   };
+}
+
+// ─── The current understanding (the dated view, never fact) ────────────────
+// A case's `_current.md` rides the read as structured data. The desk opens on
+// it when it exists, keeps the ORIGINAL index verbatim and reachable, and
+// never renders basis hashes, raw frontmatter, or `evidence:`/`basis-*`
+// engineering lines as product prose.
+
+/** One of the three reading views the paper can print. */
+export type DeskReadingView = "current" | "original" | "history";
+
+/** The current view, presentation-ready: history filtered, honest missing-
+ *  cues kept, sources exact. Built only from a successful read. */
+export interface DeskCurrentModel {
+  asOf: string;
+  missingAsOf: boolean;
+  body: string;
+  sources: string[];
+  missingEvidence: boolean;
+  /** Historical prose and dates; mechanical key lines are removed. */
+  history: string;
+  /** Exact archived evidence refs, exposed as source buttons, never prose. */
+  historySources: string[];
+  hasHistory: boolean;
+  indexChanged: boolean | null;
+}
+
+export function currentHistorySources(raw: string): string[] {
+  const sources: string[] = [];
+  for (const line of raw.split("\n")) {
+    const match = /^\s*evidence\s*:\s*(.+?)\s*$/i.exec(line);
+    if (!match || match[1] === "not recorded") continue;
+    for (const ref of match[1].split(/,\s+/).map((value) => value.trim())) {
+      if (ref && !sources.includes(ref)) sources.push(ref);
+    }
+  }
+  return sources;
+}
+
+/** Keep historical prose and dates, but not frontmatter or mechanical keys. */
+export function filterCurrentHistory(raw: string): string {
+  return raw
+    .split("\n")
+    .flatMap((line) => {
+      const t = line.trim();
+      if (t === "---" || /^evidence\s*:/i.test(t) || /^basis(-\w+)?:\s*/i.test(t)) {
+        return [];
+      }
+      const asOf = /^as[-_]?of\s*:\s*(.+?)\s*$/i.exec(t) ?? /^asOf\s*:\s*(.+?)\s*$/.exec(t);
+      if (asOf) return asOf[1] === "unknown" ? [] : [`**${asOf[1]}**`];
+      return [line];
+    })
+    .join("\n")
+    .trim();
+}
+
+/** The desk's half of the current-view contract: present on a paper model
+ *  only for a NEW-ROOT CASE index with a successful read. */
+export function deskCurrentModel(read: CaseCurrentRead): DeskCurrentModel | null {
+  if (read.status !== "ok") return null;
+  const history = filterCurrentHistory(read.view.history);
+  return {
+    asOf: read.view.asOf,
+    missingAsOf: read.view.missingAsOf,
+    body: read.view.body,
+    sources: read.view.sources,
+    missingEvidence: read.view.missingEvidence,
+    history,
+    historySources: currentHistorySources(read.view.history),
+    hasHistory: history !== "",
+    indexChanged: read.view.indexChanged,
+  };
+}
+
+/** The view the desk opens on: the current understanding when the case
+ *  carries one, else the original document. */
+export function defaultDeskView(model: {
+  current: DeskCurrentModel | null;
+}): DeskReadingView {
+  return model.current ? "current" : "original";
+}
+
+/** The markdown one reading view prints. The model's own `markdown` stays
+ *  the EXACT original — the views select, never rewrite. A view without
+ *  backing data falls back to the original. */
+export function deskPaperMarkdown(
+  model: DeskPaperModel,
+  view: DeskReadingView,
+): string | null {
+  if (model.markdown === null) return null;
+  if (view === "current") return model.current ? model.current.body : model.markdown;
+  if (view === "history") {
+    return model.current?.history ? model.current.history : model.markdown;
+  }
+  return model.markdown;
 }
 
 // ─── Pagination (v0.24, cyclic in v0.29) — the pure half of the paged
@@ -263,4 +368,47 @@ export function panelModeForDeskOpen(
   mode: ConversationPanelMode,
 ): ConversationPanelMode {
   return mode === "fullscreen" ? "pill" : mode;
+}
+
+// ─── Reading-event seam (the coordinator's subscription) ───────────────────
+// Fired ONLY on actual user gestures — a tab click, a page turn that settles.
+// Never on effect-driven restores (docRef resets, re-pagination clamps), so
+// a consumer sees reading intent, not layout noise. AppShell need not
+// consume these yet; the desk just offers them.
+
+/** The user picked a reading view (Current / Original / Earlier). */
+export interface DeskViewChange {
+  docRef: string;
+  view: DeskReadingView;
+  /** The page the new view opens on (always 1 — a switch restarts the read). */
+  page: number;
+}
+
+/** A user gesture turned to a page that settled (button, key, wheel, swipe). */
+export interface DeskPageChange {
+  docRef: string;
+  view: DeskReadingView;
+  page: number;
+}
+
+/** Passive settled screen state, including loads and re-pagination. This is
+ *  deliberately separate from the genuine-gesture callbacks above. */
+export interface DeskDocumentObservation {
+  docRef: string;
+  title: string;
+  edition: DeskReadingView;
+  page: number;
+  total: number;
+}
+
+export function deskDocumentObservationKey(
+  observation: DeskDocumentObservation,
+): string {
+  return JSON.stringify([
+    observation.docRef,
+    observation.title,
+    observation.edition,
+    observation.page,
+    observation.total,
+  ]);
 }

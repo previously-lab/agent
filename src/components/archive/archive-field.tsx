@@ -546,7 +546,7 @@ export function ArchiveField({
     (ref: string) => {
       // A scroll gesture's tail click is not an open.
       if (performance.now() - lastDragEndRef.current < 250) return;
-      openDesk(ref);
+      openDesk(ref, "manual");
     },
     [openDesk],
   );

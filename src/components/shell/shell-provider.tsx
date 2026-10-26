@@ -78,6 +78,12 @@ import {
   type WorldPose,
   type WorldViewDriver,
 } from "@/components/shell/world-view";
+import type { ScreenContext, ScreenOrigin } from "@/lib/chat/screen-context";
+import {
+  createScreenContextTracker,
+  type ScreenContextTracker,
+} from "@/lib/chat/screen-context-tracker";
+import { useNativeSourceScope } from "@/components/chat/native-source-scope";
 export type { WorldPose } from "@/components/shell/world-view";
 
 /** The desk's memory (v0.25b, product-pass §4): the last document the
@@ -122,9 +128,11 @@ interface ShellValue {
   /** Pull a document onto the desk (the shelf's terminal open action). A
    *  fullscreen panel folds to the pill first — fullscreen freezes the
    *  world's frame loop and covers the canvas the desk renders in. */
-  openDesk: (ref: string) => void;
+  openDesk: (ref: string, origin?: ScreenOrigin) => void;
   /** Put the document back; the desk's seat empties. */
   closeDesk: () => void;
+  /** Passive route cleanup: clear the desk without a manual close event. */
+  cleanupDesk: () => void;
   /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
    *  — the room the reader walks into — moves the SAME cursor the nav action
    *  owns, but steers NO world (the nav action is the only writer that also
@@ -136,6 +144,8 @@ interface ShellValue {
   getCursor: () => string | null;
   /** The per-turn view getter (v0.13 §5) — see the module header. */
   getChatView: () => CurrentView | undefined;
+  getScreenContext: () => ScreenContext | undefined;
+  screen: ScreenContextTracker;
   /** The one band feed — see `field-feed.ts`. */
   feed: FieldFeed;
   /** The feed's one-writer lease, computed and pushed by the route. */
@@ -167,6 +177,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // note. The conversation is a floating capability, never an opening surface.
   const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
   const worldFrozen = panelMode === "fullscreen";
+  const sourceScope = useNativeSourceScope();
 
   // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order.
   // Every open also writes the desk's memory (LAST_DOCUMENT_KEY, above):
@@ -176,9 +187,19 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // Opening folds a fullscreen panel to the pill first
   // (panelModeForDeskOpen), the same rule as leaving `/app` (fullscreen
   // would freeze the world the desk renders in).
+  const screenRef = useRef<ScreenContextTracker | null>(null);
+  screenRef.current ??= createScreenContextTracker();
+  const screen = screenRef.current;
+  const getScreenContext = useCallback(
+    (): ScreenContext | undefined => screen.getScreenContext(),
+    [screen],
+  );
+
   const [deskDoc, setDeskDoc] = useState<string | null>(null);
   const deskDocRef = useRef<string | null>(null);
-  const openDesk = useCallback((ref: string) => {
+  const previousSourceScope = useRef(sourceScope);
+  const openDesk = useCallback((ref: string, origin: ScreenOrigin = "observed") => {
+    screen.documentOpened({ ref, origin });
     deskDocRef.current = ref;
     setPanelMode(panelModeForDeskOpen);
     setDeskDoc(ref);
@@ -188,11 +209,23 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       // Storage can be denied (private mode) — the memory is a convenience,
       // never a gate.
     }
-  }, []);
-  const closeDesk = useCallback(() => {
+  }, [screen]);
+  const clearDesk = useCallback((origin: "manual" | "observed") => {
+    const ref = deskDocRef.current ?? undefined;
+    deskDocRef.current = null;
+    screen.documentClosed(ref, { origin });
+    setDeskDoc(null);
+  }, [screen]);
+  const closeDesk = useCallback(() => clearDesk("manual"), [clearDesk]);
+  const cleanupDesk = useCallback(() => clearDesk("observed"), [clearDesk]);
+
+  useEffect(() => {
+    if (previousSourceScope.current === sourceScope) return;
+    previousSourceScope.current = sourceScope;
     deskDocRef.current = null;
     setDeskDoc(null);
-  }, []);
+    screen.reset();
+  }, [sourceScope, screen]);
 
   // THE ARCHIVE FIELD'S FILTER (v0.25a §四). The library control's category
   // selection doubles as the field's column filter — lifted here because the
@@ -244,7 +277,13 @@ export function ShellProvider({ children }: { children: ReactNode }) {
 
   // The route's reactive pose — see the module header. Null off `/app` (a
   // route with no world registers no driver and reports no pose).
-  const [worldPose, setWorldPose] = useState<WorldPose | null>(null);
+  const [, setWorldPoseState] = useState<WorldPose | null>(null);
+  const setWorldPose = useCallback((pose: WorldPose | null) => {
+    setWorldPoseState(pose);
+    if (!pose || (pose.settled !== "game" && deskDocRef.current === null)) {
+      screen.roomLeft();
+    }
+  }, [screen]);
   const [publishing, setFeedPublishing] = useState(true);
   const [composerClearance, setComposerClearance] = useState(0);
 
@@ -254,7 +293,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const driverRef = useRef<WorldDriver | null>(null);
   const registerWorldDriver = useCallback((driver: WorldDriver | null) => {
     driverRef.current = driver;
-  }, []);
+    if (!driver) screen.routeLeft();
+  }, [screen]);
 
   // ── THE CONVERSATION'S VIEW OF THE WORLD (v0.13 §5 视野注入) ─────────
   // The actual mounted room supplies its frozen recipe inputs at SEND time.
@@ -296,9 +336,12 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       setArchiveCategory,
       openDesk,
       closeDesk,
+      cleanupDesk,
       reportCursor,
       getCursor,
       getChatView,
+      getScreenContext,
+      screen,
       feed,
       publishing,
       composerClearance,
@@ -316,13 +359,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       archiveCategory,
       openDesk,
       closeDesk,
+      cleanupDesk,
       reportCursor,
       getCursor,
       getChatView,
+      getScreenContext,
+      screen,
       feed,
       publishing,
       composerClearance,
       registerWorldDriver,
+      setWorldPose,
       reportTurnSettled,
     ],
   );

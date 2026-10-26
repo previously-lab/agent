@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UIMessage, UIMessageChunk } from "@/lib/chat/protocol";
+import type { ScreenContext } from "@/lib/chat/screen-context";
 import { regenerationMessages } from "@/lib/chat/client-stream";
 import { readDurableChat } from "@/lib/chat/client-transport";
 
@@ -9,7 +10,7 @@ export interface DurableChatOptions {
   messages: UIMessage[];
   resume?: boolean;
   getRunId: () => string | null;
-  prepareBody: (messages: UIMessage[], regenerate: boolean) => Record<string, unknown>;
+  prepareBody: (messages: UIMessage[], regenerate: boolean, screen?: ScreenContext) => Record<string, unknown>;
   onRunStarted?: (response: Response, chatId: string) => void;
   onData?: (chunk: UIMessageChunk) => void;
   onFinish?: (event: { messages: UIMessage[] }) => void;
@@ -41,7 +42,7 @@ export function useDurableChat(options: DurableChatOptions) {
     updateMessages(next);
   }, []);
 
-  const execute = useCallback(async (base: UIMessage[], mode: "send" | "regenerate" | "resume") => {
+  const execute = useCallback(async (base: UIMessage[], mode: "send" | "regenerate" | "resume", screen?: ScreenContext) => {
     active.current?.abort();
     const controller = new AbortController();
     active.current = controller;
@@ -59,7 +60,7 @@ export function useDurableChat(options: DurableChatOptions) {
         response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(latest.current.prepareBody(base, mode === "regenerate")),
+          body: JSON.stringify(latest.current.prepareBody(base, mode === "regenerate", screen)),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error((await response.text()) || `Chat HTTP ${response.status}`);
@@ -100,13 +101,13 @@ export function useDurableChat(options: DurableChatOptions) {
     return cancelActive;
   }, [execute, cancelActive]);
 
-  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string }) => {
+  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string }, screen?: ScreenContext) => {
     const next: UIMessage = { ...message, id: message.id ?? crypto.randomUUID(), role: "user" };
-    return execute([...messagesRef.current, next], "send");
+    return execute([...messagesRef.current, next], "send", screen);
   }, [execute]);
 
-  const regenerate = useCallback((request: { messageId?: string } = {}) => {
-    return execute(regenerationMessages(messagesRef.current, request.messageId), "regenerate");
+  const regenerate = useCallback((request: { messageId?: string } = {}, screen?: ScreenContext) => {
+    return execute(regenerationMessages(messagesRef.current, request.messageId), "regenerate", screen);
   }, [execute]);
 
   const stop = useCallback(() => {

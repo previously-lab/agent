@@ -28,6 +28,13 @@ function build(overrides: Partial<Opts> = {}): string {
 }
 
 describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
+  it("keeps the shared prefix stable and appends send-time observations after task context", () => {
+    const baseline = build({ taskContextBlock: "TASK STATE" });
+    const observed = build({ taskContextBlock: "TASK STATE", screenContextBlock: "SCREEN OBSERVATIONS" });
+    expect(observed).toBe(`${baseline}\n\nSCREEN OBSERVATIONS`);
+    expect(build({ screenContextBlock: undefined })).toBe(build());
+  });
+
   it("orders layers by stability: L0 charter → L0b space fiction → L1b direction → L1a assisting → L1 card → L3 slice head → L5 demo → L6 due tasks", () => {
     const ASSISTING = "## Who you're assisting\nName: Alan";
     const DUE = "## Background work that landed today";

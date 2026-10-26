@@ -61,6 +61,7 @@ export function ConversationOverlay({
         // v0.13 §5 — the current view rides each turn's request so the model
         // knows what the reader is looking at (see the provider's getChatView).
         getView={shell.getChatView}
+        getScreenContext={shell.getScreenContext}
         // Frozen while a world transition runs: the feed is one-writer
         // (field-feed.ts), and a move unmounts one world and mounts the
         // other — nobody publishes mid-move. The route computes the lease.

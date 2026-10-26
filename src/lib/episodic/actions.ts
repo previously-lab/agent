@@ -1,5 +1,6 @@
 "use server";
 
+import matter from "gray-matter";
 import { getDemoPersona, listDemoPersonas, setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getUserName } from "@/lib/identity";
@@ -36,6 +37,13 @@ import {
   parsePieceFileName,
   type CaseCategory,
 } from "@/lib/docs";
+import {
+  CASE_CURRENT_FILE_NAME,
+  caseCurrentPath,
+  caseStorageRevision,
+  parseCaseCurrent,
+  type CaseCurrentDoc,
+} from "@/lib/docs/case-doc";
 import {
   caseAttachmentsDir,
   isImageAttachmentName,
@@ -842,6 +850,90 @@ export interface CasePieceRef {
   title: string | null;
 }
 
+/** The structured "current understanding" (`_current.md`): a dated VIEW of
+ *  the case, never fact. Carried alongside the original index markdown, which
+ *  stays untouched. Absent metadata is surfaced as honest cues, never
+ *  invented. */
+export interface CaseCurrentView {
+  /** User-local as-of date; "" when the stored view carried none. */
+  asOf: string;
+  /** The view's free prose. */
+  body: string;
+  /** Canonical source refs the writer actually read — exact, unrewritten. */
+  sources: string[];
+  /** Earlier archived views, raw — the reader filters engineering lines. */
+  history: string;
+  /** True when the index's stored bytes no longer match the view's recorded
+   *  basis (the index changed after the view was written); null when the
+   *  view named no basis, so the reader cannot know. */
+  indexChanged: boolean | null;
+  /** The stored view omitted an as-of date / evidence refs — say so. */
+  missingAsOf: boolean;
+  missingEvidence: boolean;
+}
+
+/** How a `_current.md` read landed. Absence is not a state: the field is
+ *  simply left off the parent result. A non-missing failure is reported, not
+ *  swallowed into "no current view". */
+export type CaseCurrentRead =
+  | { status: "ok"; view: CaseCurrentView }
+  | { status: "unavailable"; warning: string };
+
+/** A read error that means "the file is not there" (the librarian's
+ *  classifier, flash/librarian.ts) — anything else is a genuine failure,
+ *  not an absence, and must not be mistaken for one. */
+function isMissingReadError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "ENOENT") return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /^(File not found|Directory not found)/.test(message) || /\bENOENT\b/.test(message);
+}
+
+/** Point-read one case's `_current.md` — a single read, tolerant parse, the
+ *  source file never modified. Absence → undefined (the original alone);
+ *  a non-missing failure → an honest unavailable state. */
+async function readCaseCurrent(
+  category: CaseCategory,
+  caseName: string,
+  indexRaw: string,
+): Promise<CaseCurrentRead | undefined> {
+  const path = caseCurrentPath(category, caseName);
+  let raw: string;
+  try {
+    raw = await fsReadFile(path);
+  } catch (err) {
+    if (isMissingReadError(err)) return undefined;
+    return { status: "unavailable", warning: formatErrorDetail(err) };
+  }
+  try {
+    matter(raw);
+  } catch (err) {
+    return { status: "unavailable", warning: formatErrorDetail(err) };
+  }
+  const current: CaseCurrentDoc = parseCaseCurrent(raw);
+  if (current.body === "") {
+    return {
+      status: "unavailable",
+      warning: "The current understanding has no readable prose.",
+    };
+  }
+  const indexRevision = caseStorageRevision(indexRaw);
+  return {
+    status: "ok",
+    view: {
+      asOf: current.asOf,
+      body: current.body,
+      sources: current.evidence,
+      history: current.history,
+      indexChanged: current.basis
+        ? current.basis.indexRevision !== indexRevision
+        : null,
+      missingAsOf: current.asOf === "",
+      missingEvidence: current.evidence.length === 0,
+    },
+  };
+}
+
 /** A case opened on the shelf: its `index.md` + the flat piece list. */
 export interface CaseDetail {
   category: CaseCategory;
@@ -853,6 +945,8 @@ export interface CaseDetail {
   pieces: CasePieceRef[];
   /** The case's attachments (§C.1) — names only; bytes ride /api/attachments. */
   attachments: CaseAttachmentRef[];
+  /** The dated current understanding, when the case carries one. */
+  current?: CaseCurrentRead;
   warnings: string[];
 }
 
@@ -901,6 +995,7 @@ export async function getCaseDetail(
   // Pieces live in the new root only — a legacy-hit case has no case dir.
   let pieces: CasePieceRef[] = [];
   let attachments: CaseAttachmentRef[] = [];
+  let current: CaseCurrentRead | undefined;
   if (hit.path === caseIndexPath(category, caseName)) {
     const dirEntries = await fsListFiles(caseDirPath(category, caseName)).catch(
       () => [],
@@ -926,6 +1021,15 @@ export async function getCaseDetail(
       .filter((e) => e.type === "file")
       .map((e) => ({ name: e.name, image: isImageAttachmentName(e.name) }))
       .sort((a, b) => a.name.localeCompare(b.name));
+    // The dated current view, one point read — only when the dir listing says
+    // the file exists (the common no-current case costs nothing).
+    if (
+      dirEntries.some(
+        (e) => e.type === "file" && e.name === CASE_CURRENT_FILE_NAME,
+      )
+    ) {
+      current = await readCaseCurrent(category, caseName, hit.raw);
+    }
   }
 
   if (hit.path.startsWith(`memory/${category}/`)) {
@@ -938,6 +1042,7 @@ export async function getCaseDetail(
       markdown: caseDocMarkdown(doc),
       pieces,
       attachments,
+      current,
       warnings: doc.warnings,
     };
   }
@@ -963,6 +1068,9 @@ export interface CaseDocContent {
   opened: string;
   closed: string | null;
   markdown: string;
+  /** The dated current understanding — only a NEW-ROOT CASE index carries
+   *  one; pieces and legacy docs never do. */
+  current?: CaseCurrentRead;
   warnings: string[];
 }
 
@@ -990,11 +1098,18 @@ export async function getCaseDoc(
       caseName: ref.caseName,
       fileName,
     });
+    // A CASE-index read may carry the dated current view — one point read,
+    // after the index hit. Pieces stay original-only.
+    const current =
+      ref.kind === "case"
+        ? await readCaseCurrent(ref.category, ref.caseName, hit.raw)
+        : undefined;
     return {
       ref: refText,
       opened: doc.opened,
       closed: doc.closed,
       markdown: caseDocMarkdown(doc),
+      current,
       warnings: doc.warnings,
     };
   }

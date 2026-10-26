@@ -2,6 +2,7 @@
 
 import { extractRenderState } from "@/lib/chat/tool-state";
 import { RecallToolRenderer } from "./tool-renderers/recall";
+import { ScenarioRecallRenderer } from "./tool-renderers/scenario-recall";
 import { WriteCaseRenderer } from "./tool-renderers/write-case";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { WebFetchRenderer } from "./tool-renderers/web-fetch";
@@ -33,6 +34,8 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
   const renderState = extractRenderState({ state }, null, isStreaming);
 
   switch (toolName) {
+    case "recallScenario":
+      return <ScenarioRecallRenderer input={input} output={output} state={renderState} streamingText={streamingText} />;
     case "recallRecent":
     case "recallFind":
     case "recallSearch":

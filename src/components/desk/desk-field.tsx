@@ -66,11 +66,19 @@ import {
   TURN_MS,
   pageForShellSlot,
   deskPaperModel,
+  deskPaperMarkdown,
+  defaultDeskView,
+  deskDocumentObservationKey,
   mastheadLines,
   DOSSIER_NAMES,
   SHELL_COUNT,
   shellOffsetForSlot,
+  type DeskDocumentObservation,
+  type DeskPageChange,
+  type DeskReadingView,
+  type DeskViewChange,
 } from "./desk-model";
+import { deskCurrentTexts } from "./desk-current-texts";
 import "./desk.css";
 
 /** The desk's UI strings, injected from the shell (the desk.chrome strings
@@ -135,11 +143,21 @@ function editableTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
 }
 
+export interface DeskSourceOpen {
+  fromDocRef: string;
+  docRef: string;
+  view: DeskReadingView;
+}
+
 export function DeskField({
   docRef,
   reducedMotion,
   texts,
   leaving = false,
+  onViewChange,
+  onPageChange,
+  onSourceOpen,
+  onDocumentObserved,
 }: {
   /** The open document's reference (`deskDoc` — never null here: app-shell
    *  mounts the desk only when a ref is set). */
@@ -153,6 +171,10 @@ export function DeskField({
    *  the CSS transition returns the paper to its hidden pose while the
    *  shell's own fade runs above it. */
   leaving?: boolean;
+  onViewChange?: (event: DeskViewChange) => void;
+  onPageChange?: (event: DeskPageChange) => void;
+  onSourceOpen?: (event: DeskSourceOpen) => void;
+  onDocumentObserved?: (observation: DeskDocumentObservation) => void;
 }) {
   const { closeDesk, openDesk } = useShell();
   const locale = useLocale();
@@ -197,6 +219,20 @@ export function DeskField({
     () => deskPaperModel(docRef, doc ?? null),
     [docRef, doc],
   );
+  const currentTexts = deskCurrentTexts(locale);
+  const currentUnavailable = doc?.current?.status === "unavailable";
+  const [viewChoice, setViewChoice] = useState<{
+    docRef: string;
+    view: DeskReadingView;
+  } | null>(null);
+  const choiceIsReadable =
+    viewChoice?.docRef === docRef &&
+    (viewChoice.view === "original" ||
+      (viewChoice.view === "current" && model.current !== null) ||
+      (viewChoice.view === "history" && model.current?.hasHistory === true));
+  const readingView: DeskReadingView =
+    viewChoice && choiceIsReadable ? viewChoice.view : defaultDeskView(model);
+  const displayMarkdown = deskPaperMarkdown(model, readingView);
   // The paper's display title: a record prints NONE (§三 — the transcript's
   // identity is the letterhead's clock + shelf lines; the body is the turns
   // alone); a dossier prints its fixed English name; a case its own.
@@ -214,8 +250,8 @@ export function DeskField({
   // entries go unqueried, and the live links of the previous paper never
   // flash back to plain text mid-pull-out.
   const refCandidates = useMemo(
-    () => (model.markdown ? extractMarkdownRefs(model.markdown) : []),
-    [model.markdown],
+    () => (displayMarkdown ? extractMarkdownRefs(displayMarkdown) : []),
+    [displayMarkdown],
   );
   const [refStatus, setRefStatus] = useState<ReadonlyMap<string, VerifiedRef>>(
     () => new Map(),
@@ -249,7 +285,7 @@ export function DeskField({
   // resets on a new document (render-phase reset below), on close/re-open
   // (the unmount discards it), and clamps when a re-pagination shrinks the
   // page count out from under the reader.
-  const ready = !loading && model.markdown !== null;
+  const ready = !loading && displayMarkdown !== null;
 
   const [page, setPage] = useState(1);
   // The turn (a shuffle, not a flip): which direction is in flight and
@@ -395,8 +431,11 @@ export function DeskField({
   // reopens too: every document opens at the readable default, centred, and
   // the entrance beat replays for the new stack.
   const lastDocRef = useRef(docRef);
+  const pendingPageEventRef = useRef<number | null>(null);
   if (lastDocRef.current !== docRef) {
     lastDocRef.current = docRef;
+    setViewChoice(null);
+    pendingPageEventRef.current = null;
     setPage(1);
     setTurn(null);
     setTotal(1);
@@ -421,7 +460,7 @@ export function DeskField({
     const el = pagesRef.current;
     if (!el || !ready || turn !== null) return;
     readTotal(el);
-  }, [ready, model.markdown, pageBox, turn, readTotal]);
+  }, [ready, displayMarkdown, pageBox, turn, readTotal]);
 
   // The webfonts can land after the first measure and re-break the flow —
   // re-read the count then.
@@ -435,7 +474,7 @@ export function DeskField({
     return () => {
       live = false;
     };
-  }, [ready, pageBox.w, model.markdown, readTotal]);
+  }, [ready, pageBox.w, displayMarkdown, readTotal]);
 
   // The pane resizes (window, dvh shifts): the pagebox is re-measured and
   // the count re-read — rAF-debounced so a drag's event storm collapses
@@ -481,15 +520,51 @@ export function DeskField({
     setPage((p) => clampPage(p, total));
   }, [total, turn]);
 
+  const observationRef = useRef("");
+  useEffect(() => {
+    if (!ready || leave || turn !== null || doc?.ref !== docRef) return;
+    const observation: DeskDocumentObservation = {
+      docRef,
+      title: displayTitle,
+      edition: readingView,
+      page,
+      total,
+    };
+    const key = deskDocumentObservationKey(observation);
+    if (observationRef.current === key) return;
+    observationRef.current = key;
+    onDocumentObserved?.(observation);
+  }, [
+    ready,
+    leave,
+    turn,
+    doc,
+    docRef,
+    displayTitle,
+    readingView,
+    page,
+    total,
+    onDocumentObserved,
+  ]);
+
+  const emitPageChange = useCallback(
+    (target: number) => {
+      onPageChange?.({ docRef, view: readingView, page: target });
+    },
+    [docRef, onPageChange, readingView],
+  );
   const settleTurn = useCallback(() => {
     const active = turnRef.current;
     if (!active || settledRef.current) return;
     settledRef.current = true;
-    setPage((p) =>
-      wrapPage(p + (active.dir === "next" ? 1 : -1), totalRef.current),
-    );
+    const target = pendingPageEventRef.current;
+    if (target !== null) {
+      setPage(target);
+      pendingPageEventRef.current = null;
+      emitPageChange(target);
+    }
     setTurn(null);
-  }, []);
+  }, [emitPageChange]);
 
   // The traveler's landing normally reports through animationend; the
   // timeout is the backstop for the event that never arrives (unmounted
@@ -506,10 +581,13 @@ export function DeskField({
       // THE CYCLE (v0.29): no edge rejection — forward past the last page
       // wraps to the first, back past the first to the last.
       const target = wrapPage(page + (dir === "next" ? 1 : -1), total);
+      pendingPageEventRef.current = target;
       if (reducedMotion) {
         // No motion: the sheets do not travel, the content swaps in place
         // under a quiet fade (the CSS replays it via the remount).
         setPage(target);
+        pendingPageEventRef.current = null;
+        emitPageChange(target);
         return;
       }
       // The shuffle: the top sheet (or the bottom, going back) is taken out
@@ -525,7 +603,7 @@ export function DeskField({
       settledRef.current = false;
       setTurn({ dir, traveler: dir === "next" ? order[0] : order[SHELL_COUNT - 1] });
     },
-    [turn, ready, page, total, reducedMotion, order],
+    [turn, ready, page, total, reducedMotion, order, emitPageChange],
   );
   const turnPageRef = useRef(turnPage);
   turnPageRef.current = turnPage;
@@ -758,27 +836,117 @@ export function DeskField({
     dragRef.current = null;
   }, []);
 
-  // The flow — one full copy of the document per content shell, translated
-  // to the shell's page by --desk-page-i. MEMOIZED on the document alone:
-  // a turn changes paging state every few hundred milliseconds, and without
-  // this each turn would re-parse and re-layout all three markdown copies
-  // before the animation could even start. The desk is plain DOM now, so
-  // the markdown keeps its real context — no portal re-wrap.
+  const selectReadingView = useCallback(
+    (next: DeskReadingView) => {
+      if (next === readingView || turn !== null) return;
+      pendingPageEventRef.current = null;
+      setViewChoice({ docRef, view: next });
+      setPage(1);
+      setTotal(1);
+      setTurn(null);
+      setOrder(Array.from({ length: SHELL_COUNT }, (_, i) => i));
+      settledRef.current = true;
+      fitModeRef.current = true;
+      cameraRef.current = createPaperCamera(
+        fitPaperZoom(viewRef.current.w, viewRef.current.h),
+      );
+      syncZoomView();
+      onViewChange?.({ docRef, view: next, page: 1 });
+    },
+    [docRef, onViewChange, readingView, syncZoomView, turn],
+  );
+  const openSource = useCallback(
+    (sourceRef: string) => {
+      onSourceOpen?.({ fromDocRef: docRef, docRef: sourceRef, view: readingView });
+      openDesk(sourceRef, "manual");
+    },
+    [docRef, onSourceOpen, openDesk, readingView],
+  );
+
+  // The flow — one full copy of the selected reading view per content shell.
+  // The original markdown is never rewritten; provenance is paper furniture,
+  // not part of the stored document.
   const flow = useMemo(
     () =>
-      ready && model.markdown !== null ? (
-    <>
-      {/* A record's title is "" (§三: the header carries the identity) —
-          no display line opens the transcript. */}
-      {displayTitle !== "" && <h1 className="desk-title">{displayTitle}</h1>}
-      <MarkdownRenderer
-        content={model.markdown}
-        nativeMode="paper"
-        nativeTurnId={docRef}
-      />
+      ready && displayMarkdown !== null ? (
+        <>
+          {displayTitle !== "" && <h1 className="desk-title">{displayTitle}</h1>}
+          {currentUnavailable && (
+            <p className="desk-current-cue" role="status">
+              {currentTexts.unavailable}
+            </p>
+          )}
+          {readingView === "current" && model.current && (
+            <aside className="desk-current-provenance">
+              <p className="desk-current-cue">
+                {model.current.missingAsOf
+                  ? currentTexts.asOfMissing
+                  : currentTexts.asOf(model.current.asOf)}
+              </p>
+              {model.current.indexChanged === true && (
+                <p className="desk-current-cue">{currentTexts.indexChanged}</p>
+              )}
+              {model.current.indexChanged === null && (
+                <p className="desk-current-cue">{currentTexts.freshnessUnknown}</p>
+              )}
+              {model.current.missingEvidence ? (
+                <p className="desk-current-cue">{currentTexts.evidenceMissing}</p>
+              ) : (
+                <div className="desk-current-sources">
+                  <span>{currentTexts.sourcesHeading}</span>
+                  <div className="desk-current-source-list">
+                    {model.current.sources.map((sourceRef, index) => (
+                      <button
+                        type="button"
+                        key={`${sourceRef}:${index}`}
+                        data-source-ref={sourceRef}
+                        aria-label={currentTexts.sourceAriaLabel(index + 1, sourceRef)}
+                        onClick={() => openSource(sourceRef)}
+                      >
+                        {currentTexts.sourceLabel(index + 1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </aside>
+          )}
+          {readingView === "history" && model.current && model.current.historySources.length > 0 && (
+            <div className="desk-current-sources">
+              <span>{currentTexts.sourcesHeading}</span>
+              <div className="desk-current-source-list">
+                {model.current.historySources.map((sourceRef, index) => (
+                  <button
+                    type="button"
+                    key={`${sourceRef}:${index}`}
+                    data-source-ref={sourceRef}
+                    aria-label={currentTexts.sourceAriaLabel(index + 1, sourceRef)}
+                    onClick={() => openSource(sourceRef)}
+                  >
+                    {currentTexts.sourceLabel(index + 1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <MarkdownRenderer
+            content={displayMarkdown}
+            nativeMode="paper"
+            nativeTurnId={docRef}
+          />
         </>
       ) : null,
-    [ready, model.markdown, displayTitle, docRef],
+    [
+      ready,
+      displayMarkdown,
+      displayTitle,
+      docRef,
+      currentUnavailable,
+      currentTexts,
+      readingView,
+      model,
+      openSource,
+    ],
   );
 
   // THE TRANSFORM STACK (v0.30): three layers, one transform each, so a
@@ -913,6 +1081,45 @@ export function DeskField({
                             <div className="desk-face" aria-hidden="true" />
                           ) : (
                             <div className="desk-face">
+                              {ready && (model.current || currentUnavailable) && (
+                                <div
+                                  className="desk-reading-views"
+                                  role="group"
+                                  aria-label={currentTexts.readingViews}
+                                  data-reading-view={readingView}
+                                >
+                                  <button
+                                    type="button"
+                                    data-reading-current
+                                    aria-pressed={readingView === "current"}
+                                    disabled={!model.current || turn !== null}
+                                    title={currentUnavailable ? currentTexts.unavailable : undefined}
+                                    onClick={() => selectReadingView("current")}
+                                  >
+                                    {currentTexts.viewCurrent}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    data-reading-original
+                                    aria-pressed={readingView === "original"}
+                                    disabled={turn !== null}
+                                    onClick={() => selectReadingView("original")}
+                                  >
+                                    {currentTexts.viewOriginal}
+                                  </button>
+                                  {model.current?.hasHistory && (
+                                    <button
+                                      type="button"
+                                      data-reading-history
+                                      aria-pressed={readingView === "history"}
+                                      disabled={turn !== null}
+                                      onClick={() => selectReadingView("history")}
+                                    >
+                                      {currentTexts.viewHistory}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                               {/* The head is page-aware (v0.27 原稿 §4.3,
                                   v0.28 letterhead): the FIRST page opens
                                   with the letterhead — the wordmark over the

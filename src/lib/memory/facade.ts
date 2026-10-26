@@ -1355,6 +1355,8 @@ export interface RecallReadInput {
   /** true: return the document's heading skeleton instead of its body —
    *  then fetch the sections you need with range: { type: "lines" }. */
   outline?: boolean;
+  /** Case indexes only: include archived current-understanding prose when requested. */
+  includeHistory?: boolean;
 }
 
 /** Apply the five range filters to a slice core — the readSlice protocol. */
@@ -1536,6 +1538,7 @@ export function parseDocumentOutline(raw: string): {
 async function withCaseCurrent(
   backend: RecallBackend,
   result: Extract<RecallReadResult, { kind: "content" }>,
+  includeHistory = false,
 ): Promise<RecallReadResult> {
   const index = CASE_INDEX_RE.exec(result.path);
   if (!index) return result;
@@ -1561,6 +1564,7 @@ async function withCaseCurrent(
   return {
     ...result,
     content: renderCaseWithCurrent(result.content, current, {
+      includeHistory,
       freshnessWarnings: caseCurrentFreshnessWarnings(parseCaseCurrent(current), {
         indexRevision: caseStorageRevision(result.content),
         pieces: files.filter((path) => path.startsWith(`memory/${category}/${caseName}/`) &&
@@ -1632,7 +1636,7 @@ async function recallReadBody(
   if (!candidates) return { kind: "not_found" };
   const direct = await readFirstCandidate(backend, candidates);
   if (direct.kind === "content") {
-    return withCaseCurrent(backend, direct);
+    return withCaseCurrent(backend, direct, input.includeHistory === true);
   }
   if (direct.kind === "unavailable") return direct;
 
@@ -1650,7 +1654,7 @@ async function recallReadBody(
         content: retry.content,
         path: retry.path,
         matchedRef: fuzzy.matched.ref,
-      });
+      }, input.includeHistory === true);
     }
     if (retry.kind === "unavailable") return retry;
     // the adopted candidate vanished mid-flight — fall through to near misses

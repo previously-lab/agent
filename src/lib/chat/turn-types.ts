@@ -18,6 +18,7 @@ import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { CurrentView } from "@/lib/chat/current-view";
+import type { ScreenContext } from "@/lib/chat/screen-context";
 import type { SliceLandingConfig } from "@/lib/chat/slice-landing";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 import type { PersistedReply } from "@/lib/tasks/contracts";
@@ -134,6 +135,8 @@ export interface TurnInput {
    * stays on the wire for forward compatibility.
    */
   view?: CurrentView;
+  /** A send-time app observation; never persisted as the user's own statement. */
+  screen?: ScreenContext;
 }
 
 /** Summary of a synchronous card evolution run (v0.7b — inline in housekeeping). */

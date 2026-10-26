@@ -78,6 +78,11 @@ import {
   type SubtitleSource,
 } from "@/lib/chat/subtitle-line";
 import type { CurrentView } from "@/lib/chat/current-view";
+import {
+  captureScreenContext,
+  screenContextRequestField,
+  type ScreenContext,
+} from "@/lib/chat/screen-context";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
 interface ChatPageProps {
@@ -116,6 +121,8 @@ interface ChatPageProps {
    *  returns none in the lobby default) → no field → the server injects no
    *  block. */
   getView?: () => CurrentView | undefined;
+  /** A separate, bounded observation frozen only while preparing a send. */
+  getScreenContext?: () => ScreenContext | undefined;
 }
 
 /** The mount-time verdict: the useDurableChat half (reconnect) plus the arrival gate
@@ -135,6 +142,7 @@ export function ChatPage({
   onComposerClearanceChange,
   onSubtitleLineChange,
   getView,
+  getScreenContext,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -207,6 +215,7 @@ export function ChatPage({
         onComposerClearanceChange={onComposerClearanceChange}
         onSubtitleLineChange={onSubtitleLineChange}
         getView={getView}
+        getScreenContext={getScreenContext}
         persona={verdict.persona}
         shouldResume={verdict.shouldResume}
         initialMessages={verdict.initialMessages}
@@ -417,6 +426,7 @@ function Inner({
   onComposerClearanceChange,
   onSubtitleLineChange,
   getView,
+  getScreenContext,
   persona,
   shouldResume,
   initialMessages,
@@ -438,6 +448,7 @@ function Inner({
   onSubtitleLineChange?: (line: SubtitleLine | null) => void;
   /** The shell's current-view getter — see `ChatPageProps`. */
   getView?: () => CurrentView | undefined;
+  getScreenContext?: () => ScreenContext | undefined;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -631,7 +642,7 @@ function Inner({
       rememberNativeReplay(finished);
     },
     getRunId: readStoredRunId,
-    prepareBody: (workingMessages, regenerate) => {
+    prepareBody: (workingMessages, regenerate, screen) => {
       const view = getView?.();
       return {
         messages: messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW),
@@ -639,6 +650,7 @@ function Inner({
         locale,
         loadedSliceIds: timelineSlices.map((slice) => slice.slice_id),
         ...(view ? { view } : {}),
+        ...screenContextRequestField(() => screen),
         ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
         ...(regenerate ? { regenerate: true } : {}),
       };
@@ -821,9 +833,10 @@ function Inner({
   const handleRegenerate = useCallback(
     (messageId: string) => {
       if (status !== "ready") return;
-      void regenerate({ messageId });
+      const screen = captureScreenContext(getScreenContext);
+      void regenerate({ messageId }, screen);
     },
-    [regenerate, status],
+    [regenerate, status, getScreenContext],
   );
 
   const liveItems = useMemo<ChatStreamItem[]>(() => {
@@ -1054,6 +1067,7 @@ function Inner({
   }, [withStream]);
 
   const handleSubmit = async (message: string, images: File[]) => {
+    const screen = captureScreenContext(getScreenContext);
     // Sending snaps back to the present: the jump target is cleared and the
     // stream follows the new turn to the bottom.
     setSelectedSliceId("now");
@@ -1121,6 +1135,7 @@ function Inner({
             locale,
             loadedSliceIds: timelineSlices.map((s) => s.slice_id),
             ...(view ? { view } : {}),
+            ...screenContextRequestField(() => screen),
             ...(burstId ? { burstId } : {}),
           }),
         });
@@ -1157,7 +1172,7 @@ function Inner({
       ...fileParts,
       ...(message ? [{ type: "text" as const, text: message }] : []),
     ];
-    sendMessage({ role: "user", parts });
+    sendMessage({ role: "user", parts }, screen);
     requestAnimationFrame(scrollToBottom);
     // v0.7b: self-evolution runs INLINE inside housekeeping (the turn's stream
     // carries data-evolution chunks) — no separate evolution request here.

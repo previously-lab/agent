@@ -97,6 +97,17 @@ describe("case current views and activity", () => {
     history: "只在旧认识历史里的词。", basis: { indexRevision: caseStorageRevision(old), pieces: [] },
   });
 
+  it("reads earlier understanding directly when requested while keeping the normal view compact", async () => {
+    const backend = makeBackend({ [indexPath]: old, [currentPath]: current() });
+    const normal = await recallRead(backend, { ref: "things/长期案" });
+    const historical = await recallRead(backend, { ref: "things/长期案", includeHistory: true });
+    if (normal.kind !== "content" || historical.kind !== "content") throw new Error("expected case prose");
+    expect(normal.content).not.toContain("只在旧认识历史里的词");
+    expect(historical.content).toContain("只在旧认识历史里的词");
+    expect(historical.content).toContain(old);
+    expect(historical.caseRevision).toBe(normal.caseRevision);
+  });
+
   it("ranks tail and current activity above newer-born idle cases", async () => {
     for (const supplement of ["tail", "current"]) {
       const backend = makeBackend({

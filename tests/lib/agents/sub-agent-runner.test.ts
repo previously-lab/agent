@@ -85,6 +85,18 @@ beforeEach(() => {
 });
 
 describe("native sub-agent runner", () => {
+  it("passes parent cancellation to the actual model boundary and skips an already-cancelled request", async () => {
+    fakeStream();
+    const controller = new AbortController();
+    await runSubAgent(options({ abortSignal: controller.signal }));
+    expect(lastCall().abortSignal).toBe(controller.signal);
+    controller.abort();
+    native.streamText.mockClear();
+    const result = await runSubAgent(options({ abortSignal: controller.signal }));
+    expect(result.ok).toBe(false);
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
   it("validates the named structured report", async () => {
     fakeStream({ calls: [{ toolName: "other", input: {} }, { toolName: "report", input: { verdict: "yes", count: 3 } }] });
     expect(await runSubAgent(options())).toMatchObject({ ok: true, report: { verdict: "yes", count: 3 } });

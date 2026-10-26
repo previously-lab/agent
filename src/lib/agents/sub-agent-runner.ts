@@ -103,6 +103,8 @@ export function extractToolReport<S extends z.ZodType>(
 
 
 export interface RunSubAgentOptions<Report> {
+  /** Parent cancellation must reach the model request, not just a waiting caller. */
+  abortSignal?: AbortSignal;
   model?: ModelConfig;
   role?: DeepSeekRole;
   system?: string; selfSop?: SelfAgent; skillRole?: SkillRole; prompt: string; tools: ToolSet;
@@ -164,7 +166,9 @@ export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Rep
     emitter.emit(line, stage); opts.onLine?.(line, stage);
   };
   const run = async () => {
+    opts.abortSignal?.throwIfAborted();
     const stream = await streamText({ role: opts.role ?? "recall", system, prompt: opts.prompt,
+      abortSignal: opts.abortSignal,
       tools: opts.tools, toolChoice: opts.toolChoice === "none" ? "none" : "auto", thinking: true,
       ...(opts.maxSteps !== undefined ? {stopWhen: isStepCount(opts.maxSteps)} : {}),
       ...(opts.timeoutMs !== undefined ? {timeout: opts.timeoutMs} : {}),

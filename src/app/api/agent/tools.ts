@@ -31,6 +31,7 @@ import {
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
+  recallScenarioExecute,
   recallSinceExecute,
   webSearchExecute,
   webFetchExecute,
@@ -53,6 +54,7 @@ import {
 } from "@/lib/tasks/contracts";
 import { fieldCreateTaskSchema, fieldUpdateTaskSchema } from "@/lib/chat/task-input";
 import { reportTaskFollowupInputSchema } from "@/lib/chat/task-followups";
+import { scenarioRecallRequestSchema } from "@/lib/chat/scenario-recall-contract";
 
 // ─── Context schemas ─────────────────────────────────────────────────────
 
@@ -131,6 +133,18 @@ export const toolContextSchema = z.object({
 // one result envelope (src/lib/memory/facade.ts). The agent sees entries —
 // ref / title / date / excerpt — never the tree, never raw listings.
 export const chatTools = {
+  recallScenario: tool({
+    description:
+      "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
+      "a bounded recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
+      "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
+      "the narrative answer remains a derived interpretation. Use recallRead on the cited record to verify a detail beyond those excerpts. " +
+      "For semantic documents, case understandings and other existing prose, use recallRead directly: they are already compressed and this tool cannot read them. " +
+      "Incomplete coverage or no evidence is not proof that the user never said something. This tool does not create write authority or task evidence.",
+    inputSchema: scenarioRecallRequestSchema,
+    contextSchema: toolContextSchema,
+    execute: recallScenarioExecute,
+  }),
   // ① What has been happening — the recent-N view. Omitting `category` gives
   // one cross-category timeline (the "I can't recall which world it lives
   // in" answer); a category narrows to one world.
@@ -404,6 +418,9 @@ export const chatTools = {
           "document, then fetch the spans you need with " +
           'range: { type: "lines", start, end }.',
         ),
+      includeHistory: z.boolean().optional().describe(
+        "For a case index, include its earlier current-understanding revisions. Use when the user is reading the history edition or asks why an earlier interpretation changed. This directly reads stored prose; it does not call another model.",
+      ),
     }),
     contextSchema: toolContextSchema,
     execute: recallReadExecute,
@@ -931,6 +948,7 @@ export function buildChatToolsContext(
   ctx: ToolContext,
 ): Record<keyof typeof chatTools, ToolContext> {
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
+    recallScenario: ctx,
     recallRecent: ctx,
     recallFind: ctx,
     recallSearch: ctx,

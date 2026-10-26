@@ -60,6 +60,9 @@ import {
 import { RecordSwitch } from "@/components/archive/record-switch";
 import type { FieldRig } from "@/components/timeline-3d/field-rig";
 import { LibraryControl } from "@/components/shelf/library-control";
+import { TaskPanel } from "@/components/tasks/task-panel";
+import type { TaskPanelEvent } from "@/components/tasks/events";
+import type { DeskDocumentObservation, DeskPageChange, DeskViewChange } from "@/components/desk/desk-model";
 import { WorldBlur } from "@/components/shell/world-blur";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 
@@ -99,9 +102,6 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
     lane: string;
     snapshot: RoomSnapshot | null;
   } | null>(null);
-  const onRoomSnapshotChange = useCallback((snapshot: RoomSnapshot | null) => {
-    roomSnapshotRef.current = { lane: roomSnapshotLane, snapshot };
-  }, [roomSnapshotLane]);
   const getRoomSnapshot = useCallback(() => {
     const current = roomSnapshotRef.current;
     return current?.lane === roomSnapshotLane ? current.snapshot : null;
@@ -141,6 +141,8 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
     deskDoc,
     openDesk,
     closeDesk,
+    cleanupDesk,
+    screen,
     getCursor,
     feed,
     registerWorldDriver,
@@ -750,6 +752,63 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
   useEffect(() => {
     deskDocRef.current = deskDoc;
   }, [deskDoc]);
+  const liveRoomLaneRef = useRef(roomSnapshotLane);
+  liveRoomLaneRef.current = roomSnapshotLane;
+  const previousPersonaRef = useRef(persona ?? "user");
+  useEffect(() => {
+    const nextPersona = persona ?? "user";
+    if (previousPersonaRef.current === nextPersona) return;
+    previousPersonaRef.current = nextPersona;
+    cleanupDesk();
+    screen.reset();
+    const current = roomSnapshotRef.current;
+    if (current?.lane === roomSnapshotLane && current.snapshot) {
+      screen.roomEntered({ sliceId: current.snapshot.sliceId, origin: "observed" });
+    }
+  }, [persona, roomSnapshotLane, cleanupDesk, screen]);
+
+  const onRoomSnapshotChange = useCallback((snapshot: RoomSnapshot | null) => {
+    // A late cleanup from the previous source/persona cannot clear this lane.
+    if (liveRoomLaneRef.current !== roomSnapshotLane) return;
+    roomSnapshotRef.current = { lane: roomSnapshotLane, snapshot };
+    if (!snapshot) {
+      screen.roomLeft();
+    } else if (deskDocRef.current === null && screen.getScreenContext()?.current?.kind !== "task") {
+      // Mount/resume also publishes snapshots; this proves visibility, not intent.
+      screen.roomEntered({ sliceId: snapshot.sliceId, origin: "observed" });
+    }
+  }, [roomSnapshotLane, screen]);
+
+  const onDocumentObserved = useCallback((observation: DeskDocumentObservation) => {
+    if (deskDocRef.current !== observation.docRef) return;
+    const document = {
+      ref: observation.docRef,
+      title: observation.title,
+      edition: observation.edition,
+      page: observation.page,
+      totalPages: observation.total,
+    };
+    const current = screen.getScreenContext()?.current;
+    if (current?.kind === "document" || current?.kind === "task") {
+      screen.documentObserved(document);
+    } else {
+      // Returning to /app can remount an already-open desk after route cleanup.
+      screen.documentOpened({ ...document, origin: "restored" });
+    }
+  }, [screen]);
+  const onDocumentViewChange = useCallback((event: DeskViewChange) => {
+    if (deskDocRef.current !== event.docRef) return;
+    screen.documentOpened({ ref: event.docRef, edition: event.view, page: event.page, origin: "manual" });
+  }, [screen]);
+  const onDocumentPageChange = useCallback((event: DeskPageChange) => {
+    if (deskDocRef.current !== event.docRef) return;
+    screen.documentPageChanged({ ref: event.docRef, edition: event.view, page: event.page });
+  }, [screen]);
+  const onTaskPanelEvent = useCallback((event: TaskPanelEvent) => {
+    if (event.type === "panel_opened") screen.taskPanelViewed();
+    else if (event.type === "panel_closed") screen.taskPanelClosed();
+    else if (event.type === "task_selected") screen.taskSelected({ ref: event.ref });
+  }, [screen]);
   useEffect(() => {
     if (restoreAttempted) {
       setBootResolved(true);
@@ -796,7 +855,7 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
           if (!bootRestoreAllowedRef.current || !shellMountedRef.current) return;
           if (ok) {
             bootRestoreAllowedRef.current = false;
-            if (deskDocRef.current === null) openDesk(ref);
+            if (deskDocRef.current === null) openDesk(ref, "restored");
             return;
           }
           if (ref === remembered) {
@@ -879,8 +938,8 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
   );
   useEffect(() => {
     registerWorldDriver(driver);
-    return () => registerWorldDriver(null);
   }, [driver, registerWorldDriver]);
+  useEffect(() => () => registerWorldDriver(null), [registerWorldDriver]);
   useEffect(() => {
     setWorldPose({ settled: settledView });
     return () => setWorldPose(null);
@@ -1001,6 +1060,10 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
           the paper and the chrome sit crisp above it. */}
       {blurMounted && <WorldBlur active={blurLive} />}
 
+      {/* One read-only folio above either world. Opening it does not navigate
+          or replace the desk/room; its close returns to the same state. */}
+      <TaskPanel key={roomSnapshotLane} onEvent={onTaskPanelEvent} />
+
       {/* The field world's DOM: the reader's chrome + the hotel's slot. The
           CONVERSATION LAYER IS NOT HERE — §3.1 mounted it at the layout
           (chat/conversation-overlay.tsx), a sibling of this route that
@@ -1089,6 +1152,9 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
                   reducedMotion={reducedMotion}
                   texts={deskTexts}
                   leaving={handoverLeaving}
+                  onDocumentObserved={onDocumentObserved}
+                  onViewChange={onDocumentViewChange}
+                  onPageChange={onDocumentPageChange}
                 />
               </NativePersonaProvider>
             )}
@@ -1149,7 +1215,7 @@ export function AppShell({ sourceScope }: { sourceScope: string }) {
               // stays mounted behind it — the way back is the desk's Esc.
               onOpenDoc={(ref) => {
                 documentFromSceneRef.current = true;
-                openDesk(ref);
+                openDesk(ref, "manual");
                 beginTransition("field", null);
               }}
             />

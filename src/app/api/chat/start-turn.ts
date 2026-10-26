@@ -26,6 +26,7 @@ import { FIXED_MODEL } from "@/lib/models/registry";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { withGitHubReadBudget } from "@/lib/github/client";
+import { screenContextSchema, type ScreenContext } from "@/lib/chat/screen-context";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -51,6 +52,8 @@ export interface StartTurnArgs {
    *  the chat transport; shape-validated + sliceId-checked server-side,
    *  omitted from TurnInput when absent (the lobby default). */
   view?: unknown;
+  /** Client-reported app activity, separate from user speech and authorization. */
+  screen?: unknown;
   /**
    * The parallel-burst id (v0.38 §2) — the client mints ONE ULID per 连发
    * and stamps every message of the burst with it. Optional: absent
@@ -115,6 +118,11 @@ export function sanitizeView(raw: unknown): CurrentView | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function sanitizeScreen(raw: unknown): ScreenContext | undefined {
+  const parsed = screenContextSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -267,6 +275,7 @@ export async function startTurn(
   // field is OMITTED from TurnInput when the client sent none or a malformed
   // one (the lobby default carries no per-turn block).
   const view = sanitizeView(args.view);
+  const screen = sanitizeScreen(args.screen);
 
   const input: TurnInput = {
     modelMessages,
@@ -290,6 +299,7 @@ export async function startTurn(
     ...(args.regenerate === true ? { regenerate: true } : {}),
     ...(machineContext ? { machineContext } : {}),
     ...(view ? { view } : {}),
+    ...(screen ? { screen } : {}),
     ...(args.burstId ? { burstId: args.burstId } : {}),
   };
 

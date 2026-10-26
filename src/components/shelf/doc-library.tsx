@@ -255,7 +255,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
       setActiveCase({ category, name });
       setCaseDetail(null);
       setDetailPending(true);
-      openDesk(`${category}/${name}`);
+      openDesk(`${category}/${name}`, "manual");
       getCaseDetail(category, name, persona)
         .then((detail) => setCaseDetail(detail))
         .catch(() => setCaseDetail(null))
@@ -267,7 +267,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
   const openPiece = useCallback(
     (stem: string) => {
       if (!activeCase) return;
-      openDesk(pieceRef(activeCase.category, activeCase.name, stem));
+      openDesk(pieceRef(activeCase.category, activeCase.name, stem), "manual");
     },
     [openDesk, activeCase],
   );
@@ -294,7 +294,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
                     type="button"
                     data-dossier-doc={entry.name}
                     disabled={!entry.available}
-                    onClick={() => openDesk(entry.ref)}
+                    onClick={() => openDesk(entry.ref, "manual")}
                     className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
                       active ? "is-active" : ""
                     }`}
@@ -345,7 +345,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
                             time: clock,
                             count: record.turns,
                           })}
-                          onClick={() => openDesk(ref)}
+                          onClick={() => openDesk(ref, "manual")}
                           className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm ${
                             active ? "is-active" : ""
                           }`}

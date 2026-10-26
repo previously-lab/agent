@@ -457,3 +457,102 @@ describe("getCaseDoc", () => {
     expect(await getCaseDoc("a/b/c/d")).toBeNull();
   });
 });
+
+describe("current understanding reads", () => {
+  const CURRENT_PATH = "memory/people/手机/_current.md";
+  const CURRENT_RAW = `---
+as_of: 2026-10-26
+evidence:
+  - records/2026-10-25-1200
+  - research/手机调研
+basis:
+  index: superseded-index-revision
+---
+最新但仍有日期的认识。
+
+—— 认识历史 ——
+## 2026-10-20 — previous understanding
+as-of: 2026-10-19
+evidence: records/old
+basis-index: old
+早前认识。
+`;
+
+  it("getCaseDoc returns current separately and preserves the original index", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      [CURRENT_PATH]: CURRENT_RAW,
+    });
+
+    const doc = await getCaseDoc("people/手机");
+
+    expect(doc!.markdown).toContain("用户在比较两款手机");
+    expect(doc!.markdown).not.toContain("最新但仍有日期");
+    expect(doc!.current?.status).toBe("ok");
+    if (doc!.current?.status !== "ok") throw new Error("current read failed");
+    expect(doc!.current.view.asOf).toBe("2026-10-26");
+    expect(doc!.current.view.body).toBe("最新但仍有日期的认识。");
+    expect(doc!.current.view.sources).toEqual([
+      "records/2026-10-25-1200",
+      "research/手机调研",
+    ]);
+    expect(doc!.current.view.history).toContain("早前认识");
+    expect(doc!.current.view.indexChanged).toBe(true);
+    expect(mocks.fsReadFile).toHaveBeenCalledTimes(2);
+    expect(mocks.fsReadFile).toHaveBeenCalledWith(CURRENT_PATH);
+  });
+
+  it("getCaseDoc treats a missing current file as original-only, not failure", async () => {
+    seedFiles({ "memory/people/手机/index.md": CASE_INDEX_RAW });
+    const doc = await getCaseDoc("people/手机");
+    expect(doc!.current).toBeUndefined();
+    expect(doc!.markdown).toContain("用户在比较两款手机");
+  });
+
+  it("getCaseDoc reports an unreadable current file while keeping the original", async () => {
+    mocks.fsReadFile.mockImplementation(async (path: string) => {
+      if (path === "memory/people/手机/index.md") return CASE_INDEX_RAW;
+      if (path === CURRENT_PATH) throw new Error("EACCES: read denied");
+      throw new Error(`ENOENT ${path}`);
+    });
+    const doc = await getCaseDoc("people/手机");
+    expect(doc!.current?.status).toBe("unavailable");
+    if (doc!.current?.status !== "unavailable") throw new Error("expected unavailable");
+    expect(doc!.current.warning).toContain("EACCES: read denied");
+    expect(doc!.markdown).toContain("用户在比较两款手机");
+  });
+
+  it("getCaseDoc treats malformed or empty current prose as unavailable", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      [CURRENT_PATH]: "---\nas_of: [broken\n---\nDo not leak this metadata.",
+    });
+    const malformed = await getCaseDoc("people/手机");
+    expect(malformed!.current?.status).toBe("unavailable");
+    expect(malformed!.markdown).toContain("用户在比较两款手机");
+
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      [CURRENT_PATH]: "---\nas_of: 2026-10-26\n---\n",
+    });
+    const empty = await getCaseDoc("people/手机");
+    expect(empty!.current?.status).toBe("unavailable");
+    expect(empty!.markdown).toContain("用户在比较两款手机");
+  });
+
+  it("getCaseDetail uses its flat listing to gate the optional current read", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      [CURRENT_PATH]: CURRENT_RAW,
+    });
+    const detail = await getCaseDetail("people", "手机");
+    expect(detail!.current?.status).toBe("ok");
+    expect(detail!.pieces.map((piece) => piece.fileName)).not.toContain("_current.md");
+
+    mocks.fsReadFile.mockClear();
+    seedFiles({ "memory/people/手机/index.md": CASE_INDEX_RAW });
+    const original = await getCaseDetail("people", "手机");
+    expect(original!.current).toBeUndefined();
+    expect(mocks.fsReadFile).not.toHaveBeenCalledWith(CURRENT_PATH);
+  });
+});

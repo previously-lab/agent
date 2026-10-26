@@ -71,6 +71,7 @@ import {
 } from "./steps";
 import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 import { collectTaskAckIntents, parseTaskAckMetadata, type TaskAckIntent } from "@/lib/chat/task-followups";
+import { renderScreenContext } from "@/lib/chat/screen-context";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
 
@@ -811,6 +812,8 @@ export function assembleSystemPrompt(opts: {
   userProfileBlock?: string;
   /** Authoritative task candidates and pending background result events. */
   taskContextBlock?: string;
+  /** Least-stable per-send observation block; source content remains on-demand. */
+  screenContextBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
   sliceHeadBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
@@ -826,6 +829,7 @@ export function assembleSystemPrompt(opts: {
     craftBlock,
     userProfileBlock,
     taskContextBlock,
+    screenContextBlock,
     sliceHeadBlock,
     demoNotice,
     dateAnchor,
@@ -842,6 +846,7 @@ export function assembleSystemPrompt(opts: {
     sliceHeadBlock,
     demoNotice,
     taskContextBlock ?? "",
+    screenContextBlock ?? "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -966,6 +971,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     userProfileBlock,
     // Authoritative task candidates and pending results, read once this turn.
     taskContextBlock: hk.taskContextBlock,
+    screenContextBlock: input.screen ? renderScreenContext(input.screen) : undefined,
     sliceHeadBlock,
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`

@@ -221,7 +221,7 @@ export function RecordSwitch({
                       time: clock,
                       count: record.turns,
                     })}
-                    onClick={() => openDesk(`records/${record.sliceId}`)}
+                    onClick={() => openDesk(`records/${record.sliceId}`, "manual")}
                     className={`chrome-row items-baseline gap-3 py-2 pl-3.5 pr-2 text-sm ${
                       current ? "is-active" : ""
                     }`}
