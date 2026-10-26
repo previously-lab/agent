@@ -10,11 +10,27 @@ export function isStepCount(count: number): StopCondition {
   if (!Number.isInteger(count) || count < 1) throw new Error("Step count must be a positive integer");
   return Object.assign(({ steps }: Parameters<StopCondition>[0]) => steps.length >= count, { maxSteps: count });
 }
+
+function hasObjectRoot(schema: Record<string, unknown>): boolean {
+  if (schema.type !== undefined) return schema.type === "object";
+  return ["anyOf", "oneOf"].some((keyword) => {
+    const branches = schema[keyword];
+    return Array.isArray(branches) && branches.length > 0 && branches.every((branch) =>
+      branch !== null && typeof branch === "object" && hasObjectRoot(branch));
+  });
+}
+
 export function serializeTools(tools: ToolSet | undefined): SerializedTool[] | undefined {
   if (!tools || !Object.keys(tools).length) return undefined;
   return Object.entries(tools).map(([name, definition]) => {
     const parameters = z.toJSONSchema(definition.inputSchema, { target: "draft-7", io: "input" }) as Record<string, unknown>;
     delete parameters.$schema;
+    if (!hasObjectRoot(parameters)) {
+      throw new Error(`Invalid schema for DeepSeek tool '${name}': parameters must describe an object`);
+    }
+    // Zod object unions omit the root type; DeepSeek requires it explicitly.
+    // Keep the branches intact so required fields and strict keys still apply.
+    parameters.type = "object";
     return { type: "function", function: { name, description: definition.description, parameters } };
   });
 }

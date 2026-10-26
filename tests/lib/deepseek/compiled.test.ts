@@ -15,6 +15,10 @@ describe("native DeepSeek inside compiled Workflow 5", () => {
     expect(value.unexpectedNetwork).toBe(0);
     expect(value.attempts).toBe(2);
     expect(value.record).toBe("saved");
+    expect(value.toolSchemas).toMatchObject([
+      { name: "save", parameters: { type: "object", oneOf: [{ type: "object" }, { type: "object" }] } },
+      { name: "read", parameters: { type: "object", anyOf: [{ type: "object" }, { type: "object" }] } },
+    ]);
     expect(value.secondMessages[1]).toMatchObject({ role: "assistant", reasoning_content: "fixture thought", tool_calls: [{ id: "stable-write" }, { id: "independent-read" }] });
     expect(value.secondMessages.slice(2).map((message: { tool_call_id: string }) => message.tool_call_id)).toEqual(["stable-write", "independent-read"]);
     expect(value.order.indexOf("read")).toBeLessThan(value.order.lastIndexOf("save"));

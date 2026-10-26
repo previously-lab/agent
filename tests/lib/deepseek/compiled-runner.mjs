@@ -29,11 +29,15 @@ globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   requests.push(body);
   modelCalls++;
+  const invalidTool = body.tools?.find((tool) => tool.function.parameters?.type !== "object");
+  if (invalidTool) {
+    return new Response(JSON.stringify({ error: { message: `Invalid schema for function '${invalidTool.function.name}': parameters must have type object` } }), { status: 400 });
+  }
   const events = partialMode ? [
     { choices: [{ delta: { reasoning_content: "partial durable thought", content: "partial durable answer", tool_calls: [{ index: 0, id: "never-write", function: { name: "save", arguments: '{"text":' } }] }, finish_reason: null }], usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } },
   ] : modelCalls === 1 ? [
     { choices: [{ delta: { reasoning_content: "fixture thought", tool_calls: [
-      { index: 0, id: "stable-write", function: { name: "save", arguments: '{"text":"saved"}' } },
+      { index: 0, id: "stable-write", function: { name: "save", arguments: '{"kind":"primary","text":"saved"}' } },
       { index: 1, id: "independent-read", function: { name: "read", arguments: "{}" } },
     ] }, finish_reason: null }] },
     { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
@@ -76,8 +80,11 @@ export async function read() {
 export async function parent() {
   "use workflow";
   const agent = new DeepSeekAgent({ tools: {
-    save: tool({ inputSchema: z.object({ text: z.string() }), contextSchema: z.object({ scope: z.string() }), execute: save }),
-    read: tool({ inputSchema: z.object({}), execute: read }),
+    save: tool({ inputSchema: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("primary"), text: z.string() }).strict(),
+      z.object({ kind: z.literal("secondary"), text: z.string() }).strict(),
+    ]), contextSchema: z.object({ scope: z.string() }), execute: save }),
+    read: tool({ inputSchema: z.union([z.object({}).strict(), z.object({ ref: z.string() }).strict()]), execute: read }),
   }, toolsContext: { save: { scope: "fixture-scope" } } });
   const result = await agent.stream({ prompt: "fixture", stopWhen: isStepCount(3), writable: getWritable() });
   return { text: result.text, steps: result.steps.length };
@@ -119,11 +126,12 @@ export async function partial() {
   const record = partialMode ? null : await readFile(join(directory, "ledger/record"), "utf8");
   const order = partialMode ? [] : (await readFile(join(directory, "ledger/order"), "utf8")).trim().split("\n");
   console.log("NATIVE_WORKFLOW_RESULT=" + JSON.stringify({ result, modelCalls, unexpectedNetwork, attempts, record, order,
+    toolSchemas: requests[0]?.tools.map((tool) => ({ name: tool.function.name, parameters: tool.function.parameters })),
     secondMessages: requests[1]?.messages,
     steps: steps.data.map((step) => ({ name: step.stepName, attempt: step.attempt, status: step.status })) }));
 } finally {
   clearTimeout(timeout); await world?.close(); runtime.setWorld(undefined);
   await unlink(modulesLink).catch((error) => { if (error.code !== "ENOENT") throw error; });
   if (!directory.startsWith(join(tmpdir(), "aftrbrez-deepseek-workflow-"))) throw new Error("Unexpected fixture cleanup target");
-  await rm(directory, { recursive: true, force: true });
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
