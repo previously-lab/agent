@@ -2,6 +2,8 @@ import { renderToString } from "react-dom/server";
 import { NextIntlClientProvider } from "next-intl";
 import { describe, expect, it } from "vitest";
 import { MarkdownRenderer } from "@/components/chat/markdown";
+import { DocumentNavigationProvider } from "@/components/documents/document-navigation";
+import { formatDocumentLink } from "@/lib/documents/document-link";
 import en from "../../../messages/en.json";
 
 function render(
@@ -16,6 +18,16 @@ function render(
   return renderToString(
     <NextIntlClientProvider locale="en" messages={en} timeZone="UTC">
       <MarkdownRenderer content={content} {...options} />
+    </NextIntlClientProvider>,
+  );
+}
+
+function renderWithNavigation(content: string): string {
+  return renderToString(
+    <NextIntlClientProvider locale="en" messages={en} timeZone="UTC">
+      <DocumentNavigationProvider value={{ onOpen: () => undefined }}>
+        <MarkdownRenderer content={content} />
+      </DocumentNavigationProvider>
     </NextIntlClientProvider>,
   );
 }
@@ -145,5 +157,50 @@ describe("MarkdownRenderer SSR regressions", () => {
     const html = render("```html live\n<p>Paper</p>\n```", { nativeMode: "paper", nativeTurnId: "doc" });
     expect(html).toContain('data-native-mode="paper"');
     expect(html).not.toContain('data-native-mode="chat"');
+  });
+
+  it("opens only parsed semantic internal links through document navigation", () => {
+    const html = renderWithNavigation("[那次讨论](previously:records/2026-10-12-1430?turn=a3fk2w&role=user)");
+    expect(html).toContain(">那次讨论</a>");
+    expect(html).toContain('data-document-ref="records/2026-10-12-1430"');
+    expect(html).toContain('data-document-turn="a3fk2w"');
+    expect(html).toContain('data-document-role="user"');
+    expect(html).toContain('href="previously:records/2026-10-12-1430?turn=a3fk2w&amp;role=user"');
+  });
+
+  it("round-trips a formatted legal unmatched parenthesis through the actual Markdown parser", () => {
+    const destination = formatDocumentLink("research/手机)评测(正式");
+    expect(destination).toBe("previously:research/手机%29评测%28正式");
+    const html = renderWithNavigation(`[完整标题](${destination})`);
+    expect(html).toContain(">完整标题</a>");
+    expect(html).toContain('data-document-ref="research/手机)评测(正式"');
+    expect(html).toContain('href="previously:research/手机%29评测%28正式"');
+  });
+
+  it("keeps unsafe internal URLs, arbitrary schemes, and code out of trusted navigation", () => {
+    for (const destination of [
+      "previously:memory/docs/topic/topic",
+      "previously:research/phone%2Fother",
+      "previously:research/phone?role=system",
+      "javascript:alert(1)",
+    ]) {
+      const html = renderWithNavigation(`[not an entrance](${destination})`);
+      expect(html).toContain("not an entrance");
+      expect(html).not.toContain("data-document-ref=");
+      expect(html).not.toContain(`href="${destination}`);
+    }
+    const code = renderWithNavigation("`previously:records/2026-10-12-1430`");
+    expect(code).toContain("<code>previously:records/2026-10-12-1430</code>");
+    expect(code).not.toContain("data-document-ref=");
+  });
+
+  it("leaves ordinary external and relative link behavior untouched", () => {
+    const external = renderWithNavigation("[external](https://example.com/a?x=1&y=2)");
+    expect(external).toContain('href="https://example.com/a?x=1&amp;y=2"');
+    expect(external).toContain('target="_blank"');
+    expect(external).toContain('rel="noopener noreferrer"');
+    const relative = renderWithNavigation("[relative](./doc)");
+    expect(relative).toContain('href="./doc"');
+    expect(relative).not.toContain("data-document-ref=");
   });
 });

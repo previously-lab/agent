@@ -120,7 +120,7 @@ test.describe("Room context from real records", () => {
       { slice: makeSlice("2026-02-01T11:00:00.000Z", { focus: "Implement and debug the application.", summary: "We implemented the new API and fixed the code." }), activity: "making", module: "workshop" },
     ];
     await seedSlices(fixtures.map((f) => f.slice));
-    await page.goto("/en/app");
+    await page.goto("/en/game");
     for (const fixture of fixtures) {
       const door = await doorFor(page, fixture.slice.id);
       const first = await enter(page, door);
@@ -150,7 +150,7 @@ test.describe("Room context from real records", () => {
     let delivered = false;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    await page.route("**/en/app**", async (route) => {
+    await page.route("**/en/game**", async (route) => {
       const request = route.request();
       if (request.method() !== "POST" || !request.headers()["next-action"]) {
         await route.fallback();
@@ -168,7 +168,7 @@ test.describe("Room context from real records", () => {
       }
     });
     try {
-      await page.goto("/en/app");
+      await page.goto("/en/game");
       const door = await doorFor(page, slice.id);
       await teleport(page, door.x, door.z + Math.sign(door.z) * 0.4);
       await expect.poll(() => held, { timeout: 30_000 }).toBe(true);
@@ -204,29 +204,37 @@ test.describe("Room context from real records", () => {
     await seedSlices([slice]);
     await seedCases([{ category: "research", name: "room-pause-paper", opened: "2026-02-03", pieces: [],
       body: "ROOM PAUSE PAPER — a fictional page for the reading pause.\n\nThe scene waits while this paper is read." }]);
-    await page.goto("/en/app");
+    await page.goto("/en/game");
     await enter(page, await doorFor(page, slice.id));
-    await page.locator("[data-game-manuscripts]").click();
-    await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+    await page.locator("[data-pill-expand]").click();
+    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+    await page.getByRole("button", { name: /^Research/ }).click();
+    await page.getByRole("button", { name: /room-pause-paper/ }).click();
+    await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
+    const host = page.locator("[data-workspace-game-host]");
+    await expect(host).toBeHidden();
+    await expect(host).toHaveAttribute("inert", "");
     const frozen = await read(page);
     expect(frozen?.snapshot?.sliceId).toBe(slice.id);
-    await page.locator('[data-archive-pile="research/room-pause-paper"]').click();
     await settledPaper(page);
     await page.mouse.move(640, 360);
     await page.mouse.wheel(0, 24);
     await page.setViewportSize({ width: 900, height: 650 });
     // No extra scroll may be needed to restore the reader after resize.
     await settledPaper(page);
-    await expectPaintedBackground(page);
     const paused = await read(page);
     expect({ x: paused?.x, z: paused?.z, elapsed: paused?.elapsed, snapshot: paused?.snapshot })
       .toEqual({ x: frozen?.x, z: frozen?.z, elapsed: frozen?.elapsed, snapshot: frozen?.snapshot });
-    await page.locator("[data-scene-resume]").click();
-    await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+    await expect(page).toHaveURL(/\/en\/game$/);
+    await expect(host).toBeVisible();
+    await expect(host).toHaveAttribute("data-game-active", "true");
     await expect.poll(async () => (await read(page))?.elapsed ?? 0).toBeGreaterThan(frozen!.elapsed);
     const resumed = await read(page);
     expect(resumed?.snapshot).toEqual(frozen?.snapshot);
     expect(resumed?.x).toBeCloseTo(frozen!.x, 4);
     expect(resumed?.z).toBeCloseTo(frozen!.z, 4);
+    await expectPaintedBackground(page);
   });
 });

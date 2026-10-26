@@ -10,6 +10,7 @@
  * local-dev vs GitHub-production switch transparently.
  */
 import matter from "gray-matter";
+import { decodeDocumentContext, encodeDocumentContext } from "@/lib/chat/document-context-codec";
 import type {
   TimeSlice,
   Turn,
@@ -294,7 +295,8 @@ export function serializeSlice(slice: TimeSlice): string {
         `${turn.replyTo ? ` [reply-to ${turn.replyTo}]` : ""}` +
         `${turn.burst ? ` [burst ${turn.burst}]` : ""}` +
         `${turn.merge ? " [merge]" : ""}` +
-        `${turn.clientMessageId ? ` [message ${encodeURIComponent(turn.clientMessageId)}]` : ""}\n\n${turn.content}`
+        `${turn.clientMessageId ? ` [message ${encodeURIComponent(turn.clientMessageId)}]` : ""}` +
+        `${turn.documentContext?.length ? ` [documents ${encodeDocumentContext(turn.documentContext)}]` : ""}\n\n${turn.content}`
     )
     .join("\n\n");
 
@@ -403,7 +405,7 @@ function parseTurns(body: string): Turn[] {
   // New: ## Turn a3fk2w — ISO (role)
   // Legacy: ## Turn 1 — ISO (role)
   // Optional nested-bubble suffix (v0.30 §3.4): "… (agent) [reply-to q1w2e3]"
-  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?(?: \[burst (\S+)\])?( \[merge\])?(?: \[message (\S+)\])?$/gm;
+  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?(?: \[burst (\S+)\])?( \[merge\])?(?: \[message (\S+)\])?(?: \[documents ([^\]]*)\])?$/gm;
 
   // Collect turn headers with the position right after the header line
   const headers: Array<{
@@ -414,6 +416,7 @@ function parseTurns(body: string): Turn[] {
     burst?: string;
     merge?: boolean;
     clientMessageId?: string;
+    documents?: string;
     contentStart: number;
   }> = [];
   let match: RegExpExecArray | null;
@@ -432,6 +435,7 @@ function parseTurns(body: string): Turn[] {
       ...(match[5] ? { burst: match[5] } : {}),
       ...(match[6] ? { merge: true } : {}),
       ...(match[7] ? { clientMessageId: decodeMessageId(match[7]) } : {}),
+      ...(match[8] ? { documents: match[8] } : {}),
       contentStart: afterHeader,
     });
   }
@@ -449,6 +453,9 @@ function parseTurns(body: string): Turn[] {
 
     // Distinguish: numeric label → legacy format (no turnId), base64url → new
     const isNumeric = /^\d+$/.test(headers[i].turnLabel);
+    const documentContext = headers[i].documents
+      ? decodeDocumentContext(headers[i].documents)
+      : [];
 
     turns.push({
       timestamp: headers[i].timestamp,
@@ -459,6 +466,7 @@ function parseTurns(body: string): Turn[] {
       ...(headers[i].burst ? { burst: headers[i].burst } : {}),
       ...(headers[i].merge ? { merge: true } : {}),
       ...(headers[i].clientMessageId ? { clientMessageId: headers[i].clientMessageId } : {}),
+      ...(documentContext.length ? { documentContext } : {}),
     });
   }
 

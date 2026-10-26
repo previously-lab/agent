@@ -1,8 +1,5 @@
-/** The current-view chrome's bilingual strings — a LOCAL module: the shared
- *  messages JSON is owned by another lane and stays untouched. Only the new
- *  chrome strings live here; the paper's own furniture remains fixed
- *  English (the v0.28 ruling — the document's surroundings are not
- *  translated). */
+/** Desk-specific bilingual chrome. The paper's own furniture remains fixed
+ *  English; shared chat actions use the locale message catalogs. */
 
 export interface DeskCurrentTexts {
   readingViews: string;
@@ -18,6 +15,14 @@ export interface DeskCurrentTexts {
   unavailable: string;
   sourceLabel(index: number): string;
   sourceAriaLabel(index: number, ref: string): string;
+  addWholeDocument: string;
+  addSelectedPassage: string;
+  selectionTooLong: string;
+  relatedHeading: string;
+  relatedNotFound: string;
+  relatedUnavailable: string;
+  locationNotFound: string;
+  locationAmbiguous: string;
 }
 
 const EN: DeskCurrentTexts = {
@@ -34,6 +39,14 @@ const EN: DeskCurrentTexts = {
   unavailable: "The current understanding could not be read; the original is shown.",
   sourceLabel: (index) => `Source ${index}`,
   sourceAriaLabel: (index, ref) => `Open source ${index}: ${ref}`,
+  addWholeDocument: "Reference document",
+  addSelectedPassage: "Reference selection",
+  selectionTooLong: "Select a shorter passage (up to 1,200 characters).",
+  relatedHeading: "Related documents",
+  relatedNotFound: "Not found",
+  relatedUnavailable: "Unavailable to open",
+  locationNotFound: "The requested source passage could not be found.",
+  locationAmbiguous: "The requested turn is shared by both speakers; choose its speaker.",
 };
 
 const ZH: DeskCurrentTexts = {
@@ -50,6 +63,14 @@ const ZH: DeskCurrentTexts = {
   unavailable: "当前认识读取失败，现展示原稿。",
   sourceLabel: (index) => `来源 ${index}`,
   sourceAriaLabel: (index, ref) => `打开来源 ${index}：${ref}`,
+  addWholeDocument: "引用文档",
+  addSelectedPassage: "引用选段",
+  selectionTooLong: "请选择更短的段落（最多 1,200 个字符）。",
+  relatedHeading: "相关文档",
+  relatedNotFound: "未找到",
+  relatedUnavailable: "暂时无法打开",
+  locationNotFound: "无法在这份记录中找到指定的原文位置。",
+  locationAmbiguous: "这个回合同时属于双方，请指定说话人以准确定位。",
 };
 
 export function deskCurrentTexts(locale: string): DeskCurrentTexts {

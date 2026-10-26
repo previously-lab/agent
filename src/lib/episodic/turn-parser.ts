@@ -3,7 +3,7 @@
  * workflow steps. Pure functions — no I/O, no side effects.
  */
 
-/** Parse "YYYY-MM-DD-HHMM" into path segments. Returns null on invalid format. */
+/** Parse "YYYY-MM-DD-HHMM" into path segments. Returns null unless the calendar date and time exist. */
 export function parseSliceId(sliceId: string): { y: string; m: string; d: string; hm: string } | null {
   const parts = sliceId.split("-");
   if (parts.length !== 4) return null;
@@ -11,6 +11,15 @@ export function parseSliceId(sliceId: string): { y: string; m: string; d: string
   if (!/^\d{4}$/.test(y) || !/^\d{2}$/.test(m) || !/^\d{2}$/.test(d) || !/^\d{4}$/.test(hm)) {
     return null;
   }
+  const year = Number(y);
+  const month = Number(m);
+  const day = Number(d);
+  const hour = Number(hm.slice(0, 2));
+  const minute = Number(hm.slice(2));
+  if (month < 1 || month > 12 || hour > 23 || minute > 59) return null;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day < 1 || day > days[month - 1]) return null;
   return { y, m, d, hm };
 }
 

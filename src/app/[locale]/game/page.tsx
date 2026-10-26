@@ -1,17 +1,18 @@
 import { setRequestLocale } from "next-intl/server";
-import { redirect } from "@/i18n/navigation";
-
-// §14 merge made the hotel a WORLD of the app surface, not a route of its
-// own; §3.1 moved that surface off `/` onto `/app`. The old URL stays as a
-// redirect so existing links keep landing in the game.
+import { setDemoPersona } from "@/lib/demo/demo-fs";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+import { ClientErrorCapture } from "@/components/chat/client-error-capture";
 
 export default async function GamePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ locale: string }>;
+  searchParams: Promise<{ persona?: string }>;
 }) {
   const { locale } = await params;
   setRequestLocale(locale);
-
-  redirect({ href: "/app?view=game", locale });
+  const { persona } = await searchParams;
+  if (resolveDataSource() === "demo") setDemoPersona(persona || "user");
+  return <ClientErrorCapture />;
 }

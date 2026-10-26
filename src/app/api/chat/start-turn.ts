@@ -27,6 +27,7 @@ import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { withGitHubReadBudget } from "@/lib/github/client";
 import { screenContextSchema, type ScreenContext } from "@/lib/chat/screen-context";
+import { parseDocumentContext } from "@/lib/chat/document-context";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -54,6 +55,8 @@ export interface StartTurnArgs {
   view?: unknown;
   /** Client-reported app activity, separate from user speech and authorization. */
   screen?: unknown;
+  /** Untrusted explicit document pointers; malformed entries are dropped independently. */
+  documentContext?: unknown;
   /**
    * The parallel-burst id (v0.38 §2) — the client mints ONE ULID per 连发
    * and stamps every message of the burst with it. Optional: absent
@@ -276,6 +279,7 @@ export async function startTurn(
   // one (the lobby default carries no per-turn block).
   const view = sanitizeView(args.view);
   const screen = sanitizeScreen(args.screen);
+  const documentContext = parseDocumentContext(args.documentContext);
 
   const input: TurnInput = {
     modelMessages,
@@ -300,6 +304,7 @@ export async function startTurn(
     ...(machineContext ? { machineContext } : {}),
     ...(view ? { view } : {}),
     ...(screen ? { screen } : {}),
+    ...(documentContext.length ? { documentContext } : {}),
     ...(args.burstId ? { burstId: args.burstId } : {}),
   };
 

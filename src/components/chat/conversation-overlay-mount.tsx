@@ -1,37 +1,19 @@
 "use client";
 
-/**
- * ConversationOverlayMount — the gate and the lazy seat for the conversation
- * overlay (`conversation-overlay.tsx`).
- *
- * WHY DYNAMIC. This mount is imported by the LAYOUT — shared by every route —
- * and the overlay pulls in the whole chat surface (the stream, the markdown
- * renderer, the composer). Only a dynamic import keeps that chunk out of the
- * home route (v0.13 §3's one hard engineering rule: the home loads as little
- * as it can), while the layout still hosts the layer for every route that
- * wants it. `ssr: false` because the overlay is pure client chrome — and
- * because the pathname gate below must not render different trees on server
- * and client.
- *
- * WHY THE GATE. The home route has NO conversation ability (the reader's
- * ruling: no pill, no subtitle, no fullscreen — the home is a start screen,
- * not a chat window), and the playground is a component gallery an overlay
- * would corrupt. Hiding there UNMOUNTS the layer; that is acceptable exactly
- * because the home is the session's exit (§3's 单向门 — leaving the world
- * for the home is 收工), not a tab. Every other route keeps the layer
- * MOUNTED, so drafts and attachments cross `/app` ↔ `/settings` navigation;
- * off the app surface the panel is folded to its pill (below) — a fullscreen
- * conversation must not cover a page that has no world behind it.
- */
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
 import { useShell } from "@/components/shell/shell-provider";
+import {
+  originPanelModeFromHistory,
+  panelModeForSurface,
+  workspaceSurface,
+} from "@/lib/workspace/navigation";
 
 const ConversationOverlay = dynamic(
-  () =>
-    import("./conversation-overlay").then((m) => m.ConversationOverlay),
+  () => import("./conversation-overlay").then((module) => module.ConversationOverlay),
   { ssr: false, loading: () => null },
 );
 
@@ -41,21 +23,19 @@ export function ConversationOverlayMount({
   initialConfig?: UserConfig;
 }) {
   const pathname = usePathname();
-  const { panelMode, setPanelMode } = useShell();
+  const searchParams = useSearchParams();
+  const surface = workspaceSurface(pathname, searchParams.toString());
+  const { setPanelMode } = useShell();
   const gated = pathname === "/" || pathname.startsWith("/playground");
-  const onApp = pathname === "/app";
+  const previousPathRef = useRef<string | null>(null);
 
-  // Leaving the app surface folds the conversation to its pill: the layer
-  // survives on utility routes (the draft rides along), but fullscreen is
-  // the APP's conversation face. A layout effect, so the fold lands before
-  // paint — a passive effect would flash the fullscreen body (and its
-  // portal target) over the settings page for one frame. Gated routes are
-  // excluded deliberately: the home must NOT touch the tier, so that
-  // 继续 → `/app` still opens the app the way a fresh visit always has
-  // (the fullscreen conversation at the conversation rung).
   useLayoutEffect(() => {
-    if (!gated && !onApp && panelMode !== "pill") setPanelMode("pill");
-  }, [gated, onApp, panelMode, setPanelMode]);
+    const routeChanged = previousPathRef.current !== pathname;
+    previousPathRef.current = pathname;
+    if (gated || !routeChanged) return;
+    const originMode = originPanelModeFromHistory(window.history.state);
+    setPanelMode(originMode ?? panelModeForSurface(surface));
+  }, [gated, pathname, setPanelMode, surface]);
 
   if (gated) return null;
   return <ConversationOverlay initialConfig={initialConfig} />;

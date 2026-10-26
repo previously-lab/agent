@@ -82,7 +82,33 @@
       "bridgeNotInstalled": "未安装",
       "bridgeConfigure": "去配置",
       "hqStream": "进化流（反思）",
-      "removeAttachment": "移除附件：{name}"
+      "removeAttachment": "移除附件：{name}",
+      "references": {
+        "open": "引用文档",
+        "selected": "这个问题要参考的文档",
+        "title": "引用文档",
+        "searchLabel": "搜索文档",
+        "searchPlaceholder": "按标题或引用搜索…",
+        "hint": "可选择多份文档；它们只随下一条消息发送。",
+        "loading": "正在加载文档…",
+        "loadingMore": "正在加载更多…",
+        "error": "文档暂时无法加载。",
+        "retry": "重试",
+        "empty": "没有匹配的文档。",
+        "loadMore": "更多文档",
+        "close": "关闭文档选择器",
+        "results": "匹配的文档",
+        "remove": "移除引用：{title}",
+        "excerpt": "来自{title}的选段",
+        "excerptBadge": "选段",
+        "limit": "无法添加这份引用，请检查数量和长度限制。",
+        "kind": {
+          "case": "文档",
+          "piece": "文档篇章",
+          "record": "对话记录",
+          "dossier": "档案"
+        }
+      }
     },
     "attachment": "附件",
     "actions": {
@@ -159,6 +185,13 @@
           "open": "建立档案",
           "addPiece": "追加一篇"
         }
+      },
+      "documents": {
+        "open": "打开文档",
+        "add": "加入提问",
+        "added": "已加入",
+        "rejected": "无法加入这份引用",
+        "unavailable": "这条结果没有可打开的文档视图。"
       },
       "currentTime": "看了看表",
       "webSearchRunning": "正在搜索「{query}」…",
@@ -528,6 +561,7 @@
     "enter": "进入",
     "readDoc": "阅读",
     "manuscripts": "文稿",
+    "workspace": "完整对话",
     "scenario": "情景",
     "lobby": "门厅"
   },
@@ -770,5 +804,33 @@
     "paused": "情景停在原处",
     "relatedRoom": "文稿关联的情景",
     "goToRoom": "前往这份记录的房间"
+  },
+  "workspace": {
+    "nav": {
+      "label": "工作区",
+      "conversation": "对话",
+      "library": "文库",
+      "game": "旅店",
+      "relatedRoom": "前往这份记录的房间"
+    },
+    "browser": {
+      "eyebrow": "文稿",
+      "title": "文档与对话记录",
+      "views": "工作区视图",
+      "documents": "文档",
+      "records": "更早的对话"
+    },
+    "history": {
+      "entrance": "阅读更早的对话",
+      "entranceHint": "翻开近期窗口之外的记录原稿",
+      "title": "更早的对话",
+      "description": "每次浏览一页，选一份记录打开为原稿。",
+      "newest": "最新",
+      "older": "更早",
+      "loading": "正在读取记录…",
+      "error": "暂时无法读取记录。",
+      "retry": "重试",
+      "empty": "这里没有可显示的对话。"
+    }
   }
 }

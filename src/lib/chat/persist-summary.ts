@@ -96,7 +96,9 @@ async function persistSummaryMembersInView(
     const userId = question?.turnId ?? m.turnId;
     if (m.userText && !question) {
       appendTurn(slice, { timestamp: m.at, role: "user", content: m.userText, turnId: userId,
-        ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}), ...(burst ? { burst } : {}) });
+        ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
+        ...(m.documentContext?.length ? { documentContext: m.documentContext } : {}),
+        ...(burst ? { burst } : {}) });
       body.push(`user turn ${userId}`);
       touched.set(slice.slice_id, slice);
     } else if (question) {
@@ -109,6 +111,10 @@ async function persistSummaryMembersInView(
       }
       if (m.clientMessageId && !question.clientMessageId) {
         question.clientMessageId = m.clientMessageId;
+        touched.set(slice.slice_id, slice);
+      }
+      if (m.documentContext?.length && !question.documentContext) {
+        question.documentContext = m.documentContext;
         touched.set(slice.slice_id, slice);
       }
     }

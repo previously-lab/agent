@@ -40,6 +40,7 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
     case "recallFind":
     case "recallSearch":
     case "recallRead":
+    case "recallSince":
       return (
         <RecallToolRenderer
           toolName={toolName}

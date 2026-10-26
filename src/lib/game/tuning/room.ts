@@ -115,10 +115,10 @@ export const DOOR_WIDTH = 1.4;
 export const DOOR_HEIGHT = 3.0;
 export const PORTAL_HEIGHT = 3.2;
 /** The door's trim/seam/glow family — quieted into the wall family (the
- *  art overhaul's selective-detail pass): the trim is a pale green-grey
+ *  art overhaul's selective-detail pass): the trim is a pale blue-grey
  *  plaster-adjacent tone, the glow is a faint cue, and the halo is gone
  *  entirely (a door is found by its seams and trim, not a light blob). */
-export const DOOR_TRIM_COLOR = "#8f9a82";
+export const DOOR_TRIM_COLOR = "#93a2b8";
 export const DOOR_GLOW_INTENSITY = 0.35;
 export const DOOR_HALO_OPACITY = 0;
 /** Jamb/head light-leak seams around the closed slab (the exit landmark
@@ -785,10 +785,10 @@ export const WINDOW_SILL_Y = 1.0;
 /** The pane is a VIEW, not a glowing plate (§11.2): a layered outside —
  *  sky gradient + sun halo + far/near silhouettes, all palette-driven —
  *  baked by materials/window-view.ts and shown on an unlit plane. Night
- *  stays in the same sage family and only gently lowers the view. */
+ *  stays in the same blue-gray family and only gently lowers the view. */
 export const WINDOW_VIEW_DAY_GAIN = 1;
 export const WINDOW_VIEW_NIGHT_GAIN = 0.78;
-export const WINDOW_VIEW_NIGHT_TINT = "#b6c0aa";
+export const WINDOW_VIEW_NIGHT_TINT = "#aebbd0";
 /** Cross bars over the view (m, ×wall scale) — what makes it a window
  *  and not a screen. */
 export const WINDOW_MULLION = 0.07;
@@ -838,10 +838,10 @@ export const CLERESTORY_SPILL_OPACITY = 0.03;
 
 /** Light registers (v0.11-hotel-rooms §3, design §11.2 item 4): one
  *  room, one light mood, derived deterministically from the recipe's
- *  lightSeed. Every register stays inside the quiet cream/sage family. */
+ *  lightSeed. Warm tungsten and ember stay distinct beside cool daylight. */
 export const LIGHT_REGISTER_TINTS = {
   tungsten: "#e7ddc0",
-  fluorescent: "#d5e3c9",
+  fluorescent: "#d5e0ee",
   daylight: "#eee8d4",
   ember: "#e0c39f",
 } as const;
@@ -866,8 +866,8 @@ export const MODULE_LIGHT_FIXTURES: Record<
   { color: string; intensity: number; pool: number }
 > = {
   task: { color: "#e7ddc0", intensity: 0.55, pool: 0.025 },
-  wash: { color: "#d5e3c9", intensity: 0.45, pool: 0.02 },
+  wash: { color: "#d5e0ee", intensity: 0.45, pool: 0.02 },
   daylight: { color: "#eee8d4", intensity: 0.6, pool: 0.025 },
-  "pool-bounce": { color: "#c2d8c2", intensity: 0.4, pool: 0.018 },
+  "pool-bounce": { color: "#c2d4e8", intensity: 0.4, pool: 0.018 },
   quiet: { color: "#d7d0b5", intensity: 0.3, pool: 0.015 },
 };

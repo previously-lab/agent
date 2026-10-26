@@ -8,8 +8,8 @@
  * current conversation (the `useChat` messages plus the arrival-restored
  * resume block) and, on a briefing arrival, the cold-open page of repository
  * history with the briefing card seated as an item between the two. The list
- * pages NOTHING older — happened-time browsing deeper than the cold-open page
- * belongs to the archive dispatch.
+ * pages NOTHING older — its explicit upper-edge entrance opens the bounded
+ * DOM record selector instead.
  *
  * HISTORY. Until v0.11 the conversation rendered inside an R3F canvas
  * (`conversation-field.tsx`): every block a billboard, the scroll position a
@@ -81,6 +81,8 @@ import {
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import { HistoryEntrance } from "@/components/workspace/history-entrance";
+import { hasHistoryEntrance } from "@/lib/workspace/navigation";
 
 /** How far past the viewport a row stays MOUNTED. About one screen — the
  *  reader should be able to scroll a little in either direction without a
@@ -576,6 +578,7 @@ export function DomChatList({
               sliceId={item.sliceId}
               turnId={item.turn.turnId}
               timestamp={item.turn.timestamp}
+              documentContext={item.turn.documentContext}
             />
           </div>
         );
@@ -610,7 +613,8 @@ export function DomChatList({
   };
 
   return (
-    <div className="conversation-stream-shell relative mx-auto h-full">
+    <div className="conversation-stream-shell relative mx-auto flex h-full flex-col">
+      {hasHistoryEntrance(items) && <HistoryEntrance />}
       {/* The scroller's top/bottom padding — the MEASURED chrome and
           composer heights (px) plus the static tail pad; see
           use-chrome-inset and ComposerHost. */}
@@ -624,7 +628,7 @@ export function DomChatList({
         tabIndex={0}
         role="log"
         onScroll={handleScroll}
-        className="h-full overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]"
         style={{
           paddingTop: insetTop,
           paddingBottom: insetBottom + TAIL_PAD_PX,

@@ -41,7 +41,7 @@
  *               scroll container); no R3F lives in this box. OVERLAY, never
  *               a route change — `position: fixed`, so the
  *               world canvas behind it is never resized or unmounted; the
- *               provider derives `worldFrozen` from this tier and the app
+ *               provider derives `worldFrozen` from this tier and the game
  *               route's canvas freezes its R3F `frameloop` ("never") while
  *               it is up, which pauses rendering WITHOUT unmounting:
  *               the scene, its programs and the last frame all stay.
@@ -57,9 +57,7 @@
  * never an unmount boundary.
  *
  * Keyboard. `Cmd/Ctrl+J` toggles pill ↔ fullscreen (window-level,
- * registered here so both surfaces share it). The two obvious neighbours
- * were taken: `Cmd/Ctrl+K` is the search palette and `Cmd/Ctrl+.` is the
- * shell's rung toggle (app-shell.tsx). `Escape` collapses to the pill and
+ * registered here so both surfaces share it). `Escape` collapses to the pill and
  * is listened for on the PANEL CONTAINER, not the window: popovers inside
  * the chat (the model selector & co.) render in portals OUTSIDE this
  * subtree, so their Escape never reaches this handler — one Escape closes
@@ -76,12 +74,21 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { WorkspaceRouteNav } from "@/components/workspace/workspace-route-nav";
+import { usePathname } from "@/i18n/navigation";
+import {
+  requestedPanelMode,
+  workspaceSurface,
+  type ConversationIntent,
+  type ConversationPanelMode,
+} from "@/lib/workspace/navigation";
 import "./writing.css";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
-export type ConversationPanelMode = "pill" | "fullscreen";
+export type { ConversationPanelMode } from "@/lib/workspace/navigation";
 
 /** Every tier change — clicks and keys alike — funnels through this table,
  *  so the keyboard surface and the buttons can never disagree. Exported and
@@ -142,6 +149,7 @@ export const SUBTITLE_LINE_HEIGHT_PX = 20;
 export interface PanelTier {
   mode: ConversationPanelMode;
   setMode: (mode: ConversationPanelMode) => void;
+  requestMode: (mode: ConversationPanelMode, intent: ConversationIntent) => void;
 }
 
 const PanelTierContext = createContext<PanelTier | null>(null);
@@ -173,6 +181,9 @@ export function ConversationPanel({
   children,
 }: ConversationPanelProps) {
   const t = useTranslations("conversationPanel");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const surface = workspaceSurface(pathname, searchParams.toString());
   const panelRef = useRef<HTMLDivElement>(null);
   const open = mode === "fullscreen";
 
@@ -211,8 +222,14 @@ export function ConversationPanel({
   };
 
   const tier = useMemo<PanelTier>(
-    () => ({ mode, setMode: onModeChange }),
-    [mode, onModeChange],
+    () => ({
+      mode,
+      setMode: onModeChange,
+      requestMode: (requested, intent) => {
+        onModeChange(requestedPanelMode(surface, mode, requested, intent));
+      },
+    }),
+    [mode, onModeChange, surface],
   );
 
   // The caption block's translated label — one discrete activity, never the
@@ -338,6 +355,7 @@ export function ConversationPanel({
           <span className="flex-1 truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
+          {surface !== "utility" && <WorkspaceRouteNav current={surface} />}
           {/* ONE verb, not two. The minimise and the close were the same
               action wearing two glyphs — from fullscreen both land on the
               pill — and two buttons in a corner that small read as a toolbar.

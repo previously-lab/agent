@@ -221,13 +221,14 @@
   /* The scanned light stock stays ivory even against the night world.
      Rebind ink in this scope so inherited dark-mode text stays legible. */
   --paper: #f8f6ee;
-  --foreground: #303b32;
-  --color-foreground: #303b32;
-  --card-foreground: #303b32;
-  --muted-foreground: #70796a;
-  --color-muted-foreground: #70796a;
+  --foreground: #1b2940;
+  --color-foreground: #1b2940;
+  --card-foreground: #1b2940;
+  --muted-foreground: #59677b;
+  --color-muted-foreground: #59677b;
   --muted: #eeece2;
   --color-muted: #eeece2;
+  --ink-accent-paper: #0057d9;
   --hljs-comment: #70796a;
   --hljs-keyword: #8d513b;
   --hljs-string: #3c614e;
@@ -236,7 +237,7 @@
   --hljs-attr: #38675f;
   --hljs-type: #795d36;
   --hljs-meta: #795d36;
-  --paper-line: #7d847569;
+  --paper-line: #65748a69;
   --paper-plate: #eeece2;
   --paper-grain-map: url("/paper-grain-light.webp");
   position: absolute;
@@ -245,12 +246,12 @@
   flex-direction: column;
   font-family: var(--font-serif, serif);
   font-size: 11.5pt;
-  color: #303b32;
+  color: var(--color-foreground);
   background-color: var(--paper);
   background-image: linear-gradient(#f8f6ee55, #f8f6ee55), var(--paper-grain-map);
   background-size: auto, 1024px 600px;
   border-radius: 0;
-  box-shadow: 0 0 0 1px #17251e24, 0 1px 2px #17251e4a, 0 5px 9px -2px #17251e40;
+  box-shadow: 0 0 0 1px #17233a24, 0 1px 2px #17233a4a, 0 5px 9px -2px #17233a40;
 }
 
 .desk-paper::after {
@@ -541,7 +542,7 @@
   overflow: visible;
 }
 
-.desk-paper .typeset a { color: #8d513b; }
+.desk-paper .typeset a { color: var(--ink-accent-paper); }
 
 .desk-paper .code-block > div:first-child {
   background-color: transparent;
@@ -661,21 +662,25 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: max-content;
   max-width: calc(100vw - 20px);
-  color: #34473b;
+  color: var(--foreground);
   pointer-events: auto;
 }
 
 .desk-toolbar-group,
 .desk-tool-close {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 2px;
   padding: 4px;
-  border: 1px solid #53695026;
+  border: 1px solid var(--tool-line);
   border-radius: 999px;
-  background: #eef0e4d9;
-  box-shadow: 0 3px 12px #15271a12;
+  background: var(--tool-glass, var(--tool));
+  box-shadow: var(--shadow-float);
   backdrop-filter: blur(10px);
 }
 
@@ -693,21 +698,25 @@
   transition: background-color 120ms ease;
 }
 
-.desk-tool-button:hover:not(:disabled) { background-color: #45634a14; }
-.desk-tool-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.desk-tool-button:hover:not(:disabled) { background-color: var(--accent); }
+.desk-tool-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .desk-tool-button:disabled { opacity: 0.35; cursor: default; }
 .desk-tool-close { width: 44px; height: 44px; }
 .desk-tool-readout { width: 52px; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
 .desk-page-position { min-width: 42px; text-align: center; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
 
-.dark .desk-toolbar { color: #e1e6d6; }
-.dark .desk-toolbar-group,
-.dark .desk-tool-close { background-color: #293d32d9; border-color: #c1cdb22e; }
-.dark .desk-tool-button:hover:not(:disabled) { background-color: #e1e7d314; }
-
 @media (max-width: 600px) {
   /* Chrome moves; the A4 sheet and all print rules above remain fixed. */
-  .desk-toolbar { gap: 5px; }
+  .desk-stage { bottom: 220px; }
+  .desk-toolbar {
+    gap: 5px;
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+  }
+  .desk-toolbar [data-reference-controls] {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
   .desk-toolbar-group { gap: 0; padding: 3px; }
   .desk-tool-button { width: 31px; height: 34px; }
   .desk-tool-readout { width: 45px; }

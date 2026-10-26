@@ -19,6 +19,7 @@ import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { CurrentView } from "@/lib/chat/current-view";
 import type { ScreenContext } from "@/lib/chat/screen-context";
+import type { DocumentContextSnapshot } from "@/lib/chat/document-context";
 import type { SliceLandingConfig } from "@/lib/chat/slice-landing";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 import type { PersistedReply } from "@/lib/tasks/contracts";
@@ -137,6 +138,8 @@ export interface TurnInput {
   view?: CurrentView;
   /** A send-time app observation; never persisted as the user's own statement. */
   screen?: ScreenContext;
+  /** Explicit user-selected reading pointers; separate from passive screen observation. */
+  documentContext?: DocumentContextSnapshot;
 }
 
 /** Summary of a synchronous card evolution run (v0.7b — inline in housekeeping). */
@@ -492,6 +495,8 @@ export interface TurnRunResult extends TaskAckSource {
   at: string;
   /** The user's message THIS turn answered (persisted by the summary run). */
   userText: string;
+  /** The references attached to the originating user message, including regeneration. */
+  documentContext?: DocumentContextSnapshot;
   /** The full assistant reply ("" when the turn failed — nothing to persist). */
   replyText: string;
   /** The cognition body for agent.md ("" when none). */

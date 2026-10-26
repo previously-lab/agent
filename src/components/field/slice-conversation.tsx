@@ -232,6 +232,7 @@ export function SliceConversation({
             sliceId={entry.id}
             turnId={turn.turnId}
             timestamp={turn.timestamp}
+            documentContext={turn.documentContext}
             // The unit IS the slice, so every turn in it carries the slice's
             // own strands — the tint the timeline cards use.
             strands={entry.strands}

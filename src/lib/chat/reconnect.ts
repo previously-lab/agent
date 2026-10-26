@@ -1,6 +1,7 @@
 import type { UIMessage } from "@/lib/chat/protocol";
 import type { TurnRunResult } from "./turn-types";
 import type { Turn } from "@/lib/episodic/types";
+import { createDocumentContextMetadata } from "./document-context";
 
 /** The pending-summary window restores authoritative completed run results. */
 export function recoveryMessages(records: TurnRunResult[], persistedTurnIds: ReadonlySet<string> = new Set(), persistedUserIds: ReadonlySet<string> = new Set()): UIMessage[] {
@@ -12,7 +13,7 @@ export function recoveryMessages(records: TurnRunResult[], persistedTurnIds: Rea
     const showUser = !userIds.has(userId);
     userIds.add(userId);
     return [
-      ...(showUser ? [{ id: userId, role: "user" as const, metadata: { recoveryTurnId: record.turnId }, parts: [{ type: "text" as const, text: record.userText }] }] : []),
+      ...(showUser ? [{ id: userId, role: "user" as const, metadata: { recoveryTurnId: record.turnId, ...(createDocumentContextMetadata(record.documentContext ?? []) ?? {}) }, parts: [{ type: "text" as const, text: record.userText }] }] : []),
       ...(record.replyText ? [{ id: `recovery-agent-${record.turnId}`, role: "assistant" as const, metadata: { recoveryTurnId: record.turnId }, parts: [
         { type: "text" as const, text: record.replyText },
         ...(record.nativeMessages?.length ? [{ type: "data-deepseek-step" as const, id: `recovery-native-${record.turnId}`, data: { messages: record.nativeMessages } }] : []),
@@ -43,7 +44,7 @@ export function mergeRecoveredMessages(stored: readonly UIMessage[], records: Tu
       else if (!record.regenerate && result[userAt + 1]?.role === "assistant") result[userAt + 1] = answer;
       else result.splice(end, 0, answer);
       // Mark the restored question too, so a later history read cannot seat it twice.
-      result[userAt] = { ...result[userAt], metadata: { ...(result[userAt].metadata as object | undefined), recoveryTurnId: record.turnId } };
+      result[userAt] = { ...result[userAt], metadata: { ...(result[userAt].metadata as object | undefined), ...(createDocumentContextMetadata(record.documentContext ?? []) ?? {}), recoveryTurnId: record.turnId } };
       continue;
     }
     for (const message of additions) {
@@ -66,8 +67,8 @@ export function mergeSavedTurns(stored: readonly UIMessage[], turns: readonly Tu
       const id = turn.clientMessageId ?? `saved-user-${key}`;
       users.set(key, id);
       const existing = result.findIndex((message) => message.role === "user" && message.id === id);
-      if (existing >= 0) result[existing] = { ...result[existing], metadata: { ...(result[existing].metadata as object | undefined), recoveryTurnId: turn.turnId } };
-      else result.push({ id, role: "user", metadata: { recoveryTurnId: turn.turnId }, parts: [{ type: "text", text: turn.content }] });
+      if (existing >= 0) result[existing] = { ...result[existing], metadata: { ...(result[existing].metadata as object | undefined), ...(createDocumentContextMetadata(turn.documentContext ?? []) ?? {}), recoveryTurnId: turn.turnId } };
+      else result.push({ id, role: "user", metadata: { recoveryTurnId: turn.turnId, ...(createDocumentContextMetadata(turn.documentContext ?? []) ?? {}) }, parts: [{ type: "text", text: turn.content }] });
       continue;
     }
     const userId = users.get(turn.replyTo ?? key);

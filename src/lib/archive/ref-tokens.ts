@@ -41,6 +41,7 @@
 import { CASE_CATEGORIES } from "@/lib/docs/paths";
 import { parseCaseRef } from "@/lib/docs/case-refs";
 import { parseDossierRef } from "./refs";
+import { parseDocumentLink, type ParsedDocumentLink } from "@/lib/documents/document-link";
 
 /** One candidate found in prose: the NORMALIZED ref (the form verifyRefs and
  *  openDesk speak) and its character span in the source chunk. */
@@ -172,6 +173,22 @@ function stripCode(markdown: string): string {
     .replace(/`[^`\n]*`/g, " ");
 }
 
+export interface SemanticDocumentLink {
+  link: ParsedDocumentLink;
+  label: string;
+}
+
+export function extractSemanticDocumentLinks(markdown: string): SemanticDocumentLink[] {
+  const source = stripCode(markdown);
+  const out: SemanticDocumentLink[] = [];
+  const pattern = /(?<!!)\[([^\]\r\n]*)\]\((previously:[^)\s]*)\)/g;
+  for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
+    const link = parseDocumentLink(match[2]);
+    if (link) out.push({ link, label: match[1].trim() });
+  }
+  return out;
+}
+
 /**
  * A document's candidate refs for the verify pass: the deduped normalized
  * ref strings, in first-appearance order. Runs on the markdown SOURCE with
@@ -180,8 +197,13 @@ function stripCode(markdown: string): string {
  */
 export function extractMarkdownRefs(markdown: string): string[] {
   const seen = new Set<string>();
-  for (const token of tokenizeRefText(stripCode(markdown))) {
+  const withoutInlineLinks = stripCode(markdown)
+    .replace(/!?\[[^\]\r\n]*\]\([^)\r\n]*\)/g, "");
+  for (const token of tokenizeRefText(withoutInlineLinks)) {
     seen.add(token.ref);
+  }
+  for (const semantic of extractSemanticDocumentLinks(markdown)) {
+    seen.add(semantic.link.ref);
   }
   return [...seen];
 }

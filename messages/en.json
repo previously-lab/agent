@@ -82,7 +82,33 @@
       "bridgeNotInstalled": "not installed",
       "bridgeConfigure": "Configure",
       "hqStream": "Evolution stream (Reflection)",
-      "removeAttachment": "Remove attachment: {name}"
+      "removeAttachment": "Remove attachment: {name}",
+      "references": {
+        "open": "Reference documents",
+        "selected": "Documents for this question",
+        "title": "Reference documents",
+        "searchLabel": "Search documents",
+        "searchPlaceholder": "Search by title or reference…",
+        "hint": "Select one or more documents. They are sent only with your next message.",
+        "loading": "Loading documents…",
+        "loadingMore": "Loading more…",
+        "error": "Documents could not be loaded.",
+        "retry": "Retry",
+        "empty": "No matching documents.",
+        "loadMore": "More documents",
+        "close": "Close document picker",
+        "results": "Matching documents",
+        "remove": "Remove reference: {title}",
+        "excerpt": "Selected passage from {title}",
+        "excerptBadge": "passage",
+        "limit": "This reference could not be added. Check the selection limits.",
+        "kind": {
+          "case": "Document",
+          "piece": "Document piece",
+          "record": "Conversation",
+          "dossier": "Dossier"
+        }
+      }
     },
     "attachment": "Attachment",
     "actions": {
@@ -159,6 +185,13 @@
           "open": "Opened case",
           "addPiece": "Added piece"
         }
+      },
+      "documents": {
+        "open": "Open document",
+        "add": "Add to question",
+        "added": "Added",
+        "rejected": "Couldn't add this reference",
+        "unavailable": "No document view is available for this result."
       },
       "currentTime": "Checked the time",
       "listRunning": "Browsing…",
@@ -528,6 +561,7 @@
     "enter": "Enter",
     "readDoc": "Read",
     "manuscripts": "Manuscripts",
+    "workspace": "Full conversation",
     "scenario": "Scenario",
     "lobby": "Lobby"
   },
@@ -770,5 +804,33 @@
     "paused": "The scene is waiting",
     "relatedRoom": "Related scenario",
     "goToRoom": "Go to this record’s room"
+  },
+  "workspace": {
+    "nav": {
+      "label": "Workspace",
+      "conversation": "Conversation",
+      "library": "Library",
+      "game": "Hotel",
+      "relatedRoom": "Go to this record’s room"
+    },
+    "browser": {
+      "eyebrow": "Manuscripts",
+      "title": "Documents and records",
+      "views": "Workspace views",
+      "documents": "Documents",
+      "records": "Earlier conversations"
+    },
+    "history": {
+      "entrance": "Read earlier conversations",
+      "entranceHint": "Open manuscripts beyond this recent window",
+      "title": "Earlier conversations",
+      "description": "Browse one bounded page at a time and open a record as a manuscript.",
+      "newest": "Newest",
+      "older": "Older",
+      "loading": "Loading records…",
+      "error": "Records couldn’t be loaded.",
+      "retry": "Try again",
+      "empty": "No conversations to show here."
+    }
   }
 }

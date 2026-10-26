@@ -1787,6 +1787,7 @@ function GameLoop({
   prewarmIdRef,
   setPrewarmDoor,
   transitionActive,
+  suspended,
   roomDoors,
   roomPlan,
   roomSeams,
@@ -1854,6 +1855,7 @@ function GameLoop({
   prewarmIdRef: MutableRefObject<string | null>;
   setPrewarmDoor: (door: DoorRef | null) => void;
   transitionActive: boolean;
+  suspended: boolean;
   /** The active space's placed strand doors (plan-local frame) — the
    *  clamp's passage windows; empty when the room grows none. */
   roomDoors: readonly RoomDoorPlacement[];
@@ -1924,6 +1926,7 @@ function GameLoop({
       walkRef.current.active = false;
       CHASE_LIVE.walking = false;
     } else if (
+      !suspended &&
       !transitionActive &&
       !departingRef.current &&
       !WORLD_TRANSITION.active &&
@@ -2737,14 +2740,14 @@ export default function GameCanvas({
   const paperHudRef = useRef<PaperHud | null>(null);
   const onOpenDocRef = useRef(onOpenDoc);
   onOpenDocRef.current = onOpenDoc;
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
   const departingRef = useRef(false);
   const departWatchRef = useRef(false);
   const interactRef = useRef<() => void>(() => {});
   useEffect(() => {
     interactRef.current = () => {
-      // Frozen under the document tier: the terminal and the sheets must
-      // not answer keys aimed at the desk.
-      if (WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
+      if (suspendedRef.current || WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
       // A sheet in reach reads in the original manuscript — no flare, no
       // depart latch: the desk opens over the game and the room waits.
       const paper = paperHudRef.current;
@@ -2756,13 +2759,9 @@ export default function GameCanvas({
       if (anchor === null || departingRef.current) return;
       departingRef.current = true;
       TERMINAL_DEPART.t0 = performance.now();
-      // The depart flare plays first; then the shell's transition machine
-      // takes over — the scripted camera move + dissolve replace this
-      // interaction's old instant catalog jump (world-transition.ts). The
-      // URL is written at completion, not here.
       window.setTimeout(
         () => {
-          if (GAME_SIM_FREEZE.frozen || !departingRef.current) {
+          if (suspendedRef.current || GAME_SIM_FREEZE.frozen || !departingRef.current) {
             departingRef.current = false;
             return;
           }
@@ -3171,7 +3170,7 @@ export default function GameCanvas({
   // candidates are the probe mirror's own world coordinates — the same
   // answers the interact key already gives, one thumb, no second button.
   const handleTap = useCallback((sx: number, sy: number): void => {
-    if (WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
+    if (suspended || WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
     const p = CHASE_LIVE.projectTap?.(sx, sy);
     if (!p) return;
     let best: {
@@ -3218,7 +3217,7 @@ export default function GameCanvas({
     CHASE_LIVE.walkX = pick.x;
     CHASE_LIVE.walkZ = pick.z;
     CHASE_LIVE.walking = true;
-  }, []);
+  }, [suspended]);
 
   // THE ROOM'S LOOSE PAPERS (v0.25a §五 B②): the slice's own record sheet +
   // the newest documents that stamped it. The list arrives async (one
@@ -3575,7 +3574,7 @@ export default function GameCanvas({
   // applied and leave the walk alone.
   const focusAppliedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!focusSlice || focusAppliedRef.current === focusSlice) return;
+    if (suspended || !focusSlice || focusAppliedRef.current === focusSlice) return;
     if (activeSpace?.door.sliceId === focusSlice) {
       focusAppliedRef.current = focusSlice;
       return;
@@ -3619,7 +3618,7 @@ export default function GameCanvas({
       cameraSnapRef.current = true;
       hopGuardRef.current = true;
     }
-  }, [focusSlice, doors, timelines, location, activeSpace]);
+  }, [focusSlice, doors, timelines, location, activeSpace, suspended]);
 
   // Keyboard: track pressed keys, swallow the arrows' page scroll, and clear
   // the set on window blur so a released key can never stick.
@@ -3637,7 +3636,7 @@ export default function GameCanvas({
       // Frozen under the document tier: the world's keys stand down — no
       // preventDefault either, so the desk's own arrow/Enter bindings (and
       // the page's scroll) keep their default behaviour while reading.
-      if (GAME_SIM_FREEZE.frozen) return;
+      if (suspendedRef.current || GAME_SIM_FREEZE.frozen) return;
       const key = event.key.toLowerCase();
       const targetOwnsKeys = isEditableTarget(event.target) ||
         (event.target instanceof HTMLElement && event.target.closest("button, a, select, [role='button'], [role='menuitem']") !== null);
@@ -3646,7 +3645,7 @@ export default function GameCanvas({
       if (key === "enter" || key === "e") {
         if (shouldInteractWithScene({
           key,
-          blocked: WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen,
+          blocked: suspendedRef.current || WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen,
           targetOwnsKeys,
           hasPaper: paperHudRef.current !== null,
           hasAnchor: anchorHudRef.current !== null,
@@ -3675,6 +3674,13 @@ export default function GameCanvas({
       window.removeEventListener("blur", onBlur);
     };
   }, [keysRef]);
+
+  useEffect(() => {
+    if (!suspended) return;
+    keysRef.current.clear();
+    motionRef.current = { x: 0, z: 0, moving: false };
+    walkRef.current.active = false;
+  }, [suspended]);
 
   // THE FROZEN-FRAME COMPOSER REF. The hotel's composer, captured through
   // a stable callback ref so the suspended one-shot repaint (component
@@ -3823,6 +3829,7 @@ export default function GameCanvas({
           prewarmIdRef={prewarmIdRef}
           setPrewarmDoor={setPrewarmDoor}
           transitionActive={strandTransition.phase !== "idle"}
+          suspended={suspended}
           roomDoors={activeRoomGeometry?.doors ?? []}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
           roomSeams={activeRoomGeometry?.seams ?? NO_ROOM_SEAMS}

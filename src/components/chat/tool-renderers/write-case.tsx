@@ -2,6 +2,8 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { deriveWriteCaseStatus } from "@/lib/chat/recall-output";
+import { writeCaseDocumentTarget } from "@/lib/documents/tool-document";
+import { DocumentToolActions } from "@/components/documents/document-actions";
 import { CircleX, FilePen, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
@@ -36,6 +38,7 @@ export function WriteCaseRenderer({
   const target = `${category}/${caseName}`;
 
   const status = deriveWriteCaseStatus(state.running, output);
+  const documentTarget = status.kind === "committed" ? writeCaseDocumentTarget(output) : null;
 
   const actionLabel = (action: string): string =>
     t(`writeCase.action.${action}`, { defaultValue: action });
@@ -54,7 +57,7 @@ export function WriteCaseRenderer({
         {t("writeCase.queued", { target })}
       </span>
     ) : status.kind === "committed" ? (
-      t("writeCase.committed", { target })
+      t("writeCase.committed", { target: documentTarget?.title ?? target })
     ) : status.kind === "refused" ? (
       t("writeCase.refused")
     ) : (
@@ -75,7 +78,7 @@ export function WriteCaseRenderer({
         <span className="break-words">{status.reason}</span>
       </p>
     ) : status.kind === "committed" ? (
-      <div className="space-y-1">
+      <div className="space-y-2">
         {pieceTitle && (
           <p className="text-xs leading-relaxed text-foreground/90">
             {t("writeCase.piece", { title: pieceTitle })}
@@ -84,6 +87,7 @@ export function WriteCaseRenderer({
         <code className="block break-all font-mono text-[10px] leading-tight text-muted-foreground">
           {status.path}
         </code>
+        <DocumentToolActions target={documentTarget} />
       </div>
     ) : status.kind === "unknown" && status.raw ? (
       <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">

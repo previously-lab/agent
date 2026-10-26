@@ -105,7 +105,7 @@ export const ROOM_INTERIOR_SUN_FILL = 0.55;
 /** Broad bounced light preserves the room's material colors from the RTS
  *  view. At 2.0 the palette's ambient becomes 1.12 by day and 0.88 at
  *  night: a stable diffuse floor that lifts unlit faces into the light
- *  sage/cream family while the reduced directional key keeps their
+ *  blue-gray/cream family while the reduced directional key keeps their
  *  separation modest. This changes no exposure, tone mapping or fog. */
 export const SPACE_AMBIENT_SCALE = 2;
 /** Background/fog/sun lerp rate when a space opens or closes. */

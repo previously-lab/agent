@@ -149,7 +149,7 @@
   /* ── Links ────────────────────────────────────────────────────────── */
 
   .typeset :where(a) {
-    color: var(--color-brand, oklch(0.55 0.25 262));
+    color: var(--ink-accent-paper, var(--color-brand, oklch(0.55 0.25 262)));
     text-decoration: underline;
     text-decoration-color: oklch(from var(--color-brand, oklch(0.55 0.25 262)) l c h / 0.35);
     text-underline-offset: 3px;

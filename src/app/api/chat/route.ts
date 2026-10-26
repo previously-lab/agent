@@ -29,6 +29,7 @@ export async function POST(request: Request): Promise<Response> {
       machineContext?: unknown;
       view?: unknown;
       screen?: unknown;
+      documentContext?: unknown;
       burstId?: unknown;
     };
 
@@ -63,6 +64,7 @@ export async function POST(request: Request): Promise<Response> {
       // startTurn, omitted when absent (the lobby default).
       view: body.view,
       screen: body.screen,
+      documentContext: body.documentContext,
       // Optional parallel-burst id (v0.38 §2) — the client's ULID for a
       // 连发; becomes a start attribute (`burst`) and the writer's
       // [burst {id}] turn header. Absent = overlap-heuristic fallback.

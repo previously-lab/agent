@@ -35,7 +35,7 @@ function conversationField(page: Page) {
  * composer toolbar's collapse — hence `.first()`.)
  */
 async function risePanel(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Expand to full screen" }).click();
+  await page.locator("[data-pill-expand]").click();
   await expect(
     page.getByRole("button", { name: "Exit full screen" }).first(),
   ).toBeVisible();
@@ -99,9 +99,9 @@ test.describe("Memory and scene navigation", () => {
       await seedSlices([old, fresh]);
 
       await page.goto("/en/app");
-      // The panel opens on the PILL everywhere — the restored turns are in
-      // its folded body, so the rise comes first.
-      await risePanel(page);
+      await expect(
+        page.getByRole("button", { name: "Exit full screen" }).first(),
+      ).toBeVisible();
       // chat.resume.banner — the restored turns sit directly under it.
       const panel = page.locator("#conversation-panel");
       await expect(
@@ -133,13 +133,9 @@ test.describe("Memory and scene navigation", () => {
       await seedSlices(slices);
 
       await page.goto("/en/app");
-      // A briefing arrival over a NON-empty memory leaves the panel at the
-      // pill — the world is the opening surface and the card waits inside
-      // the risen panel. The pill's single-line input is what is on screen.
       await expect(
-        page.getByRole("textbox", { name: "Send a message..." }),
+        page.getByRole("button", { name: "Exit full screen" }).first(),
       ).toBeVisible();
-      await risePanel(page);
       // The card is a stream item now (`emptyBriefing.eyebrow`, rendered
       // verbatim) — scoped to the panel's list.
       const panel = page.locator("#conversation-panel");
@@ -186,10 +182,9 @@ test.describe("Memory and scene navigation", () => {
       await seedSlices(slices);
 
       await page.goto("/en/app");
-      // The panel opens on the pill — the expand verb is the reader's way to
-      // the fullscreen tier, and that tier must not be the blank surface the
-      // v0.25 pass measured (1440×0, chrome-only innerText).
-      await risePanel(page);
+      await expect(
+        page.getByRole("button", { name: "Exit full screen" }).first(),
+      ).toBeVisible();
 
       // The fullscreen body's DOM list carries the cold-open page's turns —
       // the ten-slice window (S02..S11; S00/S01 are outside the page and
@@ -231,11 +226,11 @@ test.describe("Memory and scene navigation", () => {
 
       await page.goto("/en/app");
       // Hydration gate: the global Ctrl+K listener attaches in a mount effect,
-      // so a keypress fired before hydration is silently lost. The client
-      // badge only renders after its mount-time fetch resolved — a reliable
-      // post-hydration signal in this client-mode suite.
+      // so a keypress fired before hydration is silently lost. The mounted
+      // fullscreen conversation is the post-hydration signal.
+      await expect(conversationField(page)).toBeVisible();
       await expect(
-        page.locator("[data-game-manuscripts]"),
+        page.getByRole("button", { name: "Exit full screen" }).first(),
       ).toBeVisible();
       await page.keyboard.press("Control+k");
       const input = page.locator("[cmdk-input]");
@@ -266,48 +261,55 @@ test.describe("Memory and scene navigation", () => {
     });
   });
 
-  test.describe("scene and reading", () => {
-    test("opens on the scene and resumes after browsing manuscripts", async ({ page }) => {
+  test.describe("game routes and reading", () => {
+    test("opens the real game route and returns after browsing documents", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
-      await page.goto("/en/app");
-      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
-      await page.locator("[data-game-manuscripts]").click();
-      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
-      await expect(page.locator("[data-library-toggle]")).toBeVisible();
-      await page.locator("[data-scene-resume]").click();
-      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
-      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
+      await page.goto("/en/game");
+      const host = page.locator("[data-workspace-game-host]");
+      await expect(host).toBeVisible();
+      await expect(host).toHaveAttribute("data-game-active", "true");
+      await risePanel(page);
+      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+      await expect(host).toBeHidden();
+      await expect(host).toHaveAttribute("inert", "");
+      await page.locator(".workspace-browser-top .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await expect(page).toHaveURL(/\/en\/game$/);
+      await expect(host).toBeVisible();
+      await expect(host).toHaveAttribute("data-game-active", "true");
     });
 
-    test("the same draft survives scene, reading and fullscreen writing", async ({ page }) => {
+    test("the same draft survives game, reading and fullscreen writing", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
-      await page.goto("/en/app");
-      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
-      const input = page.getByRole("textbox", { name: "Send a message..." });
+      await page.goto("/en/game");
+      const input = page.getByRole("combobox", { name: "Send a message..." });
+      await expect(input).toBeVisible();
       await input.pressSequentially("still here");
-      await page.locator("[data-game-manuscripts]").click();
-      await expect(page.locator('[data-app-world="field"]')).toBeVisible();
+      await risePanel(page);
+      await expect(page.locator("textarea").first()).toHaveValue("still here");
+      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
       await expect(input).toHaveValue("still here");
-      await page.locator("[data-scene-resume]").click();
-      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+      await page.locator("[data-records-row]").first().click();
+      await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
+      await expect(input).toHaveValue("still here");
+      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await expect(page).toHaveURL(/\/en\/game$/);
       await expect(input).toHaveValue("still here");
       await risePanel(page);
       await expect(page.locator("textarea").first()).toHaveValue("still here");
     });
 
-    test("Ctrl+. toggles reading and scene without changing the URL", async ({ page }) => {
-      test.slow();
+    test("the old game view resolves to the real game route", async ({ page }) => {
       await seedSlices(datasetA());
-      await page.goto("/en/app");
-      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
-      await page.keyboard.press("Control+.");
-      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
-      await page.keyboard.press("Control+.");
-      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
-      await expect(page.locator("[data-game-manuscripts]")).toBeVisible();
-      await expect(page).toHaveURL(/\/en\/app$/);
+      await page.goto("/en/app?view=game");
+      await expect(page).toHaveURL(/\/en\/game$/);
+      const host = page.locator("[data-workspace-game-host]");
+      await expect(host).toBeVisible();
+      await expect(host).toHaveAttribute("data-game-active", "true");
+      await expect(page.getByRole("combobox", { name: "Send a message..." })).toBeVisible();
     });
   });
 });

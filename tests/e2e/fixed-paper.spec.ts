@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { clearCases, clearEpisodic, makeSlice, seedCases, seedSlices } from "./memory-fixture";
 
 const ref = "research/fixed-print";
+test.use({ screenshot: "only-on-failure" });
 const body = [
   "这是一份用于固定印刷测试的虚构文稿。来源见 things/paper-source。",
   ...Array.from({ length: 28 }, (_, i) => `## 第 ${i + 1} 节\n\n${"文字在纸上的大小与行长不跟随屏幕变化。缩放只改变看纸的距离，阅读可以从刚才的位置继续。".repeat(8)}`),
@@ -53,29 +54,49 @@ async function openPaper(page: Page, pauseScene = false) {
     { category: "research", name: "fixed-print", opened: "2026-02-01", body, pieces: [] },
     { category: "things", name: "paper-source", opened: "2026-02-01", body: "An original source.", pieces: [] },
   ]);
-  await page.goto(pauseScene ? "/en/app" : "/en/app?view=field");
   if (pauseScene) {
-    await page.locator("[data-game-manuscripts]").click();
-    await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+    await page.goto("/en/game");
+    const host = page.locator("[data-workspace-game-host]");
+    await expect(host).toBeVisible();
+    await expect(host).toHaveAttribute("data-game-active", "true");
+    await page.locator("[data-pill-expand]").click();
+    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+    await page.getByRole("button", { name: /^Research/ }).click();
+    await page.getByRole("button", { name: /fixed-print/ }).click();
+    await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
+    await expect(host).toBeHidden();
+    await expect(host).toHaveAttribute("inert", "");
+  } else {
+    await page.goto(`/en/app?doc=${ref}`);
   }
-  await page.locator(`[data-archive-pile="${ref}"]`).click();
   await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("fixed-print");
   await expect.poll(async () => Number((await page.locator(".desk-page-position").innerText()).split("/")[1])).toBeGreaterThan(2);
   await settlePaper(page);
 }
 
 async function printMetrics(page: Page) {
-  return page.locator(".desk-shell--top").evaluate((shell) => {
-    const paper = shell.querySelector<HTMLElement>(".desk-paper")!;
-    const box = shell.querySelector<HTMLElement>(".desk-pagebox")!;
-    const text = shell.querySelector<HTMLElement>(".typeset p")!;
+  const read = () => page.evaluate(() => {
+    const shell = document.querySelector(".desk-shell--top");
+    const paper = shell?.querySelector<HTMLElement>(".desk-paper");
+    const box = shell?.querySelector<HTMLElement>(".desk-pagebox");
+    const text = shell?.querySelector<HTMLElement>(".typeset p");
+    const position = document.querySelector(".desk-page-position");
+    if (!paper || !box || !text || !position?.textContent) return null;
     return {
       width: paper.offsetWidth, height: paper.offsetHeight,
       bodyWidth: box.clientWidth, bodyHeight: box.clientHeight,
       font: getComputedStyle(text).fontSize, leading: getComputedStyle(text).lineHeight,
-      pages: document.querySelector(".desk-page-position")!.textContent!.split("/")[1].trim(),
+      pages: position.textContent.split("/")[1].trim(),
     };
   });
+  const snapshot: { value: Awaited<ReturnType<typeof read>> } = { value: null };
+  await expect.poll(async () => {
+    snapshot.value = await read();
+    return snapshot.value !== null;
+  }).toBe(true);
+  if (!snapshot.value) throw new Error("The mounted paper and its toolbar did not become ready");
+  return snapshot.value;
 }
 
 test.describe("Fixed A4 reader", () => {
@@ -145,6 +166,7 @@ test.describe("Fixed A4 reader", () => {
     expect(endIsVisible).toBe(true);
     await page.locator("[data-page-next]").click();
     await expect(page.locator(".desk-page-position")).toHaveText(`1 / ${total}`);
+    const sourceZoom = await page.locator("[data-zoom-readout]").innerText();
     await page.locator('.desk-shell--top button[data-ref="things/paper-source"]').click();
     await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("paper-source");
     await settlePaper(page);
@@ -165,19 +187,25 @@ test.describe("Fixed A4 reader", () => {
       return selection && p.contains(selection.anchorNode) && p.contains(selection.focusNode) ? selection.toString().length : 0;
     })).toBeGreaterThan(0);
     await page.locator("[data-desk-close]").click();
+    await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("fixed-print");
+    await expect(page.locator(".desk-page-position")).toHaveText(`1 / ${total}`);
+    await expect(page.locator("[data-zoom-readout]")).toHaveText(sourceZoom);
+    await page.locator("[data-desk-close]").click();
+    await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
     await expect(page.locator("[data-desk-field]")).toHaveCount(0);
   });
 
   test("keeps paper ink readable at night and respects index and editable keyboard boundaries", async ({ page }) => {
     await openPaper(page, true);
-    await page.locator("[data-library-toggle]").click();
-    await expect(page.locator("[data-library-panel]")).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(page.locator("[data-library-panel]")).toHaveCount(0);
-    await expect(page.locator("[data-library-toggle]")).toHaveAttribute("aria-expanded", "false");
+    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
     await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("fixed-print");
     await expect(page.locator("[data-desk-stack]")).toBeVisible();
-    await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+    const host = page.locator("[data-workspace-game-host]");
+    await expect(host).toBeHidden();
+    await expect(host).toHaveAttribute("inert", "");
     const before = await page.locator(".desk-page-position").innerText();
     // A focused external text field stands in for the independently mounted
     // conversation layer; the reader's window handler must not steal its keys.
@@ -198,11 +226,11 @@ test.describe("Fixed A4 reader", () => {
       document.querySelector("#paper-keyboard-fixture")?.remove();
       document.documentElement.classList.add("dark");
     });
-    await expect(page.locator(".desk-shell--top .desk-paper")).toHaveCSS("color", "rgb(48, 59, 50)");
+    await expect(page.locator(".desk-shell--top .desk-paper")).toHaveCSS("color", "rgb(27, 41, 64)");
     await expect(page.locator(".desk-shell--top .desk-paper")).toHaveCSS("background-color", "rgb(234, 232, 218)");
   });
 
-  test("does not restore a delayed cold-start document after a scene round trip", async ({ page }) => {
+  test("does not reopen a delayed document after leaving for the hotel and library", async ({ page }) => {
     test.slow();
     await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "RESTORE" })]);
     await seedCases([
@@ -229,26 +257,32 @@ test.describe("Fixed A4 reader", () => {
       }
     });
     try {
-      await page.goto("/en/app?view=field");
+      await page.goto("/en/app?doc=people/user");
       await expect.poll(() => responseHeld).toBe(true);
       expect(readFixtureConfirmed).toBe(true);
-      await page.locator("[data-scene-resume]").click();
-      await expect(page.locator('[data-app-world="game"]')).toBeVisible();
-      // The response remains held across BOTH moves. Checking only the
-      // current world when it returns would incorrectly allow restoration.
-      await page.keyboard.press("Control+.");
-      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await expect(page).toHaveURL(/\/en\/game$/);
+      const host = page.locator("[data-workspace-game-host]");
+      await expect(host).toBeVisible();
+      await expect(host).toHaveAttribute("data-game-active", "true");
+      // Navigate to the library while the original document response is held.
+      await page.locator("[data-pill-expand]").click();
+      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+      await expect(host).toBeHidden();
+      await expect(host).toHaveAttribute("inert", "");
       const received = page.waitForResponse((response) => response.request().method() === "POST"
         && Boolean(response.request().headers()["next-action"])
         && Boolean(response.request().postData()?.includes('"people/user"')));
       releaseRead();
       await (await received).finished();
-      await expect(page.locator('[data-archive-pile="people/user"]')).toBeVisible();
+      await page.getByRole("button", { name: /^People/ }).click();
+      await expect(page.getByRole("button", { name: /^user\b/ })).toBeVisible();
       // A stale restore mounts the desk after its 220ms handover. Observe
       // beyond that beat so an immediate negative assertion cannot pass.
       await page.waitForTimeout(700);
       await expect(page.locator("[data-desk-field]")).toHaveCount(0);
-      await expect(page.locator('[data-app-world="field"][data-scene-suspended="true"]')).toBeVisible();
+      await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
     } finally {
       releaseRead();
     }

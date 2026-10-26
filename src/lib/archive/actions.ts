@@ -31,6 +31,7 @@ import {
   resolveCaseRefPaths,
   type CaseCategory,
 } from "@/lib/docs";
+import { caseStorageRevision } from "@/lib/docs/case-doc";
 import { fsListFiles, fsReadFile, fsFileModifiedDate } from "@/lib/episodic/io-helpers";
 import { enumerateSliceIds, enumerateTreePaths } from "@/lib/episodic/timeline/enumerate";
 import { sliceEntryFromDisk } from "@/lib/episodic/timeline/store";
@@ -282,9 +283,19 @@ export async function getArchiveRecords(
 /** The `records/<sliceId>` grammar lives in `./refs` (pure — this module is
  *  `"use server"` and may export only async functions). */
 
+export interface RecordTurnContent {
+  index: number;
+  turnId?: string;
+  role: "user" | "assistant";
+  timestamp: string;
+  content: string;
+  documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
+}
+
 export interface RecordDocContent extends CaseDocContent {
   sliceId: string;
   turnCount: number;
+  turns: RecordTurnContent[];
   /** The slice's recorded timezone — the record paper's letterhead prints
    *  it next to the wall clock derived from the slice id. */
   timezone: string;
@@ -308,6 +319,14 @@ export async function getRecordDoc(
   const slice = await getSliceContent(parsed.sliceId, persona, { full: true });
   if (!slice) return null;
 
+  const turns = slice.turns.map((turn, index): RecordTurnContent => ({
+    index,
+    ...(turn.turnId ? { turnId: turn.turnId } : {}),
+    role: turn.role === "user" ? "user" : "assistant",
+    timestamp: turn.timestamp,
+    content: turn.content,
+    ...(turn.documentContext?.length ? { documentContext: turn.documentContext } : {}),
+  }));
   const markdown = slice.turns
     .map(
       (turn) =>
@@ -320,9 +339,11 @@ export async function getRecordDoc(
     opened: parsed.sliceId.slice(0, 10),
     closed: null,
     markdown,
+    observedRevision: slice.observedRevision,
     warnings: [],
     sliceId: parsed.sliceId,
     turnCount: slice.totalTurns,
+    turns,
     timezone: slice.timezone,
   };
 }
@@ -391,6 +412,7 @@ export async function getDossierDoc(
     opened: modified ?? "",
     closed: null,
     markdown: raw.trim(),
+    observedRevision: caseStorageRevision(raw),
     warnings: [],
   };
 }

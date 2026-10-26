@@ -31,7 +31,7 @@ describe("scenario material colors", () => {
     const catalogueSkin = skinForSlice("dbg-skin:temperate+dbg-m:living");
     const skin = scenarioSkin(catalogueSkin, sourcePalette);
     expect(skin?.floor.colors).toEqual({ day: "#d0c1a2", night: "#c5b797" });
-    expect(skin?.wall.colors).toEqual({ day: "#d1d6bf", night: "#cbd1b8" });
+    expect(skin?.wall.colors).toEqual({ day: "#d2d8e1", night: "#c3ccda" });
     expect(catalogueSkin?.floor.colors).toEqual({ day: "#9a7a58", night: "#5e4b38" });
   });
 
@@ -74,10 +74,10 @@ describe("scenario material colors", () => {
     expect(skin.light.pool).toBe(fixture.pool);
     expect(skin.furnishing).toBe(source.furnishing);
     expect(skin.slotOverrides).toBe(source.slotOverrides);
-    // The exterior's old blue/brown haze cannot re-enter through the apron
-    // or the baked window view while the scene itself uses the new fog.
-    expect(skin.fog.day).toBe("#dce1cd");
-    expect(skin.fog.night).toBe("#c3cbb4");
+    // The exterior's authored haze cannot re-enter through the apron or
+    // baked window view while the scene uses the shared blue-gray atmosphere.
+    expect(skin.fog.day).toBe("#dbe3ee");
+    expect(skin.fog.night).toBe("#b7c3d4");
     expect(skinWindowBake(skin)?.fog).toBe(skin.fog.day);
     expect(skin.window.night.fog).toBe(skin.fog.night);
   });

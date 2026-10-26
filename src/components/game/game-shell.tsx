@@ -30,6 +30,7 @@ import {
 } from "@/lib/game/debug-slice";
 import type { CorridorDoor } from "./corridor";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
+import { useShell } from "@/components/shell/shell-provider";
 import { Link } from "@/i18n/navigation";
 
 /**
@@ -109,20 +110,10 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
  */
 
 /**
- * GameShell — the game VIEW under the single route (§14 merge): it owns the
- * hotel's data lane (skeleton → corridor doors, strand graph → room doors and
- * strand hotels) and the minimal overlay chrome. Two things it NO LONGER
- * owns:
- *
- *   - the canvas — `game-canvas.tsx` renders its scene subtree into the
- *     app's ONE shared canvas (world-canvas.tsx) through the world slot.
- *   - the conversation — the shell's persistent three-tier panel
- *     (§14.1) floats over this view exactly as it does over the field;
- *     the app shell owns its state and the world's fullscreen freeze.
- *
- * `onExit` leaves the view (the app shell switches back to the field world);
- * `focusSlice` is the shared `?slice=` address — the canvas enters the
- * slice's own hotel window when it resolves (see game-canvas.tsx).
+ * GameShell — the hotel's data lane and compact route chrome. The lazy
+ * GameRouteShell supplies the one WorldCanvas and the layout supplies the one
+ * persistent conversation. `onExit` returns to the full `/app` conversation;
+ * `focusSlice` addresses a room without recreating the world or its location.
  */
 export function GameShell({
   onExit,
@@ -151,6 +142,8 @@ export function GameShell({
   onRoomSnapshotChange?: (snapshot: RoomSnapshot | null) => void;
 }) {
   const t = useTranslations("game");
+  const tPanel = useTranslations("conversationPanel");
+  const { setPanelMode } = useShell();
   const locale = useLocale();
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
 
@@ -410,10 +403,8 @@ export function GameShell({
 
   return (
     <div className="relative h-full w-full">
-      {/* Top-left overlay: title + exit. The container is pointer-transparent
-          so it never blocks walking; only the button re-enables pointer
-          events. Exit is a WORLD SWITCH now (§14), not a navigation. Hidden
-          with the simulation while the document tier sits over the world. */}
+      {/* Compact game-route chrome: expand the shared conversation or return
+          to its full /app surface. Hidden and inert while this host is off-route. */}
       {!suspended && (
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 px-4 py-4 sm:px-8 sm:py-6">
         <Link href="/" className="scene-wordmark pointer-events-auto inline-flex h-9 items-center">Previously.</Link>
@@ -425,11 +416,19 @@ export function GameShell({
           </p>
           <button
             type="button"
+            data-game-expand
+            onClick={() => setPanelMode("fullscreen")}
+            className="pointer-events-auto h-9 rounded-full border border-tool-line bg-tool/85 px-4 text-xs text-foreground shadow-float backdrop-blur-md transition hover:bg-tool"
+          >
+            {tPanel("expand")}
+          </button>
+          <button
+            type="button"
             data-game-manuscripts
             onClick={onExit}
             className="pointer-events-auto h-9 rounded-full border border-tool-line bg-tool/85 px-4 text-xs text-foreground shadow-float backdrop-blur-md transition hover:bg-tool"
           >
-            {t("manuscripts")}
+            {t("workspace")}
           </button>
           <div className="pointer-events-auto"><NavOverflowMenu /></div>
         </div>

@@ -43,6 +43,8 @@ export interface Turn {
   turnId?: string;
   /** Stable UI message identity; regeneration produces new answers to it. */
   clientMessageId?: string;
+  /** Explicit reading pointers selected for this user turn; never source evidence or write authorization. */
+  documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
   /**
    * Nested-bubble provenance (v0.30 §3.4, D7): on an AGENT turn produced by an
    * inner episode instance, the turnId of the USER turn it answers. Absent on

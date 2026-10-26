@@ -8,6 +8,13 @@ import {
   type ParsedRecallOutput,
 } from "@/lib/chat/recall-output";
 import {
+  recallEntryDocumentTarget,
+  recallReadDocumentTarget,
+  type ToolDocumentTarget,
+} from "@/lib/documents/tool-document";
+import { DocumentToolActions } from "@/components/documents/document-actions";
+import { DocumentOpenButton } from "@/components/documents/document-navigation";
+import {
   BookOpenText,
   Inbox,
   ListTree,
@@ -162,28 +169,41 @@ function summarize(
 function EntryList({ entries }: { entries: ParsedEntry[] }) {
   return (
     <ul className="space-y-1.5">
-      {entries.map((e) => (
-        <li key={e.ref} className="min-w-0">
-          <div className="flex min-w-0 items-baseline gap-2">
-            {e.date && (
-              <span className="shrink-0 font-mono text-[10px] leading-tight text-muted-foreground">
-                {e.date}
-              </span>
+      {entries.map((e) => {
+        const target = recallEntryDocumentTarget(e.ref, e.title);
+        return (
+          <li key={e.ref} className="min-w-0">
+            <div className="flex min-w-0 items-baseline gap-2">
+              {e.date && (
+                <span className="shrink-0 font-mono text-[10px] leading-tight text-muted-foreground">
+                  {e.date}
+                </span>
+              )}
+              {target ? (
+                <DocumentOpenButton
+                  documentRef={target.ref}
+                  location={{ edition: "original" }}
+                  className="min-w-0 truncate rounded-md text-left text-xs leading-tight text-foreground/90 underline decoration-border/60 underline-offset-4 hover:text-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 dark:hover:text-brand-400"
+                >
+                  {target.title}
+                </DocumentOpenButton>
+              ) : (
+                <span className="min-w-0 truncate text-xs leading-tight text-foreground/90">
+                  {e.title}
+                </span>
+              )}
+              <code className="ml-auto shrink-0 pl-2 font-mono text-[10px] leading-tight text-muted-foreground/70">
+                {e.ref}
+              </code>
+            </div>
+            {e.excerpt && (
+              <p className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+                {e.excerpt}
+              </p>
             )}
-            <span className="min-w-0 truncate text-xs leading-tight text-foreground/90">
-              {e.title}
-            </span>
-            <code className="ml-auto shrink-0 pl-2 font-mono text-[10px] leading-tight text-muted-foreground/70">
-              {e.ref}
-            </code>
-          </div>
-          {e.excerpt && (
-            <p className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">
-              {e.excerpt}
-            </p>
-          )}
-        </li>
-      ))}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -212,6 +232,9 @@ export function RecallToolRenderer({
 
   const parsed = parseRecallOutput(toolName, output);
   const running = state.running && output == null;
+  const readTarget: ToolDocumentTarget | null | undefined = toolName === "recallRead"
+    ? recallReadDocumentTarget(input, output)
+    : undefined;
 
   const displayName = running
     ? t(`recall.${toolName}`)
@@ -241,17 +264,17 @@ export function RecallToolRenderer({
       ? { text: "", tone: "hit" as const, icon: <Search className="h-3.5 w-3.5" /> }
       : summarize(parsed, t);
 
-  // recallRead's collapsed summary is the ref it read (or the read state).
+  const summaryReference = readTarget?.title ?? ref;
   const summaryText =
-    toolName === "recallRead" && parsed?.kind === "content" && ref
-      ? t("recall.summaryRead", { reference: ref })
-      : toolName === "recallRead" && parsed?.kind === "outline" && ref
-        ? t("recall.summaryOutline", { reference: ref })
+    toolName === "recallRead" && parsed?.kind === "content" && summaryReference
+      ? t("recall.summaryRead", { reference: summaryReference })
+      : toolName === "recallRead" && parsed?.kind === "outline" && summaryReference
+        ? t("recall.summaryOutline", { reference: summaryReference })
         : toolName === "recallRead" && parsed?.kind === "content"
           ? parsed.text.split("\n", 1)[0]?.slice(0, 60) ?? ""
           : spec.text;
 
-  const expandedContent = parsed == null ? undefined : buildExpanded(parsed, t);
+  const expandedContent = parsed == null ? undefined : buildExpanded(parsed, t, readTarget);
 
   return (
     <ToolLayout
@@ -268,6 +291,7 @@ export function RecallToolRenderer({
 function buildExpanded(
   parsed: ParsedRecallOutput,
   t: Translator,
+  readTarget?: ToolDocumentTarget | null,
 ): React.ReactNode {
   switch (parsed.kind) {
     case "entries":
@@ -360,23 +384,36 @@ function buildExpanded(
       return (
         <div className="space-y-2">
           <ul className="space-y-1">
-            {parsed.entries.map((e) => (
-              <li key={`${e.change}:${e.ref}`} className="flex min-w-0 items-baseline gap-2">
-                <span
-                  className={`shrink-0 font-mono text-[11px] leading-tight ${CHANGE_GLYPH[e.change].className}`}
-                >
-                  {CHANGE_GLYPH[e.change].symbol}
-                </span>
-                <code className="min-w-0 truncate font-mono text-[11px] leading-tight text-foreground/90">
-                  {e.ref}
-                </code>
-                {e.at && (
-                  <span className="ml-auto shrink-0 pl-2 font-mono text-[10px] leading-tight text-muted-foreground">
-                    {e.at}
+            {parsed.entries.map((e) => {
+              const target = e.change === "removed" ? null : recallEntryDocumentTarget(e.ref);
+              return (
+                <li key={`${e.change}:${e.ref}`} className="flex min-w-0 items-baseline gap-2">
+                  <span
+                    className={`shrink-0 font-mono text-[11px] leading-tight ${CHANGE_GLYPH[e.change].className}`}
+                  >
+                    {CHANGE_GLYPH[e.change].symbol}
                   </span>
-                )}
-              </li>
-            ))}
+                  {target ? (
+                    <DocumentOpenButton
+                      documentRef={target.ref}
+                      location={{ edition: "original" }}
+                      className="min-w-0 truncate rounded-md text-left text-[11px] leading-tight text-foreground/90 underline decoration-border/60 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2"
+                    >
+                      {target.title}
+                    </DocumentOpenButton>
+                  ) : (
+                    <code className="min-w-0 truncate font-mono text-[11px] leading-tight text-foreground/90">
+                      {e.ref}
+                    </code>
+                  )}
+                  {e.at && (
+                    <span className="ml-auto shrink-0 pl-2 font-mono text-[10px] leading-tight text-muted-foreground">
+                      {e.at}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
           {parsed.incomplete && (
             <p className="flex items-start gap-1.5 border-t border-border/50 pt-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
@@ -393,29 +430,31 @@ function buildExpanded(
       );
     }
     case "outline":
-      if (parsed.headings.length === 0) {
-        return (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("recall.outlineEmpty")}
-          </p>
-        );
-      }
       return (
-        <ul className="space-y-1">
-          {parsed.headings.map((h) => (
-            <li
-              key={`${h.from}-${h.title}`}
-              className={`flex min-w-0 items-baseline gap-2 ${OUTLINE_INDENT[h.level] ?? "pl-20"}`}
-            >
-              <span className="shrink-0 font-mono text-[10px] leading-tight text-muted-foreground">
-                L{h.from}-{h.to}
-              </span>
-              <span className="min-w-0 truncate text-xs leading-tight text-foreground/90">
-                {h.title}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-2">
+          {readTarget !== undefined && <DocumentToolActions target={readTarget} />}
+          {parsed.headings.length === 0 ? (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("recall.outlineEmpty")}
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {parsed.headings.map((h) => (
+                <li
+                  key={`${h.from}-${h.title}`}
+                  className={`flex min-w-0 items-baseline gap-2 ${OUTLINE_INDENT[h.level] ?? "pl-20"}`}
+                >
+                  <span className="shrink-0 font-mono text-[10px] leading-tight text-muted-foreground">
+                    L{h.from}-{h.to}
+                  </span>
+                  <span className="min-w-0 truncate text-xs leading-tight text-foreground/90">
+                    {h.title}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       );
     case "content": {
       // The document body is the server-rendered text — shown verbatim,
@@ -423,6 +462,7 @@ function buildExpanded(
       // banner names the stored ref the body actually came from.
       return (
         <div className="space-y-1.5">
+          {readTarget !== undefined && <DocumentToolActions target={readTarget} />}
           {parsed.nearName && (
             <p className="text-[11px] leading-snug text-muted-foreground">
               {t("recall.nearNameBanner", { name: parsed.nearName })}

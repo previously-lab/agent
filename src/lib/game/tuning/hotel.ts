@@ -12,13 +12,14 @@
  * space renderer and lives in ./room. Pure data — no three.js, no React.
  */
 
+import { BRAND_HEX } from "@/lib/theme/palette-family";
 import { WALL_HEIGHT } from "../hotel";
 
 /**
  * Day/night — the corridor INTERIOR follows the app's Tailwind dark mode (the
  * integrator reads it via next-themes and passes `dark` down; the R3F
  * reconciler never sees that React context, so it arrives as a plain
- * prop). The space behind the hotel shares the room's muted sage family
+ * prop). The space behind the hotel shares the room's muted blue-gray family
  * so the cutaway feels continuous with the page. Every themed surface
  * color lives in THEME_COLORS; one shared material per role (see
  * HotelMaterials) is lerped between its day and night targets by a single
@@ -26,23 +27,22 @@ import { WALL_HEIGHT } from "../hotel";
  * snapping. Exported: the integrator keeps the scene background/fog on
  * VOID_COLORS so the corridor's end-fade planes always match.
  */
-export const VOID_COLORS = { night: "#8a9886", day: "#bdc8b2" } as const;
+export const VOID_COLORS = { night: "#7f8da2", day: "#b7c3d3" } as const;
 
-/** Surface palette per theme — the sage/cream/pale-wood family of the
- * matte architectural-illustration reference; day lifted from the night
- * set. */
+/** Surface palette per theme — blue-gray plaster and textiles beside natural
+ * pale wood, foliage and warm fixture light; day lifted from the night set. */
 export const THEME_COLORS = {
   floor: { night: "#b4aa8c", day: "#d0c1a2" }, // pale wood
-  wall: { night: "#bfc4ab", day: "#d1d6bf" }, // sage plaster
-  trim: { night: "#9da88f", day: "#aebba1" }, // baseboards, frames, brackets — thin light trim
+  wall: { night: "#c3ccda", day: "#d2d8e1" }, // blue-gray plaster
+  trim: { night: "#9aa8ba", day: "#afbdd0" }, // baseboards, frames, brackets — thin light trim
   slab: { night: "#aa987c", day: "#c8b38e" }, // door slabs
   desk: { night: "#c8b38e", day: "#d6c09d" },
-  cushion: { night: "#a3ae91", day: "#b3bca2" },
-  pot: { night: "#a9ad92", day: "#b9bba0" },
+  cushion: { night: "#9caec5", day: "#adbed3" },
+  pot: { night: "#a8b1bd", day: "#b9c1cc" },
   foliage: { night: "#7e946c", day: "#8aa278" },
-  carpet: { night: "#899a7e", day: "#a0af91" }, // restrained sage runner
-  carpetEdge: { night: "#718267", day: "#8e9d80" },
-  wainscot: { night: "#b7c3a6", day: "#c3cbb2" }, // wainscot band — a shade darker than the wall
+  carpet: { night: "#8297b2", day: "#9cafc7" }, // restrained blue runner
+  carpetEdge: { night: "#6d819d", day: "#879bb5" },
+  wainscot: { night: "#b3bfd0", day: "#c4cede" }, // wainscot band — a shade darker than the wall
 } as const;
 
 /**
@@ -81,7 +81,7 @@ export const LAMP_COLOR = "#ffb46b";
  *  §11.1: what belongs to Previously itself wears #0066ff). Corridor door
  *  plates, the page door, and the lobby's return door take the current
  *  hotel's accent; the core hotel's accent is this. */
-export const HOTEL_ACCENT_CORE = "#0066ff";
+export const HOTEL_ACCENT_CORE = BRAND_HEX;
 
 /** Where the lobby's NORTH return door hangs: on the junction band's north
  *  wall (z = +CORRIDOR_WIDTH/2), this far along x. Clear of the portal posts
@@ -250,8 +250,8 @@ export const HIDE_DELAY_MS = 500;
 /** Day/night color & level transitions ease at the atmosphere rate. */
 export const THEME_LERP_RATE = 2.5;
 
-export const PLATE_BG = "#59634f"; // muted deep sage — plates sit quiet in the matte palette
-export const PLATE_INK = "#ece2cc"; // cream ink, readable on the sage ground
+export const PLATE_BG = "#40516d"; // muted navy — plates sit quiet in the matte palette
+export const PLATE_INK = "#ece2cc"; // cream ink, readable on the navy ground
 
 /**
  * Muted abstract-art palette for the corridor paintings. A fixed pool —

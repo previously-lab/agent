@@ -90,14 +90,14 @@
      one notch larger (0.75rem); one dial (--radius) still drives every
      rounded-sm/md/lg/xl. */
   --radius: 0.75rem;
-  --brand: oklch(0.55 0.25 262);
+  --brand: #0066ff;
   --brand-50: oklch(0.97 0.02 262);
   --brand-100: oklch(0.935 0.045 262);
   --brand-200: oklch(0.885 0.09 262);
   --brand-300: oklch(0.8 0.15 262);
   --brand-400: oklch(0.69 0.21 261);
-  --brand-500: oklch(0.563 0.241 261);
-  --brand-600: oklch(0.5 0.22 263);
+  --brand-500: var(--brand);
+  --brand-600: #0057d9;
   --brand-700: oklch(0.43 0.19 264);
   --brand-800: oklch(0.36 0.16 265);
   --brand-900: oklch(0.29 0.13 266);
@@ -111,20 +111,20 @@
      how both menus once ended up with no background at all). */
   --popover: var(--tool);
   --popover-foreground: var(--foreground);
-  --primary: oklch(0.55 0.25 262);
+  --primary: var(--brand);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  /* The hover/selected fill every primitive reaches for: a matte wash of ink
-     into the tool surface, never the old pale blue, never alpha. */
+  /* Fallback hover/selected wash; visual-language.css supplies the final
+     blue-gray surface and selected-ink pair. */
   --accent: color-mix(in oklab, var(--foreground) 7%, var(--tool));
   --accent-foreground: var(--foreground);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.55 0.25 262);
+  --ring: var(--brand);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -132,14 +132,14 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.55 0.25 262);
+  --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-active: oklch(0.95 0.035 262);
   --sidebar-active-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.55 0.25 262);
+  --sidebar-ring: var(--brand);
 
   /* ── Strand palette ────────────────────────────────────────────────────
      The ten colours a strand can be. A strand is assigned one by hashing its
@@ -206,14 +206,14 @@
 .dark {
   /* A touch heavier than light's, on purpose — see the note on `:root`. */
   --strand-idle: oklch(0.47 0 0);
-  --brand: oklch(0.6 0.23 260);
+  --brand: #8ab8ff;
   --brand-50: oklch(0.21 0.09 267);
   --brand-100: oklch(0.27 0.12 265);
   --brand-200: oklch(0.34 0.15 264);
-  --brand-300: oklch(0.42 0.19 263);
-  --brand-400: oklch(0.51 0.22 261);
-  --brand-500: oklch(0.6 0.23 260);
-  --brand-600: oklch(0.68 0.19 259);
+  --brand-300: #6ea8ff;
+  --brand-400: var(--brand);
+  --brand-500: var(--brand);
+  --brand-600: #a9c8ff;
   --brand-700: oklch(0.77 0.14 258);
   --brand-800: oklch(0.85 0.09 257);
   --brand-900: oklch(0.93 0.045 256);
@@ -226,8 +226,8 @@
      popover, and the ink wash for hover/selected. */
   --popover: var(--tool);
   --popover-foreground: var(--foreground);
-  --primary: oklch(0.6 0.23 260);
-  --primary-foreground: oklch(0.985 0 0);
+  --primary: var(--brand);
+  --primary-foreground: #101b2d;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -237,7 +237,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.6 0.23 260);
+  --ring: var(--brand);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -245,14 +245,14 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.6 0.23 260);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: #101b2d;
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-active: oklch(0.3 0.06 260);
   --sidebar-active-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.6 0.23 260);
+  --sidebar-ring: var(--brand);
   /* Strand palette: theme-independent — see the block in :root. */
 }
 

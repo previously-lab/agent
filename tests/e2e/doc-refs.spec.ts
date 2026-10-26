@@ -90,10 +90,7 @@ async function openSourceCase(page: Page): Promise<{ sliceId: string }> {
       pieces: [],
     },
   ]);
-  await page.goto("/en/app?view=field");
-  const pile = page.locator('[data-archive-pile="research/source-case"]');
-  await expect(pile).toBeVisible({ timeout: 30_000 });
-  await pile.click();
+  await page.goto("/en/app?doc=research/source-case");
   await expect(page.locator("[data-desk-stack]")).toBeVisible({
     timeout: 30_000,
   });
@@ -145,9 +142,8 @@ test.describe("In-paper reference links", () => {
     await expect(page.locator("[data-desk-place]")).toHaveCount(0);
     // Related travel follows the open record even when the world cursor has
     // never been set. Reading alone must not silently move that cursor.
-    await page.getByRole("button", { name: "Related scenario" }).click();
-    await page.getByRole("menuitem", { name: "Go to this record’s room" }).click();
-    await expect(page.locator('[data-app-world="game"]')).toBeVisible({ timeout: 30_000 });
+    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Go to this record’s room" }).click();
+    await expect(page.locator('[data-workspace-game-host][data-game-active]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-desk-field]")).toHaveCount(0);
     await expect.poll(() => dbg(page).read().then((d) => {
       const door = d?.windowDoors.find((entry) => entry.sliceId === sliceId);
@@ -173,7 +169,7 @@ test.describe("In-paper reference links", () => {
       },
     ]);
 
-    await page.goto("/en/app?view=game");
+    await page.goto("/en/game");
     // The canvas (dynamic chunk) mounts when the corridor's doors resolve.
     await expect
       .poll(() => dbg(page).read().then((d) => d !== undefined), {
@@ -188,12 +184,14 @@ test.describe("In-paper reference links", () => {
       .read()
       .then((d) => d?.windowDoors.find((w) => w.sliceId === scene.id));
     expect(door).toBeDefined();
-    await dbg(page).teleport(door!.x, door!.z * 1.2);
     await expect
-      .poll(() => dbg(page).read().then((d) => d?.space ?? null), {
-        timeout: 60_000,
-      })
-      .toBe(scene.id);
+      .poll(async () => {
+        const state = await dbg(page).read();
+        if (state?.space === scene.id) return true;
+        await dbg(page).teleport(door!.x, door!.z + Math.sign(door!.z) * 0.4);
+        return false;
+      }, { timeout: 60_000, intervals: [300] })
+      .toBe(true);
 
     // The room's papers resolve async: the record sheet first, then the
     // stamping case.
@@ -237,7 +235,7 @@ test.describe("In-paper reference links", () => {
     expect(stillPaused?.x).toBe(paused?.x);
     expect(stillPaused?.z).toBe(paused?.z);
     expect(stillPaused?.space).toBe(scene.id);
-    await page.locator("[data-scene-resume]").click();
+    await page.locator("[data-desk-close]").click();
     await expect(page.locator('[data-game-interact="paper"]')).toBeVisible();
     const resumed = await dbg(page).read();
     expect(resumed?.x).toBe(paused?.x);
@@ -247,7 +245,7 @@ test.describe("In-paper reference links", () => {
     await page.keyboard.press("e");
     await expect(page.locator("[data-desk-stack]")).toBeVisible();
     await page.locator("[data-desk-close]").click();
-    await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+    await expect(page.locator('[data-workspace-game-host][data-game-active]')).toBeVisible();
     await expect(page.locator('[data-game-interact="paper"]')).toBeVisible();
     const putDown = await dbg(page).read();
     expect(putDown?.x).toBe(paused?.x);
@@ -267,7 +265,7 @@ test.describe("In-paper reference links", () => {
     await page.mouse.move(sx, sy);
     await page.mouse.up();
     await page.waitForTimeout(550);
-    await expect(page.locator('[data-app-world="game"]')).toBeVisible();
+    await expect(page.locator('[data-workspace-game-host][data-game-active]')).toBeVisible();
     await expect(page.locator("[data-desk-stack]")).not.toBeVisible();
 
     const clickPoint = await dbg(page).project(paper.x, paper.z);

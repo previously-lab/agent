@@ -4,7 +4,8 @@ import { History } from "lucide-react";
 import { useLocale } from "next-intl";
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { parseRecordRef } from "@/lib/archive/refs";
-import { requestSliceJump } from "@/lib/chat/slice-jump";
+import { recallEntryDocumentTarget } from "@/lib/documents/tool-document";
+import { DocumentToolActions } from "@/components/documents/document-actions";
 import { formatSliceIdLabel } from "@/lib/chat/slice-id-time";
 import { ToolLayout } from "../tool-layout";
 
@@ -25,11 +26,12 @@ export function ScenarioRecallRenderer({ input, output, state, streamingText }: 
   const gaps = (Array.isArray(result.uncertainty) ? result.uncertainty : [])
     .filter((gap): gap is string => typeof gap === "string");
   const pending = state.running && output === undefined;
+  const readError = typeof result.error === "string" && result.error.trim() ? result.error : null;
   const summary = pending
     ? streamingText || (typeof question === "string" ? question : zh ? "正在回想相关对话…" : "Recollecting the conversation…")
-    : evidence.length > 0
+    : readError ?? (evidence.length > 0
       ? zh ? `${evidence.length} 段原文依据` : `${evidence.length} verified excerpt(s)`
-      : zh ? "尚无足够的原文依据" : "Insufficient original evidence";
+      : zh ? "尚无足够的原文依据" : "Insufficient original evidence");
   return (
     <ToolLayout name={zh ? "回忆" : "Recollection"} icon={<History className="h-3.5 w-3.5" />}
       summary={<span className="line-clamp-1">{summary}</span>} state={state}
@@ -40,13 +42,22 @@ export function ScenarioRecallRenderer({ input, output, state, streamingText }: 
           {evidence.map((item, index) => {
             const ref = item.ref as string;
             const record = parseRecordRef(ref)!;
+            const label = formatSliceIdLabel(record.sliceId, locale) || record.sliceId;
             return <div key={`${ref}:${String(item.turnId ?? index)}`} className="border-l-2 border-border pl-3">
-              <button type="button" onClick={() => requestSliceJump(record.sliceId)}
-                className="rounded-md text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-4">
-                {formatSliceIdLabel(record.sliceId, locale) || record.sliceId}
+              <p className="text-xs text-muted-foreground">
+                {label}
                 {item.role === "user" ? zh ? " · 用户" : " · User" : item.role === "assistant" ? " · Previously" : ""}
-              </button>
+              </p>
               <blockquote className="mt-1 whitespace-pre-wrap">{item.quote as string}</blockquote>
+              <DocumentToolActions
+                target={recallEntryDocumentTarget(ref, label)}
+                location={{
+                  ...(typeof item.turnId === "string" ? { turnId: item.turnId } : {}),
+                  ...(item.role === "user" || item.role === "assistant" ? { role: item.role } : {}),
+                }}
+                quote={item.quote as string}
+                className="mt-2"
+              />
             </div>;
           })}
           {gaps.length > 0 && <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">{gaps.map((gap, i) => <li key={i}>{gap}</li>)}</ul>}

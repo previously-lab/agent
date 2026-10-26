@@ -1,5 +1,10 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/i18n/navigation", () => ({ usePathname: () => "/app" }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
+vi.mock("@/components/workspace/workspace-route-nav", () => ({ WorkspaceRouteNav: () => null }));
+
 import {
   isPanelHotkey,
   reducePanelMode,

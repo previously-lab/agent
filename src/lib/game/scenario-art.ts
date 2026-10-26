@@ -1,24 +1,26 @@
 /** Visual direction for the RTS scene. These values never alter a room's
  * identity, geometry, links or stored record. No browser or renderer imports. */
+import { BRAND_HEX } from "@/lib/theme/palette-family";
 import type { Palette } from "./space-types";
 import type { BiomeSkin, SkinFloorKind, SkinWallKind } from "./skins";
 import { CAM_OFFSET, MODULE_LIGHT_FIXTURES } from "./tuning/room";
 
 type ScenarioPalette = Palette & Required<Pick<Palette, "wall" | "fabric" | "wood">>;
 
-/** The same calm material family in every room; the existing palette id keeps
- * its daylight/night distinction and remains available to authored fixtures. */
+/** The same calm blue-gray material family in every room; natural timber and
+ * warm daylight stay intact, while each skin keeps its material and horizon
+ * distinctions. The existing palette id remains available to authored fixtures. */
 export function scenarioPalette(source: Palette, night: boolean): ScenarioPalette {
   return {
     ...source,
-    sky: night ? "#b7c1a9" : "#d9ddc7",
-    fog: night ? "#c3cbb4" : "#dce1cd",
-    ground: night ? "#b7bfa6" : "#c0c5ad",
-    wall: night ? "#cbd1b8" : "#d1d6bf",
-    fabric: night ? "#9dab8e" : "#a0af91",
+    sky: night ? "#aebbd0" : "#d7e0ec",
+    fog: night ? "#b7c3d4" : "#dbe3ee",
+    ground: night ? "#a7b5c8" : "#b4c0d0",
+    wall: night ? "#c3ccda" : "#d2d8e1",
+    fabric: night ? "#91a4bf" : "#9dafc7",
     wood: night ? "#c5b797" : "#d0c1a2",
-    accent: "#b78b60",
-    sunColor: night ? "#e2ddbb" : "#fff3d5",
+    accent: BRAND_HEX,
+    sunColor: night ? "#d8e2f2" : "#fff3d5",
     sunIntensity: night ? 0.62 : 0.92,
     // Matte broad-surface pass (v0.11-streams art overhaul): interiors read
     // soft and diffuse — the lifted sun fill + ambient do the shaping —

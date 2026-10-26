@@ -7,263 +7,113 @@ import {
   seedCases,
   seedSlices,
   type FixtureCase,
+  type FixtureSlice,
 } from "./memory-fixture";
 
-/**
- * Archive-field e2e (v0.25a §四): the 原稿 rung's default surface is the
- * field of piles — rows are time buckets, columns the case categories, a
- * cell one pile (one case: its index + its pieces). Covered here: the piles
- * render with their thickness tiers, a pile opens its case on the desk,
- * Escape returns to the field at the SAME scroll position (the rig is
- * shell-held), and a phone viewport lays the field flat into one column.
- *
- * Cases are seeded straight into the isolated MEMORY_ROOT
- * (memory/<category>/<case>/index.md + dated pieces — see memory-fixture.ts);
- * one historical slice keeps the arrival gate at the pill so the field is
- * never covered by a risen panel. No chat turn ever runs.
- *
- * NOTE the field VIRTUALIZES (visibleRangeFor): only rows near the scroll
- * window mount, so a spec never counts piles globally — it asserts the
- * piles that the current scroll position should show, then scrolls.
- */
+/** DOM document and record browser coverage. The retired 3D archive rig is
+ * intentionally not treated as the acceptance contract for this workspace. */
 
 const DAY = 24 * 3600_000;
 
-/** A `YYYY-MM-DD` in LOCAL days before today — the model buckets by the
- *  reader's local calendar, so the fixtures must speak the same frame. */
 function localIso(daysAgo: number): string {
   const d = new Date(Date.now() - daysAgo * DAY);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** `n` pieces all born on `date` — the pile's volume is 1 + n. */
 function piecesOn(date: string, n: number): FixtureCase["pieces"] {
   return Array.from({ length: n }, (_, i) => ({ date, title: `p${i + 1}` }));
 }
 
-/**
- * Eight cases across five categories: seven day buckets (today … today-6,
- * safely inside the trailing-week rule) plus one week bucket (today-20).
- * Volumes exercise every tier: 1 page → thin (3 sheets), 5 → medium (6),
- * 12 → thick (the 10-sheet cap). Desktop total ≈ header + 8 rows ≈ 2100px —
- * the field genuinely scrolls at the 1280×720 default viewport.
- */
-function fieldCases(): FixtureCase[] {
+function libraryCases(): FixtureCase[] {
   return [
     { category: "people", name: "field-alpha", opened: localIso(0), pieces: [] },
     { category: "people", name: "field-beta", opened: localIso(1), pieces: piecesOn(localIso(1), 2) },
     { category: "events", name: "field-gamma", opened: localIso(2), pieces: piecesOn(localIso(2), 4) },
-    { category: "events", name: "field-delta", opened: localIso(3), pieces: [] },
     { category: "things", name: "field-epsilon", opened: localIso(4), pieces: piecesOn(localIso(4), 6) },
     { category: "research", name: "field-zeta", opened: localIso(5), pieces: [] },
-    { category: "research", name: "field-eta", opened: localIso(6), pieces: piecesOn(localIso(6), 3) },
     { category: "orgs", name: "field-theta", opened: localIso(20), pieces: piecesOn(localIso(20), 11) },
   ];
 }
 
-function pile(page: Page, ref: string) {
-  return page.locator(`[data-archive-pile="${ref}"]`);
+function historySlices(count: number): FixtureSlice[] {
+  const base = Date.UTC(2026, 1, 1, 9, 0, 0);
+  return Array.from({ length: count }, (_, index) =>
+    makeSlice(new Date(base + index * DAY).toISOString(), {
+      tag: `H${String(index).padStart(2, "0")}`,
+    }),
+  );
 }
 
-/** Seed the world and land on the reader rung with the field settled: the
- *  first pile visible is the post-hydration, post-fetch, post-compile
- *  signal (the first canvas mount compiles the three.js chunk in dev).
- *  With `suspended`, enter the field through the hotel's manuscripts door
- *  instead: the shell lands in the document pause — the game world mounted
- *  behind the field, the canvas on demand frames — the state the
- *  frame-loop policy must serve. */
-async function openField(page: Page, suspended = false): Promise<void> {
+async function openLibrary(page: Page): Promise<void> {
   await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
-  await seedCases(fieldCases());
-  if (!suspended) {
-    await page.goto("/en/app?view=field");
-  } else {
-    await page.goto("/en/app");
-    await page.locator("[data-game-manuscripts]").click();
-    await expect(
-      page.locator('[data-app-world="field"][data-scene-suspended="true"]'),
-    ).toBeVisible();
-  }
-  await expect(pile(page, "people/field-alpha")).toBeVisible({ timeout: 30_000 });
+  await seedCases(libraryCases());
+  await page.goto("/en/app?view=field");
+  await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: /^People/ })).toBeVisible({ timeout: 30_000 });
 }
 
-/** Wait until `ref`'s pile holds still: two probe reads 400ms apart within
- *  a pixel (the rig's exponential ease snaps under 0.05px residual, so a
- *  quiet 400ms window means settled — robust to slow headless frame rates). */
-async function waitSettled(page: Page, ref: string): Promise<void> {
-  const target = pile(page, ref);
-  let lastY = -1;
-  await expect
-    .poll(
-      async () => {
-        await page.waitForTimeout(400);
-        const y = (await target.boundingBox())?.y ?? -1;
-        const stable = lastY >= 0 && y >= 0 && Math.abs(y - lastY) < 1;
-        lastY = y;
-        return stable ? 1 : 0;
-      },
-      { timeout: 20_000 },
-    )
-    .toBe(1);
+async function openCategory(page: Page, name: string): Promise<void> {
+  const category = page.getByRole("button", { name: new RegExp(`^${name}`) });
+  await expect(category).toBeVisible();
+  if (await category.getAttribute("aria-expanded") !== "true") await category.click();
+  await expect(category).toHaveAttribute("aria-expanded", "true");
 }
 
-test.describe("Archive field", () => {
-  test("hydrates a case's opened date after the light index has painted", async ({ page }) => {
-    await seedSlices([makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), { tag: "OLD" })]);
-    await seedCases([{ category: "people", name: "hydrated-date", opened: localIso(0), pieces: [] }]);
-    await page.goto("/en/app?view=field");
-    await expect(pile(page, "people/hydrated-date")).toContainText(`opened ${localIso(0)}`);
-  });
-
+test.describe("DOM document workspace", () => {
   test.afterEach(async () => {
     await clearCases();
     await clearEpisodic();
   });
 
-  test("renders the piles tiered by volume, under the category header; the past mounts on scroll", async ({
-    page,
-  }) => {
-    await openField(page);
-
-    // The first screenful of rows (virtualization: deeper rows mount on
-    // scroll — asserting a global count would test the scroller, not the
-    // data).
-    await expect(pile(page, "people/field-beta")).toBeVisible();
-    await expect(pile(page, "events/field-gamma")).toBeVisible();
-    await expect(pile(page, "events/field-delta")).toBeVisible();
-
-    // The thickness tiers (archive-model.ts's one table): thin renders 3
-    // sheets, medium 6.
-    await expect(
-      pile(page, "people/field-alpha").locator(".archive-sheet"),
-    ).toHaveCount(3);
-    await expect(
-      pile(page, "events/field-gamma").locator(".archive-sheet"),
-    ).toHaveCount(6);
-
-    // The desktop header row names the present categories only — a category
-    // with no case has no column. (en `library.category.orgs` → "Organizations")
-    const header = page.locator(".archive-header");
-    await expect(header.getByText("People", { exact: true })).toBeVisible();
-    await expect(header.getByText("Organizations", { exact: true })).toBeVisible();
-    await expect(header.getByText("Places", { exact: true })).toHaveCount(0);
-
-    // The far past mounts on scroll: the week bucket's pile renders thick —
-    // the 10-sheet cap for a 12-page case.
-    await page.mouse.move(640, 360);
-    await page.mouse.wheel(0, 4000);
-    const theta = pile(page, "orgs/field-theta");
-    await expect(theta).toBeVisible({ timeout: 15_000 });
-    await expect(theta.locator(".archive-sheet")).toHaveCount(10);
-  });
-
-  test("opens the pile's case on the desk; Escape puts it back", async ({
-    page,
-  }) => {
-    await openField(page);
-    await waitSettled(page, "people/field-alpha");
-
-    await pile(page, "people/field-alpha").click();
-    // The desk's stack is the open document's seat; the case's own index
-    // text proves the right document arrived.
-    await expect(page.locator("[data-desk-stack]")).toBeVisible({
-      timeout: 30_000,
-    });
-    await expect(
-      page.getByText("Case field-alpha — the seeded index.").first(),
-    ).toBeVisible({ timeout: 30_000 });
-    // Handover: the field is gone while the desk stands.
-    await expect(page.locator("[data-archive-pile]")).toHaveCount(0);
+  test("opens a case without WebGL and Escape returns to the expanded library category", async ({ page }) => {
+    await openLibrary(page);
+    await expect(page.locator("canvas")).toHaveCount(0);
+    await openCategory(page, "People");
+    await page.getByRole("button", { name: /field-alpha/ }).click();
+    await expect(page.locator("[data-desk-stack]")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Case field-alpha — the seeded index.").first()).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.get("doc")).toBe("people/field-alpha");
 
     await page.keyboard.press("Escape");
-    await expect(pile(page, "people/field-alpha")).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator("[data-desk-stack]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^People/ })).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("button", { name: /field-alpha/ })).toBeVisible();
   });
 
-  test("returns to the same scroll position after a desk round trip", async ({
-    page,
-  }) => {
-    await openField(page);
+  test("pages older records only after an explicit request and opens the exact record", async ({ page }) => {
+    const slices = historySlices(25);
+    await seedSlices(slices);
+    await page.goto("/en/app?view=field&history=1");
+    const browser = page.locator(".workspace-history-browser");
+    await expect(browser).toBeVisible();
+    await expect(browser).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
+    await expect(page.locator(".workspace-record-list li")).toHaveCount(20);
+    await expect(page.getByRole("button", { name: new RegExp(slices[24].id) })).toBeVisible();
+    await expect(page.getByRole("button", { name: new RegExp(slices[0].id) })).toHaveCount(0);
 
-    // Scroll into the past until the week bucket's pile is on screen. The
-    // wheel handler is window-bound and chrome-gated; mid-viewport is field.
-    await page.mouse.move(640, 360);
-    await page.mouse.wheel(0, 1600);
-    const theta = pile(page, "orgs/field-theta");
-    await expect(theta).toBeVisible({ timeout: 15_000 });
-    await waitSettled(page, "orgs/field-theta");
-    const before = (await theta.boundingBox())!;
-
-    await theta.click();
-    await expect(page.locator("[data-desk-stack]")).toBeVisible({
-      timeout: 30_000,
-    });
-    await page.keyboard.press("Escape");
-    await expect(theta).toBeVisible({ timeout: 15_000 });
-
-    // The rig is shell-held: the remounted field returns to the exact
-    // scroll the reader left (a warm remount skips the entrance stagger).
-    await expect
-      .poll(
-        async () => {
-          const b = await theta.boundingBox();
-          return b ? Math.abs(b.y - before.y) : 99;
-        },
-        { timeout: 10_000 },
-      )
-      .toBeLessThan(4);
+    await page.locator(".workspace-history-pages button").click();
+    await expect(browser).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
+    const oldest = page.getByRole("button", { name: new RegExp(slices[0].id) });
+    await expect(oldest).toBeVisible();
+    await oldest.click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("doc")).toBe(`records/${slices[0].id}`);
+    await expect(page.getByText("TURN H00 user question").first()).toBeVisible({ timeout: 30_000 });
   });
 
-  test("suspended document pause: the archive scrolls on demand frames and the hotel never repaints", async ({
-    page,
-  }) => {
-    await openField(page, true);
-    await waitSettled(page, "people/field-alpha");
-
-    // The hotel is mounted behind the documents with its EffectComposer
-    // disabled: no demand frame may repaint it, so the last GL render's
-    // timestamp must stay frozen for the whole pause.
-    const lastRenderAt = (): Promise<number | undefined> =>
-      page.evaluate(() => window.__gameMountTrace?.frames.at(-1)?.[0]);
-    const t0 = await lastRenderAt();
-    expect(typeof t0).toBe("number");
-
-    // A real wheel scroll: the ref-only gesture asks for its first frame
-    // through the world-slot channel, the easing re-arms the loop, and the
-    // week bucket's pile mounts and settles — all on demand frames.
-    await page.mouse.move(640, 360);
-    await page.mouse.wheel(0, 4000);
-    const theta = pile(page, "orgs/field-theta");
-    await expect(theta).toBeVisible({ timeout: 15_000 });
-    await waitSettled(page, "orgs/field-theta");
-
-    // The scroll completed, the loop idled — and the game's last GL render
-    // is still the one from before the pause: the background world painted
-    // nothing.
-    await expect
-      .poll(async () => await lastRenderAt(), { timeout: 5_000 })
-      .toBe(t0);
-  });
-
-  test("a phone viewport lays the field flat: one pile per screen, one column", async ({
-    page,
-  }) => {
+  test("keeps DOM categories and case rows usable without horizontal overflow on a phone", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await openField(page);
-
-    // No desktop header row; the buckets carry their own label units.
-    await expect(page.locator(".archive-header")).toHaveCount(0);
-
-    const alpha = pile(page, "people/field-alpha");
-    const beta = pile(page, "people/field-beta");
-    await expect(beta).toBeVisible({ timeout: 10_000 });
-    const a = (await alpha.boundingBox())!;
-    const b = (await beta.boundingBox())!;
-    // Same column: the centres align; one pile per screen: stacked vertically.
-    expect(Math.abs(a.x + a.width / 2 - (b.x + b.width / 2))).toBeLessThan(2);
-    expect(b.y).toBeGreaterThan(a.y + a.height / 2);
+    await openLibrary(page);
+    await expect(page.locator("canvas")).toHaveCount(0);
+    const panel = page.locator(".workspace-browser-panel");
+    await expect.poll(() => panel.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await openCategory(page, "Research");
+    const row = page.getByRole("button", { name: /field-zeta/ });
+    await expect(row).toBeVisible();
+    const bounds = await row.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(391);
   });
 });

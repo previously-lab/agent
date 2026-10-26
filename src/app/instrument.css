@@ -3,18 +3,19 @@
    visual-language.css after this structural stylesheet. */
 
 :root {
-  --tool: oklch(0.93 0.006 90);
+  --tool: oklch(0.97 0.01 255);
   --tool-line: color-mix(in oklab, var(--tool) 82%, var(--foreground));
-  --ink-accent: #0066ff;
-  --ink-accent-paper: oklch(0.45 0.12 256);
+  --ink-accent: var(--brand);
+  /* Small text keeps a deeper blue on light stocks; the exact brand remains
+     the primary action, identity and focus paint. */
+  --ink-accent-paper: var(--brand-600);
 }
 
 .dark {
-  --tool: oklch(0.26 0.004 90);
+  --tool: oklch(0.28 0.025 255);
   --tool-line: color-mix(in oklab, var(--tool) 82%, var(--foreground));
-  /* #0066ff lightened for the dark tool stock — same hue family. */
-  --ink-accent: #4d94ff;
-  --ink-accent-paper: oklch(0.68 0.12 256);
+  --ink-accent: var(--brand);
+  --ink-accent-paper: var(--brand);
 }
 
 /* The theme registration for these tokens lives in `globals.css`, NOT here:
@@ -75,7 +76,7 @@
 }
 
 .chrome-control:focus-visible {
-  outline: 1px solid var(--foreground);
+  outline: 1px solid var(--ring);
   outline-offset: 2px;
   color: var(--foreground);
 }
@@ -115,7 +116,7 @@
 .chrome-inscription:focus-visible {
   outline: none;
   text-decoration: underline;
-  text-decoration-color: var(--foreground);
+  text-decoration-color: var(--ring);
   text-underline-offset: 3px;
 }
 
@@ -171,12 +172,10 @@
 }
 
 /* ── Menus (overflow + search palette) ──────────────────────────────────
-   Hover and focus are the primitive's own fill: `--accent`, remapped in
-   globals.css to a matte wash of ink into the tool surface — the same fill
-   every other control gets, with a transition so it arrives instead of
-   snapping. The hairline under a row marks the SELECTED state only; it used
-   to fire on hover too, which is what put a hard black line under whatever
-   the pointer touched. */
+   Hover and focus share the themed blue-gray `--accent` wash, with a
+   transition so it arrives instead of snapping. The brand hairline under a
+   row marks the SELECTED state only; it used to fire on hover too, which is
+   what put a hard line under whatever the pointer touched. */
 
 .chrome-menu-item {
   border-radius: var(--radius-sm, 4px);
@@ -188,7 +187,7 @@
 /* The SELECTED row keeps a hairline under it… */
 .chrome-menu-item[data-selected="true"] {
   color: var(--foreground);
-  box-shadow: inset 0 -1px 0 var(--foreground);
+  box-shadow: inset 0 -1px 0 var(--ring);
 }
 
 /* …and the row under the POINTER gets the wash. Base UI marks that row with
@@ -231,8 +230,8 @@
 }
 
 .chrome-radio.is-on {
-  background: var(--foreground);
-  border-color: var(--foreground);
+  background: var(--primary);
+  border-color: var(--primary);
 }
 
 /* The shared writing ledge. Live conversation adds its responsive layout. */
@@ -279,11 +278,11 @@
   border-left-color: var(--foreground);
 }
 
-/* The act, armed: an ink block reversed out — the pressed type slug. */
+/* The armed action uses the primary brand paint with its paired label. */
 
 .composer-cell.is-active {
-  background: var(--foreground);
-  color: var(--paper);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 /* ── The pod — the name tab ───────────────────────────────────────────── */

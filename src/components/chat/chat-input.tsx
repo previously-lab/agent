@@ -1,16 +1,33 @@
 "use client";
 
-import { useState, useRef, useEffect, useLayoutEffect, type FormEvent, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useId, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUp, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
+import { ArrowUp, AtSign, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
+import { toast } from "sonner";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { appendNativeDraft, NATIVE_DRAFT_EVENT } from "@/lib/chat/native-draft";
+import type { DocumentCatalogItem } from "@/lib/chat/document-catalog-actions";
+import {
+  findDocumentMentionRange,
+  isImeKeyboardEvent,
+  nextDocumentMentionIndex,
+  removeDocumentMentionRange,
+  type DocumentMentionRange,
+} from "@/lib/chat/document-mentions";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
+import { useDocumentContext } from "./document-context-provider";
+import { useNativePersona } from "./native-source-scope";
+import {
+  DocumentMentionPicker,
+  DocumentReferenceChips,
+  useDocumentMentionCatalog,
+} from "./document-mention-picker";
 import "./writing.css";
+import "./document-mentions.css";
 
 /** The textarea's floor and ceiling, in px. The floor is what an empty
  *  composer reports so the box does not collapse while it is being typed
@@ -90,12 +107,33 @@ export function ChatInput({
   const tPanel = useTranslations("conversationPanel");
   const tier = usePanelTier();
   const reducedMotion = useReducedMotion() ?? false;
+  const mentionId = useId();
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const miniInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [mention, setMention] = useState<{
+    open: boolean;
+    manual: boolean;
+    query: string;
+    range: DocumentMentionRange | null;
+  }>({ open: false, manual: false, query: "", range: null });
+  const { references, addReference, removeReference } = useDocumentContext();
+  const persona = useNativePersona() ?? "user";
+  const catalog = useDocumentMentionCatalog(mention.open, mention.query, persona);
   const { images, removeImage, clearImages, handlePaste, handleDrop, handleDragOver } = useImageAttachments();
+
+  const closeMention = () => {
+    setMention({ open: false, manual: false, query: "", range: null });
+  };
+
+  const openManualMention = () => {
+    setMention((current) => current.open && current.manual
+      ? { open: false, manual: false, query: "", range: null }
+      : { open: true, manual: true, query: "", range: null });
+  };
 
   useEffect(() => {
     const onDraft = (event: Event): void => {
@@ -123,6 +161,7 @@ export function ChatInput({
     e?.preventDefault();
     const trimmed = value.trim();
     if (!trimmed && images.length === 0) return;
+    closeMention();
     // v0.30 §4.1: sending is NOT blocked while a run streams — the page
     // routes the message into the live episode (or starts a fresh turn).
     onSubmit(trimmed, images);
@@ -133,14 +172,58 @@ export function ChatInput({
     }
   };
 
-  const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    setValue(e.target.value);
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const next = e.target.value;
+    const caret = e.target.selectionStart ?? next.length;
+    setValue(next);
+    setMention((current) => {
+      const range = findDocumentMentionRange(next, caret);
+      if (range) return { open: true, manual: false, query: range.query, range };
+      return current.manual ? current : { open: false, manual: false, query: "", range: null };
+    });
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const selectDocument = (item: DocumentCatalogItem) => {
+    if (!addReference({ ref: item.ref, title: item.title })) {
+      toast.error(t("references.limit"));
+      return;
+    }
+    if (mention.range) {
+      const range = mention.range;
+      setValue((current) => removeDocumentMentionRange(current, range));
+    }
+    if (mention.manual) {
+      setMention((current) => ({ ...current, query: "" }));
+    } else {
+      closeMention();
+      requestAnimationFrame(() => {
+        const target = tier?.mode === "pill" ? miniInputRef.current : textareaRef.current;
+        target?.focus();
+      });
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (isImeKeyboardEvent(e.nativeEvent)) return;
+      if (mention.open) {
+        const item = catalog.items[catalog.activeIndex];
+        if (item) selectDocument(item);
+        return;
+      }
       handleSubmit();
+      return;
+    }
+    if (!mention.open || isImeKeyboardEvent(e.nativeEvent)) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMention();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      catalog.setActiveIndex(nextDocumentMentionIndex(catalog.activeIndex, catalog.items.length, e.key));
     }
   };
 
@@ -231,97 +314,115 @@ export function ChatInput({
   // calls.
   if (tier?.mode === "pill") {
     return (
-      <div
-        data-pill-composer
-        onPaste={handlePaste}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        // Fill the floating pill while allowing its text field to shrink
-        // between the fixed controls on narrow screens.
-        className="flex h-full min-w-0 flex-1 items-center gap-0.5"
-      >
-        {/* Attach — the full form's channel, nothing new: the hidden input
-            below feeds the shared `handlePaste`, and the images reappear as
-            previews the moment the reader expands. */}
-        <button
-          type="button"
-          data-attach
-          onClick={() => fileInputRef.current?.click()}
-          aria-label={t("attach")}
-          title={t("attach")}
-          className="composer-cell text-muted-foreground hover:text-foreground"
+      <div className="relative min-w-0 flex-1">
+        {!mention.open && <DocumentReferenceChips references={references} onRemove={removeReference} floating />}
+        {mention.open && (
+          <DocumentMentionPicker
+            id={mentionId}
+            query={mention.query}
+            catalog={catalog}
+            manual={mention.manual}
+            floating
+            onQueryChange={(query) => setMention((current) => ({ ...current, query }))}
+            onSelect={selectDocument}
+            onClose={closeMention}
+            onKeyDown={handleKeyDown}
+          />
+        )}
+        <div
+          data-pill-composer
+          onPaste={handlePaste}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          className="flex h-full min-w-0 flex-1 items-center gap-0.5"
         >
-          <Paperclip className="size-4" />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          onChange={handleFileChange}
-          className="hidden"
-          accept="image/*"
-        />
-        {/* The evolution stream — the HQ panel's second entry (the pod's
-            floating button is the first). One panel, two doors. */}
-        <HQStreamButton
-          className="composer-cell text-muted-foreground hover:text-foreground"
-          iconClassName="size-4"
-        />
-        {/* The single line — a real one-line input, not a resized textarea.
-            Enter sends, as in the full form. Serif (the reader writes in
-            their own documents' voice), with a quieter placeholder. */}
-        <input
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t("placeholder")}
-          aria-label={t("placeholder")}
-          className="min-w-0 flex-1 bg-transparent px-2 outline-none"
-        />
-        {/* Expand — the ledge's one way up, through the panel's own
-            transition table. */}
-        <button
-          type="button"
-          data-pill-expand
-          onClick={() =>
-            tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
-          }
-          aria-label={tPanel("expand")}
-          title={tPanel("expand")}
-          className="composer-cell text-muted-foreground hover:text-foreground"
-        >
-          <Maximize2 className="size-4" />
-        </button>
-        {/* Send / stop — TWO keys while a run streams (v0.30 §4.1): send is
-            always usable (the message queues into the live episode), and the
-            stop key appears beside it only mid-run, as the secondary. Send
-            keeps the rightmost edge at every size. */}
-        {isLoading && onStop && (
           <button
             type="button"
-            onClick={onStop}
-            aria-label={t("stopTooltip")}
-            title={t("stopTooltip")}
-            className="composer-cell text-destructive hover:border-l-destructive hover:opacity-90"
+            data-attach
+            onClick={() => fileInputRef.current?.click()}
+            aria-label={t("attach")}
+            title={t("attach")}
+            className="composer-cell text-muted-foreground hover:text-foreground"
           >
-            <Square className="size-3.5 fill-current" />
+            <Paperclip className="size-4" />
           </button>
-        )}
-        <button
-          type="submit"
-          onClick={(e) => handleSubmit(e as unknown as FormEvent)}
-          disabled={!hasContent}
-          aria-label={t("sendTooltip")}
-          title={t("sendTooltip")}
-          className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
-            hasContent
-              ? "is-active hover:border-l-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <ArrowUp className="size-4" />
-        </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={handleFileChange}
+            className="hidden"
+            accept="image/*"
+          />
+          <HQStreamButton
+            className="composer-cell text-muted-foreground hover:text-foreground"
+            iconClassName="size-4"
+          />
+          <button
+            type="button"
+            data-document-mention
+            onClick={openManualMention}
+            aria-label={t("references.open")}
+            title={t("references.open")}
+            aria-expanded={mention.open && mention.manual}
+            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
+            className="composer-cell text-muted-foreground hover:text-foreground"
+          >
+            <AtSign aria-hidden className="size-4" />
+          </button>
+          <input
+            ref={miniInputRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={t("placeholder")}
+            aria-label={t("placeholder")}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={mention.open}
+            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
+            aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
+            className="min-w-0 flex-1 bg-transparent px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <button
+            type="button"
+            data-pill-expand
+            onClick={() =>
+              tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
+            }
+            aria-label={tPanel("expand")}
+            title={tPanel("expand")}
+            className="composer-cell text-muted-foreground hover:text-foreground"
+          >
+            <Maximize2 className="size-4" />
+          </button>
+          {isLoading && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label={t("stopTooltip")}
+              title={t("stopTooltip")}
+              className="composer-cell text-destructive hover:border-l-destructive hover:opacity-90"
+            >
+              <Square className="size-3.5 fill-current" />
+            </button>
+          )}
+          <button
+            type="submit"
+            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
+            disabled={!hasContent}
+            aria-label={t("sendTooltip")}
+            title={t("sendTooltip")}
+            className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
+              hasContent
+                ? "is-active hover:border-l-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <ArrowUp className="size-4" />
+          </button>
+        </div>
       </div>
     );
   }
@@ -334,6 +435,26 @@ export function ChatInput({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
     >
+      {references.length > 0 && (
+        <div className="px-4 pt-3">
+          <DocumentReferenceChips references={references} onRemove={removeReference} />
+        </div>
+      )}
+      {mention.open && (
+        <div className="px-4 pt-3">
+          <DocumentMentionPicker
+            id={mentionId}
+            query={mention.query}
+            catalog={catalog}
+            manual={mention.manual}
+            floating={false}
+            onQueryChange={(query) => setMention((current) => ({ ...current, query }))}
+            onSelect={selectDocument}
+            onClose={closeMention}
+            onKeyDown={handleKeyDown}
+          />
+        </div>
+      )}
       {/* Image previews */}
       {images.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
@@ -367,8 +488,13 @@ export function ChatInput({
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           aria-label={t("placeholder")}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={mention.open}
+          aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
+          aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
           rows={1}
-          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent focus:outline-none"
+          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
       </div>
 
@@ -420,6 +546,18 @@ export function ChatInput({
             className="conversation-control"
             iconClassName="h-3.5 w-3.5"
           />
+          <button
+            type="button"
+            data-document-mention
+            onClick={openManualMention}
+            aria-label={t("references.open")}
+            title={t("references.open")}
+            aria-expanded={mention.open && mention.manual}
+            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
+            className="conversation-control"
+          >
+            <AtSign aria-hidden className="h-3.5 w-3.5" />
+          </button>
         </div>
 
         {/* Right side — stop, then send: the walk towards the act, so the

@@ -14,6 +14,7 @@ import { RecallReferencesBar } from "./recall-references-bar";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { ConversationTurn } from "./conversation-turn";
+import { SubmittedDocumentReferencesFromMetadata } from "@/components/documents/submitted-document-references";
 import { TimeDisplay, sameDay } from "./time-display";
 import {
   Activity,
@@ -247,6 +248,7 @@ export const ChatMessage = memo(function ChatMessage({
             )}
           </div>
         )}
+        <SubmittedDocumentReferencesFromMetadata metadata={message.metadata} />
         {(userText || fileParts.length === 0) && (
           <div className="conversation-prose">
             <MarkdownRenderer content={userText} />

@@ -43,18 +43,14 @@
  *                    the overlay's ChatPage, consumed by the chat stream; the
  *                    provider is the one place above both.
  *
- * THE ROUTE'S HALF — `WorldDriver`. The world (canvas, transition machine)
- * stays in `/app`; the layout TALKS to it through a registered driver instead
- * of owning it. AppShell registers on mount and unregisters on unmount: off
- * `/app` the nav action still moves the cursor but drives no world (there is
- * none to drive), and `getChatView` falls back to the lobby.
+ * THE ROUTE'S HALF — `WorldDriver`. The lazy game host registers here only
+ * after the first `/game` visit. Its hidden state reports a suspended pose,
+ * so app/reader sends never describe a world that is not visible.
  *
- * SSR / HYDRATION NOTE. The first tier is the PILL everywhere: the
- * conversation is a floating capability over whichever world the route opens
- * on, never a surface of its own — so no route may be covered by a fullscreen
- * conversation on its first commit. `panelMode` reaches no SSR'd markup (the
- * overlay is client-only, and the route reads the tier only in effects and in
- * the client-only canvas's `paused` prop).
+ * Desk state is URL-backed. Explicit opens carry a fresh focus epoch; Back
+ * and Forward restore the prior document without reapplying its old source
+ * anchor. The main `/app` conversation defaults to fullscreen; reader, game,
+ * and utility surfaces use the mini composer until an explicit expansion.
  */
 import {
   createContext,
@@ -84,7 +80,26 @@ import {
   type ScreenContextTracker,
 } from "@/lib/chat/screen-context-tracker";
 import { useNativeSourceScope } from "@/components/chat/native-source-scope";
+import { usePathname, useRouter } from "@/i18n/navigation";
+import {
+  buildConversationHref,
+  buildDocumentHref,
+  buildGameHref,
+  buildLibraryHref,
+  deskHistoryOwnsTarget,
+  deskTargetEqual,
+  markDeskHistoryState,
+  markOriginPanelMode,
+  originPanelModeFromHistory,
+  reduceDeskNavigation,
+  shouldFocusSyncedDocument,
+  workspaceDocumentTarget,
+  type DeskNavigationState,
+  type DeskOpenOptions,
+  type WorkspaceDocumentTarget,
+} from "@/lib/workspace/navigation";
 export type { WorldPose } from "@/components/shell/world-view";
+export type { DeskOpenOptions } from "@/lib/workspace/navigation";
 
 /** The desk's memory (v0.25b, product-pass §4): the last document the
  *  reader opened, so a returning reader's desk opens on his paper instead
@@ -106,33 +121,24 @@ export interface WorldDriver extends WorldViewDriver {
   onTurnSettled: () => void;
 }
 
-interface ShellValue {
+export interface ShellValue {
   panelMode: ConversationPanelMode;
   setPanelMode: (mode: ConversationPanelMode) => void;
-  /** Fullscreen freezes the world — the route hands this to the canvas as
-   *  `paused` (frameloop="never"). Pause, never unmount. */
   worldFrozen: boolean;
-  /** The shared slice address — the one cursor every surface reads. */
   sharedSlice: string | null;
-  /** The document on the desk (v0.22): a case/record/dossier ref, or null
-   *  when the desk is away. The field lives here (no persistence of the
-   *  LIVE desk) — the cross-session memory is the LAST_DOCUMENT_KEY write
-   *  in openDesk, restored by the app shell's preflight. */
   deskDoc: string | null;
-  /** The archive field's category filter (v0.25a §四): the library control's
-   *  category selection IS this filter — the shelf's browsing tree and the
-   *  field's columns answer the same question, so the state lives here,
-   *  above both. null = the whole archive. */
+  deskOpenOptions: DeskOpenOptions | null;
+  deskNavigation: DeskNavigationState;
   archiveCategory: CaseCategory | null;
   setArchiveCategory: (category: CaseCategory | null) => void;
-  /** Pull a document onto the desk (the shelf's terminal open action). A
-   *  fullscreen panel folds to the pill first — fullscreen freezes the
-   *  world's frame loop and covers the canvas the desk renders in. */
-  openDesk: (ref: string, origin?: ScreenOrigin) => void;
-  /** Put the document back; the desk's seat empties. */
+  openDesk: (ref: string, origin?: ScreenOrigin, options?: DeskOpenOptions) => void;
   closeDesk: () => void;
-  /** Passive route cleanup: clear the desk without a manual close event. */
   cleanupDesk: () => void;
+  syncDeskRoute: (target: WorkspaceDocumentTarget | null) => void;
+  resetDeskForLane: () => void;
+  openLibrary: (history?: boolean) => void;
+  openConversation: () => void;
+  openGame: () => void;
   /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
    *  — the room the reader walks into — moves the SAME cursor the nav action
    *  owns, but steers NO world (the nav action is the only writer that also
@@ -173,20 +179,17 @@ export function useShell(): ShellValue {
 }
 
 export function ShellProvider({ children }: { children: ReactNode }) {
-  // The first tier is the PILL on every route — see the module header's SSR
-  // note. The conversation is a floating capability, never an opening surface.
-  const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
+  const router = useRouter();
+  const pathname = usePathname();
+  const [panelMode, setPanelModeState] = useState<ConversationPanelMode>("pill");
+  const panelModeRef = useRef(panelMode);
+  const setPanelMode = useCallback((mode: ConversationPanelMode) => {
+    panelModeRef.current = mode;
+    setPanelModeState(mode);
+  }, []);
   const worldFrozen = panelMode === "fullscreen";
   const sourceScope = useNativeSourceScope();
 
-  // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order.
-  // Every open also writes the desk's memory (LAST_DOCUMENT_KEY, above):
-  // the reader's NEXT session restores it. The page's library column
-  // (shelf/doc-library.tsx) and the archive field's piles write it, the app
-  // shell reads it; this provider is their common ancestor.
-  // Opening folds a fullscreen panel to the pill first
-  // (panelModeForDeskOpen), the same rule as leaving `/app` (fullscreen
-  // would freeze the world the desk renders in).
   const screenRef = useRef<ScreenContextTracker | null>(null);
   screenRef.current ??= createScreenContextTracker();
   const screen = screenRef.current;
@@ -195,37 +198,173 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     [screen],
   );
 
-  const [deskDoc, setDeskDoc] = useState<string | null>(null);
-  const deskDocRef = useRef<string | null>(null);
+  const [deskTarget, setDeskTarget] = useState<WorkspaceDocumentTarget | null>(null);
+  const [deskNavigation, setDeskNavigation] = useState<DeskNavigationState>({ epoch: 0, focus: false });
+  const deskDoc = deskTarget?.ref ?? null;
+  const deskOpenOptions = deskTarget?.options ?? null;
+  const deskTargetRef = useRef<WorkspaceDocumentTarget | null>(null);
+  const pendingDeskTargetRef = useRef<WorkspaceDocumentTarget | null>(null);
+  const restoreNavigationRef = useRef(false);
   const previousSourceScope = useRef(sourceScope);
-  const openDesk = useCallback((ref: string, origin: ScreenOrigin = "observed") => {
-    screen.documentOpened({ ref, origin });
-    deskDocRef.current = ref;
-    setPanelMode(panelModeForDeskOpen);
-    setDeskDoc(ref);
+
+  const applyDeskTarget = useCallback((
+    target: WorkspaceDocumentTarget,
+    origin: ScreenOrigin,
+    focus: boolean,
+  ) => {
+    deskTargetRef.current = target;
+    setDeskTarget(target);
+    setDeskNavigation((current) => reduceDeskNavigation(current, focus));
+    screen.documentOpened({
+      ref: target.ref,
+      origin,
+      ...(target.options.edition ? { edition: target.options.edition } : {}),
+    });
+    setPanelMode(panelModeForDeskOpen(panelModeRef.current));
     try {
-      window.localStorage.setItem(LAST_DOCUMENT_KEY, ref);
+      window.localStorage.setItem(LAST_DOCUMENT_KEY, target.ref);
     } catch {
-      // Storage can be denied (private mode) — the memory is a convenience,
-      // never a gate.
+      // Storage is a convenience, never a gate.
     }
-  }, [screen]);
+  }, [screen, setPanelMode]);
+
   const clearDesk = useCallback((origin: "manual" | "observed") => {
-    const ref = deskDocRef.current ?? undefined;
-    deskDocRef.current = null;
-    screen.documentClosed(ref, { origin });
-    setDeskDoc(null);
+    const previous = deskTargetRef.current;
+    setDeskNavigation((current) => ({ ...current, focus: false }));
+    if (!previous) return;
+    deskTargetRef.current = null;
+    pendingDeskTargetRef.current = null;
+    setDeskTarget(null);
+    screen.documentClosed(previous.ref, { origin });
   }, [screen]);
-  const closeDesk = useCallback(() => clearDesk("manual"), [clearDesk]);
   const cleanupDesk = useCallback(() => clearDesk("observed"), [clearDesk]);
+
+  const rememberPanelOnEntry = useCallback(() => {
+    window.history.replaceState(
+      markOriginPanelMode(window.history.state, panelModeRef.current),
+      "",
+      window.location.href,
+    );
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => { restoreNavigationRef.current = true; };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const syncDeskRoute = useCallback((target: WorkspaceDocumentTarget | null) => {
+    const restoring = restoreNavigationRef.current;
+    restoreNavigationRef.current = false;
+    const pending = target && pendingDeskTargetRef.current && deskTargetEqual(pendingDeskTargetRef.current, target)
+      ? pendingDeskTargetRef.current
+      : null;
+    if (pending) {
+      const href = buildDocumentHref(pending, window.location.search);
+      window.history.replaceState(
+        markDeskHistoryState(window.history.state, href),
+        "",
+        window.location.href,
+      );
+    }
+    pendingDeskTargetRef.current = null;
+    if (deskTargetEqual(deskTargetRef.current, target)) return;
+    if (deskTargetRef.current) clearDesk("observed");
+    if (target) applyDeskTarget(target, "restored", shouldFocusSyncedDocument(pending !== null, restoring));
+    const originMode = originPanelModeFromHistory(window.history.state);
+    if (originMode) setPanelMode(originMode);
+  }, [applyDeskTarget, clearDesk, setPanelMode]);
+
+  const openDesk = useCallback((
+    ref: string,
+    origin: ScreenOrigin = "observed",
+    options?: DeskOpenOptions,
+  ) => {
+    const target = workspaceDocumentTarget(ref, options);
+    if (!target) return;
+    if (pathname === "/app" && deskTargetEqual(deskTargetRef.current, target)) {
+      applyDeskTarget(target, origin, true);
+      return;
+    }
+    const href = buildDocumentHref(target, window.location.search);
+    rememberPanelOnEntry();
+    if (pathname === "/app") {
+      window.history.pushState(
+        markDeskHistoryState(markOriginPanelMode({}, panelModeRef.current), href),
+        "",
+        `${window.location.pathname}${href.slice("/app".length)}`,
+      );
+    } else {
+      pendingDeskTargetRef.current = target;
+      router.push(href, { scroll: false });
+    }
+    applyDeskTarget(target, origin, true);
+  }, [applyDeskTarget, pathname, rememberPanelOnEntry, router]);
+
+  const closeDesk = useCallback(() => {
+    const target = deskTargetRef.current;
+    if (!target) return;
+    const href = buildDocumentHref(target, window.location.search);
+    const owned = pathname === "/app" && deskHistoryOwnsTarget(window.history.state, href);
+    clearDesk("manual");
+    if (owned) {
+      window.history.back();
+      return;
+    }
+    setPanelMode("pill");
+    router.replace(buildLibraryHref(window.location.search), { scroll: false });
+  }, [clearDesk, pathname, router, setPanelMode]);
+
+  const resetDeskForLane = useCallback(() => {
+    clearDesk("observed");
+    pendingDeskTargetRef.current = null;
+    screen.reset();
+    if (pathname === "/app" && new URLSearchParams(window.location.search).has("doc")) {
+      router.replace(buildLibraryHref(window.location.search), { scroll: false });
+    }
+  }, [clearDesk, pathname, router, screen]);
+
+  const openLibrary = useCallback((history = false) => {
+    const href = buildLibraryHref(window.location.search, history);
+    const current = new URLSearchParams(window.location.search);
+    const unchanged = pathname === "/app" &&
+      current.get("view") === "field" &&
+      !current.has("doc") &&
+      (current.get("history") === "1") === history;
+    if (!unchanged) rememberPanelOnEntry();
+    cleanupDesk();
+    setPanelMode("pill");
+    if (!unchanged) router.push(href, { scroll: false });
+  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
+
+  const openConversation = useCallback(() => {
+    const href = buildConversationHref(window.location.search);
+    const current = new URLSearchParams(window.location.search);
+    const unchanged = pathname === "/app" &&
+      !current.has("doc") &&
+      current.get("view") !== "field" &&
+      current.get("view") !== "game" &&
+      current.get("history") !== "1";
+    if (!unchanged) rememberPanelOnEntry();
+    cleanupDesk();
+    setPanelMode("fullscreen");
+    if (!unchanged) router.push(href, { scroll: false });
+  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
+
+  const openGame = useCallback(() => {
+    if (pathname !== "/game") rememberPanelOnEntry();
+    cleanupDesk();
+    setPanelMode("pill");
+    if (pathname !== "/game") {
+      router.push(buildGameHref(window.location.search), { scroll: false });
+    }
+  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
 
   useEffect(() => {
     if (previousSourceScope.current === sourceScope) return;
     previousSourceScope.current = sourceScope;
-    deskDocRef.current = null;
-    setDeskDoc(null);
-    screen.reset();
-  }, [sourceScope, screen]);
+    resetDeskForLane();
+  }, [sourceScope, resetDeskForLane]);
 
   // THE ARCHIVE FIELD'S FILTER (v0.25a §四). The library control's category
   // selection doubles as the field's column filter — lifted here because the
@@ -275,50 +414,35 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   feedRef.current ??= createFieldFeed();
   const feed = feedRef.current;
 
-  // The route's reactive pose — see the module header. Null off `/app` (a
-  // route with no world registers no driver and reports no pose).
   const [, setWorldPoseState] = useState<WorldPose | null>(null);
   const setWorldPose = useCallback((pose: WorldPose | null) => {
     setWorldPoseState(pose);
-    if (!pose || (pose.settled !== "game" && deskDocRef.current === null)) {
+    if (!pose || (pose.settled !== "game" && deskTargetRef.current === null)) {
       screen.roomLeft();
     }
   }, [screen]);
   const [publishing, setFeedPublishing] = useState(true);
   const [composerClearance, setComposerClearance] = useState(0);
 
-  // The route's driver. A REF, not state: callers (the nav action, the
-  // send-time getter, the turn forwarder) all read it at call time, and a
-  // registration must not re-render the layout's whole subtree.
   const driverRef = useRef<WorldDriver | null>(null);
   const registerWorldDriver = useCallback((driver: WorldDriver | null) => {
     driverRef.current = driver;
     if (!driver) screen.routeLeft();
   }, [screen]);
 
-  // ── THE CONVERSATION'S VIEW OF THE WORLD (v0.13 §5 视野注入) ─────────
-  // The actual mounted room supplies its frozen recipe inputs at SEND time.
-  // The shared cursor is deliberately absent: it can outlive a room visit.
-  // Desk opens are mirrored synchronously, so a send in that same event
-  // cannot describe the world underneath a document as the current view.
   const getChatView = useCallback((): CurrentView | undefined => {
-    return currentRoomView(driverRef.current, deskDocRef.current !== null);
+    return currentRoomView(driverRef.current, deskTargetRef.current !== null);
   }, []);
 
-  // ── THE NAVIGATION ACTION (shell-nav.ts) ────────────────────────────────
-  // The memory form of the old `?slice=` contract. It moves the cursor HERE
-  // (the provider owns it) and then delegates the world motion to the
-  // registered driver — with no driver (off `/app`) the cursor still moves
-  // and nothing else happens, which is the honest state of a route that has
-  // no world.
   const nav = useMemo<ShellNav>(
     () => ({
       standAtSlice: (sliceId) => {
         reportCursor(sliceId);
+        openGame();
         driverRef.current?.standAtSlice(sliceId);
       },
     }),
-    [reportCursor],
+    [openGame, reportCursor],
   );
 
   const reportTurnSettled = useCallback(() => {
@@ -332,11 +456,18 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       worldFrozen,
       sharedSlice,
       deskDoc,
+      deskOpenOptions,
+      deskNavigation,
       archiveCategory,
       setArchiveCategory,
       openDesk,
       closeDesk,
       cleanupDesk,
+      syncDeskRoute,
+      resetDeskForLane,
+      openLibrary,
+      openConversation,
+      openGame,
       reportCursor,
       getCursor,
       getChatView,
@@ -353,13 +484,21 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     }),
     [
       panelMode,
+      setPanelMode,
       worldFrozen,
       sharedSlice,
       deskDoc,
+      deskOpenOptions,
+      deskNavigation,
       archiveCategory,
       openDesk,
       closeDesk,
       cleanupDesk,
+      syncDeskRoute,
+      resetDeskForLane,
+      openLibrary,
+      openConversation,
+      openGame,
       reportCursor,
       getCursor,
       getChatView,

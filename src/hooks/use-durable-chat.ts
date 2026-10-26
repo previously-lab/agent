@@ -101,7 +101,7 @@ export function useDurableChat(options: DurableChatOptions) {
     return cancelActive;
   }, [execute, cancelActive]);
 
-  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string }, screen?: ScreenContext) => {
+  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string; metadata?: unknown }, screen?: ScreenContext) => {
     const next: UIMessage = { ...message, id: message.id ?? crypto.randomUUID(), role: "user" };
     return execute([...messagesRef.current, next], "send", screen);
   }, [execute]);

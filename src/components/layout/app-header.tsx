@@ -11,8 +11,12 @@ import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
+  const tWorkspace = useTranslations("workspace.nav");
   const identity = useBriefingIdentity();
-  const isHome = usePathname() === "/";
+  const pathname = usePathname();
+  const isHome = pathname === "/";
+  const onGame = pathname === "/game";
+  if (onGame) return null;
 
   return (
     <header
@@ -38,6 +42,13 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
 
       {!isHome && (
         <nav className="pointer-events-auto ml-auto flex h-9 items-center gap-2 sm:ml-0">
+          <Link
+            href={onGame ? "/app" : "/game"}
+            prefetch={false}
+            className="chrome-island inline-flex h-9 items-center px-3 text-xs"
+          >
+            {onGame ? tWorkspace("conversation") : tWorkspace("game")}
+          </Link>
           <SearchPalette disabled={isHome} />
           <NavOverflowMenu />
         </nav>

@@ -57,12 +57,12 @@ export function readNativeTheme(surface: "chat" | "paper"): NativeThemeTokens {
   const styles = getComputedStyle(document.documentElement);
   const token = (name: string, fallback: string): string => styles.getPropertyValue(name).trim() || fallback;
   return {
-    background: token(surface === "paper" ? "--paper" : "--background", surface === "paper" ? "#f8f6ee" : "#eef0e6"),
-    foreground: token(surface === "paper" ? "--card-foreground" : "--foreground", "#2d3d33"),
-    muted: token("--muted", "#e6eadf"),
-    mutedForeground: token("--muted-foreground", "#687260"),
-    border: token("--border", "#cdd4c1"),
-    brand: token("--brand", "#526c51"),
+    background: token(surface === "paper" ? "--paper" : "--background", surface === "paper" ? "#f8f6ee" : "#f8f9fb"),
+    foreground: token(surface === "paper" ? "--card-foreground" : "--foreground", "#1b2940"),
+    muted: token("--muted", "#edf1f6"),
+    mutedForeground: token("--muted-foreground", "#59677b"),
+    border: token("--border", "#c6d0df"),
+    brand: token("--ink-accent-paper", "#0057d9"),
     fontBody: token("--font-serif", 'Georgia, "Times New Roman", serif'),
     fontHeading: token("--font-serif", 'Georgia, "Times New Roman", serif'),
     fontMono: token("--font-mono", 'ui-monospace, "SFMono-Regular", Consolas, monospace'),
@@ -71,12 +71,12 @@ export function readNativeTheme(surface: "chat" | "paper"): NativeThemeTokens {
 }
 
 export const DEFAULT_NATIVE_THEME: NativeThemeTokens = {
-  background: "#eef0e6",
-  foreground: "#2d3d33",
-  muted: "#e6eadf",
-  mutedForeground: "#687260",
-  border: "#cdd4c1",
-  brand: "#526c51",
+  background: "#f8f9fb",
+  foreground: "#1b2940",
+  muted: "#edf1f6",
+  mutedForeground: "#59677b",
+  border: "#c6d0df",
+  brand: "#0057d9",
   fontBody: 'Georgia, "Times New Roman", serif',
   fontHeading: 'Georgia, "Times New Roman", serif',
   fontMono: 'ui-monospace, "SFMono-Regular", Consolas, monospace',

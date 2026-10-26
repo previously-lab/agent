@@ -1,0 +1,124 @@
+.document-reference-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.document-reference-chips--floating {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 20;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  box-shadow: var(--shadow-float, 0 0.5rem 2rem rgb(0 0 0 / 0.12));
+}
+
+.document-reference-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.25rem;
+  padding-block: 0.125rem;
+  padding-inline-start: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--primary) 8%, var(--card));
+  color: var(--foreground);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.document-reference-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-reference-chip button,
+.document-mention-icon-button {
+  display: inline-flex;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  color: var(--muted-foreground);
+}
+
+.document-reference-chip button:hover,
+.document-mention-icon-button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.document-mention-panel {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-float, 0 0.5rem 2rem rgb(0 0 0 / 0.12));
+}
+
+.document-mention-panel--floating {
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 30;
+  width: min(22rem, calc(100vw - 2rem));
+}
+
+.document-mention-options {
+  max-height: 16rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.document-mention-option {
+  display: flex;
+  width: 100%;
+  min-height: 2.75rem;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+}
+
+.document-mention-option[aria-selected="true"] {
+  background: color-mix(in oklab, var(--primary) 12%, var(--card));
+}
+
+.document-mention-option:hover {
+  background: var(--accent);
+}
+
+.document-reference-chip button:focus-visible,
+.document-mention-icon-button:focus-visible,
+.document-mention-option:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .document-reference-chip button,
+  .document-mention-icon-button {
+    min-width: 2rem;
+    min-height: 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-reference-chip,
+  .document-reference-chip button,
+  .document-mention-option,
+  .document-mention-icon-button {
+    transition: none;
+  }
+}

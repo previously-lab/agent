@@ -1,22 +1,10 @@
 "use client";
 
 /**
- * The shell's navigation action — the IN-MEMORY form of the query-string
- * contract the single-route shell used to have. Since v0.13 §3.1 the CURSOR
- * half (the shared slice address) and this action are owned by the
- * layout-level `ShellProvider` (shell-provider.tsx), because the conversation
- * layer — the cursor's other reader — lives at the layout now; the
- * WORLD-MOTION half is registered by AppShell as a `WorldDriver`. Nothing
- * here touches the URL.
- *
- *   standAtSlice(id) — address a slice to the HOTEL: the reader stands at
- *                      the slice's door (game-canvas.tsx's `focusSlice`).
- *                      The board bar's Scene word's one addressed move.
- *
- * There used to be three actions; the other two (the card field's focus and
- * the conversation jump's world half) retired with the conversation rung —
- * a slice jump now rises the floating panel and lands in its stream
- * (lib/chat/slice-jump.ts), and the card field no longer renders.
+ * Addressed room navigation shared by the app and reader. ShellProvider owns
+ * the cursor and route change; the lazy game host receives focusSlice when
+ * `/game` becomes visible. standAtSlice therefore works both with an already
+ * mounted world and before the first game visit, without a second game host.
  */
 import { createContext, useContext } from "react";
 

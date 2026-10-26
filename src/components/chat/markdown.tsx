@@ -25,6 +25,9 @@ import { remarkDocRefs } from "@/lib/markdown/remark-doc-refs";
 import { remarkNativeSections } from "@/lib/markdown/remark-native-sections";
 import { parseNativeSections, type NativeSection } from "@/lib/markdown/native-sections";
 import { repairStreamingMarkdown } from "@/lib/markdown/streaming-display";
+import { documentUrlTransform } from "@/lib/markdown/document-url-transform";
+import { DocumentLink } from "@/components/documents/document-navigation";
+import { parseDocumentLink } from "@/lib/documents/document-link";
 import { cn } from "@/lib/utils";
 import {
   NativeHtmlBlock,
@@ -155,7 +158,18 @@ function MarkdownLink({ node, href, children, ...props }: React.JSX.IntrinsicEle
   if (streaming.inertLinkOffset !== null && node?.position?.start.offset === streaming.inertLinkOffset) {
     return <span>{children}</span>;
   }
-  const external = typeof href === "string" && /^https?:\/\//i.test(href);
+  if (parseDocumentLink(href)) {
+    return (
+      <DocumentLink href={href!} className="doc-ref doc-ref--semantic" title={props.title}>
+        {children}
+      </DocumentLink>
+    );
+  }
+  if (typeof href === "string" && /^previously:/i.test(href)) {
+    return <span className="doc-ref doc-ref--dead" title={props.title}>{children}</span>;
+  }
+  if (!href) return <span title={props.title}>{children}</span>;
+  const external = /^https?:\/\//i.test(href);
   return (
     <a
       href={href}
@@ -291,6 +305,7 @@ const MarkdownDocument = memo(function MarkdownDocument({
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         components={MARKDOWN_COMPONENTS}
+        urlTransform={documentUrlTransform}
       >
         {content}
       </ReactMarkdown>
@@ -338,6 +353,7 @@ function NativeMarkdownDocument({
           remarkPlugins={remarkPlugins}
           rehypePlugins={REHYPE_PLUGINS}
           components={MARKDOWN_COMPONENTS}
+        urlTransform={documentUrlTransform}
         >
           {content}
         </ReactMarkdown>

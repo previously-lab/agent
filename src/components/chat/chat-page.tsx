@@ -10,7 +10,15 @@ import type { UIMessage } from "@/lib/chat/protocol";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
 import { NativePersonaProvider } from "./native-source-scope";
+import { DocumentContextPersonaSync, useDocumentContext } from "./document-context-provider";
+import {
+  createDocumentContextEnvelope,
+  createDocumentContextMetadata,
+  documentContextFromMetadata,
+  type DocumentContextSnapshot,
+} from "@/lib/chat/document-context";
 import { usePanelTier } from "./conversation-panel";
+import { useShell, type DeskOpenOptions } from "@/components/shell/shell-provider";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { DomChatList, type ChatStreamHandle } from "./dom-chat-list";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
@@ -205,6 +213,7 @@ export function ChatPage({
   if (!verdict) return <ChatPageSkeleton />;
   return (
     <NativePersonaProvider value={verdict.persona}>
+      <DocumentContextPersonaSync persona={verdict.persona} />
       <Inner
         initialConfig={initialConfig}
         onTurnSettled={onTurnSettled}
@@ -458,6 +467,8 @@ function Inner({
   arrival: ArrivalState;
 }) {
   const locale = useLocale();
+  const { getSnapshot, clearReferences } = useDocumentContext();
+  const parallelDocumentContextsRef = useRef<Map<string, DocumentContextSnapshot>>(new Map());
 
   const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
 
@@ -644,6 +655,8 @@ function Inner({
     getRunId: readStoredRunId,
     prepareBody: (workingMessages, regenerate, screen) => {
       const view = getView?.();
+      const lastUser = [...workingMessages].reverse().find((message) => message.role === "user");
+      const documentContext = documentContextFromMetadata(lastUser?.metadata);
       return {
         messages: messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -651,6 +664,7 @@ function Inner({
         loadedSliceIds: timelineSlices.map((slice) => slice.slice_id),
         ...(view ? { view } : {}),
         ...screenContextRequestField(() => screen),
+        ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
         ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
         ...(regenerate ? { regenerate: true } : {}),
       };
@@ -700,6 +714,7 @@ function Inner({
         additions.push({
           id: lane.laneId,
           role: "user",
+          metadata: createDocumentContextMetadata(parallelDocumentContextsRef.current.get(lane.laneId) ?? []),
           parts: [{ type: "text" as const, text: lane.userText }],
         });
       }
@@ -723,6 +738,7 @@ function Inner({
         return next;
       });
     }
+    for (const lane of parallelLanes) parallelDocumentContextsRef.current.delete(lane.laneId);
     setParallelLanes([]);
   }, [parallelLanes, status, setMessages]);
 
@@ -1067,6 +1083,7 @@ function Inner({
   }, [withStream]);
 
   const handleSubmit = async (message: string, images: File[]) => {
+    const documentContext = getSnapshot();
     const screen = captureScreenContext(getScreenContext);
     // Sending snaps back to the present: the jump target is cleared and the
     // stream follows the new turn to the bottom.
@@ -1109,7 +1126,13 @@ function Inner({
         ...(message ? [{ type: "text" as const, text: message }] : []),
       ];
       const clientId = mintTurnId();
-      const userMsg: UIMessage = { id: clientId, role: "user", parts };
+      const userMsg: UIMessage = {
+        id: clientId,
+        role: "user",
+        parts,
+        metadata: createDocumentContextMetadata(documentContext),
+      };
+      parallelDocumentContextsRef.current.set(clientId, documentContext);
       // Seat the collapsed main lane first (the in-flight answer folds into a
       // mini-block — nothing is lost: it re-seats as a normal message when
       // its turn ends), then the new bypass lane.
@@ -1128,7 +1151,8 @@ function Inner({
           body: JSON.stringify({
             // Same window + fields the transport sends (see
             // prepareSendMessagesRequest) plus the new message.
-            messages: [...messagesWithNativeReplay(messages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW), userMsg],            timezone:
+            messages: [...messagesWithNativeReplay(messages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW), userMsg],
+            timezone:
               typeof Intl !== "undefined"
                 ? Intl.DateTimeFormat().resolvedOptions().timeZone
                 : "UTC",
@@ -1136,9 +1160,11 @@ function Inner({
             loadedSliceIds: timelineSlices.map((s) => s.slice_id),
             ...(view ? { view } : {}),
             ...screenContextRequestField(() => screen),
+            ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
             ...(burstId ? { burstId } : {}),
           }),
         });
+        clearReferences(documentContext);
         const runId = res.headers.get("x-workflow-run-id");
         if (!res.ok || !runId) {
           throw new Error(`parallel send HTTP ${res.status}`);
@@ -1149,6 +1175,7 @@ function Inner({
         await res.body?.cancel().catch(() => {});
         patchParallelLane(clientId, { runId });
       } catch (err) {
+        parallelDocumentContextsRef.current.delete(clientId);
         console.error("[chat] parallel send failed:", err);
         setParallelLanes((prev) => prev.filter((l) => l.laneId !== clientId));
         toast.error(t("parallel.sendFailed"));
@@ -1172,7 +1199,8 @@ function Inner({
       ...fileParts,
       ...(message ? [{ type: "text" as const, text: message }] : []),
     ];
-    sendMessage({ role: "user", parts }, screen);
+    sendMessage({ role: "user", parts, metadata: createDocumentContextMetadata(documentContext) }, screen);
+    clearReferences(documentContext);
     requestAnimationFrame(scrollToBottom);
     // v0.7b: self-evolution runs INLINE inside housekeeping (the turn's stream
     // carries data-evolution chunks) — no separate evolution request here.
@@ -1213,7 +1241,6 @@ function Inner({
   // slice jump (search palette, references bar, `?at=`) pages the target slice
   // into the stream (the time-travel clock covers the loading) and
   // scroll-lands on its seam. "now" lands at the bottom.
-  const tHist = useTranslations("chat.history");
 
   // The travel clock's TARGET time: producers that know the slice's start
   // pass it as `toTime` (the timeline card click threads it through
@@ -1243,6 +1270,7 @@ function Inner({
   // the reader should land looking at it. Rising is an /app-only move — the
   // overlay-mount gate force-folds fullscreen on utility routes.
   const panelTier = usePanelTier();
+  const openDesk = useShell().openDesk;
   const pathname = usePathname();
   const onApp = pathname === "/app";
 
@@ -1258,38 +1286,26 @@ function Inner({
   }, [emptyMemory, onApp, panelTier]);
 
   const handleSelectSlice = useCallback(
-    async (sliceId: string, toTime?: string) => {
-      if (sliceId === selectedSliceId && !transition) return; // already there
+    async (sliceId: string, toTime?: string, targetOptions?: DeskOpenOptions) => {
+      if (sliceId === selectedSliceId && !transition) return;
 
       const nowIso = new Date().toISOString();
-      // Travel FROM where the viewer actually is (the top item's time) — the
-      // clock's reverse-tick reads like the stream rewinding.
       const from = topTimeRef.current ?? nowIso;
-      const to =
-        toTime ??
-        (sliceId === "now"
-          ? nowIso
-          : ((await resolveSliceStart(sliceId)) ?? from));
-
+      const to = toTime ??
+        (sliceId === "now" ? nowIso : ((await resolveSliceStart(sliceId)) ?? from));
       const clockLanded = new Promise<void>((resolve) => {
         clockLandedRef.current = resolve;
       });
       setTransition({ from, to, sliceId });
 
-      // Every jump target lives in THIS list — the conversation is a floating
-      // capability, so a jump to a past slice RISES the panel to show it.
-      // The list pages nothing: a slice older than the cold-open page is an
-      // honest miss (happened-time browsing is the archive dispatch's job).
-      if (sliceId !== "now" && onApp && panelTier?.mode === "pill") {
-        panelTier.setMode("fullscreen");
+      if (sliceId !== "now" && panelTier?.mode === "pill") {
+        panelTier.requestMode("fullscreen", "jump");
       }
 
       await clockLanded;
       setTransition(null);
       setSelectedSliceId(sliceId);
 
-      // Scroll once the stream is visible again (the exit fade is 0.3s, but
-      // the list beneath is live the whole time — one frame is enough).
       requestAnimationFrame(() => {
         if (sliceId === "now") {
           scrollToBottom();
@@ -1298,26 +1314,21 @@ function Inner({
         withStream((api) => {
           const found = api.scrollToKey("seam-" + sliceId);
           if (found) return;
-          // Not loaded. While a briefing arrival's history page is still on
-          // the wire the handle REMEMBERS the key and lands when the items
-          // commit; once the page has settled, a miss is honest — report it.
-          const pagePending =
-            arrival.mode === "briefing" && briefingSlices === null;
-          if (!pagePending) toast.error(tHist("notFound"));
+          const pagePending = arrival.mode === "briefing" && briefingSlices === null;
+          if (!pagePending) openDesk(`records/${sliceId}`, "manual", targetOptions);
         });
       });
     },
     [
       selectedSliceId,
       transition,
-      onApp,
       panelTier,
+      openDesk,
       scrollToBottom,
       withStream,
       resolveSliceStart,
       arrival.mode,
       briefingSlices,
-      tHist,
     ],
   );
 
@@ -1387,19 +1398,9 @@ function Inner({
   // is a sibling, not inside the stream column, so it stays live.
   const panelPill = panelTier?.mode === "pill";
 
-  /**
-   * Sending RISES the panel first. The reply is written into the
-   * conversation's list, and watching it arrive is the point of sending — so
-   * a send from the pill rises to fullscreen and then runs the normal path.
-   * /app only: utility routes force-fold the fullscreen tier
-   * (conversation-overlay-mount.tsx), so rising there would fold right back.
-   */
-  // Not memoized, deliberately: `handleSubmit` is not either (it closes over
-  // the whole turn state), so a `useCallback` here would either recreate on
-  // every render anyway or need a ref to hide that — machinery for a prop that
-  // is not memoized on the other end either.
+  // Route policy owns send expansion; game and reader mini composers stay mini.
   const submitAndRise = (...args: Parameters<typeof handleSubmit>) => {
-    if (onApp && panelTier?.mode === "pill") panelTier.setMode("fullscreen");
+    if (panelTier?.mode === "pill") panelTier.requestMode("fullscreen", "send");
     return handleSubmit(...args);
   };
 
@@ -1557,7 +1558,8 @@ function Inner({
           <ChatInput
             onSubmit={submitAndRise}
             isLoading={isLoading}
-            onStop={handleStop}          />
+            onStop={handleStop}
+          />
         }
       />
     </>

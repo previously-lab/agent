@@ -8,6 +8,10 @@ import { AppHeader } from "@/components/layout/app-header";
 import { ShellProvider } from "@/components/shell/shell-provider";
 import { ConversationOverlayMount } from "@/components/chat/conversation-overlay-mount";
 import { NativeSourceScopeProvider } from "@/components/chat/native-source-scope";
+import { DocumentContextProvider } from "@/components/chat/document-context-provider";
+import { DocumentNavigationAdapter } from "@/components/workspace/document-navigation-adapter";
+import { GameWorkspaceMount } from "@/components/workspace/game-workspace-mount";
+import { WorkspaceFeatures } from "@/components/workspace/workspace-features";
 import { loadUserConfig } from "@/lib/config/loader";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { nativeSourceScopeForDeployment } from "@/lib/chat/native-source-scope.server";
@@ -58,21 +62,20 @@ export default async function LocaleLayout({ children, params }: Props) {
   return (
     <NextIntlClientProvider messages={messages} locale={locale}>
       <AppHeader isDemo={isDemo} />
-      {/* THE CONVERSATION LAYER LIVES HERE (v0.13 §3.1). ShellProvider owns
-          the state the overlay and the routes share (the panel tier, the
-          slice cursor, the per-turn view getter, the world-freeze signal),
-          and the overlay itself mounts as a SIBLING of the route content —
-          a real floating layer above the canvas by z-index, surviving
-          navigation and world rebuilds. The home route hides it (no
-          conversation ability there); the world canvas stays in `/app` and
-          talks to the provider through a registered driver — the layout
-          converses with the world, it does not own it. */}
       <NativeSourceScopeProvider value={nativeSourceScopeForDeployment()}>
         <ShellProvider>
-          {children}
-          <Suspense fallback={null}>
-            <OverlayLoader />
-          </Suspense>
+          <DocumentNavigationAdapter>
+            <DocumentContextProvider>
+              {children}
+              <Suspense fallback={null}>
+                <GameWorkspaceMount />
+                <WorkspaceFeatures />
+              </Suspense>
+              <Suspense fallback={null}>
+                <OverlayLoader />
+              </Suspense>
+            </DocumentContextProvider>
+          </DocumentNavigationAdapter>
         </ShellProvider>
       </NativeSourceScopeProvider>
     </NextIntlClientProvider>

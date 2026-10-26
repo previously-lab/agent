@@ -53,7 +53,7 @@
 }
 
 .archive-pile:focus-visible {
-  outline: 2px solid var(--color-foreground);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 

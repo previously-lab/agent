@@ -72,6 +72,7 @@ import {
 import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 import { collectTaskAckIntents, parseTaskAckMetadata, type TaskAckIntent } from "@/lib/chat/task-followups";
 import { renderScreenContext } from "@/lib/chat/screen-context";
+import { renderDocumentContext } from "@/lib/chat/document-context-prompt";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
 
@@ -812,6 +813,8 @@ export function assembleSystemPrompt(opts: {
   userProfileBlock?: string;
   /** Authoritative task candidates and pending background result events. */
   taskContextBlock?: string;
+  /** Explicit per-send reading pointers; originals still need to be read. */
+  documentContextBlock?: string;
   /** Least-stable per-send observation block; source content remains on-demand. */
   screenContextBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
@@ -829,6 +832,7 @@ export function assembleSystemPrompt(opts: {
     craftBlock,
     userProfileBlock,
     taskContextBlock,
+    documentContextBlock,
     screenContextBlock,
     sliceHeadBlock,
     demoNotice,
@@ -846,6 +850,7 @@ export function assembleSystemPrompt(opts: {
     sliceHeadBlock,
     demoNotice,
     taskContextBlock ?? "",
+    documentContextBlock ?? "",
     screenContextBlock ?? "",
   ]
     .filter(Boolean)
@@ -971,6 +976,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     userProfileBlock,
     // Authoritative task candidates and pending results, read once this turn.
     taskContextBlock: hk.taskContextBlock,
+    documentContextBlock: renderDocumentContext(input.documentContext),
     screenContextBlock: input.screen ? renderScreenContext(input.screen) : undefined,
     sliceHeadBlock,
     demoNotice: input.useDemo
@@ -1808,6 +1814,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     sliceId: hk.slice.slice_id,
     at: input.startedAtIso,
     userText: input.lastUserMessage,
+    ...(input.documentContext?.length ? { documentContext: input.documentContext } : {}),
     replyText: outcome.text,
     cognition: outcome.cognition,
     ...(mergeLine ? { mergeLine } : {}),

@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import { useLocale } from "next-intl";
 import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { useShell } from "@/components/shell/shell-provider";
+import { useNativePersona, useNativeSourceScope } from "@/components/chat/native-source-scope";
 import {
   clampViewCentre,
   dragPanBy,
@@ -79,6 +80,24 @@ import {
   type DeskViewChange,
 } from "./desk-model";
 import { deskCurrentTexts } from "./desk-current-texts";
+import { DOCUMENT_CONTEXT_LIMITS } from "@/lib/chat/document-context";
+import {
+  documentLabelFallback,
+  type DocumentLinkLocation,
+} from "@/lib/documents/document-link";
+import { collectRelatedDocuments } from "@/lib/documents/related-documents";
+import {
+  initialLocationSignature,
+  readDeskReadingLocation,
+  writeDeskReadingLocation,
+  type DeskReadingLocation,
+} from "@/lib/documents/reading-location";
+import { paperPageForPoint, resolveRecordTurnAnchor } from "@/lib/documents/record-location";
+import { DocumentNavigationProvider } from "@/components/documents/document-navigation";
+import { AddDocumentReferenceAction } from "@/components/documents/document-actions";
+import { RecordTurnView } from "@/components/documents/record-turn";
+import { RelatedDocuments } from "@/components/documents/related-documents";
+import "@/components/documents/document-reader.css";
 import "./desk.css";
 
 /** The desk's UI strings, injected from the shell (the desk.chrome strings
@@ -143,14 +162,33 @@ function editableTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
 }
 
+function readingLocationStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 export interface DeskSourceOpen {
   fromDocRef: string;
   docRef: string;
   view: DeskReadingView;
+  location?: DocumentLinkLocation;
 }
+
+interface VisiblePassage {
+  text: string;
+  turnId?: string;
+  role?: DocumentLinkLocation["role"];
+}
+
+type SelectionState = { kind: "passage"; passage: VisiblePassage } | { kind: "tooLong" } | null;
 
 export function DeskField({
   docRef,
+  initialLocation,
   reducedMotion,
   texts,
   leaving = false,
@@ -162,6 +200,7 @@ export function DeskField({
   /** The open document's reference (`deskDoc` — never null here: app-shell
    *  mounts the desk only when a ref is set). */
   docRef: string;
+  initialLocation?: DocumentLinkLocation;
   /** Legacy shell prop. The paper now centres in its own reading viewport. */
   camXOffset: number;
   reducedMotion: boolean;
@@ -179,6 +218,14 @@ export function DeskField({
   const { closeDesk, openDesk } = useShell();
   const locale = useLocale();
   const leave = leaving;
+  const sourceScope = useNativeSourceScope();
+  const persona = useNativePersona() ?? "user";
+  const locationIdentity = JSON.stringify([sourceScope, persona, docRef]);
+  const requestedLocationSignature = initialLocationSignature(initialLocation);
+  const focusSignature = `${docRef}:${requestedLocationSignature}`;
+  const hasInitialLocation = Boolean(
+    initialLocation?.turnId || initialLocation?.role || initialLocation?.edition,
+  );
 
   // The document arrives lazily, one server-action round trip per open —
   // the shelf's own rhythm. `undefined` = in flight; null = dead link (the
@@ -187,7 +234,7 @@ export function DeskField({
   // getCaseDoc; records/<sliceId> reads the slice's transcript (composed
   // with THIS locale's speaker labels — a locale switch refetches); a
   // dossier/<name> ref reads the self-document verbatim.
-  const [doc, setDoc] = useState<CaseDocContent | null | undefined>(undefined);
+  const [doc, setDoc] = useState<CaseDocContent | RecordDocContent | null | undefined>(undefined);
   const recordUserLabel = texts.recordUserLabel;
   const recordAgentLabel = texts.recordAgentLabel;
   useEffect(() => {
@@ -199,10 +246,10 @@ export function DeskField({
         ? getRecordDoc(docRef, {
             user: recordUserLabel,
             agent: recordAgentLabel,
-          })
+          }, persona)
         : kind === "dossier"
-          ? getDossierDoc(docRef)
-          : getCaseDoc(docRef);
+          ? getDossierDoc(docRef, persona)
+          : getCaseDoc(docRef, persona);
     read
       .then((d) => {
         if (live) setDoc(d);
@@ -213,7 +260,7 @@ export function DeskField({
     return () => {
       live = false;
     };
-  }, [docRef, recordUserLabel, recordAgentLabel]);
+  }, [docRef, recordUserLabel, recordAgentLabel, persona]);
   const loading = doc === undefined;
   const model = useMemo(
     () => deskPaperModel(docRef, doc ?? null),
@@ -233,6 +280,12 @@ export function DeskField({
   const readingView: DeskReadingView =
     viewChoice && choiceIsReadable ? viewChoice.view : defaultDeskView(model);
   const displayMarkdown = deskPaperMarkdown(model, readingView);
+  const recordTurns = model.kind === "record" && doc && "turns" in doc ? doc.turns : null;
+  const observedRevision = readingView === "original"
+    ? doc?.observedRevision
+    : doc?.current?.status === "ok"
+      ? doc.current.view.observedRevision
+      : undefined;
   // The paper's display title: a record prints NONE (§三 — the transcript's
   // identity is the letterhead's clock + shelf lines; the body is the turns
   // alone); a dossier prints its fixed English name; a case its own.
@@ -242,6 +295,21 @@ export function DeskField({
       : model.kind === "dossier" && model.dossier
         ? DOSSIER_NAMES[model.dossier]
         : model.title;
+  const referenceTitle = (displayTitle || documentLabelFallback(docRef) || docRef)
+    .slice(0, DOCUMENT_CONTEXT_LIMITS.maxTitleChars);
+  const relatedDocuments = useMemo(
+    () => collectRelatedDocuments({
+      currentRef: docRef,
+      markdown: displayMarkdown,
+      evidence: readingView === "current"
+        ? model.current?.sources
+        : readingView === "history"
+          ? model.current?.historySources
+          : undefined,
+      submitted: recordTurns?.flatMap((turn) => turn.documentContext ?? []),
+    }),
+    [docRef, displayMarkdown, readingView, model, recordTurns],
+  );
 
   // ── REFERENCE LINKS (v0.25a §五) ───────────────────────────────────────
   // The candidates ride the SAME grammar the remark plugin renders
@@ -250,41 +318,43 @@ export function DeskField({
   // entries go unqueried, and the live links of the previous paper never
   // flash back to plain text mid-pull-out.
   const refCandidates = useMemo(
-    () => (displayMarkdown ? extractMarkdownRefs(displayMarkdown) : []),
-    [displayMarkdown],
+    () => [...new Set([
+      ...(displayMarkdown ? extractMarkdownRefs(displayMarkdown) : []),
+      ...relatedDocuments.map((related) => related.ref),
+    ])],
+    [displayMarkdown, relatedDocuments],
   );
   const [refStatus, setRefStatus] = useState<ReadonlyMap<string, VerifiedRef>>(
     () => new Map(),
   );
   useEffect(() => {
+    setRefStatus(new Map());
+  }, [persona]);
+  useEffect(() => {
     if (refCandidates.length === 0) return;
     let live = true;
-    verifyRefs(refCandidates)
+    verifyRefs(refCandidates, persona)
       .then((verified) => {
         if (live) setRefStatus(new Map(verified.map((v) => [v.ref, v])));
       })
       .catch(() => {
-        // A failed verify pass leaves every candidate inert (plain text).
+        if (live) {
+          setRefStatus((previous) => {
+            const next = new Map(previous);
+            for (const ref of refCandidates) next.delete(ref);
+            return next;
+          });
+        }
       });
     return () => {
       live = false;
     };
-  }, [refCandidates]);
-
-  const docRefCtx = useMemo<DocRefContextValue>(
-    () => ({
-      status: new Map(Array.from(refStatus, ([ref, v]) => [ref, v.alive])),
-      onOpen: openDesk,
-    }),
-    [refStatus, openDesk],
-  );
+  }, [refCandidates, persona]);
 
   // ── PAGING (v0.24) ────────────────────────────────────────────────────
-  // The current page is ephemeral reading state: it lives HERE (not in the
-  // shell provider — deskDoc stays the desk's only shell-level state) and
-  // resets on a new document (render-phase reset below), on close/re-open
-  // (the unmount discards it), and clamps when a re-pagination shrinks the
-  // page count out from under the reader.
+  // The current page lives HERE (not in the shell provider). A new source
+  // resets first, then the metadata-only session store restores its own
+  // page/edition/camera; re-pagination still clamps the page to the real count.
   const ready = !loading && displayMarkdown !== null;
 
   const [page, setPage] = useState(1);
@@ -309,6 +379,17 @@ export function DeskField({
   // horizontally), and scrollWidth / pageW is the exact filled-column count.
   // 1 until the first measure lands (the single-sheet form until then).
   const [total, setTotal] = useState(1);
+  const [selection, setSelection] = useState<SelectionState>(null);
+  const [focusedTurnIndex, setFocusedTurnIndex] = useState<number | null>(null);
+  const [locationNotice, setLocationNotice] = useState<"missing" | "ambiguous" | null>(null);
+  const handledFocusRef = useRef("");
+  const locationSignatureRef = useRef(requestedLocationSignature);
+  const latestReadingLocationRef = useRef<{
+    scope: string;
+    persona: string;
+    ref: string;
+    location: DeskReadingLocation;
+  } | null>(null);
 
   const totalRef = useRef(total);
   totalRef.current = total;
@@ -317,6 +398,58 @@ export function DeskField({
 
   const pagesRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!ready) {
+      setSelection(null);
+      return;
+    }
+    const updateSelection = (): void => {
+      const root = pagesRef.current;
+      const current = window.getSelection();
+      if (!root || root.closest("[inert]") || !current || current.isCollapsed || current.rangeCount === 0) {
+        setSelection(null);
+        return;
+      }
+      const nodes = [current.anchorNode, current.focusNode];
+      if (nodes.some((node) => !node || !root.contains(node))) {
+        setSelection(null);
+        return;
+      }
+      const elements = nodes.map((node) => node instanceof Element ? node : node?.parentElement ?? null);
+      if (elements.some((element) => !element || element.closest(
+        '[data-no-selection], button, a, input, textarea, select, [contenteditable="true"], [data-native-block]',
+      ))) {
+        setSelection(null);
+        return;
+      }
+      const text = current.toString().replaceAll("\r\n", "\n").replaceAll("\r", "\n").trim();
+      if (!text) {
+        setSelection(null);
+        return;
+      }
+      if (text.length > DOCUMENT_CONTEXT_LIMITS.maxQuoteChars) {
+        setSelection({ kind: "tooLong" });
+        return;
+      }
+      const turnElements = elements.map((element) => element?.closest("[data-record-turn-index]") ?? null);
+      const firstTurn = turnElements[0];
+      const turn = firstTurn && firstTurn === turnElements[1]
+        ? recordTurns?.find((candidate) => candidate.index === Number(firstTurn.getAttribute("data-record-turn-index")))
+        : undefined;
+      setSelection({
+        kind: "passage",
+        passage: {
+          text,
+          ...(turn?.turnId ? { turnId: turn.turnId } : {}),
+          ...(turn ? { role: turn.role } : {}),
+        },
+      });
+    };
+    document.addEventListener("selectionchange", updateSelection);
+    updateSelection();
+    return () => document.removeEventListener("selectionchange", updateSelection);
+  }, [ready, docRef, readingView, page, recordTurns]);
 
   // The count read, self-contained on the node: the pages container stays
   // one page wide, so its clientWidth IS the page width and scrollWidth /
@@ -420,6 +553,10 @@ export function DeskField({
   // reversed, in step with the shell's handover fade. Pure CSS on
   // .desk-stage (data-entered) — reduced motion keeps the opacity leg.
   const [entered, setEntered] = useState(false);
+  const [browserMounted, setBrowserMounted] = useState(false);
+  useEffect(() => {
+    setBrowserMounted(true);
+  }, []);
   useEffect(() => {
     if (leave) return;
     const frame = requestAnimationFrame(() => setEntered(true));
@@ -430,15 +567,18 @@ export function DeskField({
   // phase reset (no frame flashes the old document's last page). The camera
   // reopens too: every document opens at the readable default, centred, and
   // the entrance beat replays for the new stack.
-  const lastDocRef = useRef(docRef);
+  const lastLocationIdentity = useRef(locationIdentity);
   const pendingPageEventRef = useRef<number | null>(null);
-  if (lastDocRef.current !== docRef) {
-    lastDocRef.current = docRef;
+  if (lastLocationIdentity.current !== locationIdentity) {
+    lastLocationIdentity.current = locationIdentity;
     setViewChoice(null);
     pendingPageEventRef.current = null;
     setPage(1);
     setTurn(null);
     setTotal(1);
+    setSelection(null);
+    setFocusedTurnIndex(null);
+    setLocationNotice(null);
     settledRef.current = true;
     fitModeRef.current = true;
     cameraRef.current = createPaperCamera(fitPaperZoom(viewRef.current.w, viewRef.current.h));
@@ -446,6 +586,78 @@ export function DeskField({
   }
   useEffect(() => syncZoomView(), [docRef, syncZoomView]);
 
+  const restoredLocationRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const intent = JSON.stringify([locationIdentity, focusSignature, hasInitialLocation]);
+    // Effect reconnection can replay layout effects without a new reading
+    // intent. It must not restore an old page over a turn already in flight.
+    if (restoredLocationRef.current === intent) return;
+    restoredLocationRef.current = intent;
+    const stored = readDeskReadingLocation(readingLocationStorage(), sourceScope, persona, docRef);
+    const applyInitial = hasInitialLocation;
+    if (stored) {
+      setViewChoice({ docRef, view: stored.edition });
+      setPage(stored.page);
+      fitModeRef.current = stored.fit;
+      cameraRef.current = clampCameraPan({
+        zoom: stored.zoom,
+        zoomTarget: stored.zoom,
+        pan: { x: stored.panX, y: stored.panY },
+        panTarget: { x: stored.panX, y: stored.panY },
+      });
+    }
+    if (applyInitial && initialLocation?.edition) {
+      setViewChoice({ docRef, view: initialLocation.edition });
+      setPage(1);
+      setTotal(1);
+      setTurn(null);
+    }
+    locationSignatureRef.current = requestedLocationSignature;
+    handledFocusRef.current = applyInitial ? "" : focusSignature;
+    setFocusedTurnIndex(null);
+    setLocationNotice(null);
+    setSelection(null);
+    syncZoomView();
+  }, [
+    locationIdentity,
+    focusSignature,
+    requestedLocationSignature,
+    sourceScope,
+    persona,
+    docRef,
+    hasInitialLocation,
+    initialLocation?.edition,
+    clampCameraPan,
+    syncZoomView,
+  ]);
+
+  latestReadingLocationRef.current = {
+    scope: sourceScope,
+    persona,
+    ref: docRef,
+    location: {
+      edition: readingView,
+      page,
+      zoom: cameraRef.current.zoomTarget,
+      fit: fitModeRef.current,
+      panX: cameraRef.current.panTarget.x,
+      panY: cameraRef.current.panTarget.y,
+      initialSignature: locationSignatureRef.current,
+    },
+  };
+  useEffect(() => {
+    if (!ready) return;
+    const current = latestReadingLocationRef.current;
+    if (current) {
+      writeDeskReadingLocation(
+        readingLocationStorage(),
+        current.scope,
+        current.persona,
+        current.ref,
+        current.location,
+      );
+    }
+  }, [ready, sourceScope, persona, docRef, readingView, page, panTick, zoomView.text, focusSignature]);
   // THE COUNT IS READ, NOT PLANNED (v0.29). The top sheet's flow container
   // stays one page wide; with `column-fill: auto` the browser fragments the
   // whole flow into page-height columns on demand, letting the excess
@@ -520,6 +732,53 @@ export function DeskField({
     setPage((p) => clampPage(p, total));
   }, [total, turn]);
 
+  useLayoutEffect(() => {
+    if (
+      !ready ||
+      turn !== null ||
+      !initialLocation?.turnId ||
+      handledFocusRef.current === focusSignature
+    ) {
+      return;
+    }
+    if (model.kind !== "record" || !recordTurns) {
+      handledFocusRef.current = focusSignature;
+      setLocationNotice("missing");
+      return;
+    }
+    const match = resolveRecordTurnAnchor(recordTurns, initialLocation.turnId, initialLocation.role);
+    if (match.status !== "found") {
+      handledFocusRef.current = focusSignature;
+      setFocusedTurnIndex(null);
+      setLocationNotice(match.status);
+      return;
+    }
+    const pages = pagesRef.current;
+    const target = pages?.querySelector(`[data-record-turn-index="${match.index}"]`);
+    if (!pages || !target) return;
+    const targetPage = paperPageForPoint({
+      pagesLeft: pages.getBoundingClientRect().left,
+      targetLeft: target.getBoundingClientRect().left,
+      pageWidth: pages.clientWidth,
+      zoom: cameraRef.current.zoomTarget,
+    });
+    if (targetPage === null || targetPage > total) return;
+    handledFocusRef.current = focusSignature;
+    setPage(targetPage);
+    setFocusedTurnIndex(match.index);
+    setLocationNotice(null);
+  }, [
+    ready,
+    turn,
+    initialLocation?.turnId,
+    initialLocation?.role,
+    focusSignature,
+    model.kind,
+    recordTurns,
+    total,
+    pageBox.w,
+  ]);
+
   const observationRef = useRef("");
   useEffect(() => {
     if (!ready || leave || turn !== null || doc?.ref !== docRef) return;
@@ -578,6 +837,7 @@ export function DeskField({
   const turnPage = useCallback(
     (dir: "next" | "prev") => {
       if (turn !== null || !ready || total <= 1) return;
+      setSelection(null);
       // THE CYCLE (v0.29): no edge rejection — forward past the last page
       // wraps to the first, back past the first to the last.
       const target = wrapPage(page + (dir === "next" ? 1 : -1), total);
@@ -844,6 +1104,9 @@ export function DeskField({
       setPage(1);
       setTotal(1);
       setTurn(null);
+      setSelection(null);
+      setFocusedTurnIndex(null);
+      setLocationNotice(null);
       setOrder(Array.from({ length: SHELL_COUNT }, (_, i) => i));
       settledRef.current = true;
       fitModeRef.current = true;
@@ -856,11 +1119,23 @@ export function DeskField({
     [docRef, onViewChange, readingView, syncZoomView, turn],
   );
   const openSource = useCallback(
-    (sourceRef: string) => {
-      onSourceOpen?.({ fromDocRef: docRef, docRef: sourceRef, view: readingView });
-      openDesk(sourceRef, "manual");
+    (sourceRef: string, location?: DocumentLinkLocation) => {
+      setSelection(null);
+      onSourceOpen?.({ fromDocRef: docRef, docRef: sourceRef, view: readingView, location });
+      openDesk(sourceRef, "manual", location);
     },
     [docRef, onSourceOpen, openDesk, readingView],
+  );
+  const documentNavigation = useMemo(
+    () => ({ onOpen: openSource }),
+    [openSource],
+  );
+  const docRefCtx = useMemo<DocRefContextValue>(
+    () => ({
+      status: new Map(Array.from(refStatus, ([ref, v]) => [ref, v.alive])),
+      onOpen: openSource,
+    }),
+    [refStatus, openSource],
   );
 
   // The flow — one full copy of the selected reading view per content shell.
@@ -876,8 +1151,13 @@ export function DeskField({
               {currentTexts.unavailable}
             </p>
           )}
+          {locationNotice && (
+            <p className="document-location-notice" role="status">
+              {locationNotice === "ambiguous" ? currentTexts.locationAmbiguous : currentTexts.locationNotFound}
+            </p>
+          )}
           {readingView === "current" && model.current && (
-            <aside className="desk-current-provenance">
+            <aside className="desk-current-provenance" data-no-selection>
               <p className="desk-current-cue">
                 {model.current.missingAsOf
                   ? currentTexts.asOfMissing
@@ -912,7 +1192,7 @@ export function DeskField({
             </aside>
           )}
           {readingView === "history" && model.current && model.current.historySources.length > 0 && (
-            <div className="desk-current-sources">
+            <div className="desk-current-sources" data-no-selection>
               <span>{currentTexts.sourcesHeading}</span>
               <div className="desk-current-source-list">
                 {model.current.historySources.map((sourceRef, index) => (
@@ -929,11 +1209,22 @@ export function DeskField({
               </div>
             </div>
           )}
-          <MarkdownRenderer
-            content={displayMarkdown}
-            nativeMode="paper"
-            nativeTurnId={docRef}
-          />
+          {recordTurns ? recordTurns.map((turn) => (
+            <RecordTurnView
+              key={`${turn.index}:${turn.turnId ?? "legacy"}:${turn.role}`}
+              docRef={docRef}
+              turn={turn}
+              speaker={turn.role === "user" ? texts.recordUserLabel : texts.recordAgentLabel}
+              focused={focusedTurnIndex === turn.index}
+            />
+          )) : (
+            <MarkdownRenderer
+              content={displayMarkdown}
+              nativeMode="paper"
+              nativeTurnId={docRef}
+            />
+          )}
+          <RelatedDocuments documents={relatedDocuments} status={refStatus} />
         </>
       ) : null,
     [
@@ -943,9 +1234,16 @@ export function DeskField({
       docRef,
       currentUnavailable,
       currentTexts,
+      locationNotice,
       readingView,
       model,
       openSource,
+      recordTurns,
+      focusedTurnIndex,
+      texts.recordUserLabel,
+      texts.recordAgentLabel,
+      relatedDocuments,
+      refStatus,
     ],
   );
 
@@ -1188,9 +1486,11 @@ export function DeskField({
                                         style={pagesStyle}
                                       >
                                         <div className="desk-flow">
-                                          <DocRefProvider value={docRefCtx}>
-                                            {flow}
-                                          </DocRefProvider>
+                                          <DocumentNavigationProvider value={documentNavigation}>
+                                            <DocRefProvider value={docRefCtx}>
+                                              {flow}
+                                            </DocRefProvider>
+                                          </DocumentNavigationProvider>
                                         </div>
                                       </div>
                                     ) : (
@@ -1237,7 +1537,7 @@ export function DeskField({
           </div>
         </div>
       </div>
-      {createPortal(
+      {browserMounted && createPortal(
         <div className="desk-toolbar" data-desk-toolbar>
           <div className="desk-toolbar-group" data-page-controls>
             <button type="button" data-page-prev aria-label={texts.prevPage} title={texts.prevPage}
@@ -1262,6 +1562,38 @@ export function DeskField({
               <Plus className="size-4" />
             </button>
           </div>
+          {ready && (
+            <div className="desk-toolbar-group" data-reference-controls>
+              <AddDocumentReferenceAction
+                reference={{
+                  ref: docRef,
+                  title: referenceTitle,
+                  edition: readingView,
+                  ...(observedRevision ? { observedRevision } : {}),
+                }}
+                label={currentTexts.addWholeDocument}
+              />
+              {selection?.kind === "passage" && (
+                <AddDocumentReferenceAction
+                  reference={{
+                    ref: docRef,
+                    title: referenceTitle,
+                    edition: readingView,
+                    quote: selection.passage.text,
+                    ...(selection.passage.turnId ? { turnId: selection.passage.turnId } : {}),
+                    ...(selection.passage.role ? { role: selection.passage.role } : {}),
+                    ...(observedRevision ? { observedRevision } : {}),
+                  }}
+                  label={currentTexts.addSelectedPassage}
+                />
+              )}
+              {selection?.kind === "tooLong" && (
+                <span className="document-selection-notice" role="status">
+                  {currentTexts.selectionTooLong}
+                </span>
+              )}
+            </div>
+          )}
           <button type="button" data-desk-close onClick={closeDesk} className="desk-tool-button desk-tool-close"
             aria-label={texts.close ?? texts.regionLabel} title={texts.close ?? texts.regionLabel}><X className="size-4" /></button>
         </div>, document.body,

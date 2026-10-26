@@ -575,6 +575,7 @@ export interface SliceContent {
   /** The card's truncated opening rounds by default; every turn under
    *  `{ full: true }` (see `getSliceContent`). */
   turns: Turn[];
+  observedRevision?: string;
   totalTurns: number;
   totalChars: number;
   open_loops: string[];
@@ -685,6 +686,7 @@ export async function getSliceContent(
       status: slice.status,
       timezone: slice.timezone,
       turns: full ? slice.turns : frameTurns(slice.turns),
+      observedRevision: caseStorageRevision(raw),
       totalTurns: slice.turns.length,
       totalChars,
       open_loops: slice.open_loops,
@@ -863,6 +865,7 @@ export interface CaseCurrentView {
   sources: string[];
   /** Earlier archived views, raw — the reader filters engineering lines. */
   history: string;
+  observedRevision?: string;
   /** True when the index's stored bytes no longer match the view's recorded
    *  basis (the index changed after the view was written); null when the
    *  view named no basis, so the reader cannot know. */
@@ -925,6 +928,7 @@ async function readCaseCurrent(
       body: current.body,
       sources: current.evidence,
       history: current.history,
+      observedRevision: caseStorageRevision(raw),
       indexChanged: current.basis
         ? current.basis.indexRevision !== indexRevision
         : null,
@@ -1068,6 +1072,7 @@ export interface CaseDocContent {
   opened: string;
   closed: string | null;
   markdown: string;
+  observedRevision?: string;
   /** The dated current understanding — only a NEW-ROOT CASE index carries
    *  one; pieces and legacy docs never do. */
   current?: CaseCurrentRead;
@@ -1109,6 +1114,7 @@ export async function getCaseDoc(
       opened: doc.opened,
       closed: doc.closed,
       markdown: caseDocMarkdown(doc),
+      observedRevision: caseStorageRevision(hit.raw),
       current,
       warnings: doc.warnings,
     };
@@ -1120,6 +1126,7 @@ export async function getCaseDoc(
     opened: legacy?.opened ?? "",
     closed: legacy?.closed ?? null,
     markdown: legacy?.markdown ?? hit.raw,
+    observedRevision: caseStorageRevision(hit.raw),
     warnings: legacy?.warnings ?? [],
   };
 }
