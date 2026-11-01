@@ -68,8 +68,12 @@ export async function walkPathsLocal(
     let entries;
     try {
       entries = readdirSync(abs, { withFileTypes: true });
-    } catch {
-      continue;
+    } catch (error) {
+      // A new installation may have neither records root yet, and a directory
+      // may disappear during the walk. Only absence means an empty subtree;
+      // access/IO errors must not make existing local memory appear empty.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
     }
     for (const e of entries) {
       const childRel = `${rel}/${e.name}`;
