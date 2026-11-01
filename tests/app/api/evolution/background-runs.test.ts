@@ -12,6 +12,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // In-memory memory root (same pattern as tests/lib/episodic/*).
 const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
+
+vi.mock("@/lib/data-source/resolve", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/data-source/resolve")>(),
+  resolveDataSource: () => "local",
+}));
 vi.mock("@/lib/episodic/io-helpers", () => ({
   // The run coalesces its writes into ONE batch and ONE flush — createBatch/
   // flushBatch mirror the production shapes so the queued entries land on

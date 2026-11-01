@@ -24,6 +24,8 @@ const eslintConfig = [
   {
     ignores: [
       "node_modules/**",
+      // Agent worktrees are full checkouts, not source for this checkout.
+      ".claude/**",
       // Any Next build output — including probe distDirs (NEXT_DIST_DIR=.next-*),
       // which .gitignore already covers with `.next*/`.
       ".next*/**",

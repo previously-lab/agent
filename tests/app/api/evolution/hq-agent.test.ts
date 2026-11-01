@@ -11,6 +11,16 @@ import { fileURLToPath } from "node:url";
  * any order (or skip them).
  */
 
+vi.mock("@/lib/data-source/resolve", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/data-source/resolve")>(),
+  resolveDataSource: () => {
+    const explicit = process.env.STORAGE;
+    return explicit === "github" || explicit === "demo" || explicit === "local"
+      ? explicit
+      : "local";
+  },
+}));
+
 // In-memory memory root (same pattern as background-runs.test.ts).
 const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -1008,10 +1018,10 @@ describe("handleBrief (v0.21 §5)", () => {
   // flush and poisoned the whole commit (the trailer never landed, the
   // cursor held, the next round retried the same scope). The gate must
   // refuse BEFORE any read, write, or lock — a string, never a throw.
-  // ("2026-13-99-9999" is range-nonsense but SHAPE-valid — parseSliceId's
-  // contract is the four-segment shape; that id passes the gate and degrades
-  // through the unreadable path below, still without a write.)
+  // Calendar/time validation is part of the gate as well as the four-segment
+  // shape, so range-nonsense cannot reach the round-end commit either.
   const MALFORMED_IDS = [
+    "2026-13-99-9999",
     "2026-10-16 01:31",
     "2026-10-16-0131/core.md",
     "../escape",
@@ -1046,12 +1056,13 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(io.files.size).toBe(0);
   });
 
-  it("a shape-valid but nonexistent id (2026-13-99-9999) degrades unreadable — the pre-gate load judgment, never a throw or a write", async () => {
+  it("a valid but nonexistent id degrades unreadable — the post-gate load judgment, never a throw or a write", async () => {
+    const missingId = "2026-12-09-2359";
     episodic.loadSlice.mockResolvedValue(null);
     runSubAgentMock.mockImplementation(async (opts) => {
-      const m = await callTool(opts, "markOrphan", { sliceId: "2026-13-99-9999" });
+      const m = await callTool(opts, "markOrphan", { sliceId: missingId });
       expect(m).toContain("unreadable");
-      const r = await callTool(opts, "readRound", { sliceId: "2026-13-99-9999" });
+      const r = await callTool(opts, "readRound", { sliceId: missingId });
       expect(r).toContain("cannot read");
       expect(io.batchRef.current!.entries.size).toBe(0);
       return { ok: true, report: { actions: [], note: "degraded" }, text: "" };

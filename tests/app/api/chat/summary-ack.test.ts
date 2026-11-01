@@ -3,9 +3,15 @@ import type { SummaryRunPayload, SummaryRunOutcome, VerifiedTaskReply } from "@/
 import type { TaskAckIntent } from "@/lib/chat/task-followups";
 
 vi.hoisted(() => {
-  process.env.MEMORY_ROOT = `${process.env.MEMORY_ROOT}/summary-ack`;
-  process.env.PREVIOUSLY_HOME = `${process.env.PREVIOUSLY_HOME}/summary-ack`;
+  const root = `${process.env.TMPDIR ?? process.env.TEMP ?? "/tmp"}/aftrbrez-summary-ack-${process.pid}-${Date.now()}`;
+  process.env.MEMORY_ROOT = `${root}/memory`;
+  process.env.PREVIOUSLY_HOME = `${root}/home`;
 });
+
+vi.mock("@/lib/data-source/resolve", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/data-source/resolve")>(),
+  resolveDataSource: () => "local",
+}));
 
 const h = vi.hoisted(() => ({
   persist: vi.fn(),

@@ -223,7 +223,10 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
       caseName: "手机购买调研",
       body: "用户在 2026-08-09-1300 提到想换手机，预算未定。",
     };
+    io.files.set(`${SLICE_ID}:core`, "## Turn a1b2c3 — 2026-08-09T13:00:00.000Z (user)\n想换手机，预算未定。\n");
     runSubAgentMock.mockImplementation(async (opts) => {
+      const evidence = await callTool(opts, "readRound", { sliceId: SLICE_ID });
+      expect(evidence).toContain("想换手机，预算未定。");
       const r = await callTool(opts, "writeCase", openArgs);
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
@@ -255,6 +258,8 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
     };
     const piecePaths: string[] = [];
     runSubAgentMock.mockImplementation(async (opts) => {
+      const current = await callTool(opts, "readCase", { ref: "research/手机购买调研" });
+      expect(current).toContain("沉淀的正文。");
       const r = await callTool(opts, "writeCase", pieceArgs);
       const m = r.match(/^OK — 已记录，随本轮一次落盘: (\S+)/);
       if (m) piecePaths.push(m[1]);

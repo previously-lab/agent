@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
-  process.env.MEMORY_ROOT = `${process.env.MEMORY_ROOT}/task-tools`;
-  process.env.PREVIOUSLY_HOME = `${process.env.PREVIOUSLY_HOME}/task-tools`;
+  const root = `${process.env.TMPDIR ?? process.env.TEMP ?? "/tmp"}/aftrbrez-task-tools-${process.pid}-${Date.now()}`;
+  process.env.MEMORY_ROOT = `${root}/memory`;
+  process.env.PREVIOUSLY_HOME = `${root}/home`;
 });
+
+vi.mock("@/lib/data-source/resolve", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/data-source/resolve")>(),
+  resolveDataSource: () => "local",
+}));
 
 import {
   createTaskExecute,
