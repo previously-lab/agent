@@ -60,4 +60,16 @@ describe("native iframe document policy", () => {
     expect(result).not.toContain("<script>window.injected=true</script>");
     expect(result).toContain('"previously-native-reply-v1"');
   });
+
+  it("layers default styles below utilities and applies surface tokens after shared CSS", () => {
+    const result = buildNativeDocument({ source: '<body class="bg-primary"><p>fixture</p></body>', token: "token", locale: "en", interactive: true, fallback: "fallback",
+      theme: { ...DEFAULT_NATIVE_THEME, cssVariables: { "--primary": "host-brand" } },
+      styles: { id: "host-css", cssText: '@layer utilities {.bg-primary{background:var(--primary)}}/* </style><script>breakout</script> */' },
+    });
+    expect(result.indexOf("@layer utilities")).toBeLessThan(result.indexOf("--primary:host-brand"));
+    expect(result).toContain("@layer base{");
+    expect(result).not.toContain("</style><script>breakout</script>");
+    expect(result).toContain("form-action 'none'");
+    expect(result).not.toContain("unsafe-eval");
+  });
 });

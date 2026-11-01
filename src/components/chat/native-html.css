@@ -11,11 +11,7 @@
 
 .native-frame-shell {
   position: relative;
-  height: min(var(--native-frame-height, 12rem), 64rem);
-}
-
-.native-html--expanded .native-frame-shell {
-  height: min(var(--native-frame-height, 12rem), 160rem);
+  height: var(--native-frame-height, 12rem);
 }
 
 .native-html--paper {
@@ -23,8 +19,7 @@
 }
 
 .native-html--paper .native-frame-shell {
-  height: 18rem;
-  max-height: 18rem;
+  height: min(var(--native-frame-height, 18rem), max(6rem, calc(var(--native-page-height, 64rem) - 3rem)));
 }
 
 .native-frame {
@@ -78,17 +73,6 @@
   margin-top: 0.2rem;
 }
 
-.native-controls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.2rem;
-  min-height: 2rem;
-  color: var(--muted-foreground);
-  font-family: var(--font-sans, sans-serif);
-  font-size: 0.68rem;
-}
-
 .native-suggestion {
   display: flex;
   flex-wrap: wrap;
@@ -106,7 +90,6 @@
   white-space: pre-wrap;
 }
 
-.native-controls button,
 .native-incomplete > button,
 .native-suggestion button {
   display: inline-flex;
@@ -125,40 +108,14 @@
   color: var(--foreground);
 }
 
-.native-controls button:hover,
 .native-incomplete > button:hover,
 .native-suggestion button:hover {
   background: color-mix(in oklab, var(--foreground) 6%, transparent);
   color: var(--foreground);
 }
 
-.native-controls button:focus-visible,
 .native-incomplete > button:focus-visible,
-.native-suggestion button:focus-visible,
-.native-dialog-close:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.native-controls svg {
-  width: 0.85rem;
-  height: 0.85rem;
-}
-
-.native-source {
-  max-width: 100%;
-  max-height: 20rem;
-  margin-top: 0.35rem;
-  padding: 0.75rem;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: color-mix(in oklab, var(--foreground) 3%, transparent);
-  font: 0.75rem/1.6 var(--font-mono, monospace);
-  white-space: pre;
-}
-
-.native-source:focus-visible {
+.native-suggestion button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
@@ -178,46 +135,6 @@
   font: 0.72rem/1.5 var(--font-sans, sans-serif);
 }
 
-.native-dialog {
-  width: min(56rem, calc(100vw - 2rem));
-  max-width: 100%;
-  max-height: 90dvh;
-  padding: 2.5rem 1rem 1rem;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--background);
-  color: var(--foreground);
-  box-shadow: var(--shadow-panel);
-}
-
-.native-dialog::backdrop {
-  background: rgb(12 20 34 / 48%);
-}
-
-.native-dialog-close {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 2rem;
-  min-height: 2rem;
-  border-radius: 999px;
-  color: var(--muted-foreground);
-}
-
-.native-dialog-close:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.native-dialog-close svg {
-  width: 1rem;
-  height: 1rem;
-}
-
 @keyframes native-block-arrive {
   from {
     opacity: 0;
@@ -230,10 +147,8 @@
 }
 
 @media (pointer: coarse) {
-  .native-controls button,
   .native-incomplete > button,
-  .native-suggestion button,
-  .native-dialog-close {
+  .native-suggestion button {
     min-width: 2.75rem;
     min-height: 2.75rem;
   }
@@ -247,4 +162,9 @@
   .native-frame {
     transition: none;
   }
+}
+
+@media print {
+  .native-suggestion,
+  .native-incomplete > button { display: none; }
 }

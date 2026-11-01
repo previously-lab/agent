@@ -18,6 +18,34 @@ function render(node: React.ReactNode): string {
 }
 
 describe("reader document parts", () => {
+  it("renders archived assistant HTML inline with the same stable turn identity as chat", () => {
+    const html = render(<RecordTurnView
+      docRef="records/2026-10-12-1430"
+      turn={{ index: 2, turnId: "same-chat-turn", role: "assistant", timestamp: "2026-10-12T14:30:00.000Z", content: "```html live\n<button>Try it</button>\n```" }}
+      speaker="Previously"
+      focused={false}
+    />);
+    expect(html).toContain('data-native-render-mode="reader"');
+    expect(html).toContain('data-native-turn="same-chat-turn"');
+    expect(html).toContain('data-native-mode="paper"');
+    expect(html).not.toContain("native-controls");
+    expect(html).not.toContain("native-dialog");
+    expect(html).not.toContain("native-source");
+  });
+
+  it("never executes a user's quoted html live fence in a record", () => {
+    const html = render(<RecordTurnView
+      docRef="records/2026-10-12-1430"
+      turn={{ index: 1, turnId: "user-turn", role: "user", timestamp: "2026-10-12T14:30:00.000Z", content: "```html live\n<script>window.quoted=true</script>\n```" }}
+      speaker="You"
+      focused={false}
+    />);
+    expect(html).not.toContain("data-native-block");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("quoted");
+  });
+
   it("renders exact record identity, focus, persisted references, and verbatim content", () => {
     const html = render(<RecordTurnView
       docRef="records/2026-10-12-1430"

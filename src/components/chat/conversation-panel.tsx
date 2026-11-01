@@ -1,5 +1,7 @@
 "use client";
 
+import { NativeReadingCopyProvider } from "./native-reading-context";
+
 /**
  * ConversationPanel — the conversation layer's two tiers (v0.13 §4).
  *
@@ -406,7 +408,11 @@ export function ConversationPanel({
           {/* min-h-0 so the chat's own surface — not this column — grows and
               scrolls. The body is one plain DOM column (the DOM chat list);
               no portal target lives here any more. */}
-          <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <NativeReadingCopyProvider active={mode === "fullscreen"} priority={3}>
+              {children}
+            </NativeReadingCopyProvider>
+          </div>
         </div>
 
         {/* The composer is NOT in this JSX — `ChatPage` renders it

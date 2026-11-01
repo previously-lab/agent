@@ -96,6 +96,8 @@ import { paperPageForPoint, resolveRecordTurnAnchor } from "@/lib/documents/reco
 import { DocumentNavigationProvider } from "@/components/documents/document-navigation";
 import { AddDocumentReferenceAction } from "@/components/documents/document-actions";
 import { RecordTurnView } from "@/components/documents/record-turn";
+import { NativeReadingCopyProvider, NativeReadingLayoutProvider } from "@/components/chat/native-reading-context";
+import { flushNativeReading } from "@/components/chat/native-html";
 import { RelatedDocuments } from "@/components/documents/related-documents";
 import "@/components/documents/document-reader.css";
 import "./desk.css";
@@ -215,7 +217,7 @@ export function DeskField({
   onSourceOpen?: (event: DeskSourceOpen) => void;
   onDocumentObserved?: (observation: DeskDocumentObservation) => void;
 }) {
-  const { closeDesk, openDesk } = useShell();
+  const { closeDesk: closeDeskImmediately, openDesk } = useShell();
   const locale = useLocale();
   const leave = leaving;
   const sourceScope = useNativeSourceScope();
@@ -460,6 +462,22 @@ export function DeskField({
     const actual = paperPageCount(el.scrollWidth, w);
     setTotal((prev) => (prev === actual ? prev : actual));
   }, []);
+
+  // Intrinsic HTML figures can grow after their frame becomes ready. Read the
+  // existing column geometry after the shared figure heights have committed.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    let frame = 0;
+    const remeasure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (pagesRef.current && turnRef.current === null) readTotal(pagesRef.current);
+      });
+    };
+    wrap.addEventListener("previously:native-resize", remeasure);
+    return () => { wrap.removeEventListener("previously:native-resize", remeasure); cancelAnimationFrame(frame); };
+  }, [readTotal]);
 
   // Callback refs, not plain refs: a missed attach must not leave the
   // measurement state at zero until some unrelated re-render. The callback
@@ -834,9 +852,14 @@ export function DeskField({
     return () => clearTimeout(t);
   }, [turn, settleTurn]);
 
+  const flushingTurnRef = useRef(false);
   const turnPage = useCallback(
-    (dir: "next" | "prev") => {
-      if (turn !== null || !ready || total <= 1) return;
+    async (dir: "next" | "prev") => {
+      if (turn !== null || !ready || total <= 1 || flushingTurnRef.current) return;
+      flushingTurnRef.current = true;
+      await flushNativeReading(wrapRef.current);
+      flushingTurnRef.current = false;
+      if (turnRef.current !== null || lastLocationIdentity.current !== locationIdentity || !wrapRef.current?.isConnected) return;
       setSelection(null);
       // THE CYCLE (v0.29): no edge rejection — forward past the last page
       // wraps to the first, back past the first to the last.
@@ -863,7 +886,7 @@ export function DeskField({
       settledRef.current = false;
       setTurn({ dir, traveler: dir === "next" ? order[0] : order[SHELL_COUNT - 1] });
     },
-    [turn, ready, page, total, reducedMotion, order, emitPageChange],
+    [turn, ready, page, total, reducedMotion, order, emitPageChange, locationIdentity],
   );
   const turnPageRef = useRef(turnPage);
   turnPageRef.current = turnPage;
@@ -954,6 +977,10 @@ export function DeskField({
   // Escape must keep working there (it defers to any inner handler that
   // already claimed the key, and to editable targets).
   const wrapRef = useRef<HTMLDivElement>(null);
+  const closeDesk = useCallback(async () => {
+    await flushNativeReading(wrapRef.current);
+    if (lastLocationIdentity.current === locationIdentity && wrapRef.current?.isConnected) closeDeskImmediately();
+  }, [closeDeskImmediately, locationIdentity]);
   useEffect(() => {
     wrapRef.current?.focus();
   }, []);
@@ -1097,8 +1124,10 @@ export function DeskField({
   }, []);
 
   const selectReadingView = useCallback(
-    (next: DeskReadingView) => {
+    async (next: DeskReadingView) => {
       if (next === readingView || turn !== null) return;
+      await flushNativeReading(wrapRef.current);
+      if (lastLocationIdentity.current !== locationIdentity || !wrapRef.current?.isConnected) return;
       pendingPageEventRef.current = null;
       setViewChoice({ docRef, view: next });
       setPage(1);
@@ -1116,15 +1145,17 @@ export function DeskField({
       syncZoomView();
       onViewChange?.({ docRef, view: next, page: 1 });
     },
-    [docRef, onViewChange, readingView, syncZoomView, turn],
+    [docRef, onViewChange, readingView, syncZoomView, turn, locationIdentity],
   );
   const openSource = useCallback(
-    (sourceRef: string, location?: DocumentLinkLocation) => {
+    async (sourceRef: string, location?: DocumentLinkLocation) => {
+      await flushNativeReading(wrapRef.current);
+      if (lastLocationIdentity.current !== locationIdentity || !wrapRef.current?.isConnected) return;
       setSelection(null);
       onSourceOpen?.({ fromDocRef: docRef, docRef: sourceRef, view: readingView, location });
       openDesk(sourceRef, "manual", location);
     },
-    [docRef, onSourceOpen, openDesk, readingView],
+    [docRef, onSourceOpen, openDesk, readingView, locationIdentity],
   );
   const documentNavigation = useMemo(
     () => ({ onOpen: openSource }),
@@ -1220,7 +1251,7 @@ export function DeskField({
           )) : (
             <MarkdownRenderer
               content={displayMarkdown}
-              nativeMode="paper"
+              nativeMode="reader"
               nativeTurnId={docRef}
             />
           )}
@@ -1266,7 +1297,7 @@ export function DeskField({
   void panTick;
 
   return (
-    <>
+    <NativeReadingLayoutProvider identity={`${locationIdentity}:${readingView}:${pageBox.w}`} pageHeight={pageBox.h}>
       <div
         ref={wrapRef}
         data-desk-field
@@ -1488,7 +1519,9 @@ export function DeskField({
                                         <div className="desk-flow">
                                           <DocumentNavigationProvider value={documentNavigation}>
                                             <DocRefProvider value={docRefCtx}>
-                                              {flow}
+                                              <NativeReadingCopyProvider active={isTop}>
+                                                {flow}
+                                              </NativeReadingCopyProvider>
                                             </DocRefProvider>
                                           </DocumentNavigationProvider>
                                         </div>
@@ -1598,6 +1631,6 @@ export function DeskField({
             aria-label={texts.close ?? texts.regionLabel} title={texts.close ?? texts.regionLabel}><X className="size-4" /></button>
         </div>, document.body,
       )}
-    </>
+    </NativeReadingLayoutProvider>
   );
 }

@@ -8,13 +8,14 @@ import {
   seedSlices,
   type FixtureSlice,
 } from "./memory-fixture";
+import { liveFence, sliderDocument } from "./native-interaction-fixture";
 
 const NATIVE_STORE = "previously:native-replies:v1";
 
 async function openConversation(page: Page): Promise<void> {
   const expand = page.getByRole("button", { name: "Expand to full screen" });
   const retry = page.locator("[data-chat-arrival-error]").getByRole("button", { name: "Retry", exact: true });
-  const textarea = page.locator(".conversation-composer textarea");
+  const textarea = page.locator("[data-manuscript-input]");
   await expect(expand.or(retry).or(textarea).first()).toBeVisible({ timeout: 30_000 });
   if (await retry.isVisible()) await retry.click();
   await expect(expand.or(textarea).first()).toBeVisible({ timeout: 30_000 });
@@ -248,8 +249,8 @@ test("mock SSE keeps completed native DOM stable through later prose, diagrams, 
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
   await openConversation(page);
-  await page.getByRole("textbox", { name: "Send a message..." }).fill("Start the fictional rich reply");
-  await page.getByRole("textbox", { name: "Send a message..." }).press("Enter");
+  await page.locator("[data-manuscript-input]").fill("Start the fictional rich reply");
+  await page.locator("[data-manuscript-input]").press("Enter");
   await expect.poll(posts).toBe(1);
   await next();
   await next();
@@ -336,7 +337,15 @@ for (const viewport of [
     test("history controls survive resize, fold and reload; reduced motion and source versions reset cleanly", async ({ page }) => {
       test.setTimeout(120_000);
       await page.emulateMedia({ reducedMotion: "reduce" });
-      const fixtureSlice = nativeSlice(nativeFixture({ value: 10 }));
+      const fixtureSlice = nativeSlice(nativeFixture({ value: 10,
+        markup: '<button id="custom-step" type="button">Add saved step</button><output id="custom-total">7</output>',
+        script: `
+          let clicks=window.previously.getState()?.clicks??1;
+          const renderCustom=()=>document.getElementById('custom-total').textContent=String(clicks*7);
+          document.getElementById('custom-step').onclick=()=>{clicks++;window.previously.setState({clicks});renderCustom()};
+          renderCustom();
+        `,
+      }));
       await seedSlices([fixtureSlice]);
       await page.goto("/en/app");
       await openConversation(page);
@@ -350,24 +359,28 @@ for (const viewport of [
       await setRange(page, 64);
       await expect.poll(() => storedControlValues(page)).toContain("64");
       const run = await nativeRun(page);
-      const source = block.getByRole("button", { name: "Source", exact: true });
-      await source.focus();
-      await page.keyboard.press("Enter");
-      await expect(block.locator(".native-source")).toBeVisible();
-      await block.getByRole("button", { name: "Expand", exact: true }).click();
-      await expect(block).toHaveClass(/native-html--expanded/);
+      await expect(block.locator(".native-source, .native-controls")).toHaveCount(0);
       expect(await nativeRun(page)).toBe(run);
       await page.setViewportSize({ width: viewport.mobile ? 430 : 1100, height: viewport.height });
       expect(await rangeValue(page)).toBe("64");
-      await page.locator(".conversation-composer textarea").press("Escape");
-      await page.getByRole("button", { name: "Expand to full screen" }).click();
       expect(await nativeRun(page)).toBe(run);
+      await page.frameLocator("[data-native-frame]").getByRole("button", { name: "Add saved step", exact: true }).click();
+      await page.locator("[data-manuscript-input]").press("Escape");
+      await page.getByRole("button", { name: "Expand to full screen" }).click();
+      // Folding intentionally releases execution. Reopening restores state;
+      // resize above, live theme changes and streamed prose must not reload it.
       expect(await rangeValue(page)).toBe("64");
+      expect(await outputValue(page)).toBe("64");
+      expect(await circleRadius(page)).toBe("10.4");
+      await expect(page.frameLocator("[data-native-frame]").locator("#custom-total")).toHaveText("14");
+      expect(await page.frameLocator("[data-native-frame]").locator("html").evaluate(() =>
+        (window as unknown as { previously: { getState(): unknown } }).previously.getState())).toEqual({ clicks: 2 });
       await page.reload();
       await openConversation(page);
       expect(await rangeValue(page)).toBe("64");
       expect(await outputValue(page)).toBe("64");
       expect(await circleRadius(page)).toBe("10.4");
+      await expect(page.frameLocator("[data-native-frame]").locator("#custom-total")).toHaveText("14");
       fixtureSlice.turns[1].content = nativeFixture({ value: 35 });
       await seedSlices([fixtureSlice]);
       await page.reload();
@@ -433,11 +446,11 @@ test("sandbox denies parent, storage and network; only host acceptance appends o
   await expect(frame.locator("html")).toHaveAttribute("data-parent-access", "denied");
   await expect(frame.locator("html")).toHaveAttribute("data-storage-access", "denied");
   await expect(frame.locator("html")).toHaveAttribute("data-fetch-denied", "yes");
-  const input = page.getByRole("textbox", { name: "Send a message..." });
+  const input = page.locator("[data-manuscript-input]");
   await expect(input).toHaveValue("");
   await expect(page.locator("[data-native-suggestion]")).toHaveCount(1);
   await input.fill("Existing draft");
-  await page.locator(".conversation-composer input[type=file]").setInputFiles({
+  await page.locator("input[type=file]").first().setInputFiles({
     name: "fixture-note.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64"),
@@ -459,7 +472,7 @@ test("sandbox denies parent, storage and network; only host acceptance appends o
   expect(external).toBe(0);
 });
 
-test("terminal incomplete source stays readable and inert, with keyboard-accessible controls", async ({ page }) => {
+test("terminal incomplete source stays inert with a readable message and keyboard Retry", async ({ page }) => {
   let posts = 0;
   page.on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/chat") posts++;
@@ -470,49 +483,73 @@ test("terminal incomplete source stays readable and inert, with keyboard-accessi
   const incomplete = page.locator("[data-native-incomplete]");
   await expect(incomplete).toBeVisible();
   await expect(page.locator("[data-native-frame]")).toHaveCount(0);
-  const source = incomplete.getByRole("button", { name: "Source", exact: true });
-  await source.focus();
-  await page.keyboard.press("Enter");
-  await expect(incomplete.locator(".native-source")).toContainText("window.partialExecuted=true");
+  await expect(incomplete.locator("p")).not.toBeEmpty();
+  await expect(incomplete.locator(".native-source, .native-controls")).toHaveCount(0);
   await incomplete.getByRole("button", { name: "Retry", exact: true }).focus();
   await page.keyboard.press("Space");
-  await expect(page.getByRole("textbox", { name: "Send a message..." })).toHaveValue("Please finish the incomplete interactive HTML block from the previous reply.");
+  await expect(page.locator("[data-manuscript-input]")).toHaveValue("Please finish the incomplete interactive HTML block from the previous reply.");
   expect(posts).toBe(0);
 });
 
-test("paper copies never run duplicate scripts and open only one deliberate interactive view", async ({ page }) => {
+test("paper copies execute once per scope and page turns retain independent slider states", async ({ page }) => {
   test.setTimeout(120_000);
   const body = [
     "# Fictional native paper",
-    "```html live",
-    "<p>Readable static native summary.</p><script>document.documentElement.dataset.paperScript='ran'</script>",
-    "```",
-    ...Array.from({ length: 18 }, (_, index) => `## Section ${index + 1}\n\n${"Fixed printable prose. ".repeat(18)}`),
+    liveFence(sliderDocument("A", 10)),
+    ...Array.from({ length: 12 }, (_, index) => `## Section ${index + 1}\n\n${"Fixed printable prose. ".repeat(18)}`),
+    liveFence(sliderDocument("B", 60)),
   ].join("\n\n");
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await seedCases([{ category: "research", name: "native-paper", opened: "2026-02-01", body, pieces: [] }]);
-  await page.goto("/en/app?view=field");
-  await page.locator('[data-archive-pile="research/native-paper"]').click();
+  await page.addInitScript(() => {
+    const probe = window as unknown as { __maxPaperCopies: number };
+    probe.__maxPaperCopies = 0;
+    new MutationObserver(() => {
+      const scopes = new Map<string, number>();
+      for (const iframe of document.querySelectorAll('.desk-paper iframe[sandbox~="allow-scripts"]')) {
+        const scope = iframe.closest('[data-native-scope]')?.getAttribute('data-native-scope') ?? "unknown";
+        scopes.set(scope, (scopes.get(scope) ?? 0) + 1);
+      }
+      probe.__maxPaperCopies = Math.max(probe.__maxPaperCopies, ...scopes.values());
+    }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["sandbox"] });
+  });
+  await page.goto("/en/app?doc=research/native-paper");
   await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("native-paper");
   await expect.poll(async () => Number((await page.locator(".desk-page-position").innerText()).split("/")[1])).toBeGreaterThan(1);
-  const staticFrames = page.locator('[data-native-mode="paper"] iframe');
-  await expect(staticFrames.first()).toBeVisible();
-  expect(await staticFrames.count()).toBeGreaterThanOrEqual(2);
-  expect(await staticFrames.evaluateAll((frames) => frames.every((frame) => frame.getAttribute("sandbox") === ""))).toBe(true);
-  const scriptRuns = async () => {
-    let count = 0;
-    for (const frame of page.frames()) count += await frame.locator('html[data-paper-script="ran"]').count();
-    return count;
-  };
-  expect(await scriptRuns()).toBe(0);
-  const position = await page.locator(".desk-page-position").innerText();
-  await page.locator(".desk-shell--top [data-native-block]").getByRole("button", { name: "Open interactive", exact: true }).click();
-  await expect(page.locator("dialog.native-dialog iframe[sandbox='allow-scripts']")).toHaveCount(1);
-  await expect.poll(scriptRuns).toBe(1);
-  await page.getByRole("button", { name: "Close interactive view", exact: true }).click();
-  await expect(page.locator("dialog.native-dialog")).toHaveCount(0);
-  expect(await scriptRuns()).toBe(0);
-  await expect(page.locator(".desk-page-position")).toHaveText(position);
+  const first = page.locator('.desk-shell--top [data-native-block="native-0"] iframe[sandbox~="allow-scripts"]').contentFrame();
+  await first.getByLabel("Level A").press("End");
+  await first.getByLabel("Level A").press("ArrowLeft");
+  await expect(first.locator("#value")).toHaveText("198");
+  await expect.poll(() => storedControlValues(page)).toContain("99");
+  const secondElement = page.locator('.desk-shell--top [data-native-block="native-1"] iframe[sandbox~="allow-scripts"]');
+  const inPage = () => page.evaluate(() => {
+    const element = document.querySelector('.desk-shell--top [data-native-block="native-1"] iframe[sandbox~="allow-scripts"]');
+    const pageBox = document.querySelector(".desk-shell--top .desk-pagebox");
+    if (!element || !pageBox) return false;
+    const rect = element.getBoundingClientRect();
+    const clip = pageBox.getBoundingClientRect();
+    return rect.left >= clip.left - 1 && rect.right <= clip.right + 1 && rect.top < clip.bottom && rect.bottom > clip.top;
+  });
+  for (let index = 0; index < 12 && !(await inPage()); index++) {
+    await page.locator("[data-page-next]").click();
+    await expect(page.locator(".desk-shell--travel-next, .desk-shell--travel-prev")).toHaveCount(0);
+  }
+  expect(await inPage()).toBe(true);
+  const second = secondElement.contentFrame();
+  await expect(second.getByLabel("Level B")).toHaveValue("60");
+  await second.getByLabel("Level B").press("Home");
+  await second.getByLabel("Level B").press("ArrowRight");
+  await expect(second.locator("#value")).toHaveText("2");
+  await expect.poll(() => storedControlValues(page)).toContain("1");
+  for (let index = 0; index < 12 && !(await page.locator(".desk-page-position").innerText()).startsWith("1 /"); index++) {
+    await page.locator("[data-page-prev]").click();
+    await expect(page.locator(".desk-shell--travel-next, .desk-shell--travel-prev")).toHaveCount(0);
+  }
+  await expect(first.getByLabel("Level A")).toHaveValue("99");
+  await expect(first.locator("#value")).toHaveText("198");
+  await expect.poll(() => storedControlValues(page)).toContain("1");
+  expect(await page.evaluate(() => (window as unknown as { __maxPaperCopies: number }).__maxPaperCopies)).toBe(1);
+  await expect(page.locator(".native-controls, .native-source, dialog.native-dialog")).toHaveCount(0);
 });
 
 test("timed chunks do not replay settled prose or replace the completed iframe", async ({ page }) => {
@@ -560,8 +597,8 @@ test("timed chunks do not replay settled prose or replace the completed iframe",
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
   await openConversation(page);
-  await page.getByRole("textbox", { name: "Send a message..." }).fill("Start the timed fictional reply");
-  await page.getByRole("textbox", { name: "Send a message..." }).press("Enter");
+  await page.locator("[data-manuscript-input]").fill("Start the timed fictional reply");
+  await page.locator("[data-manuscript-input]").press("Enter");
   await expect(page.getByText("First settled paragraph.", { exact: true })).toBeVisible();
   await expect(page.locator("[data-native-frame]")).toBeVisible();
   const run = await nativeRun(page);
@@ -603,22 +640,20 @@ test("early script errors survive ready and script-only content keeps a readable
   const frame = page.frameLocator("[data-native-frame]").first();
   await expect(frame.locator("#previously-native-fallback")).toBeVisible();
   await expect(page.locator(".native-error")).toContainText("script problem");
-  await expect(page.getByRole("button", { name: "Source", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeVisible();
+  await expect(page.locator(".native-controls, .native-source")).toHaveCount(0);
 });
 
-test("a second iframe load removes the navigated document and leaves recovery controls", async ({ page }) => {
+test("a second iframe load removes the navigated document and leaves a readable failure", async ({ page }) => {
   const navigating = nativeFixture({
     script: "setTimeout(()=>{window.location.assign('about:blank')},1000);",
   });
   await seedAndOpen(page, navigating);
   await expect(page.locator("[data-native-frame]")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".native-preparing-label")).toContainText("navigate away");
-  await expect(page.getByRole("button", { name: "Source", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeVisible();
+  await expect(page.locator(".native-controls, .native-source")).toHaveCount(0);
 });
 
-test("native height follows content both ways and expansion adds room", async ({ page }) => {
+test("native height follows content both ways without expansion controls", async ({ page }) => {
   test.setTimeout(120_000);
   const fixture = nativeFixture({
     markup: '<button id="details" type="button">Toggle details</button><div id="details-panel" hidden><div style="height:1400px">Tall fictional details</div></div>',
@@ -641,9 +676,9 @@ test("native height follows content both ways and expansion adds room", async ({
   await expect(page.locator(".conversation-panel .pulse-delay")).toHaveCount(0);
   await frame.locator("#details").click();
   await expect(frame.locator("#details-panel")).toBeVisible();
-  await expect.poll(height).toBe(1024);
-  await page.getByRole("button", { name: "Expand", exact: true }).click();
   await expect.poll(height).toBeGreaterThan(1024);
+  await expect.poll(() => frame.locator("html").evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+  await expect(page.locator(".native-controls")).toHaveCount(0);
   await frame.locator("#details").focus();
   await page.keyboard.press("Space");
   await expect.poll(height).toBeLessThan(900);
@@ -733,7 +768,7 @@ test("an EOF closing candidate and a delayed invalid suffix never execute native
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
   await openConversation(page);
-  const input = page.getByRole("textbox", { name: "Send a message..." });
+  const input = page.locator("[data-manuscript-input]");
   await input.fill("Start the EOF candidate fixture");
   await input.press("Enter");
   await expect.poll(sse.posts).toBe(1);
@@ -774,7 +809,7 @@ test("valid closing EOL and terminal EOF each execute once without replacing the
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
   await openConversation(page);
-  const input = page.getByRole("textbox", { name: "Send a message..." });
+  const input = page.locator("[data-manuscript-input]");
   await input.fill("Start the valid and terminal EOF fixture");
   await input.press("Enter");
   await expect.poll(sse.posts).toBe(1);
@@ -800,8 +835,7 @@ test("synchronous first-load navigation fails closed on the ready timeout", asyn
   await openConversation(page);
   await expect(page.locator(".native-preparing-label")).toContainText("stopped or could not finish loading", { timeout: 15_000 });
   await expect(page.locator("[data-native-frame]")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Source", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reset", exact: true })).toBeVisible();
+  await expect(page.locator(".native-controls, .native-source")).toHaveCount(0);
 });
 
 test("initial arrival Retry and Expand work with a real pointer", async ({ page }) => {
@@ -811,13 +845,18 @@ test("initial arrival Retry and Expand work with a real pointer", async ({ page 
   const arrivalGate = new Promise<void>((resolve) => { releaseArrival = resolve; });
   await page.route("**/en/app**", async (route) => {
     const request = route.request();
-    if (!delayedArrival && request.method() === "POST" && request.headers()["next-action"] && request.postData() === "[[],[]]") {
-      delayedArrival = true;
-      await arrivalGate;
-      await route.abort("aborted");
+    if (request.method() === "POST" && request.headers()["next-action"]) {
+      const response = await route.fetch();
+      if (!delayedArrival && /"mode":"(?:resume|briefing)"/.test(await response.text())) {
+        delayedArrival = true;
+        await arrivalGate;
+        await route.abort("aborted");
+      } else {
+        await route.fulfill({ response });
+      }
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
@@ -828,7 +867,7 @@ test("initial arrival Retry and Expand work with a real pointer", async ({ page 
   await retry.click();
   await expect(arrivalError).toHaveCount(0, { timeout: 5_000 });
   const expand = page.getByRole("button", { name: "Expand to full screen" });
-  const composer = page.locator(".conversation-composer textarea");
+  const composer = page.locator("[data-manuscript-input]");
   await expect(expand.or(composer).first()).toBeVisible({ timeout: 30_000 });
   if (!(await composer.isVisible()) && (await expand.isVisible())) await expand.click();
   await expect(composer).toBeVisible();
@@ -881,7 +920,7 @@ test("live provisional state restores under the canonical authoritative history 
   await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "OLD" })]);
   await page.goto("/en/app");
   await openConversation(page);
-  const input = page.getByRole("textbox", { name: "Send a message..." });
+  const input = page.locator("[data-manuscript-input]");
   await input.fill("Live canonical question");
   await input.press("Enter");
   await expect.poll(sse.posts).toBe(1);

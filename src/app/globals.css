@@ -4,6 +4,10 @@
 @import "katex/dist/katex.min.css";
 @import "./typeset.css";
 
+/* Native replies reuse these exact compiled utilities inside an opaque iframe.
+   This explicit static source keeps the supported set available in production. */
+@source "../lib/markdown/native-theme.ts";
+
 @custom-variant dark (&:is(.dark *));
 @custom-variant hover (&:hover);
 

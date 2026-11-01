@@ -31,8 +31,8 @@ export function RecordTurnView({
         <div className="conversation-prose">
           <MarkdownRenderer
             content={turn.content}
-            nativeMode="paper"
-            nativeTurnId={`${docRef}:${turn.turnId ?? turn.index}:${turn.role}`}
+            nativeMode={turn.role === "assistant" ? "reader" : undefined}
+            nativeTurnId={turn.turnId ?? `${docRef}:${turn.index}:${turn.role}`}
           />
         </div>
       </ConversationTurn>

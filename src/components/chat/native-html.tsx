@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Code2, ExternalLink, Maximize2, Minimize2, RotateCcw, X } from "lucide-react";
+import { useNativeExecutionLease, useNativeReadingCopy } from "./native-reading-context";
+import { createNativeFlushTracker } from "./native-execution";
 import {
   NATIVE_BRIDGE_CHANNEL,
   validateNativeFrameMessage,
+  type NativeStylesSnapshot,
   type NativeThemeTokens,
 } from "@/lib/chat/native-bridge";
 import { requestNativeDraftAppend } from "@/lib/chat/native-draft";
@@ -19,10 +21,14 @@ import {
   buildNativeDocument,
   DEFAULT_NATIVE_THEME,
   readNativeTheme,
+  readNativeStyles,
+  subscribeNativeStyles,
 } from "@/lib/markdown/native-document";
 import "./native-html.css";
 
-export type NativeRenderMode = "interactive" | "paper";
+/** Execution is independent of the surface: reader uses paper colors while
+ * its active copy executes; paper is reserved for static/print presentation. */
+export type NativeRenderMode = "interactive" | "reader" | "paper";
 export type NativeTurnIdentity = Omit<NativeStateIdentity, "blockId" | "sourceVersion"> & {
   locale: string;
   slotId: string;
@@ -42,6 +48,14 @@ interface NativeHtmlBlockProps {
 }
 
 const MAX_NATIVE_SOURCE_CHARS = 262_144;
+const readingFlushers = new Map<Element, () => Promise<void>>();
+
+/** Finish a bounded snapshot handoff before a paper turn unmounts its writer.
+ * A nonresponsive figure never blocks navigation indefinitely. */
+export async function flushNativeReading(root: Element | null): Promise<void> {
+  if (!root) return;
+  await Promise.allSettled([...readingFlushers].filter(([element]) => root.contains(element)).map(([, flush]) => flush()));
+}
 
 function NativePreparing({ label }: { label?: string }): React.JSX.Element {
   const t = useTranslations("chat.native");
@@ -51,14 +65,6 @@ function NativePreparing({ label }: { label?: string }): React.JSX.Element {
       <span className="native-preparing-line native-preparing-line--short" />
       <span className="native-preparing-label">{label ?? t("generating")}</span>
     </div>
-  );
-}
-
-function NativeSource({ source, labelledBy }: { source: string; labelledBy: string }): React.JSX.Element {
-  return (
-    <pre id={labelledBy} className="native-source" tabIndex={0}>
-      <code>{source}</code>
-    </pre>
   );
 }
 
@@ -73,6 +79,9 @@ function NativeFrame({
   surface,
   locale,
   onSuggestion,
+  measuredHeight,
+  onMeasure,
+  ownsExecution,
 }: {
   source: string;
   version: string;
@@ -84,24 +93,35 @@ function NativeFrame({
   surface: "chat" | "paper";
   locale: string;
   onSuggestion: (prompt: string) => void;
+  measuredHeight?: number;
+  onMeasure: (height: number) => void;
+  ownsExecution: () => boolean;
 }): React.JSX.Element {
   const t = useTranslations("chat.native");
   const store = getNativeStateStore();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const scopeRef = useRef(scope);
   const initialScopesRef = useRef({ scope, migrateFromScope });
   const themeRef = useRef<NativeThemeTokens>(DEFAULT_NATIVE_THEME);
+  const stylesRef = useRef<NativeStylesSnapshot | undefined>(undefined);
+  const stylesIdRef = useRef<string | undefined>(undefined);
   const localeRef = useRef(locale);
   const fallbackRef = useRef(t("empty"));
   const suggestionRef = useRef(onSuggestion);
   suggestionRef.current = onSuggestion;
+  const measureRef = useRef(onMeasure);
+  measureRef.current = onMeasure;
+  const ownsRef = useRef(ownsExecution);
+  ownsRef.current = ownsExecution;
   const readyRef = useRef(false);
   const blockedRef = useRef(false);
   const loadCountRef = useRef(0);
+  const flushSequenceRef = useRef(0);
   const [token, setToken] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [height, setHeight] = useState(surface === "paper" ? 288 : 192);
+  const [height, setHeight] = useState(measuredHeight ?? (surface === "paper" ? 288 : 192));
   const [initialStateJson, setInitialStateJson] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -124,7 +144,9 @@ function NativeFrame({
       setInitialStateJson(null);
     }
     try {
-      themeRef.current = readNativeTheme(surface);
+      themeRef.current = readNativeTheme(surface, shellRef.current ?? undefined);
+      stylesRef.current = readNativeStyles();
+      stylesIdRef.current = stylesRef.current.id;
       const bytes = new Uint8Array(24);
       crypto.getRandomValues(bytes);
       setToken(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""));
@@ -139,6 +161,7 @@ function NativeFrame({
       source,
       token,
       theme: themeRef.current,
+      styles: stylesRef.current,
       locale: localeRef.current,
       interactive,
       initialStateJson,
@@ -148,17 +171,27 @@ function NativeFrame({
 
   useEffect(() => {
     if (!token || !interactive) return;
+    const waitingForState = createNativeFlushTracker();
     const postTheme = (): void => {
-      if (blockedRef.current) return;
+      if (blockedRef.current || !ownsRef.current()) return;
       iframeRef.current?.contentWindow?.postMessage({
         channel: NATIVE_BRIDGE_CHANNEL,
         token,
         type: "theme",
-        theme: readNativeTheme(surface),
+        theme: readNativeTheme(surface, shellRef.current ?? undefined),
       }, "*");
     };
+    const postStyles = (): void => {
+      if (blockedRef.current || !readyRef.current || !ownsRef.current()) return;
+      try {
+        const styles = readNativeStyles();
+        if (styles.id === stylesIdRef.current) return;
+        stylesIdRef.current = styles.id;
+        iframeRef.current?.contentWindow?.postMessage({ channel: NATIVE_BRIDGE_CHANNEL, token, type: "styles", styles }, "*");
+      } catch { setFailed("unavailable"); }
+    };
     const onMessage = (event: MessageEvent): void => {
-      if (blockedRef.current) return;
+      if (blockedRef.current || !ownsRef.current()) return;
       const message = validateNativeFrameMessage(
         event.data,
         event.source,
@@ -170,11 +203,17 @@ function NativeFrame({
         readyRef.current = true;
         setReady(true);
         postTheme();
+        postStyles();
       } else if (message.type === "resize") {
         setHeight((current) => current === message.height ? current : message.height);
+        measureRef.current(message.height);
+        shellRef.current?.dispatchEvent(new Event("previously:native-resize", { bubbles: true }));
       } else if (message.type === "state") {
         const snapshot = parseNativeSnapshot(message.json);
-        if (snapshot) store.write(scopeRef.current, snapshot);
+        if (snapshot) {
+          store.write(scopeRef.current, snapshot);
+          waitingForState.acknowledge(message.requestId);
+        }
       } else if (message.type === "followup") {
         suggestionRef.current(message.prompt);
       } else if (message.type === "error") {
@@ -184,9 +223,24 @@ function NativeFrame({
     window.addEventListener("message", onMessage);
     const observer = new MutationObserver(postTheme);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
+    const paper = shellRef.current?.closest(".desk-paper");
+    if (paper) observer.observe(paper, { attributes: true, attributeFilter: ["class", "style"] });
+    const unsubscribeStyles = subscribeNativeStyles(() => { postStyles(); postTheme(); });
+    const shell = shellRef.current;
+    if (shell) readingFlushers.set(shell, () => new Promise<void>((resolve) => {
+      if (!readyRef.current || blockedRef.current || !ownsRef.current()) { resolve(); return; }
+      const requestId = `flush-${++flushSequenceRef.current}`;
+      const finish = () => { window.clearTimeout(timer); waitingForState.forget(requestId); resolve(); };
+      const timer = window.setTimeout(finish, 120);
+      waitingForState.wait(requestId, finish);
+      iframeRef.current?.contentWindow?.postMessage({ channel: NATIVE_BRIDGE_CHANNEL, token, type: "flush", requestId }, "*");
+    }));
     return () => {
       window.removeEventListener("message", onMessage);
       observer.disconnect();
+      unsubscribeStyles();
+      if (shell) readingFlushers.delete(shell);
+      waitingForState.dispose();
     };
   }, [token, interactive, surface, store]);
 
@@ -213,17 +267,19 @@ function NativeFrame({
   return (
     <div className="native-frame-region">
       <div
+        ref={shellRef}
         className="native-frame-shell"
         data-ready={ready || undefined}
         data-native-mode={surface}
-        style={{ "--native-frame-height": `${height}px` } as React.CSSProperties}
+        data-native-execution={interactive ? "active" : "static"}
+        style={{ "--native-frame-height": `${measuredHeight ?? height}px` } as React.CSSProperties}
       >
         {srcDoc && !removeFailedFrame ? (
           <iframe
             ref={iframeRef}
-            title={t(surface === "paper" ? "staticFrameTitle" : "frameTitle", { index: ordinal + 1 })}
+            title={t(interactive ? "frameTitle" : "staticFrameTitle", { index: ordinal + 1 })}
             className="native-frame"
-            sandbox={interactive ? "allow-scripts" : ""}
+            sandbox={interactive ? "allow-scripts allow-forms" : ""}
             referrerPolicy="no-referrer"
             srcDoc={srcDoc}
             data-native-frame={blockId}
@@ -256,32 +312,6 @@ function NativeFrame({
   );
 }
 
-function NativeDialog({
-  title,
-  closeLabel,
-  onClose,
-  children,
-}: {
-  title: string;
-  closeLabel: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (dialog && !dialog.open) dialog.showModal();
-  }, []);
-  return (
-    <dialog ref={ref} className="native-dialog" aria-label={title} onClose={onClose}>
-      <button type="button" className="native-dialog-close" aria-label={closeLabel} onClick={() => ref.current?.close()}>
-        <X aria-hidden />
-      </button>
-      {children}
-    </dialog>
-  );
-}
-
 export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element {
   const {
     source,
@@ -295,14 +325,9 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
     onRetry,
   } = props;
   const t = useTranslations("chat.native");
-  const sourceId = useId();
-  const [showSource, setShowSource] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [resetVersion, setResetVersion] = useState(0);
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [suggestion, setSuggestion] = useState<{ scope: string; text: string } | null>(null);
   const acceptedSuggestionRef = useRef<{ scope: string; text: string } | null>(null);
-  const store = getNativeStateStore();
+  const reading = useNativeReadingCopy();
   const scope = nativeStateScope({ ...identity, blockId, sourceVersion: version });
   const confirmedAlias = identity.provisionalTurnId === identity.slotId && identity.turnId !== identity.slotId;
   const frameTurnId = confirmedAlias ? identity.slotId : identity.turnId;
@@ -315,7 +340,14 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         sourceVersion: version,
       })
     : undefined;
-  const interactive = mode === "interactive";
+  const eligible = closed && source.length <= MAX_NATIVE_SOURCE_CHARS &&
+    mode !== "paper" && reading.active;
+  const lease = useNativeExecutionLease(scope, eligible, reading.priority, migrateFromScope);
+  const interactive = lease.active;
+  const surface = mode === "interactive" ? "chat" : "paper";
+  const measure = reading.layout?.measure;
+  const onMeasure = useCallback((height: number) => measure?.(frameKey, height), [measure, frameKey]);
+  const measuredHeight = reading.layout?.heights.get(frameKey);
   const pendingSuggestion = suggestion?.scope === scope ? suggestion.text : null;
 
   const receiveSuggestion = (prompt: string): void => {
@@ -340,18 +372,9 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
     return (
       <div className="native-incomplete" data-native-incomplete={blockId}>
         <p>{t("incomplete")}</p>
-        <div className="native-controls">
-          <button type="button" aria-expanded={showSource} aria-controls={sourceId} onClick={() => setShowSource((value) => !value)}>
-            <Code2 aria-hidden />{t("source")}
-          </button>
-          <button
-            type="button"
-            onClick={() => onRetry ? onRetry() : requestNativeDraftAppend(t("retryDraft"))}
-          >
-            <RotateCcw aria-hidden />{t("retry")}
-          </button>
-        </div>
-        {showSource ? <NativeSource source={source} labelledBy={sourceId} /> : null}
+        <button type="button" onClick={() => onRetry ? onRetry() : requestNativeDraftAppend(t("retryDraft"))}>
+          {t("retry")}
+        </button>
       </div>
     );
   }
@@ -360,22 +383,21 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
     return (
       <div className="native-incomplete" data-native-oversized={blockId}>
         <p>{t("tooLarge")}</p>
-        <button type="button" aria-expanded={showSource} aria-controls={sourceId} onClick={() => setShowSource((value) => !value)}>
-          <Code2 aria-hidden />{t("source")}
-        </button>
-        {showSource ? <NativeSource source={source} labelledBy={sourceId} /> : null}
       </div>
     );
   }
 
   return (
     <div
-      className={`native-html${expanded ? " native-html--expanded" : ""}${interactive ? "" : " native-html--paper"}`}
+      className={`native-html${surface === "paper" ? " native-html--paper" : ""}`}
       data-native-block={blockId}
       data-native-turn={identity.turnId}
+      data-native-scope={scope}
+      data-native-render-mode={mode}
+      style={reading.layout?.pageHeight ? { "--native-page-height": `${reading.layout.pageHeight}px` } as React.CSSProperties : undefined}
     >
       <NativeFrame
-        key={`${frameKey}:${interactive ? "interactive" : "paper"}:${resetVersion}`}
+        key={`${frameKey}:${interactive ? "active" : "static"}`}
         source={source}
         version={version}
         blockId={blockId}
@@ -383,54 +405,18 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         scope={scope}
         migrateFromScope={migrateFromScope}
         interactive={interactive}
-        surface={interactive ? "chat" : "paper"}
+        surface={surface}
         locale={identity.locale}
         onSuggestion={receiveSuggestion}
+        measuredHeight={measuredHeight}
+        onMeasure={onMeasure}
+        ownsExecution={lease.owns}
       />
-      <div className="native-controls" role="group" aria-label={t("controls")}>
-        <button type="button" aria-expanded={showSource} aria-controls={sourceId} onClick={() => setShowSource((value) => !value)}>
-          <Code2 aria-hidden />{t("source")}
-        </button>
-        {interactive ? (
-          <>
-            <button type="button" aria-pressed={expanded} onClick={() => setExpanded((value) => !value)}>
-              {expanded ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
-              {expanded ? t("collapse") : t("expand")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                store.clear(scope);
-                if (migrateFromScope) store.clear(migrateFromScope);
-                acceptedSuggestionRef.current = null;
-                setSuggestion(null);
-                setResetVersion((value) => value + 1);
-              }}
-            >
-              <RotateCcw aria-hidden />{t("reset")}
-            </button>
-          </>
-        ) : (
-          <button type="button" onClick={() => setDialogOpen(true)}>
-            <ExternalLink aria-hidden />{t("openInteractive")}
-          </button>
-        )}
-      </div>
-      {pendingSuggestion ? (
+      {interactive && pendingSuggestion ? (
         <div className="native-suggestion" data-native-suggestion>
           <span>{pendingSuggestion}</span>
           <button type="button" onClick={acceptSuggestion}>{t("acceptSuggestion")}</button>
         </div>
-      ) : null}
-      {showSource ? <NativeSource source={source} labelledBy={sourceId} /> : null}
-      {!interactive && dialogOpen ? (
-        <NativeDialog
-          title={t("dialogTitle", { index: ordinal + 1 })}
-          closeLabel={t("closeInteractive")}
-          onClose={() => setDialogOpen(false)}
-        >
-          <NativeHtmlBlock {...props} mode="interactive" />
-        </NativeDialog>
       ) : null}
     </div>
   );

@@ -10,7 +10,7 @@ function render(
   content: string,
   options: {
     isStreaming?: boolean;
-    nativeMode?: "interactive" | "paper";
+    nativeMode?: "interactive" | "reader" | "paper";
     nativeTurnId?: string;
     nativeOrdinalOffset?: number;
   } = {},
@@ -157,6 +157,16 @@ describe("MarkdownRenderer SSR regressions", () => {
     const html = render("```html live\n<p>Paper</p>\n```", { nativeMode: "paper", nativeTurnId: "doc" });
     expect(html).toContain('data-native-mode="paper"');
     expect(html).not.toContain('data-native-mode="chat"');
+  });
+
+  it("presents native HTML as prose without source, expand, reset or dialog chrome", () => {
+    for (const nativeMode of ["interactive", "reader", "paper"] as const) {
+      const html = render("```html live\n<p>Inline content</p>\n```", { nativeMode, nativeTurnId: "turn" });
+      expect(html).toContain('data-native-block="native-0"');
+      expect(html).not.toContain("native-controls");
+      expect(html).not.toContain("native-source");
+      expect(html).not.toContain("native-dialog");
+    }
   });
 
   it("opens only parsed semantic internal links through document navigation", () => {

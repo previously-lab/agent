@@ -35,4 +35,13 @@ describe("native iframe bridge validation", () => {
     expect(validateNativeFrameMessage(message("unknown"), source, source, token)).toBeNull();
     expect(validateNativeFrameMessage("ready", source, source, token)).toBeNull();
   });
+
+  it("preserves only bounded flush correlation ids on state acknowledgements", () => {
+    expect(validateNativeFrameMessage(message("state", { json: "{}", requestId: "handoff-2" }), source, source, token))
+      .toMatchObject({ type: "state", requestId: "handoff-2" });
+    for (const requestId of ["", 5, null, "x".repeat(129)]) {
+      expect(validateNativeFrameMessage(message("state", { json: "{}", requestId }), source, source, token)).toBeNull();
+    }
+    expect(validateNativeFrameMessage(message("state", { json: "{}" }), source, source, token)).not.toHaveProperty("requestId");
+  });
 });
