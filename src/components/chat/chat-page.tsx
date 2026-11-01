@@ -9,7 +9,7 @@ import { usePathname } from "@/i18n/navigation";
 import type { UIMessage } from "@/lib/chat/protocol";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
-import { NativePersonaProvider } from "./native-source-scope";
+import { NativePersonaProvider, useNativeSourceScope } from "./native-source-scope";
 import { DocumentContextPersonaSync, useDocumentContext } from "./document-context-provider";
 import {
   createDocumentContextEnvelope,
@@ -39,7 +39,9 @@ import { SLICE_PAGE_SIZE } from "@/hooks/use-slice-stream";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
-  raceArrivalVerdict,
+  readArrivalWithRecovery,
+  shouldDiscardRecoveredSession,
+  type ArrivalGateResult,
   recoveryMessages,
   recoveredTurnIds,
   mergeRecoveredMessages,
@@ -63,9 +65,9 @@ import {
   useParallelLaneReaders,
   type ParallelLane,
 } from "./parallel-lane";
-import { getChatRecovery } from "@/lib/chat/actions";
+import { getChatRecovery, type ChatRecovery } from "@/lib/chat/actions";
 import { usePersistenceObserver } from "@/hooks/use-persistence-observer";
-import { acceptPersistenceRecovery, readPendingPersistence, rememberSummaryRun, rememberTurnRun } from "@/lib/chat/persistence";
+import { ACTIVE_RUN_ID_KEY, acceptPersistenceRecovery, readPendingPersistence, rememberSummaryRun, rememberTurnRun } from "@/lib/chat/persistence";
 import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
 import type { UserConfig } from "@/lib/config/types";
 import { useTranslations, useLocale } from "next-intl";
@@ -133,154 +135,125 @@ interface ChatPageProps {
   getScreenContext?: () => ScreenContext | undefined;
 }
 
-/** The mount-time verdict: the useDurableChat half (reconnect) plus the arrival gate
- *  half (§2 resume-vs-briefing) plus the persona both were resolved under. */
+/** Only history failure blocks entry. Workflow recovery is optional and bounded. */
 interface MountVerdict extends ArrivalDecision {
   arrival: ArrivalState;
-  persona: string;
+  recovery: ChatRecovery | null;
+  storedRunId: string | null;
+  resumeRunId: string | null;
+  discardStored: boolean;
 }
 
-export function ChatPage({
-  initialConfig,
-  onTurnSettled,
-  feed,
-  publishing,
-  insetTop,
-  insetBottom,
-  onComposerClearanceChange,
-  onSubtitleLineChange,
-  getView,
-  getScreenContext,
-}: ChatPageProps) {
-  // Mount-time arrival decision. Only the SERVER can say whether the persisted
-  // run is still in flight and whether the newest slice is still alive, so
-  // this verdict is async — Inner (and therefore useDurableChat) mounts only after it
-  // lands, keeping useDurableChat's init a synchronous, once-only snapshot. Until
-  // then nothing renders (the header is outside this tree, so the page chrome
-  // still shows). The verdict is gated by raceArrivalVerdict: a timeout or
-  // failure shows a retry card instead of an endless skeleton.
+export function ChatPage(props: ChatPageProps) {
+  const sourceScope = useNativeSourceScope();
+  const searchParams = useSearchParams();
+  const persona = searchParams.get("persona") || "user";
+  // A late result must not mount another memory owner's conversation. Ordinary
+  // route/tier changes retain the same session and its single editor.
+  const scope = JSON.stringify([sourceScope, persona]);
+  return <ChatPageSession key={scope} {...props} persona={persona} />;
+}
+
+function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: string }) {
   const t = useTranslations("chat");
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
-  const [arrivalFailed, setArrivalFailed] = useState(false);
+  const [arrivalFailure, setArrivalFailure] = useState<"failed" | "timeout" | null>(null);
   const [arrivalAttempt, setArrivalAttempt] = useState(0);
-  usePersistenceObserver(() => {
-    onTurnSettled?.();
-    if (!verdict || arrivalFailed) {
-      setArrivalFailed(false);
-      setArrivalAttempt((attempt) => attempt + 1);
-    }
-  }, (error) => toast.error(error));
+  const onTurnSettledRef = useRef(props.onTurnSettled);
+  onTurnSettledRef.current = props.onTurnSettled;
   useEffect(() => {
-    // Persona comes from the URL — server actions can't read searchParams.
-    const persona =
-      new URLSearchParams(window.location.search).get("persona") || "user";
     let cancelled = false;
-    raceArrivalVerdict(resolveArrival(persona)).then((r) => {
+    resolveArrival(persona).then((result) => {
       if (cancelled) return;
-      if (r.kind === "ok") {
-        setVerdict({ ...r.verdict, persona });
-      } else {
-        setArrivalFailed(true);
+      if (result.kind !== "ok") {
+        setArrivalFailure(result.kind);
+        return;
       }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [arrivalAttempt]);
-  if (arrivalFailed) {
-    return (
-      <ComposerHost
-        composer={
-          <div data-chat-arrival-error className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
-            <p role="alert" className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-              {t("arrivalError")}
-            </p>
-            <button
-              type="button"
-              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm"
-              onClick={() => {
-                setArrivalFailed(false);
-                setArrivalAttempt((n) => n + 1);
-              }}
-            >
-              {t("arrivalRetry")}
-            </button>
-          </div>
+      const next = result.verdict;
+      // Apply only timely results from this source/persona. Missing workflow
+      // IDs are discarded, not acknowledged as saved; transient errors do not
+      // remove pending entries. No late read may mutate these pointers.
+      const sameStoredRun = readStoredRunId() === next.storedRunId;
+      if (next.recovery) acceptPersistenceRecovery(next.recovery);
+      // The background observer is deliberately not mounted yet. Initial
+      // receipts must still refresh the shell's archive/catalog once accepted.
+      if (next.recovery?.receipts.length) onTurnSettledRef.current?.();
+      if (persona === "user" && sameStoredRun) {
+        if (next.discardStored) {
+          clearStoredRunId();
+          clearStoredChatId();
+          clearStoredMessages();
+        } else if (next.storedRunId && next.recovery?.missingRunIds?.includes(next.storedRunId)) {
+          clearStoredRunId();
         }
-      />
+        if (next.resumeRunId) writeStoredRunId(next.resumeRunId);
+      }
+      setVerdict(next);
+    });
+    return () => { cancelled = true; };
+  }, [arrivalAttempt, persona]);
+  if (arrivalFailure) {
+    return (
+      <ComposerHost composer={
+        <div data-chat-arrival-error data-arrival-failure={arrivalFailure} className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
+          <p role="alert" className="min-w-0 flex-1 text-sm text-muted-foreground">
+            {t(arrivalFailure === "timeout" ? "arrivalTimeout" : "arrivalError")}
+          </p>
+          <button type="button" className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm"
+            onClick={() => { setArrivalFailure(null); setArrivalAttempt((n) => n + 1); }}>
+            {t("arrivalRetry")}
+          </button>
+        </div>
+      } />
     );
   }
   if (!verdict) return <ChatPageSkeleton />;
   return (
-    <NativePersonaProvider value={verdict.persona}>
-      <DocumentContextPersonaSync persona={verdict.persona} />
-      <Inner
-        initialConfig={initialConfig}
-        onTurnSettled={onTurnSettled}
-        feed={feed}
-        publishing={publishing}
-        insetTop={insetTop}
-        insetBottom={insetBottom}
-        onComposerClearanceChange={onComposerClearanceChange}
-        onSubtitleLineChange={onSubtitleLineChange}
-        getView={getView}
-        getScreenContext={getScreenContext}
-        persona={verdict.persona}
-        shouldResume={verdict.shouldResume}
-        initialMessages={verdict.initialMessages}
-        arrival={verdict.arrival}
-      />
+    <NativePersonaProvider value={persona}>
+      <DocumentContextPersonaSync persona={persona} />
+      {persona === "user" && <PersistenceObserver onCommitted={props.onTurnSettled} />}
+      <Inner {...props} persona={persona} shouldResume={verdict.shouldResume}
+        initialMessages={verdict.initialMessages} arrival={verdict.arrival} />
     </NativePersonaProvider>
   );
 }
 
-/**
- * The one-shot arrival verdict, side effects included (v0.10 §1.7/§2).
- *
- * - The persisted run is still pending/running → genuine reconnect: keep the
- *   working conversation from the stash (the replay rebuilds its trailing
- *   partial turn). The stash's ONLY job is this in-flight reconnection.
- * - A completed answer awaiting its summary restores from the durable run.
- *   A receipt acknowledges only the turn ids actually saved. Saved bypasses
- *   come from the current slice even when the main answer is still running.
- * - With no remaining dependency, continuity comes from getArrivalState and
- *   the paged slice history.
- *
- * An unavailable pending run preserves its pointer and shows the retry card.
- */
-async function resolveArrival(
-  persona: string,
-): Promise<ArrivalDecision & { arrival: ArrivalState }> {
-  let runId = readStoredRunId();
-  const pending = readPendingPersistence();
-  const recovery = await getChatRecovery([...new Set([...pending.runIds, ...(runId ? [runId] : [])])], pending.summaryRunIds);
-  acceptPersistenceRecovery(recovery);
-  if (!runId && recovery.activeRunIds.length === 1) {
-    runId = recovery.activeRunIds[0];
-    writeStoredRunId(runId);
-  }
-  const active = Boolean(runId && recovery.activeRunIds.includes(runId));
-  // The arrival gate is independent of the run verdict — fetched in parallel
-  // spirit (after the run check so a hanging status call doesn't delay it is
-  // NOT a goal; correctness of the neutral-fail path is).
-  const arrival = await getArrivalState(persona).catch(
-    (): ArrivalState => ({ mode: "briefing" }),
+function PersistenceObserver({ onCommitted }: { onCommitted?: () => void }) {
+  // Mount only after history has loaded: Next can serialize Server Actions,
+  // so a background workflow read must not get ahead of authoritative history.
+  usePersistenceObserver(onCommitted, (error) => toast.error(error));
+  return null;
+}
+
+async function resolveArrival(persona: string): Promise<ArrivalGateResult<MountVerdict>> {
+  // Legacy reconnect keys belong to the user's live chat, not demo personas.
+  const storedRunId = persona === "user" ? readStoredRunId() : null;
+  const pending = persona === "user" ? readPendingPersistence() : { runIds: [], summaryRunIds: [] };
+  const runIds = [...new Set([...pending.runIds, ...(storedRunId ? [storedRunId] : [])])];
+  const result = await readArrivalWithRecovery(
+    getArrivalState(persona),
+    () => runIds.length || pending.summaryRunIds.length
+      ? getChatRecovery(runIds, pending.summaryRunIds)
+      : Promise.resolve({ records: [], activeRunIds: [], savedRunIds: [], receipts: [], unavailableRunIds: [], failures: [] }),
   );
+  if (result.kind !== "ok") return result;
+  const { arrival, recovery: recoveryRead } = result.verdict;
+  const recovery = recoveryRead.kind === "ok" ? recoveryRead.verdict : null;
+  let resumeRunId = storedRunId && recovery?.activeRunIds.includes(storedRunId) ? storedRunId : null;
+  if (!resumeRunId && recovery?.activeRunIds.length === 1) resumeRunId = recovery.activeRunIds[0];
+  const verdict = { arrival, recovery, storedRunId, resumeRunId,
+    discardStored: shouldDiscardRecoveredSession(recovery, runIds, pending.summaryRunIds) };
+  if (!recovery) return { kind: "ok", verdict: { ...verdict, ...decideArrival(false, []) } };
   const persisted = new Set(arrival.mode === "resume" ? arrival.turns.map((turn) => turn.turnId).filter((id): id is string => Boolean(id)) : []);
   const persistedUsers = new Set(arrival.mode === "resume" ? arrival.turns.filter((turn) => turn.role === "user").map((turn) => turn.clientMessageId).filter((id): id is string => Boolean(id)) : []);
-  if (active) {
-    const decision = decideArrival(true, readStoredMessages());
+  if (resumeRunId) {
+    const decision = decideArrival(true, storedRunId === resumeRunId ? readStoredMessages() : []);
     const saved = mergeSavedTurns(decision.initialMessages, arrival.mode === "resume" ? arrival.turns : []);
-    return { ...decision, initialMessages: mergeRecoveredMessages(saved, recovery.records.map(({ record }) => record), persisted, persistedUsers), arrival };
+    return { kind: "ok", verdict: { ...verdict, ...decision,
+      initialMessages: mergeRecoveredMessages(saved, recovery.records.map(({ record }) => record), persisted, persistedUsers) } };
   }
-  if (recovery.records.length > 0) {
-    return { shouldResume: false, initialMessages: recoveryMessages(recovery.records.map(({ record }) => record), persisted, persistedUsers), arrival };
-  }
-  if (recovery.unavailableRunIds.some((id) => pending.runIds.includes(id))) throw new Error("Pending conversation recovery is unavailable");
-  clearStoredRunId();
-  clearStoredChatId();
-  clearStoredMessages();
-  return { ...decideArrival(false, []), arrival };
+  return { kind: "ok", verdict: { ...verdict, shouldResume: false,
+    initialMessages: recoveryMessages(recovery.records.map(({ record }) => record), persisted, persistedUsers) } };
 }
 
 // ─── Reconnect persistence ────────────────────────────────────────────────
@@ -290,7 +263,7 @@ async function resolveArrival(
 // mount-time arrival decision asks the server, see resolveArrival). Cleared on
 // a clean turn end and whenever the run turns out terminal. Guarded so a
 // private-mode / SSR environment (no localStorage) degrades to no-op.
-const RUN_ID_KEY = "previously:activeRunId";
+const RUN_ID_KEY = ACTIVE_RUN_ID_KEY;
 const CHAT_ID_KEY = "previously:chatId";
 
 // ─── Sending window (v0.8) ────────────────────────────────────────────────
@@ -526,7 +499,9 @@ function Inner({
   // empty-memory verdict (`hasMore` included: an empty recent page with more
   // pages behind it is NOT an empty memory). (The 3D
   // timeline loads its catalog lazily inside AppShell.)
-  const [episodicReady, setEpisodicReady] = useState(false);
+  // The arrival payload already contains readable history. A later catalog
+  // request queued behind a slow workflow must not cover that history again.
+  const [episodicReady, setEpisodicReady] = useState(arrival.mode === "resume");
   const [episodicHasMore, setEpisodicHasMore] = useState(true);
   useEffect(() => {
     let cancelled = false;

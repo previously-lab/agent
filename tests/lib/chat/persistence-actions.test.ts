@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const h = vi.hoisted(() => ({ runs: new Map<string, { status: string; returnValue?: unknown; attributes?: Record<string, string> }>() }));
-vi.mock("workflow/api", () => ({ getRun: (id: string) => {
+const h = vi.hoisted(() => ({ runs: new Map<string, { status: string; returnValue?: unknown; attributes?: Record<string, string> }>(), errors: new Map<string, Error>() }));
+vi.mock("workflow/api", async () => {
+  const { WorkflowRunNotFoundError } = await import("workflow/errors");
+  return { getRun: (id: string) => {
+  if (h.errors.has(id)) throw h.errors.get(id);
   const run = h.runs.get(id);
-  if (!run) throw new Error("not found");
+  if (!run) throw new WorkflowRunNotFoundError(id);
   return { status: Promise.resolve(run.status), returnValue: Promise.resolve(run.returnValue) };
-} }));
+} }; });
 vi.mock("workflow/runtime", () => ({ getWorld: async () => ({ runs: {
   get: async (id: string) => h.runs.get(id),
   list: async () => ({ data: [...h.runs].map(([runId, row]) => ({ ...row, runId })) }),
@@ -12,7 +15,7 @@ vi.mock("workflow/runtime", () => ({ getWorld: async () => ({ runs: {
 import { getChatRecovery, getPersistenceState } from "@/lib/chat/actions";
 const receipt = { version: 1, commitSha: "sha", records: [{ sliceId: "slice", turnIds: ["turn"] }] };
 const record = { turnId: "turn", sliceId: "slice", at: "2026-10-22T00:00:00Z", userText: "question", replyText: "answer", cognition: "", summaryRunId: "summary" };
-beforeEach(() => h.runs.clear());
+beforeEach(() => { h.runs.clear(); h.errors.clear(); });
 
 describe("persistence recovery reads durable outcomes", () => {
   it("does not confuse a completed workflow whose outcome failed with a commit", async () => {
@@ -65,5 +68,42 @@ describe("persistence recovery reads durable outcomes", () => {
     const ids = Array.from({ length: 40 }, (_, index) => `run-${index}`);
     for (const id of ids) h.runs.set(id, { status: "running" });
     expect((await getChatRecovery(ids)).activeRunIds).toEqual(ids);
+  });
+
+  it("classifies the SDK's missing runs and summaries separately from unavailable reads", async () => {
+    const recovery = await getChatRecovery(["gone-turn"], ["gone-summary"]);
+    expect(recovery.missingRunIds).toEqual(["gone-turn"]);
+    expect(recovery.missingSummaryRunIds).toEqual(["gone-summary"]);
+    expect(recovery.unavailableRunIds).toEqual([]);
+    expect(recovery.savedRunIds).toEqual([]);
+    expect(recovery.receipts).toEqual([]);
+    expect(recovery.failures).toEqual([]);
+    expect(await getPersistenceState("gone-summary")).toEqual({ state: "missing" });
+  });
+
+  it.each([
+    new Error("Workflow run not found"),
+    Object.assign(new Error("proxy route missing"), { status: 404 }),
+    Object.assign(new Error("rate limited"), { status: 429 }),
+    new Error("ECONNRESET"),
+  ])("retains a temporary/untyped read error: %s", async (error) => {
+    h.errors.set("turn", error);
+    h.errors.set("summary", error);
+    const recovery = await getChatRecovery(["turn"], ["summary"]);
+    expect(recovery.unavailableRunIds).toEqual(["turn"]);
+    expect(recovery.missingRunIds).toEqual([]);
+    expect(recovery.missingSummaryRunIds).toEqual([]);
+    expect(await getPersistenceState("summary")).toEqual({ state: "unknown" });
+  });
+
+  it("returns an available answer once while abandoning its permanently missing summary dependency", async () => {
+    h.runs.set("turn-run", { status: "completed", returnValue: record });
+    const recovery = await getChatRecovery(["turn-run"]);
+    expect(recovery.records).toEqual([{ runId: "turn-run", record }]);
+    expect(recovery.missingRunIds).toEqual([]);
+    expect(recovery.missingSummaryRunIds).toEqual(["summary"]);
+    expect(recovery.abandonedRunIds).toEqual(["turn-run"]);
+    expect(recovery.savedRunIds).toEqual([]);
+    expect(recovery.receipts).toEqual([]);
   });
 });

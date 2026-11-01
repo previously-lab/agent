@@ -5,6 +5,7 @@ import { recoveryMessages } from "./reconnect";
 import { rememberNativeReplay } from "./native-replay";
 
 const KEY = "previously:pending-persistence:v1";
+export const ACTIVE_RUN_ID_KEY = "previously:activeRunId";
 type Pending = { runIds: string[]; summaryRunIds: string[] };
 const changes = new Set<() => void>();
 const commits = new Set<(receipt: PersistenceReceipt) => void>();
@@ -37,14 +38,21 @@ export function rememberSummaryRun(summaryRunId: string) {
 export function acceptPersistenceRecovery(recovery: ChatRecovery) {
   rememberNativeReplay(recoveryMessages(recovery.records.map(({ record }) => record)));
   const pending = readPendingPersistence();
-  const acknowledged = new Set(recovery.savedRunIds);
-  // A summary can cover many turns. Keep its pointer while any carried record
-  // still depends on it; failed/legacy runs without a receipt remain recoverable.
-  const confirmedSummaries = new Set(recovery.savedSummaryRunIds ?? []);
+  const released = new Set([...recovery.savedRunIds, ...(recovery.missingRunIds ?? []), ...(recovery.abandonedRunIds ?? [])]);
+  // A missing workflow is abandoned, not saved. Only receipts below publish
+  // commits; transient failures and still-running dependencies remain pending.
+  const releasedSummaries = new Set([...(recovery.savedSummaryRunIds ?? []), ...(recovery.missingSummaryRunIds ?? [])]);
   writePending({
-    runIds: pending.runIds.filter((id) => !acknowledged.has(id)),
-    summaryRunIds: pending.summaryRunIds.filter((id) => !confirmedSummaries.has(id)),
+    runIds: pending.runIds.filter((id) => !released.has(id)),
+    summaryRunIds: pending.summaryRunIds.filter((id) => !releasedSummaries.has(id)),
   }, false);
+  // Background recovery can discover a missing active run after arrival has
+  // already proceeded. Invalidate that exact pointer too, so a later mount
+  // cannot reintroduce the dead ID into the now-clean pending queue.
+  try {
+    const active = localStorage.getItem(ACTIVE_RUN_ID_KEY);
+    if (active && [...(recovery.missingRunIds ?? []), ...(recovery.abandonedRunIds ?? [])].includes(active)) localStorage.removeItem(ACTIVE_RUN_ID_KEY);
+  } catch { /* Private browsing; recovery remains best-effort. */ }
   for (const receipt of recovery.receipts) {
     const key = persistenceReceiptKey(receipt);
     if (seen.has(key)) continue;

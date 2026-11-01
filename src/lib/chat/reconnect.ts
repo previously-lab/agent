@@ -1,6 +1,7 @@
 import type { UIMessage } from "@/lib/chat/protocol";
 import type { TurnRunResult } from "./turn-types";
 import type { Turn } from "@/lib/episodic/types";
+import type { ChatRecovery } from "./actions";
 import { createDocumentContextMetadata } from "./document-context";
 
 /** The pending-summary window restores authoritative completed run results. */
@@ -153,8 +154,8 @@ export function decideArrival(
 // ─── Arrival gate timeout ─────────────────────────────────────────────────
 
 /**
- * Hard cap on the mount-time arrival verdict (run-status check + arrival
- * state). The reads underneath carry their own GitHub budget; this gate is
+ * Hard cap on the authoritative history read. The reads underneath carry
+ * their own GitHub budget; this gate is
  * the UI-level backstop so a degraded network/server surfaces the retry card
  * instead of an endless skeleton.
  */
@@ -162,14 +163,13 @@ export const ARRIVAL_GATE_TIMEOUT_MS = 15_000;
 
 export type ArrivalGateResult<T> =
   | { kind: "ok"; verdict: T }
-  | { kind: "failed" };
+  | { kind: "timeout" }
+  | { kind: "failed"; error: unknown };
 
 /**
- * Race the arrival verdict against the gate timeout. ANY outcome that isn't a
- * timely success — timeout or rejection — collapses to `{ kind: "failed" }`
- * so the caller can render its failure card. A late-settling loser promise
- * stays handled by the race (no unhandled rejection); its side effects are
- * idempotent localStorage/cache reads.
+ * Bound a read without confusing a rejection with a timeout. The promise must
+ * be read-only: apply any persistence effects only after accepting its result.
+ * A late rejection remains handled, but a late success cannot mutate storage.
  */
 export async function raceArrivalVerdict<T>(
   verdict: Promise<T>,
@@ -180,12 +180,41 @@ export async function raceArrivalVerdict<T>(
     return await Promise.race([
       verdict.then((v): ArrivalGateResult<T> => ({ kind: "ok", verdict: v })),
       new Promise<ArrivalGateResult<T>>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: "failed" }), timeoutMs);
+        timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
       }),
     ]);
-  } catch {
-    return { kind: "failed" };
+  } catch (error) {
+    return { kind: "failed", error };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Old workflow availability must not consume the history read's whole budget. */
+export const ARRIVAL_RECOVERY_TIMEOUT_MS = 3_000;
+/** Discard a dead reconnect session without claiming it was saved. Unknown
+ * transport errors retain their identifiers for a later background attempt. */
+export function shouldDiscardRecoveredSession(
+  recovery: ChatRecovery | null,
+  runIds: readonly string[],
+  summaryRunIds: readonly string[],
+): boolean {
+  if (!recovery || recovery.activeRunIds.length || recovery.records.length || recovery.unavailableRunIds.length) return false;
+  const released = new Set([...recovery.savedRunIds, ...(recovery.missingRunIds ?? []), ...(recovery.abandonedRunIds ?? [])]);
+  const summaries = new Set([...(recovery.savedSummaryRunIds ?? []), ...(recovery.missingSummaryRunIds ?? [])]);
+  return runIds.every((id) => released.has(id)) && summaryRunIds.every((id) => summaries.has(id));
+}
+
+/** Keep the authoritative history read and optional workflow read independent.
+ * Neither rejected history nor a stale workflow is an empty-memory verdict. */
+export async function readArrivalWithRecovery<A>(
+  arrival: Promise<A>,
+  recovery: () => Promise<ChatRecovery>,
+) {
+  const history = await raceArrivalVerdict(arrival);
+  if (history.kind !== "ok") return history;
+  // Next may serialize Server Actions. Do not enqueue an optional workflow
+  // read until authoritative history has completed, even with Promise.race.
+  const recoveryRead = await raceArrivalVerdict(Promise.resolve().then(recovery), ARRIVAL_RECOVERY_TIMEOUT_MS);
+  return { kind: "ok" as const, verdict: { arrival: history.verdict, recovery: recoveryRead } };
 }

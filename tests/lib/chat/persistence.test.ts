@@ -1,16 +1,44 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { acceptPersistenceRecovery, readPendingPersistence, rememberTurnRun, rememberSummaryRun, subscribePersistenceCommits } from "@/lib/chat/persistence";
+import { ACTIVE_RUN_ID_KEY, acceptPersistenceRecovery, readPendingPersistence, rememberTurnRun, rememberSummaryRun, subscribePersistenceCommits } from "@/lib/chat/persistence";
 import { recoveredTurnIds, recoveryMessages, mergeRecoveredMessages, mergeSavedTurns } from "@/lib/chat/reconnect";
 import { readDurableChat } from "@/lib/chat/client-transport";
 import type { UIMessage, UIMessageChunk } from "@/lib/chat/protocol";
 const record = { turnId: "u1", sliceId: "s", at: "2026-10-22T00:00:00Z", userText: "question", replyText: "answer", cognition: "" };
 beforeEach(() => {
   const values = new Map<string, string>();
-  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) });
 });
 afterEach(() => vi.unstubAllGlobals());
 
 describe("pending persistence acknowledgement", () => {
+  it("forgets permanently missing IDs without announcing a successful save, retaining transient/live work", () => {
+    for (const id of ["gone", "unknown", "live", "answer-with-missing-summary"]) rememberTurnRun(id);
+    for (const id of ["gone-summary", "unknown-summary"]) rememberSummaryRun(id);
+    const committed = vi.fn();
+    const unsubscribe = subscribePersistenceCommits(committed);
+    const recovery = {
+      records: [], activeRunIds: ["live"], savedRunIds: [], receipts: [], failures: [],
+      unavailableRunIds: ["unknown"], missingRunIds: ["gone"], missingSummaryRunIds: ["gone-summary"], abandonedRunIds: ["answer-with-missing-summary"],
+    };
+    localStorage.setItem(ACTIVE_RUN_ID_KEY, "gone");
+    acceptPersistenceRecovery(recovery);
+    expect(localStorage.getItem(ACTIVE_RUN_ID_KEY)).toBeNull();
+    localStorage.setItem(ACTIVE_RUN_ID_KEY, "live");
+    acceptPersistenceRecovery(recovery);
+    expect(localStorage.getItem(ACTIVE_RUN_ID_KEY)).toBe("live");
+    expect(readPendingPersistence()).toEqual({ runIds: ["unknown", "live"], summaryRunIds: ["unknown-summary"] });
+    expect(committed).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("leaves an active pointer intact when its status is only temporarily unavailable", () => {
+    rememberTurnRun("unknown");
+    localStorage.setItem(ACTIVE_RUN_ID_KEY, "unknown");
+    acceptPersistenceRecovery({ records: [], activeRunIds: [], savedRunIds: [], receipts: [], failures: [], unavailableRunIds: ["unknown"] });
+    expect(localStorage.getItem(ACTIVE_RUN_ID_KEY)).toBe("unknown");
+    expect(readPendingPersistence().runIds).toEqual(["unknown"]);
+  });
+
   it("keeps pending run identifiers until the server confirms coverage, publishing each commit once", () => {
     rememberTurnRun("run");
     const callback = vi.fn();

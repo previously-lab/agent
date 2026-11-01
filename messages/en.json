@@ -62,7 +62,8 @@
     "dialogTitle": "Choose a Persona"
   },
   "chat": {
-    "arrivalError": "Loading the conversation state timed out — the memory service may be temporarily unavailable (rate-limited or offline).",
+    "arrivalError": "Conversation history could not be read. Retry to load it; this does not mean your memory is empty.",
+    "arrivalTimeout": "Reading conversation history took too long. Retry to load it.",
     "arrivalRetry": "Retry",
     "input": {
       "placeholder": "Send a message...",

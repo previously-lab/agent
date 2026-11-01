@@ -2,11 +2,12 @@
 
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
+import { WorkflowRunNotFoundError } from "workflow/errors";
 import type { PersistenceReceipt, SummaryRunOutcome, TurnRunResult } from "./turn-types";
 import { mergePersistenceReceipts } from "./persistence-receipt";
 
 export type PersistenceState =
-  | { state: "pending" | "unknown" }
+  | { state: "pending" | "unknown" | "missing" }
   | { state: "committed"; receipt: PersistenceReceipt }
   | { state: "failed"; error: string };
 
@@ -30,8 +31,8 @@ export async function getPersistenceState(summaryRunId: string): Promise<Persist
     if ((outcome?.kind === "committed" || outcome?.kind === "deduped") && receipt) return { state: "committed", receipt };
     if (outcome?.kind === "failed") return { state: "failed", error: outcome.error ?? "Persistence failed" };
     return { state: "unknown" };
-  } catch {
-    return { state: "unknown" };
+  } catch (error) {
+    return { state: WorkflowRunNotFoundError.is(error) ? "missing" : "unknown" };
   }
 }
 
@@ -42,13 +43,19 @@ export interface ChatRecovery {
   savedSummaryRunIds?: string[];
   receipts: PersistenceReceipt[];
   unavailableRunIds: string[];
+  /** Confirmed absent by the Workflow SDK, not a transient read failure. */
+  missingRunIds?: string[];
+  missingSummaryRunIds?: string[];
+  /** A readable answer whose saving workflow is gone. Return it once, but do
+   * not keep retrying its missing summary or call it successfully saved. */
+  abandonedRunIds?: string[];
   failures: Array<{ runId: string; error: string }>;
 }
 
 /** Recover unacknowledged answers from durable runs, never from a browser transcript. */
 export async function getChatRecovery(runIds: string[], summaryRunIds: string[] = []): Promise<ChatRecovery> {
   summaryRunIds = [...summaryRunIds];
-  const result: ChatRecovery = { records: [], activeRunIds: [], savedRunIds: [], savedSummaryRunIds: [], receipts: [], unavailableRunIds: [], failures: [] };
+  const result: ChatRecovery = { records: [], activeRunIds: [], savedRunIds: [], savedSummaryRunIds: [], receipts: [], unavailableRunIds: [], missingRunIds: [], missingSummaryRunIds: [], abandonedRunIds: [], failures: [] };
   const summaries = new Map<string, Promise<PersistenceState>>();
   const readSummary = (id: string) => {
     let pending = summaries.get(id);
@@ -69,7 +76,10 @@ export async function getChatRecovery(runIds: string[], summaryRunIds: string[] 
         try {
           const source = await (await getWorld()).runs.get(runId, { resolveData: "none" });
           turnId = (source as { attributes?: Record<string, string> }).attributes?.turn;
-        } catch { /* unknown source metadata keeps the dependency pending */ }
+        } catch (error) {
+          if (WorkflowRunNotFoundError.is(error)) { result.missingRunIds!.push(runId); continue; }
+          /* Unknown source metadata keeps the dependency pending. */
+        }
         unreturned.set(runId, turnId);
         continue;
       }
@@ -80,6 +90,10 @@ export async function getChatRecovery(runIds: string[], summaryRunIds: string[] 
       records.push({ runId, record });
       if (record.summaryRunId) summaryRunIds.push(record.summaryRunId);
     } catch (error) {
+      if (WorkflowRunNotFoundError.is(error)) {
+        result.missingRunIds!.push(runId);
+        continue;
+      }
       console.warn("[chat/recovery] run unavailable", runId, error instanceof Error ? error.message : String(error));
       result.unavailableRunIds.push(runId);
     }
@@ -102,13 +116,17 @@ export async function getChatRecovery(runIds: string[], summaryRunIds: string[] 
     const state = await readSummary(summaryRunId);
     if (state.state === "committed") result.savedSummaryRunIds!.push(summaryRunId);
     if (state.state === "committed") result.receipts.push(state.receipt);
+    if (state.state === "missing") result.missingSummaryRunIds!.push(summaryRunId);
     if (state.state === "failed") result.failures.push({ runId: summaryRunId, error: state.error });
   }
   result.receipts = mergePersistenceReceipts(result.receipts);
   const covered = new Set(result.receipts.flatMap((receipt) => receipt.records.flatMap((record) => record.turnIds)));
   for (const entry of records) {
     if (covered.has(entry.record.turnId)) result.savedRunIds.push(entry.runId);
-    else result.records.push(entry);
+    else {
+      result.records.push(entry);
+      if (entry.record.summaryRunId && result.missingSummaryRunIds!.includes(entry.record.summaryRunId)) result.abandonedRunIds!.push(entry.runId);
+    }
   }
   for (const [runId, turnId] of unreturned) {
     if (turnId && covered.has(turnId)) result.savedRunIds.push(runId);

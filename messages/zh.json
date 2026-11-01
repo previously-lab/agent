@@ -62,7 +62,8 @@
     "dialogTitle": "选择角色"
   },
   "chat": {
-    "arrivalError": "加载对话状态超时——记忆服务可能暂时不可用（限流或离线）。",
+    "arrivalError": "读取对话历史失败，请重试。这不代表你的记忆为空。",
+    "arrivalTimeout": "读取对话历史等待过久，请重试。",
     "arrivalRetry": "重试",
     "input": {
       "placeholder": "发送消息…",

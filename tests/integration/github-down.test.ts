@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  *   → only the WIRE is faked (the octokit fetch boundary).
  *
  * COVERAGE HONESTY: this file proves the VERDICT layer — bounded typed
- * failures, the circuit, and the arrival gate's {kind:"failed"} collapse
+ * failures, the circuit, and the arrival gate's distinct failure/timeout results
  * that ChatPage turns into the failure card. The last mile (React rendering
  * the card) is NOT covered: the repo has no component-test harness (vitest
  * runs node env, no testing-library), and src/ is off-limits for a fault
@@ -159,14 +159,14 @@ describe("GitHub unavailable — entry actions fail fast and typed", () => {
 });
 
 describe("arrival gate under GitHub-down (the verdict layer of the failure card)", () => {
-  it("a hung memory service collapses to {kind:'failed'} at the gate timeout — bounded, the failure card's trigger", async () => {
+  it("a hung memory service reports timeout at the gate deadline", async () => {
     fetchMock.mockImplementation(hangingFetch);
     // The gate (10s here) fires BEFORE the read deadline (15s) — exactly
-    // the composition ChatPage runs: raceArrivalVerdict(resolveArrival(…)).
+    // the authoritative history gate used before optional workflow recovery.
     const action = getArrivalState();
     const t0 = Date.now();
     await expect(raceArrivalVerdict(action, 10_000)).resolves.toEqual({
-      kind: "failed",
+      kind: "timeout",
     });
     expect(Date.now() - t0).toBeLessThan(11_000);
     // Drain the loser: its own read deadline (15s) still bounds it even
@@ -174,17 +174,12 @@ describe("arrival gate under GitHub-down (the verdict layer of the failure card)
     await expect(action).rejects.toSatisfy(isGitHubReadTimeoutError);
   }, 25_000);
 
-  it("a rate-limited memory service rejects typed and fast; resolveArrival's own catch contract turns that into a neutral briefing, not a spin", async () => {
+  it("a rate-limited memory service stays a typed read failure, never an empty briefing", async () => {
     fetchMock.mockImplementation(rateLimitedFetch);
     const t0 = Date.now();
-    // resolveArrival is module-private in chat-page.tsx; this replicates its
-    // exact contract verbatim (chat-page.tsx: getArrivalState(persona).catch(
-    // () => ({ mode: "briefing" }))) so the gate receives a resolved verdict.
-    const verdict = await raceArrivalVerdict(
-      getArrivalState().catch(() => ({ mode: "briefing" as const })),
-      10_000,
-    );
-    expect(verdict).toEqual({ kind: "ok", verdict: { mode: "briefing" } });
+    const verdict = await raceArrivalVerdict(getArrivalState(), 10_000);
+    expect(verdict.kind).toBe("failed");
+    if (verdict.kind === "failed") expect(isGitHubRateLimitError(verdict.error)).toBe(true);
     expect(Date.now() - t0).toBeLessThan(1_000);
   });
 });
