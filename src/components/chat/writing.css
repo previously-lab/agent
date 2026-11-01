@@ -69,7 +69,7 @@
 
 .conversation-prose,
 .conversation-prose > .typeset {
-  --typeset-size: 1.0625rem;
+  --typeset-size: 1rem;
   --typeset-leading: 1.95;
   --typeset-flow: 0.9em;
   font-family: var(--font-serif, serif);
@@ -223,7 +223,7 @@
   padding-inline-start: 1rem;
   border-inline-start: 1px solid color-mix(in oklab, var(--foreground) 19%, transparent);
   overflow: hidden;
-  font-size: 1.0625rem;
+  font-size: 1rem;
   line-height: 1.95;
 }
 
