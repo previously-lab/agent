@@ -1,8 +1,7 @@
 /**
  * The memory-read facade executors (v0.36) — recallRecent / recallFind /
  * recallSearch / recallRead over an in-memory local fs, including the
- * doc_rework probe chain (recordDocRead → checkDocRework → logDocReworkSignal)
- * which now rides on recallRead.
+ * semantic doc_rework read tracking (recordDocRead) and mediated record refs.
  *
  * rework-signal itself is REAL; only its two sinks are mocked (the fitness
  * store append and the agent.md timeline write), so the classification chain
@@ -10,7 +9,16 @@
  * map keys.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { parseCaseReadEnvelope, unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import type { ScenarioRecallEvidence, ScenarioRecallResult } from "@/lib/agents/scenario-recall";
+
+const recall = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock("@/lib/agents/scenario-recall", () => ({ runScenarioRecall: recall.run }));
+vi.mock("workflow", () => ({
+  getWritable: () => ({
+    getWriter: () => ({ write: vi.fn(async () => {}), releaseLock: vi.fn() }),
+  }),
+}));
 
 const io = vi.hoisted(() => {
   const files = new Map<string, string>();
@@ -78,6 +86,7 @@ import {
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
+  recallScenarioExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
 import {
@@ -155,6 +164,7 @@ function seedDirs() {
 }
 
 beforeEach(() => {
+  recall.run.mockReset();
   io.files.clear();
   io.dirs.clear();
   sinks.appendSignal.mockClear();
@@ -232,6 +242,9 @@ describe("recallSearchExecute", () => {
     expect(out).toMatch(
       /^Nothing matches "绝对不存在的关键词"\. Here are the \d+ most recent entries instead:/,
     );
+    expect(out).toContain("Original conversation");
+    expect(out).not.toContain("我想换手机");
+    expect(out).not.toContain("手机选购闲聊");
   });
 
   it("records bodies are scanned only when asked (scan-surface discipline)", async () => {
@@ -247,6 +260,9 @@ describe("recallSearchExecute", () => {
     );
     expect(withRecords).toMatch(/^1 match\(es\) for "深埋关键词":/);
     expect(withRecords).toContain("records/2026-09-05-0900");
+    expect(withRecords).toContain("Original conversation");
+    expect(withRecords).not.toContain("企鹅在很后面的正文里");
+    expect(withRecords).not.toContain("别的焦点");
   });
 });
 
@@ -256,6 +272,7 @@ describe("recallReadExecute", () => {
       { ref: "research/手机调研" },
       opts(makeCtx("2026-09-10-1000")),
     );
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected to recallScenario");
     expect(unwrapCaseReadEnvelope(out)).toBe(INDEX_RAW);
   });
 
@@ -264,15 +281,54 @@ describe("recallReadExecute", () => {
       { ref: "《research/手机调研.md》" },
       opts(makeCtx("2026-09-10-1000")),
     );
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected to recallScenario");
     expect(unwrapCaseReadEnvelope(out)).toBe(INDEX_RAW);
   });
 
-  it("records/<slice id> → the slice core; an unknown ref renders the fixed sentence", async () => {
+  it("semantic line ranges stay bounded and never issue a full-read receipt", async () => {
+    const sentinel = "FULL_SEMANTIC_DOCUMENT_SENTINEL_NEVER_RETURN";
+    const longRaw = Array.from({ length: 450 }, (_, index) =>
+      index === 449 ? sentinel : `line ${index + 1}`).join("\n");
+    io.files.set("memory/research/long/index.md", longRaw);
+    io.dirs.set("memory/research", ["手机调研", "long"]);
+    io.dirs.set("memory/research/long", ["index.md"]);
+
+    const ranged = await recallReadExecute(
+      { ref: "research/long", range: { type: "lines", start: 1, end: 2 } },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    if (typeof ranged !== "string") throw new Error("Semantic range unexpectedly redirected to recallScenario");
+    const text = ranged;
+    expect(text).toContain("Lines 1-2 of research/long");
+    expect(text).toContain("line 1\nline 2");
+    expect(text).not.toContain("line 3");
+    expect(text).not.toContain(sentinel);
+    expect(parseCaseReadEnvelope(text)).toBeNull();
+
+    const capped = await recallReadExecute(
+      { ref: "research/long", range: { type: "lines", start: 1, end: 450 } },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(capped).toContain("bounded to 400 lines/16000 chars");
+    expect(capped).toContain("line 400");
+    expect(capped).not.toContain("line 401");
+    expect(capped).not.toContain(sentinel);
+
+    const wrongRange = await recallReadExecute(
+      { ref: "research/long", range: { type: "turns", indices: [0] } },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(wrongRange).toContain('ERROR: Range type "turns" is not available for semantic document');
+    expect(wrongRange).not.toContain(sentinel);
+  });
+
+  it("records/<slice id> redirects to mediated recall; an unknown semantic ref renders the fixed sentence", async () => {
     const out = await recallReadExecute(
       { ref: "records/2026-09-04-2130" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(out).toContain("我想换手机，预算 5000。");
+    expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-09-04-2130" });
+    expect(JSON.stringify(out)).not.toContain("我想换手机，预算 5000。");
     const miss = await recallReadExecute(
       { ref: "research/不存在" },
       opts(makeCtx("2026-09-10-1000")),
@@ -284,21 +340,113 @@ describe("recallReadExecute", () => {
 });
 
 describe("doc_rework probe (§4.4)", () => {
-  it("logs doc_rework when recallRead opens a slice a case read referenced", async () => {
+  const evidence: ScenarioRecallEvidence = {
+    ref: "records/2026-09-04-2130",
+    turnId: "1",
+    role: "user",
+    quote: "预算 5000",
+    note: "The original turn states the budget.",
+  };
+
+  function recollection(items: ScenarioRecallEvidence[] = [evidence]): ScenarioRecallResult {
+    const result: ScenarioRecallResult = {
+      status: items.length ? "ok" : "insufficient_evidence",
+      answer: items.length ? "预算为 5000。" : "",
+      evidence: items,
+      coverage: { discovered: 1, searched: [], read: [evidence.ref], omitted: 0, notes: [] },
+      truncated: false,
+      uncertainty: [],
+    };
+    recall.run.mockResolvedValue(result);
+    return result;
+  }
+
+  it("records each verified record once after a semantic read, including discovered refs", async () => {
+    const ctx = makeCtx("2026-09-10-1100");
+    io.files.set("memory/research/手机调研/index.md", `${INDEX_RAW}\n另见 2026-09-05-0900。`);
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+    const result = recollection([
+      evidence,
+      { ...evidence, quote: "我想换手机" },
+      { ...evidence, ref: "records/2026-09-05-0900", quote: "开场白" },
+    ]);
+
+    // No input refs: the verified, discovered sources alone drive this probe.
+    const out = await recallScenarioExecute({ question: "当时的预算是多少？" }, opts(ctx));
+
+    expect(out).toBe(result);
+    expect(sinks.writeAgentTimeline).toHaveBeenCalledTimes(2);
+    for (const sliceId of ["2026-09-04-2130", "2026-09-05-0900"]) {
+      expect(sinks.writeAgentTimeline).toHaveBeenCalledWith(ctx.sliceId,
+        expect.stringContaining(`main agent read slice ${sliceId} that document "memory/research/手机调研/index.md" references`));
+    }
+    expect(sinks.writeAgentTimeline.mock.calls.every(([, line]) => !line.includes(evidence.quote))).toBe(true);
+    expect(parseCaseReadEnvelope(JSON.stringify(out))).toBeNull();
+    expect(JSON.stringify(out)).not.toContain(CORE_RAW);
+  });
+
+  it.each(["insufficient_evidence", "timeout", "cancelled", "error"] as const)(
+    "does not signal from requested or read refs without verified evidence (%s)", async (status) => {
+      const ctx = makeCtx("2026-09-10-1101");
+      await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+      const result = recollection([]);
+      result.status = status;
+
+      await recallScenarioExecute({ question: "当时的预算是多少？", refs: [evidence.ref, evidence.ref] }, opts(ctx));
+
+      expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not signal before a semantic read or retroactively after one", async () => {
+    const ctx = makeCtx("2026-09-10-1102");
+    recollection();
+    await recallScenarioExecute({ question: "当时的预算是多少？" }, opts(ctx));
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+  });
+
+  it("does not signal for an unrelated verified source or the active conversation", async () => {
+    for (const ctx of [makeCtx("2026-09-10-1103"), makeCtx("2026-09-04-2130")]) {
+      await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+      recollection(ctx.sliceId === "2026-09-04-2130" ? [evidence] : [{ ...evidence, ref: "records/2026-09-05-0900" }]);
+      await recallScenarioExecute({ question: "当时的预算是多少？" }, opts(ctx));
+    }
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed record refs and empty quotes at the audit boundary", async () => {
+    const ctx = makeCtx("2026-09-10-1104");
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+    recollection([
+      { ...evidence, ref: "2026-09-04-2130" },
+      { ...evidence, ref: "records/2026-99-04-2130" },
+      { ...evidence, ref: "research/手机调研" },
+      { ...evidence, quote: " " },
+    ]);
+    await recallScenarioExecute({ question: "当时的预算是多少？" }, opts(ctx));
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+  });
+
+  it("preserves the bounded recall result when the audit write fails", async () => {
+    const ctx = makeCtx("2026-09-10-1105");
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+    const result = recollection();
+    sinks.writeAgentTimeline.mockRejectedValueOnce(new Error("fixture audit write failed"));
+
+    await expect(recallScenarioExecute({ question: "当时的预算是多少？" }, opts(ctx))).resolves.toBe(result);
+    expect(sinks.writeAgentTimeline).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run the raw-read doc_rework probe when a record read is mediated", async () => {
     const ctx = makeCtx("2026-09-10-1000");
 
     await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
     expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
 
     const out = await recallReadExecute({ ref: "records/2026-09-04-2130" }, opts(ctx));
-    expect(out).toContain("我想换手机");
-    // v0.19 R4/R5: signals land as the agent.md audit line (+ run log), not
-    // the retired fitness store.
-    expect(sinks.writeAgentTimeline).toHaveBeenCalledTimes(1);
-    const line = sinks.writeAgentTimeline.mock.calls[0][1] as string;
-    expect(line).toContain("doc_rework");
-    expect(line).toContain("2026-09-04-2130");
-    expect(line).toContain("memory/research/手机调研/index.md");
+    expect(out).toMatchObject({ kind: "recallScenario_required" });
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
   });
 
   it("stays silent when the read slice is not referenced by any read case", async () => {
@@ -409,18 +557,13 @@ describe("GitHub backend routing (cached reads)", () => {
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 
-  it("recallRead reads the file through the cached tree layer, never the direct read", async () => {
+  it("record recallRead redirects before any backend read", async () => {
     const out = await recallReadExecute(
       { ref: "records/2026-09-04-2130" },
       opts(makeGithubCtx("2026-09-10-1000")),
     );
-    expect(out).toContain("我想换手机");
-    expect(githubReadFileViaTree).toHaveBeenCalledWith(
-      CORE_PATH,
-      "mem",
-      "me",
-      undefined,
-    );
+    expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-09-04-2130" });
+    expect(githubReadFileViaTree).not.toHaveBeenCalled();
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 });

@@ -89,6 +89,7 @@ const ctx: ToolContext = {
 async function actualRead(ref: string, context = ctx): Promise<{ messages: ModelMessage[]; output: string }> {
   const toolCallId = "real-read-1";
   const output = await recallReadExecute({ ref }, { context, toolCallId });
+  if (typeof output !== "string") throw new Error("Semantic read unexpectedly redirected to recallScenario");
   return { output, messages: [
     { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: "recallRead", input: { ref } }] },
     { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: "recallRead", output: { type: "text", value: output } }] },
@@ -267,6 +268,7 @@ describe("writeCase — addPiece on an existing case", () => {
     await call({ caseName: "提纲案", body: "## 一节\n原文。" });
     const ref = "research/提纲案";
     const output = await recallReadExecute({ ref, outline: true }, { context: ctx, toolCallId: "outline-read" });
+    if (typeof output !== "string") throw new Error("Semantic outline unexpectedly redirected to recallScenario");
     expect(parseCaseReadEnvelope(output)).toBeNull();
     const messages: ModelMessage[] = [
       { role: "assistant", content: [{ type: "tool-call", toolCallId: "outline-read", toolName: "recallRead", input: { ref, outline: true } }] },

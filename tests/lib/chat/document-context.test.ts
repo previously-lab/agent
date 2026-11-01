@@ -149,14 +149,17 @@ describe("multilingual durable codec and grounding prompt", () => {
     expect(decodeDocumentContext(encoded)).toEqual(references);
   });
 
-  it("uses B's escaped link formatter and labels selections as unverified pointers, never evidence or permission", () => {
-    const prompt = renderDocumentContext(parseDocumentContext([{ ref: "research/项目 (试点)", title: "Project", quote: "client quote", observedRevision: "sha" }]));
+  it("uses escaped links and selection metadata without injecting the selected passage", () => {
+    const selectedText = `LARGE_PRIVATE_SELECTION_${"x".repeat(1100)}`;
+    const prompt = renderDocumentContext(parseDocumentContext([{ ref: "research/项目 (试点)", title: "Project", quote: selectedText, observedRevision: "sha" }]));
     expect(prompt).toBeDefined();
     expect(prompt).toContain("recallScenario");
     expect(prompt).toContain("recallRead");
     expect(prompt).toContain("not durable-memory evidence");
     expect(prompt).toContain("not write authorization");
-    expect(prompt).toContain("unverified reading pointer");
+    expect(prompt).toContain("Selection supplied: yes");
+    expect(prompt).not.toContain(selectedText);
+    expect(prompt).not.toContain("LARGE_PRIVATE_SELECTION_");
     expect(prompt).toContain("%20");
     expect(prompt).toContain("%28");
     expect(prompt).toContain("%29");

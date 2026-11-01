@@ -1348,7 +1348,7 @@ export interface RecallReadInput {
   ref: string;
   /** records only: which slice part (default "core"). */
   part?: "core" | "agent" | "previously";
-  /** records core only: the five range filters. */
+  /** Record cores support all filters; semantic documents support bounded lines. */
   range?: RecallReadRange;
   /** User-local rendering for slice parts (turn annotation / snapshot banner). */
   timezone?: string;
@@ -1385,6 +1385,31 @@ export function applySliceRange(sliceId: string, raw: string, range?: RecallRead
       : reassembleSlice(frontmatter, filtered);
   }
   return `ERROR: Unknown range type "${range.type}" in ${sliceId}.`;
+}
+
+const SEMANTIC_LINE_RANGE_MAX_LINES = 400;
+const SEMANTIC_LINE_RANGE_MAX_CHARS = 16_000;
+
+function applySemanticDocumentRange(ref: string, raw: string, range: RecallReadRange): string {
+  if (range.type !== "lines") {
+    return `ERROR: Range type "${range.type}" is not available for semantic document ${ref}; use { type: "lines", start, end }.`;
+  }
+  const start = range.start ?? 1;
+  const requestedEnd = range.end ?? start;
+  if (!Number.isInteger(start) || !Number.isInteger(requestedEnd) || start < 1 || requestedEnd < 1 || start > requestedEnd) {
+    return `ERROR: Invalid line range ${start}-${requestedEnd} in ${ref}.`;
+  }
+  const end = Math.min(requestedEnd, start + SEMANTIC_LINE_RANGE_MAX_LINES - 1);
+  const { content, clamped } = textLines(raw, start, end);
+  const lineCapped = end < requestedEnd;
+  const charCapped = content.length > SEMANTIC_LINE_RANGE_MAX_CHARS;
+  const bounded = charCapped ? `${content.slice(0, SEMANTIC_LINE_RANGE_MAX_CHARS - 1)}…` : content;
+  const notes = [
+    clamped ? "clamped" : null,
+    lineCapped || charCapped ? `bounded to ${SEMANTIC_LINE_RANGE_MAX_LINES} lines/${SEMANTIC_LINE_RANGE_MAX_CHARS} chars` : null,
+  ].filter((note): note is string => note !== null);
+  const header = `Lines ${start}-${requestedEnd} of ${ref}${notes.length ? ` (${notes.join("; ")})` : ""}:\n\n`;
+  return bounded === "" ? `${header}(empty range)` : header + bounded;
 }
 
 /** Split a slice core into turn segments (the episodic turn-parser split). */
@@ -1584,6 +1609,9 @@ export async function recallRead(
   if (input.outline && result.kind === "content") {
     const { totalLines, headings } = parseDocumentOutline(result.content);
     return { kind: "outline", ref: input.ref, totalLines, headings };
+  }
+  if (result.kind === "content" && input.range && !normalizeCaseRefText(input.ref).startsWith("records/")) {
+    return { ...result, content: applySemanticDocumentRange(input.ref, result.content, input.range) };
   }
   return result;
 }

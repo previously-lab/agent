@@ -160,7 +160,7 @@ function opts(overrides: Partial<ToolContext> = {}): {
 }
 
 
-describe("recallReadExecute — the user card and historical snapshots", () => {
+describe("recallReadExecute — semantic reads and record mediation", () => {
   beforeEach(() => {
     local.files.clear();
   });
@@ -173,6 +173,7 @@ describe("recallReadExecute — the user card and historical snapshots", () => {
     // The frozen legacy file exists on disk — the executor must NOT read it.
     local.files.set("memory/episodic/current-previously.md", "FROZEN legacy card");
     const out = await recallReadExecute({ ref: "people/user" }, opts());
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected to recallScenario");
     expect(unwrapCaseReadEnvelope(out)).toBe(
       "## User profile\n\n- 自称 Dream\n\n## Self-model\n\nlive card.",
     );
@@ -185,18 +186,17 @@ describe("recallReadExecute — the user card and historical snapshots", () => {
     );
   });
 
-  it("records/<slice id> part 'previously' → that slice's historical snapshot, with the local-time banner", async () => {
-    // v3 format passes migrateToV3 through unchanged.
-    local.files.set(
-      "memory/records/2026/08/11/1115/previously.md",
-      "## User profile\n\n- snapshot line\n\n## Self-model\n\nsnapshot body.",
-    );
-    const out = await recallReadExecute(
-      { ref: "records/2026-08-11-1115", part: "previously" },
-      opts(),
-    );
-    expect(out).toContain("snapshot body.");
-    expect(out).not.toBe("## User profile\n\n- snapshot line\n\n## Self-model\n\nsnapshot body.");
+  it.each([
+    "records/2026-08-11-1115",
+    "/records/2026-08-11-1115",
+    "previously:records/2026-08-11-1115",
+    "memory/records/2026/08/11/1115/core.md",
+    "/memory/records/2026/08/11/1115/previously.md",
+    "memory/episodic/slices/2026/08/11/1115/timeline/core.md",
+  ])("record ref %s returns a typed redirect without reading the original", async (ref) => {
+    const out = await recallReadExecute({ ref, part: "previously" }, opts());
+    expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-08-11-1115" });
+    expect(JSON.stringify(out)).not.toContain("snapshot body");
   });
 
   it("an invalid records ref → the fixed not-found sentence (never a throw)", async () => {

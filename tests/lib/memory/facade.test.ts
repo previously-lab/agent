@@ -108,6 +108,29 @@ describe("case current views and activity", () => {
     expect(historical.caseRevision).toBe(normal.caseRevision);
   });
 
+  it("applies semantic line ranges to the rendered current and history content", async () => {
+    const backend = makeBackend({ [indexPath]: old, [currentPath]: current() });
+    const currentOnly = await recallRead(backend, {
+      ref: "things/长期案",
+      range: { type: "lines", start: 1, end: 5 },
+    });
+    if (currentOnly.kind !== "content") throw new Error("expected current prose");
+    expect(currentOnly.content).toContain("CURRENT UNDERSTANDING");
+    expect(currentOnly.content).toContain("当前解释。共同关键词。只在最新认识中出现的线索。");
+    expect(currentOnly.content).not.toContain("PRESERVED HISTORICAL INDEX");
+
+    const historyOnly = await recallRead(backend, {
+      ref: "things/长期案",
+      includeHistory: true,
+      range: { type: "lines", start: 9, end: 11 },
+    });
+    if (historyOnly.kind !== "content") throw new Error("expected history prose");
+    expect(historyOnly.content).toContain("CURRENT-VIEW HISTORY");
+    expect(historyOnly.content).toContain("只在旧认识历史里的词。");
+    expect(historyOnly.content).not.toContain("当前解释。共同关键词。只在最新认识中出现的线索。");
+    expect(historyOnly.content).not.toContain("PRESERVED HISTORICAL INDEX");
+  });
+
   it("ranks tail and current activity above newer-born idle cases", async () => {
     for (const supplement of ["tail", "current"]) {
       const backend = makeBackend({

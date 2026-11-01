@@ -138,7 +138,7 @@ export const chatTools = {
       "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
       "a bounded recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
       "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
-      "the narrative answer remains a derived interpretation. Use recallRead on the cited record to verify a detail beyond those excerpts. " +
+      "the narrative answer remains a derived interpretation. Ask another focused recallScenario question when more original detail is needed. " +
       "For semantic documents, case understandings and other existing prose, use recallRead directly: they are already compressed and this tool cannot read them. " +
       "Incomplete coverage or no evidence is not proof that the user never said something. This tool does not create write authority or task evidence.",
     inputSchema: scenarioRecallRequestSchema,
@@ -151,7 +151,7 @@ export const chatTools = {
   recallRecent: tool({
     description:
       "See what has been happening in memory — the N most recent ENTRIES " +
-      "(ref / title / date / one-line excerpt), never raw files, newest " +
+      "(ref / title / date / one-line excerpt), never raw files. Record rows contain locators only; use recallScenario for their content. Semantic rows keep their excerpts. Results are newest " +
       "activity first. Use this FIRST whenever the user asks about the past " +
       "and you are not sure WHERE it lives: omit `category` and you get one " +
       "cross-category timeline (conversation slices + cases interleaved by " +
@@ -225,7 +225,7 @@ export const chatTools = {
       "`Nothing named \"{name}\" exists in {category}. Closest matches: …` " +
       "(or `…and nothing similar.`) — a miss is NOT proof of absence; " +
       "check the near matches before telling the user anything is " +
-      "missing. Then recallRead(ref) for the content.",
+      "missing. Continue semantic refs with recallRead(ref); continue record refs with recallScenario.",
     inputSchema: z.object({
       category: z
         .enum(RECALL_CATEGORIES)
@@ -251,8 +251,8 @@ export const chatTools = {
       "slice HEADS (focus/summary lines). Raw conversation bodies " +
       "(category 'records') are scanned ONLY when you pass category " +
       "'records' or includeRecords:true — reach for the organized layer " +
-      "first; go to the raw record as the second layer, when the answer is " +
-      "not in any document. Keywords AND within a segment (pass synonyms as " +
+      "first; locate original conversations as the second layer when the answer is " +
+      "not in any document, then use recallScenario for their content. Keywords AND within a segment (pass synonyms as " +
       "separate calls). Hits return entries whose excerpt is the matching " +
       "snippet, newest activity first, up to `limit` (default 20, hard cap 30) " +
       "per page; `offset` (default 0) pages deeper — pass the offset the " +
@@ -270,8 +270,8 @@ export const chatTools = {
       "appends `Showing {n} from offset {offset} — pass offset={offset+n} for " +
       "older ones.`; an offset past the end returns `No more entries — offset " +
       "{offset} is past the end; only {total} exist in this scope, newest " +
-      "first.` — an empty page is NOT absence. Continue with recallRead(ref) " +
-      "on anything promising.",
+      "first.` — an empty page is NOT absence. Record hits return only ref/date locators, never body excerpts or summary claims. " +
+      "Continue semantic refs with recallRead(ref) and record refs with recallScenario.",
     inputSchema: z.object({
       query: z
         .union([z.string(), z.array(z.string())])
@@ -323,23 +323,13 @@ export const chatTools = {
   // ④ Continue reading — the "出处" verb: entries cite refs, refs read here.
   recallRead: tool({
     description:
-      "Continue reading an entry — pass the `ref` from any recall result " +
+      "Continue reading a SEMANTIC document — pass its `ref` from any recall result " +
       "(e.g. 'events/换手机', 'research/手机调研/" +
-      "2026-09-08-报价篇', 'self/agenda', 'people/user/profile', " +
-      "'records/2026-10-14-1836'). An approximate name in the ref also " +
+      "2026-09-08-报价篇', 'self/agenda', 'people/user/profile'). An approximate name in the ref also " +
       "resolves — the result opens by telling you which stored name it " +
-      "matched. Case refs return the whole document; the " +
-      "records ref returns that conversation's core record — the ONLY " +
-      "source for specific facts (numbers, dates, quotes, promises): read " +
-      "it BEFORE answering from memory, and prefer a `range` over a full " +
-      "slice (a full slice is the most expensive read). For records: " +
-      "`part` selects 'core' (default) / 'agent' (your cognition for that " +
-      "slice) / 'previously' (the user-card snapshot of that moment); on " +
-      "core, `range` narrows the read — 'last' the most recent N turns, " +
-      "'turns' by 0-based index, 'date' turns after an ISO timestamp, " +
-      "'search' keywords (matched turns + one turn of context; a miss " +
-      "returns the full slice with a note), 'lines' a 1-indexed line range " +
-      "like a code file. For a LONG document, first call with `outline: true` " +
+      "matched. Case refs return the whole document. Original conversation refs, /records aliases, and raw record storage paths " +
+      "return a typed recallScenario_required redirect instead of content; call recallScenario with a focused question and the canonical ref. " +
+      "For a LONG semantic document, first call with `outline: true` " +
       "to get its heading skeleton (levels + line spans), then read only the " +
       "spans you need with `range: { type: \"lines\", start, end }`. FIXED " +
       "result wording: an approximate match " +
@@ -362,7 +352,7 @@ export const chatTools = {
         .enum(["core", "agent", "previously"])
         .optional()
         .describe(
-          "records refs only: which slice part to read (default 'core').",
+          "Legacy record-only field. Any records ref returns recallScenario_required; semantic documents do not use parts.",
         ),
       range: z
         .object({
@@ -406,8 +396,7 @@ export const chatTools = {
         })
         .optional()
         .describe(
-          "records core only: an optional range filter. When omitted, " +
-          "returns the full slice content.",
+          "For semantic documents, use type 'lines' to read at most 400 lines/16000 chars; larger spans are explicitly bounded. Legacy record range requests return recallScenario_required.",
         ),
       outline: z
         .boolean()
@@ -438,8 +427,8 @@ export const chatTools = {
       "Give `since` (YYYY-MM-DD, user calendar, that day included) OR " +
       "`cursor` (a commit sha from a previous result's paging note — the " +
       "changes AFTER that commit); neither defaults to the last 1 day. " +
-      "Every returned entry is a recallRead-ready ref carrying its change " +
-      "(added / modified / removed) and date — continue with recallRead(ref). " +
+      "Every returned entry is a ref carrying its change (added / modified / removed) and date. " +
+      "Continue semantic refs with recallRead(ref) and record refs with recallScenario. " +
       "`limit` caps ENTRIES (default 20, hard cap 50), not commits; " +
       "`category` narrows to one world (records / events / …). The refs of " +
       "one conversation slice collapse into ONE records/<sliceId> entry no " +

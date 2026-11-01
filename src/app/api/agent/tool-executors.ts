@@ -40,8 +40,8 @@ import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
 import {
   checkDocRework,
-  recordDocRead,
   logDocReworkSignal,
+  recordDocRead,
   extractSliceIds,
 } from "@/lib/episodic/rework-signal";
 import { questionRun } from "@/app/api/evolution/question-run";
@@ -76,11 +76,16 @@ import {
 } from "@/lib/evolution/skill-store";
 import { renderRoleSkillGuidance } from "@/lib/evolution/skill-policy";
 import { runScenarioRecall, type ScenarioRecallResult } from "@/lib/agents/scenario-recall";
-import { scenarioRecallRequestSchema, type ScenarioRecallRequest } from "@/lib/chat/scenario-recall-contract";
+import {
+  createConversationRecordReadRedirect,
+  scenarioRecallRequestSchema,
+  withoutConversationEntryContent,
+  type ConversationRecordReadRedirect,
+  type ScenarioRecallRequest,
+} from "@/lib/chat/scenario-recall-contract";
 
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
-  normalizeCaseRefText,
   caseIndexPath,
   isValidCaseName,
   sanitizeCaseSegment,
@@ -99,6 +104,7 @@ import {
   isRecallCategory,
   type RecallBackend,
   type RecallCategory,
+  type RecallResult,
   type RecallReadRange,
 } from "@/lib/memory/facade";
 import {
@@ -129,7 +135,7 @@ import {
 
 import { resolveMainModelFromConfig } from "@/lib/models/resolve";
 import { resolveSubAgentModel } from "@/lib/agents/sub-agent-runner";
-import type { ModelConfig } from "@/lib/models/registry";
+import { FIXED_MODEL, type ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { isTransientError, triageErrorMessage } from "@/lib/chat/tool-triage";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
@@ -330,6 +336,16 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
   };
 }
 
+function publicRecallResult(result: RecallResult): RecallResult {
+  if (result.kind === "entries" || result.kind === "fallback") {
+    return { ...result, entries: result.entries.map(withoutConversationEntryContent) };
+  }
+  if (result.kind === "not_found") {
+    return { ...result, nearMisses: result.nearMisses.map(withoutConversationEntryContent) };
+  }
+  return result;
+}
+
 export async function recallRecentExecute(
   input: { category?: string; n?: number; offset?: number; before?: string; after?: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
@@ -352,7 +368,7 @@ export async function recallRecentExecute(
     ...(input.before ? { before: input.before } : {}),
     ...(input.after ? { after: input.after } : {}),
   });
-  return renderRecallResult(result, { ...(category ? { category } : {}) });
+  return renderRecallResult(publicRecallResult(result), { ...(category ? { category } : {}) });
 }
 
 export async function recallFindExecute(
@@ -376,7 +392,7 @@ export async function recallFindExecute(
     );
   }
   const result = await recallFind(createRecallBackend(ctx), { category, name });
-  return renderRecallResult(result, { category, name });
+  return renderRecallResult(publicRecallResult(result), { category, name });
 }
 
 export async function recallSearchExecute(
@@ -417,7 +433,7 @@ export async function recallSearchExecute(
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
   });
-  return renderRecallResult(result, {
+  return renderRecallResult(publicRecallResult(result), {
     query: keywords.join(" "),
     ...(category ? { category } : {}),
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
@@ -425,12 +441,10 @@ export async function recallSearchExecute(
 }
 
 /**
- * recallRead — continue reading through an entry's ref. Also the carrier of
- * the doc_rework probe (design v0.15 §4.4): a successful case read records
- * the document + the slice ids its text references (recordDocRead); a
- * successful slice read then classifies against it, logging an audit line on
- * the current slice's agent.md when the document was not credited for the
- * fact it carried. Best-effort, never fails the read.
+ * recallRead — read semantic documents. Original conversation refs redirect
+ * to recallScenario before any backend read. A successful semantic read still
+ * records the document + referenced slice ids for the doc_rework probe;
+ * partial ranges and outlines never receive a full-index read receipt.
  */
 export async function recallReadExecute(
   input: {
@@ -441,7 +455,7 @@ export async function recallReadExecute(
     includeHistory?: boolean;
   },
   { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
-): Promise<string> {
+): Promise<string | ConversationRecordReadRedirect> {
   "use step";
   const ref = input.ref?.trim();
   if (!ref) {
@@ -453,6 +467,8 @@ export async function recallReadExecute(
       ref,
     );
   }
+  const recordRedirect = createConversationRecordReadRedirect(ref);
+  if (recordRedirect) return recordRedirect;
   const result = await recallRead(createRecallBackend(ctx), {
     ref,
     ...(input.part ? { part: input.part } : {}),
@@ -463,14 +479,7 @@ export async function recallReadExecute(
   });
 
   if (result.kind === "content") {
-    const recordsMatch = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/.exec(normalizeCaseRefText(ref));
-    if (recordsMatch && (!input.part || input.part === "core")) {
-      const sliceId = recordsMatch[1]!;
-      const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
-      if (docReworkFile) {
-        await logDocReworkSignal(ctx.sliceId, sliceId, docReworkFile);
-      }
-    } else if (!recordsMatch && result.path.startsWith("memory/")) {
+    if (result.path.startsWith("memory/")) {
       recordDocRead(ctx.sliceId, result.path, extractSliceIds(result.content));
     }
     const caseMatch = !input.outline && !input.range
@@ -511,18 +520,30 @@ export async function recallScenarioExecute(
   const result = await runScenarioRecall({
     ...request,
     backend: createRecallBackend(ctx),
-    model: ctx.mainModel,
+    model: FIXED_MODEL,
     timezone: ctx.timezone,
     signal: abortSignal,
   });
   if (result.evidence.length > 0) {
     const seen = new Set<string>();
     const references = result.evidence.flatMap((evidence) => {
-      const sliceId = evidence.ref.replace(/^records\//, "");
-      if (!parseSliceId(sliceId) || seen.has(sliceId)) return [];
+      const sliceId = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/.exec(evidence.ref)?.[1];
+      if (!sliceId || !parseSliceId(sliceId) || !evidence.quote.trim() || seen.has(sliceId)) return [];
       seen.add(sliceId);
       return [{ slice_id: sliceId, note: evidence.note }];
     });
+    // Only evidence verified by the read-only recall agent counts as a record
+    // read. Requested refs and search/read coverage alone prove no recollection.
+    // Keep the existing semantic-document probe outside that agent; this audit
+    // signal grants neither a case-read receipt nor document write authority.
+    for (const { slice_id: sliceId } of references) {
+      try {
+        const docFileName = checkDocRework(ctx.sliceId, sliceId);
+        if (docFileName) await logDocReworkSignal(ctx.sliceId, sliceId, docFileName);
+      } catch (error) {
+        console.warn("[recallScenario] doc_rework probe failed:", error instanceof Error ? error.message : error);
+      }
+    }
     try {
       const writer = getWritable<UIMessageChunk>().getWriter();
       try { await writer.write({ type: "data-recall-references", data: { references } } as UIMessageChunk); }
@@ -1737,7 +1758,7 @@ const SUB_AGENT_TIMEOUT_NOTE =
   "The reasoning fragment was interrupted before finishing. The `answer` holds " +
   "the partial conclusion and `reasoning` the thinking trail it already produced " +
   "— work with them (noting the uncertainty). If you need more, gather the " +
-  "missing information yourself (webSearch / recallSearch / recallRead), embed it, and dispatch a " +
+  "missing information yourself (webSearch / recallSearch / recallRead for semantic documents / recallScenario for records), embed it, and dispatch a " +
   "finer fragment. Do not re-dispatch the same question unchanged — a fragment " +
   "that timed out will likely time out again.";
 

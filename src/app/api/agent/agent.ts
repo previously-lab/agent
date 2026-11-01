@@ -2,6 +2,7 @@
 import { DeepSeekAgent, type DeepSeekAgentOptions } from "@/lib/deepseek/workflow-agent";
 import type { ModelConfig } from "@/lib/models/registry";
 import { getChatTools, type buildChatToolsContext } from "./tools";
+import { mediateReplayedRecordReads } from "@/lib/chat/scenario-recall-contract";
 export type ChatToolSet = ReturnType<typeof getChatTools>;
 export type ChatAgent = DeepSeekAgent<ChatToolSet>;
 export function createChatAgent(opts: {
@@ -11,5 +12,9 @@ export function createChatAgent(opts: {
 }): ChatAgent {
   return new DeepSeekAgent({ role: "chat", thinking: true,
     instructions: "You are the user's personal agent with layered episodic memory. Answer from the provided context; use the memory tools to recall details when needed.",
-    tools: getChatTools(), toolsContext: opts.toolsContext, onStepEnd: opts.onStepEnd });
+    tools: getChatTools(), toolsContext: opts.toolsContext, onStepEnd: opts.onStepEnd,
+    prepareStep: ({ messages }) => {
+      const mediated = mediateReplayedRecordReads(messages);
+      messages.splice(0, messages.length, ...mediated);
+    } });
 }
