@@ -81,7 +81,7 @@ export function GameRouteShell({ active }: { active: boolean }) {
 
   const onRoomSnapshotChange = useCallback((snapshot: RoomSnapshot | null) => {
     if (liveLaneRef.current !== lane) return;
-    if (snapshot) roomSnapshotRef.current = { lane, snapshot };
+    roomSnapshotRef.current = { lane, snapshot };
     if (!activeRef.current || !snapshot) {
       screen.roomLeft();
       return;
@@ -107,6 +107,7 @@ export function GameRouteShell({ active }: { active: boolean }) {
             sourceScope={sourceScope}
             dataGeneration={dataGeneration}
             onRoomSnapshotChange={onRoomSnapshotChange}
+            paused={worldFrozen}
             onExit={openConversation}
             focusSlice={sharedSlice}
             suspended={!active}

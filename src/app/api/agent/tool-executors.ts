@@ -1636,25 +1636,34 @@ export async function describeRoomExecute(
   const desc = describeRoom(
     sid,
     frozen
-      ? {
-          profile: frozen.profile,
-          strandDoors: frozen.roomDoorCount,
-          corridorSide: frozen.corridorSide,
-        }
-      : view
-        ? {}
+      ? frozen.generatorVersion === 2
+        ? { generatorVersion: 2, profile: frozen.profile, timezone: frozen.timezone }
         : {
-            ...(strandDoors !== undefined ? { strandDoors } : {}),
-            ...(corridorSide ? { corridorSide } : {}),
-          },
+            generatorVersion: 1,
+            profile: frozen.profile,
+            strandDoors: frozen.roomDoorCount,
+            corridorSide: frozen.corridorSide,
+          }
+      : {
+          generatorVersion: 2,
+          ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
+          ...(strandDoors !== undefined ? { strandDoors } : {}),
+          ...(corridorSide ? { corridorSide } : {}),
+        },
   );
   const rendered = formatRoomDescription(desc, ctx.locale === "zh" ? "zh" : "en");
-  if (frozen) return rendered;
+  const generatedAtmosphereNote =
+    ctx.locale === "zh"
+      ? "日期与天气氛围仅是固定房间生成器的视觉装饰，不是真实天气或现场观测。"
+      : "Date and weather atmosphere are decorative fixed-room visuals, not real weather or a live observation.";
+  if (frozen) return frozen.generatorVersion === 2
+    ? `${rendered}\n\n${generatedAtmosphereNote}`
+    : rendered;
   const baseNote =
     ctx.locale === "zh"
-      ? "基础空间说明：以上仅使用现有基础编译；没有读取该记录原文或语义 profile，也没有借用其他房间的冻结快照。"
-      : "Base space only: this is the existing basic compilation. No record text or semantic profile was read, and no other room's frozen snapshot was borrowed.";
-  return `${rendered}\n\n${baseNote}`;
+      ? "固定房间说明：以上使用当前固定房间生成器；没有读取该记录原文或语义 profile，也没有借用其他房间的冻结快照。"
+      : "Fixed room only: this uses the current fixed-room generator. No record text or semantic profile was read, and no other room's frozen snapshot was borrowed.";
+  return `${rendered}\n\n${baseNote}\n${generatedAtmosphereNote}`;
 }
 
 /**

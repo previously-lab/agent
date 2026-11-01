@@ -29,6 +29,7 @@ import {
   gameElapsed,
   resetGameTimeForTests,
   setGameFrozen,
+  subscribeGameFrozen,
 } from "@/components/game/game-time";
 import { GAME_SIM_FREEZE } from "@/components/game/sim-freeze";
 
@@ -178,5 +179,18 @@ describe("GAME_SIM_FREEZE (the delegated compatibility view)", () => {
     expect(gameElapsed()).toBe(0);
     advanceGameClock(0.016);
     expect(gameElapsed()).toBe(0.016);
+  });
+});
+
+describe("subscribeGameFrozen", () => {
+  it("notifies only on transitions and stops after unsubscribe", () => {
+    const events: boolean[] = [];
+    const unsubscribe = subscribeGameFrozen((frozen) => events.push(frozen));
+    setGameFrozen(true);
+    setGameFrozen(true);
+    setGameFrozen(false);
+    unsubscribe();
+    setGameFrozen(true);
+    expect(events).toEqual([true, false]);
   });
 });

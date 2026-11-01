@@ -551,8 +551,8 @@
     "subtitleHousekeeping": "（正在整理）"
   },
   "game": {
-    "title": "旅店",
-    "loading": "正在布置长廊……",
+    "title": "房间",
+    "loading": "正在布置房间……",
     "roomPreparing": "正在布置这个情景……",
     "roomUnavailable": "暂时无法布置这个情景。",
     "roomRetry": "重试",
@@ -563,7 +563,11 @@
     "manuscripts": "文稿",
     "workspace": "完整对话",
     "scenario": "情景",
-    "lobby": "门厅"
+    "lobby": "房间",
+    "timeHistory": "房间时间",
+    "timePrevious": "较早的时刻",
+    "timeNext": "较晚的时刻",
+    "timeEmpty": "还没有记录——开始一段对话，房间会在这里等你。"
   },
   "memory": {
     "emptyTitle": "暂无记忆",
@@ -803,15 +807,15 @@
     "resume": "继续",
     "paused": "情景停在原处",
     "relatedRoom": "文稿关联的情景",
-    "goToRoom": "前往这份记录的房间"
+    "goToRoom": "在房间中查看这个时刻"
   },
   "workspace": {
     "nav": {
       "label": "工作区",
       "conversation": "对话",
       "library": "文库",
-      "game": "旅店",
-      "relatedRoom": "前往这份记录的房间"
+      "game": "房间",
+      "relatedRoom": "在房间中查看这个时刻"
     },
     "browser": {
       "eyebrow": "文稿",

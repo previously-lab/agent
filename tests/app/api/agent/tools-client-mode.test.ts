@@ -10,7 +10,7 @@ import {
 } from "@/app/api/agent/tools";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 import { deriveRoomProfile } from "@/lib/game/room-profile";
-import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
+import { LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 
 const SAVED_MODE = process.env.PREVIOUSLY_MODE;
 
@@ -197,7 +197,7 @@ describe("toolContextSchema — step-boundary round-trip", () => {
     surface: "room",
     snapshot: {
       sliceId: ctx.sliceId,
-      generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+      generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
       profile: deriveRoomProfile({ focus: "撰写小说" }),
       roomDoorCount: 4,
       corridorSide: "south",

@@ -142,13 +142,10 @@ test.describe("In-paper reference links", () => {
     await expect(page.locator("[data-desk-place]")).toHaveCount(0);
     // Related travel follows the open record even when the world cursor has
     // never been set. Reading alone must not silently move that cursor.
-    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Go to this record’s room" }).click();
+    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "View this moment in the room" }).click();
     await expect(page.locator('[data-workspace-game-host][data-game-active]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-desk-field]")).toHaveCount(0);
-    await expect.poll(() => dbg(page).read().then((d) => {
-      const door = d?.windowDoors.find((entry) => entry.sliceId === sliceId);
-      return door && d ? Math.abs(d.x - door.x) : 999;
-    }), { timeout: 30_000 }).toBeLessThan(1);
+    await expect.poll(() => dbg(page).read().then((d) => d?.space), { timeout: 60_000 }).toBe(sliceId);
   });
 
   test("the room carries its papers and a sheet opens in the manuscript", async ({
@@ -170,28 +167,18 @@ test.describe("In-paper reference links", () => {
     ]);
 
     await page.goto("/en/game");
-    // The canvas (dynamic chunk) mounts when the corridor's doors resolve.
+    // The canvas (dynamic chunk) mounts when the fixed room resolves.
     await expect
       .poll(() => dbg(page).read().then((d) => d !== undefined), {
         timeout: 60_000,
       })
       .toBe(true);
 
-    // Into the room: teleport past the wall plane at the slice's door (the
-    // crossing check is positional — |z| beyond the wall inside the door's
-    // grab range), then wait for the space to engage.
-    const door = await dbg(page)
-      .read()
-      .then((d) => d?.windowDoors.find((w) => w.sliceId === scene.id));
-    expect(door).toBeDefined();
+    // The normal path mounts the record's fixed room directly; no corridor
+    // crossing or door coordinates are involved.
     await expect
-      .poll(async () => {
-        const state = await dbg(page).read();
-        if (state?.space === scene.id) return true;
-        await dbg(page).teleport(door!.x, door!.z + Math.sign(door!.z) * 0.4);
-        return false;
-      }, { timeout: 60_000, intervals: [300] })
-      .toBe(true);
+      .poll(() => dbg(page).read().then((d) => d?.space), { timeout: 60_000 })
+      .toBe(scene.id);
 
     // The room's papers resolve async: the record sheet first, then the
     // stamping case.

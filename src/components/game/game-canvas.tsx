@@ -197,7 +197,8 @@ import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import { getBrowserRoomProfileCache, type RoomProfileRequest, type RoomProfileCacheResult } from "@/lib/game/room-profile-cache";
 import { NEUTRAL_ROOM_PROFILE, type RoomProfile } from "@/lib/game/room-profile";
 import {
-  ROOM_SNAPSHOT_GENERATOR_VERSION,
+  LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
+  type LegacyRoomSnapshot,
   type RoomSnapshot,
 } from "@/lib/game/room-snapshot";
 import {
@@ -333,13 +334,13 @@ import {
 /* Shared types & constants                                            */
 /* ------------------------------------------------------------------ */
 
-interface PlayerPos {
+export interface PlayerPos {
   x: number;
   z: number;
 }
 
 /** Last normalized move direction + whether the player is moving. */
-interface Motion {
+export interface Motion {
   x: number;
   z: number;
   moving: boolean;
@@ -348,7 +349,7 @@ interface Motion {
 /** A tap-to-walk target (touch: tap a door or the terminal). Manual input
  *  (keys or the stick) cancels it the frame it appears; arrival fires the
  *  anchor interaction when the tap named a terminal. */
-interface WalkTarget {
+export interface WalkTarget {
   active: boolean;
   x: number;
   z: number;
@@ -388,7 +389,7 @@ type RoomReadiness =
  *  mounted by ANY path (wall crossing, prewarm, return landing) describes
  *  itself identically. Never seeded into any RNG: the snapshot freezes
  *  state, it never perturbs the streams. */
-interface ActiveSpace {
+export interface ActiveSpace {
   door: DoorRef;
   recipe: SpaceRecipe;
   scaledRecipe: SpaceRecipe;
@@ -404,10 +405,10 @@ function buildSnapshotForDoor(
   door: DoorRef,
   profile: RoomProfile,
   roomDoorCount: number,
-): RoomSnapshot {
+): LegacyRoomSnapshot {
   return Object.freeze({
     sliceId: door.sliceId,
-    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
     profile,
     roomDoorCount,
     corridorSide: door.side,
@@ -453,7 +454,7 @@ const LOBBY_SOLID_BLOCKERS: readonly SolidBox[] = [
   },
 ];
 
-type PlayerRef = MutableRefObject<PlayerPos>;
+export type PlayerRef = MutableRefObject<PlayerPos>;
 
 /** The anchor HUD payload (§13.1) — set while the player stands in reach
  *  of the lobby's terminal (the ONE live machine; v0.29 retired the
@@ -477,7 +478,7 @@ interface AnchorHud {
  *  reach of a loose sheet AND the sheet is nearer than the anchor terminal
  *  (the loop arbitrates: the closer interaction wins the prompt AND the
  *  interact key). `x`/`z` are the sheet's world position. */
-interface PaperHud {
+export interface PaperHud {
   ref: string;
   title: string;
   x: number;
@@ -496,7 +497,7 @@ declare global {
 }
 
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
-const MAX_DT = 0.05;
+export const MAX_DT = 0.05;
 
 /**
  * Screen-relative key directions in the CANONICAL screen frame ([right,
@@ -532,7 +533,7 @@ function lerpAngle(a: number, b: number, t: number): number {
 
 /** Move vector in the SCREEN frame ([right, up], unit-clamped) for the
  *  pressed keys — the GameLoop rotates it by the live camera basis. */
-function moveVectorFromKeys(keys: ReadonlySet<string>): { rx: number; up: number } {
+export function moveVectorFromKeys(keys: ReadonlySet<string>): { rx: number; up: number } {
   let rx = 0;
   let up = 0;
   for (const key of keys) {
@@ -553,7 +554,7 @@ function moveVectorFromKeys(keys: ReadonlySet<string>): { rx: number; up: number
 /** In-room speed factor: clamp(S, 1, ∞)^EXP — miniature rooms keep corridor
  *  speed; colossal rooms get a sub-linear boost so crossing one is a walk,
  *  not a commute. */
-function roomSpeedFactor(scaleFactor: number): number {
+export function roomSpeedFactor(scaleFactor: number): number {
   return Math.pow(Math.max(1, scaleFactor), ROOM_SPEED_SCALE_EXP);
 }
 
@@ -577,7 +578,7 @@ function roomZoomPullback(scaleFactor: number): number {
  * doors sit at rotation 0 → local = world − door; south doors rotate π
  * about Y → local = −(world − door).
  */
-function groundTargetY(
+export function groundTargetY(
   space: ActiveSpace,
   waterSide: number,
   x: number,
@@ -622,7 +623,9 @@ function resolveAtmosphere(
   out: AtmosphereTargets,
 ): AtmosphereTargets {
   if (space !== null) {
-    const palette = scenarioPalette(space.recipe.palette, dark);
+    const palette = space.snapshot.generatorVersion === 2
+      ? space.recipe.palette
+      : scenarioPalette(space.recipe.palette, dark);
     // The sage backdrop matches the room's material family. There is no
     // scene fog to target (removed — see Atmosphere).
     out.background.set(palette.fog);
@@ -959,7 +962,7 @@ function resolveSpaceForDoor(
   snapshot?: RoomSnapshot,
 ): ActiveSpace {
   const saved = snapshot?.sliceId === door.sliceId &&
-    snapshot.generatorVersion === ROOM_SNAPSHOT_GENERATOR_VERSION &&
+    snapshot.generatorVersion === LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION &&
     snapshot.corridorSide === door.side ? snapshot : undefined;
   const visitProfile = saved?.profile ?? profile ?? NEUTRAL_ROOM_PROFILE;
   const visitDoorCount = saved?.roomDoorCount ?? roomDoorCount;
@@ -1009,7 +1012,7 @@ function resolveSpaceForDoor(
  * resolver reports, so the rooms' paper layouts stay byte-identical to
  * the ones the live machine produced).
  */
-function roomGeometryForSpace(
+export function roomGeometryForSpace(
   space: ActiveSpace,
   count: number,
 ): {
@@ -1143,7 +1146,7 @@ function terminalForSpace(space: ActiveSpace, plan: RoomPlan): TerminalAnchor {
  * boom, which is wrong-state too) on the spot
  * (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
  */
-function CameraRig({
+export function CameraRig({
   playerRef,
   motionRef,
   space,
@@ -1479,7 +1482,7 @@ function CameraRig({
  * identical to the old fixed rig, so surface response is unchanged — only
  * coverage moved.
  */
-function Atmosphere({
+export function Atmosphere({
   space,
   dark,
   playerRef,
@@ -1593,7 +1596,7 @@ function Atmosphere({
  * travel heading. Y snaps to the active space's terrain (wading pools) and
  * lerps back to the corridor floor on exit.
  */
-function PlayerAvatar({
+export function PlayerAvatar({
   playerRef,
   motionRef,
   space,
@@ -2320,7 +2323,7 @@ const TAP_MAX_MS = 400;
  * their taps by stacking order; the world gate is field chrome and never
  * mounts over the hotel, so nothing competes for the lower half.
  */
-function TouchControls({
+export function TouchControls({
   onTap,
 }: {
   onTap: (sx: number, sy: number) => void;
@@ -2434,7 +2437,7 @@ function TouchControls({
  *  Sits bottom-24 (not bottom-6): the conversation pill floats centred at
  *  the bottom edge (16px gap + 48px tall + its subtitle line above), so
  *  the prompt must clear the whole pill stack — no overlap, no shrink. */
-function Hud({
+export function Hud({
   door,
   anchor,
   paper,
@@ -2613,7 +2616,7 @@ function RenderTrace(): null {
 /** Restore a cleared paused canvas after static initialization (priority 0)
  * and the ordinary composer (priority 1). The independent game clock keeps
  * demand frames frozen. Only actual paints discharge the resize debt. */
-function FrozenGameFrameRepaint({
+export function FrozenGameFrameRepaint({
   suspended,
   composer,
 }: {

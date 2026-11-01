@@ -142,6 +142,7 @@ import {
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import { scenarioPalette, scenarioSkin } from "@/lib/game/scenario-art";
+import type { TimeRoomAtmosphere } from "@/lib/game/time-room";
 import {
   GROUND_Y,
   POOL_DEPTH,
@@ -7606,6 +7607,8 @@ export function SpaceScene({
   roomDoorCount: roomDoorCountProp,
   onRoomDoor,
   papers,
+  showEntrance = true,
+  timeAtmosphere,
 }: {
   recipe: SpaceRecipe;
   door: DoorRef;
@@ -7639,11 +7642,20 @@ export function SpaceScene({
    *  the integrator (pure spots + async list). Absent/empty = a bare floor.
    *  Render-only data, the roomDoors pattern. */
   papers?: readonly RoomPaperItem[];
+  /** Normal fixed-room play has no corridor entrance; gallery keeps it. */
+  showEntrance?: boolean;
+  /** v2 only: preserve the date-derived palette instead of the gallery skin. */
+  timeAtmosphere?: TimeRoomAtmosphere;
 }): JSX.Element {
-  const night = useAppDark();
+  const appNight = useAppDark();
+  const night = timeAtmosphere ? timeAtmosphere.dayNight === "night" : appNight;
+  const fixedTime = timeAtmosphere !== undefined;
   const recipe = useMemo(
-    () => ({ ...sourceRecipe, palette: scenarioPalette(sourceRecipe.palette, night) }),
-    [sourceRecipe, night],
+    () => ({
+      ...sourceRecipe,
+      palette: fixedTime ? sourceRecipe.palette : scenarioPalette(sourceRecipe.palette, night),
+    }),
+    [sourceRecipe, night, fixedTime],
   );
   const spec = ARCHETYPES[recipe.archetype];
   const { dir, rotationY } = roomOrientationFor(door);
@@ -7691,8 +7703,8 @@ export function SpaceScene({
   // The door id retains explicit debug forces; a skinless debug room keeps
   // the palette path. Both themes are derived together, without reseeding.
   const skin = useMemo(
-    () => scenarioSkin(skinForSlice(door.sliceId), sourceRecipe.palette),
-    [door.sliceId, sourceRecipe.palette],
+    () => fixedTime ? null : scenarioSkin(skinForSlice(door.sliceId), sourceRecipe.palette),
+    [door.sliceId, sourceRecipe.palette, fixedTime],
   );
   // A FUNCTIONAL semantic profile (activity ≠ neutral) owns the room's
   // furniture semantics — the composition pins its primary module and
@@ -7796,7 +7808,10 @@ export function SpaceScene({
   // The room's ONE shared prop-material set (room-props.tsx): created per
   // mount, disposed on unmount; the fade collector dedups it across every
   // mesh and instanced fill that references it.
-  const propMaterials = useRoomPropMaterials(recipe.palette, canopyColor);
+  const propMaterials = useRoomPropMaterials(
+    recipe.palette as Parameters<typeof useRoomPropMaterials>[0],
+    canopyColor,
+  );
   const rootRef = useRef<THREE.Group>(null);
   const fadeMatsRef = useRef<FadeMaterialEntry[]>([]);
   const fadeTRef = useRef(fade === "in" && !(GAME_SIM_FREEZE.frozen && !prewarm) ? 0 : 1);
@@ -8632,16 +8647,20 @@ export function SpaceScene({
   // and drops to WINDOW_NIGHT_SPOT_SCALE of its strength.
   const lightRegister = useMemo(() => lightRegisterFor(recipe), [recipe]);
   const windowPaneColor = useMemo(() => {
+    if (fixedTime) return new THREE.Color(recipe.palette.sunColor);
     const c = new THREE.Color(recipe.palette.sunColor)
       .lerp(new THREE.Color("#ffffff"), 0.25)
       .lerp(new THREE.Color(LIGHT_REGISTER_TINTS[lightRegister]), 0.45);
     if (night) c.lerp(new THREE.Color(WINDOW_VIEW_NIGHT_TINT), 0.55);
     return c;
-  }, [recipe, lightRegister, night]);
+  }, [recipe, lightRegister, night, fixedTime]);
   // The view plane's multiplier: daylight pushes the sky just past the
   // bloom threshold (scaled by the palette's own sun intensity); night is
   // a cool half-strength wash — dark, never black.
   const windowViewColor = useMemo(() => {
+    if (fixedTime) {
+      return new THREE.Color(recipe.palette.sunColor).multiplyScalar(night ? 0.72 : 1);
+    }
     if (night) {
       // A forced skin tints the night view with its own night haze; the
       // gain law is unchanged (WINDOW_VIEW_NIGHT_*).
@@ -8654,7 +8673,7 @@ export function SpaceScene({
       .multiplyScalar(
         WINDOW_VIEW_DAY_GAIN * Math.min(1.2, Math.max(0.6, recipe.palette.sunIntensity)),
       );
-  }, [recipe, night, windowNightTint]);
+  }, [recipe, night, windowNightTint, fixedTime]);
   // The baked outside, one per room: sky gradient + sun halo + far/near
   // silhouettes, every color from this room's palette (§11.2 — the blue
   // room admits pale-blue daylight). The window samples it once; the
@@ -10034,13 +10053,15 @@ export function SpaceScene({
       {/* The door from inside: same frame and glow as the corridor face;
           the hinged slab mounts once the corridor is gone — before that
           the corridor's own slab is the one physical door. */}
-      <SpaceDoorway
-        accent={doorGlowColor(recipe.palette)}
-        wallColor={wallColor}
-        playerRef={playerRef}
-        door={door}
-        doorVisible={corridorGone}
-      />
+      {showEntrance && (
+        <SpaceDoorway
+          accent={doorGlowColor(recipe.palette)}
+          wallColor={wallColor}
+          playerRef={playerRef}
+          door={door}
+          doorVisible={corridorGone}
+        />
+      )}
     </group>
   );
 }

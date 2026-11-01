@@ -39,7 +39,7 @@ import {
   MAX_MACHINE_CONTEXT_CHARS,
 } from "@/app/api/chat/start-turn";
 import { deriveRoomProfile } from "@/lib/game/room-profile";
-import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
+import { LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 
 describe("structured screen observations", () => {
   const screen = {
@@ -68,7 +68,7 @@ describe("sanitizeView room snapshots", () => {
   const sliceId = "2026-10-24-0930";
   const snapshot = {
     sliceId,
-    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
     profile: deriveRoomProfile({ focus: "撰写小说" }),
     roomDoorCount: 2,
     corridorSide: "north" as const,

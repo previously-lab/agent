@@ -958,7 +958,7 @@ export function compositionForRecipe(
   const activity = recipe.profile?.activity;
   const semanticActivity = activity && activity !== "neutral" ? activity : null;
   const semanticPrimary = semanticActivity ? recipe.profile?.primaryModule : null;
-  const forced = debugPrimary ?? semanticPrimary ?? undefined;
+  const forced = recipe.fixedModule ?? debugPrimary ?? semanticPrimary ?? undefined;
   const countHint = forced ? 1 : TIER_MODULE_COUNTS[recipe.size.id];
   return resolveRoomComposition(
     recipe.sliceId,

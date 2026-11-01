@@ -274,7 +274,7 @@ test.describe("Memory and scene navigation", () => {
       await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
       await expect(host).toBeHidden();
       await expect(host).toHaveAttribute("inert", "");
-      await page.locator(".workspace-browser-top .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await page.locator(".workspace-browser-top .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
       await expect(page).toHaveURL(/\/en\/game$/);
       await expect(host).toBeVisible();
       await expect(host).toHaveAttribute("data-game-active", "true");
@@ -295,7 +295,7 @@ test.describe("Memory and scene navigation", () => {
       await page.locator("[data-records-row]").first().click();
       await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
       await expect(input).toHaveValue("still here");
-      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
       await expect(page).toHaveURL(/\/en\/game$/);
       await expect(input).toHaveValue("still here");
       await risePanel(page);

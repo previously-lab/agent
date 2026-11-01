@@ -17,6 +17,15 @@ export const GAME_DEBUG = {
   z: 0,
   space: null as string | null,
   snapshot: null as RoomSnapshot | null,
+  /** Stable normal-path navigation and decorative atmosphere probe. */
+  timeRoom: {
+    roomId: "",
+    sliceId: null as string | null,
+    atmosphere: "",
+    timezone: "UTC",
+    previousSliceId: null as string | null,
+    nextSliceId: null as string | null,
+  },
   elapsed: 0,
   /** The current hotel: "timelineId@windowIndex" (written by GameLoop). */
   hotel: "",

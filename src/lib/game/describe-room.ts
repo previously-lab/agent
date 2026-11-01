@@ -80,6 +80,12 @@
  */
 
 import { compileSpaceRecipe } from "./space-recipe";
+import {
+  TIME_ROOM_ID,
+  timeRoomAtmosphere,
+  timeRoomRecipe,
+  type TimeRoomAtmosphere,
+} from "./time-room";
 import { NEUTRAL_ROOM_PROFILE } from "./room-profile";
 import { resolveActivityDressing } from "./activity-traces";
 import {
@@ -142,6 +148,10 @@ import {
 } from "./tuning/room";
 
 export interface DescribeRoomOptions {
+  /** v1 is the legacy procedural hotel; v2 is the normal fixed room. */
+  generatorVersion?: 1 | 2;
+  /** User timezone for v2's decorative calendar atmosphere. UTC fallback. */
+  timezone?: string;
   /** The runtime strand-door count (the strand graph's say). When given
    *  WITH `corridorSide`, the doors are placed exactly as the renderer
    *  places them; alone it steers BOTH the module composition's sizing
@@ -179,6 +189,11 @@ export interface PlacedDoorOutline {
 
 export interface RoomDescription {
   sliceId: string;
+  generatorVersion: 1 | 2;
+  /** Fixed architectural identity for v2; the procedural seed id for v1. */
+  roomId: string;
+  /** Date/timezone-derived decorative mood for v2; null for legacy rooms. */
+  atmosphere: TimeRoomAtmosphere | null;
   /** The exact unscaled compiler result used by every derivation below. */
   recipe: import("./space-types").SpaceRecipe;
   /** Neutral means the legacy ID-only fallback, not missing or unavailable IO. */
@@ -322,17 +337,22 @@ export function describeRoom(
   // hero/side/open-field kits list the skin's decks. Real slices resolve
   // their world's skin (an interior world answers null — the temperate
   // baseline), and a null skin stages byte-for-byte the legacy way.
-  const skin = skinForSlice(sliceId);
-  const roomId = debugSliceIdWithoutSkin(sliceId);
-  // The renderer's own derivation order (space.tsx SpaceScene /
-  // game-canvas.tsx roomGeometryForSpace), same functions, same arguments.
-  const recipe = compileSpaceRecipe(roomId, WORLD_SEED, options.profile);
-  const profile = recipe.profile ?? NEUTRAL_ROOM_PROFILE;
+  const generatorVersion = options.generatorVersion ?? 1;
+  const fixedRoom = generatorVersion === 2;
+  const skin = fixedRoom ? null : skinForSlice(sliceId);
+  const roomId = fixedRoom ? TIME_ROOM_ID : debugSliceIdWithoutSkin(sliceId);
+  // v2 shares the normal renderer's fixed architecture and explicit user
+  // timezone. v1 retains the procedural hotel description byte-for-byte.
+  const recipe = fixedRoom
+    ? timeRoomRecipe(sliceId, options.timezone)
+    : compileSpaceRecipe(roomId, WORLD_SEED, options.profile);
+  const profile = fixedRoom ? NEUTRAL_ROOM_PROFILE : recipe.profile ?? NEUTRAL_ROOM_PROFILE;
+  const atmosphere = fixedRoom ? timeRoomAtmosphere(sliceId, options.timezone) : null;
   // The strand-door count steers the composition the same way the renderer
   // steers it (§8.4): absent = 0, the doorless derivation the renderer's
   // own pre-strand resolutions freeze — a description WITH the count
   // matches a room built WITH it.
-  const strandDoors = options.strandDoors ?? 0;
+  const strandDoors = fixedRoom ? 0 : options.strandDoors ?? 0;
   const { recipe: scaled, scale } = scaledRecipeFor(recipe, strandDoors);
   const scaleFactor = scale.factor;
   const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
@@ -529,6 +549,9 @@ export function describeRoom(
 
   return {
     sliceId,
+    generatorVersion,
+    roomId,
+    atmosphere,
     recipe,
     profile,
     worldClass: recipe.worldClass,
@@ -769,10 +792,21 @@ export function formatRoomDescription(
     desc.scale.id === "normal" ? "" : ` ×${round(desc.scale.factor)}`;
 
   L.push(
-    zh
-      ? `房间大纲 · slice ${desc.sliceId}（由种子纯推导，与渲染同源）`
-      : `Room outline · slice ${desc.sliceId} (derived from the seed — the same pure chain the renderer builds from)`,
+    desc.generatorVersion === 2
+      ? zh
+        ? `固定房间大纲 · slice ${desc.sliceId}（房间 ${desc.roomId}，与正常游戏渲染同源）`
+        : `Fixed room outline · slice ${desc.sliceId} (room ${desc.roomId}, shared with the normal game renderer)`
+      : zh
+        ? `房间大纲 · slice ${desc.sliceId}（由种子纯推导，与渲染同源）`
+        : `Room outline · slice ${desc.sliceId} (derived from the seed — the same pure chain the renderer builds from)`,
   );
+  if (desc.atmosphere) {
+    L.push(
+      zh
+        ? `装饰氛围：${desc.atmosphere.season} · ${desc.atmosphere.dayNight} · ${desc.atmosphere.weather}（由 slice 日期与用户时区稳定推导，并非历史天气记录）`
+        : `Decorative atmosphere: ${desc.atmosphere.season} · ${desc.atmosphere.dayNight} · ${desc.atmosphere.weather} (stable from the slice date and user timezone; not historical weather)`,
+    );
+  }
   L.push(
     zh
       ? `世界：${worldClass} · ${archetype} ｜ 尺寸档：${desc.sizeTier}（${round(desc.extent)}m 深 × ${round(desc.width)}m 宽）｜ 尺度：${scale}${scaleFactor}`
@@ -908,7 +942,9 @@ export function formatRoomDescription(
     );
   }
 
-  const doorWalls = desc.doors.permittedWalls
+  const doorWalls = desc.generatorVersion === 2
+    ? null
+    : desc.doors.permittedWalls
     ? desc.doors.permittedWalls
         .map((w) => (zh ? WALL_ROLE_ZH[w] : w))
         .join(", ")
@@ -923,11 +959,13 @@ export function formatRoomDescription(
       : zh
         ? `实测容量 ${desc.doors.measuredCapacity}`
         : `measured capacity ${desc.doors.measuredCapacity}`;
-  L.push(
-    zh
-      ? `门：入口在南墙（永远有一扇）；strand 门可挂：${doorWalls}（${capacityNote}）`
-      : `Doors: the entrance is on the south wall (always one); strand doors may hang on: ${doorWalls} (${capacityNote})`,
-  );
+  if (desc.generatorVersion === 1) {
+    L.push(
+      zh
+        ? `门：入口在南墙（永远有一扇）；strand 门可挂：${doorWalls}（${capacityNote}）`
+        : `Doors: the entrance is on the south wall (always one); strand doors may hang on: ${doorWalls} (${capacityNote})`,
+    );
+  }
   if (desc.doors.placed) {
     const { doors, relaxed, doubleRow, axialOverflow } = desc.doors.placed;
     const list = doors

@@ -65,6 +65,11 @@ const GameCanvas = dynamic(() => import("./game-canvas"), {
   loading: () => <GameLoading />,
 });
 
+const TimeRoomCanvas = dynamic(() => import("./time-room-canvas"), {
+  ssr: false,
+  loading: () => <GameLoading />,
+});
+
 function GameLoading() {
   const t = useTranslations("game");
   return (
@@ -120,6 +125,7 @@ export function GameShell({
   focusSlice = null,
   onOpenDoc,
   suspended = false,
+  paused = false,
   persona = "user",
   sourceScope,
   dataGeneration = 0,
@@ -134,6 +140,8 @@ export function GameShell({
    *  frozen world — the view's chrome (title/exit, the gallery switcher)
    *  stands down with the simulation, exactly like the in-world HUD. */
   suspended?: boolean;
+  /** Shared conversation freeze while the game route remains mounted. */
+  paused?: boolean;
   persona?: string;
   /** Server-resolved deployment/source labels; never credentials or paths. */
   sourceScope: string;
@@ -412,7 +420,9 @@ export function GameShell({
           <p className="mr-2 hidden max-w-56 truncate text-right text-xs text-muted-foreground sm:block" data-game-scenario>
             {activeScenario
               ? `${t("scenario")} · ${doors?.find((door) => door.sliceId === activeScenario)?.label ?? activeScenario}`
-              : t("lobby")}
+              : galleryDoors
+                ? t("lobby")
+                : t("timeHistory")}
           </p>
           <button
             type="button"
@@ -473,21 +483,35 @@ export function GameShell({
       </div>
       )}
       {doors ? (
-        <GameCanvas
-          persona={persona}
-          sourceScope={sourceScope}
-          doors={doors}
-          roomDoors={roomDoors}
-          timelines={timelines}
-          focusSlice={focusSlice}
-          onOpenDoc={onOpenDoc}
-          onActiveSliceChange={setActiveScenario}
-          onRoomSnapshotChange={onRoomSnapshotChange}
-          suspended={suspended}
-          // The product uses a fixed RTS camera. Only an explicit debug
-          // query can compare the former chase view.
-          cameraMode={cameraModeFor(searchParams.get(CAMERA_PARAM))}
-        />
+        galleryDoors ? (
+          <GameCanvas
+            persona={persona}
+            sourceScope={sourceScope}
+            doors={doors}
+            roomDoors={roomDoors}
+            timelines={timelines}
+            focusSlice={focusSlice}
+            onOpenDoc={onOpenDoc}
+            onActiveSliceChange={setActiveScenario}
+            onRoomSnapshotChange={onRoomSnapshotChange}
+            suspended={suspended}
+            cameraMode={cameraModeFor(searchParams.get(CAMERA_PARAM))}
+          />
+        ) : (
+          <TimeRoomCanvas
+            persona={persona}
+            sourceScope={sourceScope}
+            entries={doors}
+            focusSlice={focusSlice}
+            onOpenDoc={onOpenDoc}
+            onActiveSliceChange={setActiveScenario}
+            onRoomSnapshotChange={onRoomSnapshotChange}
+            suspended={suspended}
+            paused={paused}
+            cameraMode={cameraModeFor(searchParams.get(CAMERA_PARAM))}
+            timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+          />
+        )
       ) : (
         <GameLoading />
       )}

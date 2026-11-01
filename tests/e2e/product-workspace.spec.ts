@@ -245,7 +245,7 @@ test.describe("Product workspace routes", () => {
     await expect(host).toHaveAttribute("inert", "");
     await expect(input).toHaveValue("draft across workspace routes");
 
-    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
     await expect(page).toHaveURL(/\/en\/game$/);
     await expect(host).toBeVisible();
     await expect(host).toHaveAttribute("data-game-active", "true");

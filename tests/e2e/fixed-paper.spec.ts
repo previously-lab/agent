@@ -260,7 +260,7 @@ test.describe("Fixed A4 reader", () => {
       await page.goto("/en/app?doc=people/user");
       await expect.poll(() => responseHeld).toBe(true);
       expect(readFixtureConfirmed).toBe(true);
-      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Hotel", exact: true }).click();
+      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
       await expect(page).toHaveURL(/\/en\/game$/);
       const host = page.locator("[data-workspace-game-host]");
       await expect(host).toBeVisible();

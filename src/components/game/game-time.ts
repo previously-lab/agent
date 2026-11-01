@@ -57,6 +57,16 @@ export const GAME_TIME: GameTimeState = {
  *  exactly one advanceGameClock call. */
 let discardNextRawDelta = false;
 
+type GameFrozenListener = (frozen: boolean) => void;
+const frozenListeners = new Set<GameFrozenListener>();
+
+/** React-facing observation of the shared freeze flag. Frame loops should
+ *  continue reading GAME_TIME directly; this is for deferring React work. */
+export function subscribeGameFrozen(listener: GameFrozenListener): () => void {
+  frozenListeners.add(listener);
+  return () => { frozenListeners.delete(listener); };
+}
+
 /** Freeze or thaw the game clock. Freezing forces delta to 0
  *  immediately; thawing arms the next raw delta for discard (see the
  *  file note). Repeated calls with the same value are a no-op, so a
@@ -70,6 +80,7 @@ export function setGameFrozen(frozen: boolean): void {
   } else {
     discardNextRawDelta = true;
   }
+  for (const listener of frozenListeners) listener(frozen);
 }
 
 /** The ONE writer. Called every rendered frame by GameTimeOwner

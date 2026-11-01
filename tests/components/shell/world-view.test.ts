@@ -7,17 +7,29 @@ import {
 import { parseCurrentView } from "@/lib/chat/current-view";
 import { deriveRoomProfile } from "@/lib/game/room-profile";
 import {
+  LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
   ROOM_SNAPSHOT_GENERATOR_VERSION,
   type RoomSnapshot,
 } from "@/lib/game/room-snapshot";
+import { TIME_ROOM_ID } from "@/lib/game/time-room";
 
 function room(sliceId = "2026-10-24-1200"): RoomSnapshot {
   return {
     sliceId,
-    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
     profile: deriveRoomProfile({ focus: "Rewrite the ending of my short story." }),
     roomDoorCount: 2,
     corridorSide: "south",
+  };
+}
+
+function fixedRoom(sliceId = "2026-10-24-0600"): RoomSnapshot {
+  return {
+    sliceId,
+    generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+    profile: deriveRoomProfile({ focus: "Rewrite the ending of my short story." }),
+    roomId: TIME_ROOM_ID,
+    timezone: "Asia/Shanghai",
   };
 }
 
@@ -32,12 +44,27 @@ function world(
 }
 
 describe("send-time room view", () => {
-  it("carries the actual frozen snapshot, including layout inputs, through the wire parser", () => {
+  it("carries the actual legacy frozen snapshot, including layout inputs, through the wire parser", () => {
     const snapshot = room();
     const view = currentRoomView(world(snapshot), false);
     expect(view).toEqual({ sliceId: snapshot.sliceId, surface: "room", snapshot });
     expect(view?.snapshot).toBe(snapshot);
     expect(parseCurrentView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+  });
+
+  it("passes a v2 fixed room and its timezone through the wire, then clears it at call time", () => {
+    let active: RoomSnapshot | null = fixedRoom();
+    const driver = world(active);
+    const view = currentRoomView(driver, false);
+    expect(view?.snapshot).toMatchObject({
+      generatorVersion: 2,
+      roomId: TIME_ROOM_ID,
+      timezone: "Asia/Shanghai",
+    });
+    expect(parseCurrentView(JSON.parse(JSON.stringify(view)))).toEqual(view);
+    active = null;
+    driver.getRoomSnapshot = () => active;
+    expect(currentRoomView(driver, false)).toBeUndefined();
   });
 
   it("sends no room from the corridor, even if a navigation cursor still names a record", () => {

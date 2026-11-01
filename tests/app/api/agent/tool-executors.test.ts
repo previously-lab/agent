@@ -133,7 +133,7 @@ import {
   formatRoomDescription,
 } from "@/lib/game/describe-room";
 import { deriveRoomProfile } from "@/lib/game/room-profile";
-import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
+import { LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION, ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -264,10 +264,11 @@ describe("describeRoomExecute", () => {
       {},
       opts({ sliceId: "2026-09-14-2207", locale: "en" }),
     );
-    expect(out).toContain("Room outline · slice 2026-09-14-2207");
+    expect(out).toContain("Fixed room outline · slice 2026-09-14-2207");
+    expect(out).toContain("default-indoor-room-v1");
     expect(out).toContain("World:");
     expect(out).toContain("Palette:");
-    expect(out).toContain("Doors:");
+    expect(out).toContain("decorative fixed-room visuals");
   });
 
   it("describes an explicit slice, localized by the turn locale", async () => {
@@ -275,8 +276,8 @@ describe("describeRoomExecute", () => {
       { sliceId: "2026-09-12-0941" },
       opts({ locale: "zh" }),
     );
-    expect(out).toContain("房间大纲 · slice 2026-09-12-0941");
-    expect(out).toContain("入口在南墙");
+    expect(out).toContain("固定房间大纲 · slice 2026-09-12-0941");
+    expect(out).toContain("装饰氛围");
   });
 
   it("is deterministic — the same slice yields the same outline", async () => {
@@ -291,12 +292,13 @@ describe("describeRoomExecute", () => {
     expect(b).toBe(a);
   });
 
-  it("places strand doors when the runtime inputs are provided", async () => {
+  it("uses the fixed room for live calls even when legacy procedural door inputs are supplied", async () => {
     const out = await describeRoomExecute(
       { sliceId: "2026-09-14-2207", strandDoors: 3, corridorSide: "north" },
       opts({ locale: "en" }),
     );
-    expect(out).toContain("Placed strand doors (3)");
+    expect(out).toContain("Fixed room outline");
+    expect(out).not.toContain("Placed strand doors (3)");
   });
 
   it("returns a domain error (never throws) for an invalid slice id", async () => {
@@ -317,7 +319,7 @@ describe("describeRoomExecute — validated view snapshots", () => {
       surface: "room",
       snapshot: {
         sliceId: viewedSlice,
-        generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+        generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
         profile: deriveRoomProfile({ focus: "撰写小说" }),
         roomDoorCount: 3,
         corridorSide: "north",
@@ -352,7 +354,7 @@ describe("describeRoomExecute — validated view snapshots", () => {
   it("does not lend the active snapshot to another slice or accept model door inputs there", async () => {
     const view = activeView();
     const otherSlice = "2026-09-12-0941";
-    const base = formatRoomDescription(describeRoom(otherSlice), "en");
+    const base = formatRoomDescription(describeRoom(otherSlice, { generatorVersion: 2, timezone: "Asia/Shanghai" }), "en");
 
     const out = await describeRoomExecute(
       { sliceId: otherSlice, strandDoors: 7, corridorSide: "south" },
@@ -360,14 +362,14 @@ describe("describeRoomExecute — validated view snapshots", () => {
     );
 
     expect(out.startsWith(base)).toBe(true);
-    expect(out).toContain("Base space only");
+    expect(out).toContain("Fixed room only");
     expect(out).toContain("No record text or semantic profile was read");
     expect(out).not.toContain(view.snapshot?.profile.revision);
     expect(out).not.toContain("Placed strand doors (7)");
   });
 
   it("falls back to the base room without inventing runtime inputs when an old view has no snapshot", async () => {
-    const base = formatRoomDescription(describeRoom(viewedSlice), "en");
+    const base = formatRoomDescription(describeRoom(viewedSlice, { generatorVersion: 2, timezone: "Asia/Shanghai" }), "en");
     const out = await describeRoomExecute(
       { strandDoors: 2, corridorSide: "north" },
       opts({
@@ -377,7 +379,29 @@ describe("describeRoomExecute — validated view snapshots", () => {
     );
 
     expect(out.startsWith(base)).toBe(true);
-    expect(out).toContain("Base space only");
+    expect(out).toContain("Fixed room only");
+    expect(out).not.toContain("Placed strand doors");
+  });
+
+  it("uses a frozen v2 room and its snapshot timezone", async () => {
+    const snapshot = {
+      sliceId: viewedSlice,
+      generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+      profile: deriveRoomProfile({ focus: "阅读" }),
+      roomId: "default-indoor-room-v1" as const,
+      timezone: "Asia/Shanghai",
+    };
+    const view: NonNullable<ToolContext["view"]> = { sliceId: viewedSlice, surface: "room", snapshot };
+    const expected = formatRoomDescription(describeRoom(viewedSlice, {
+      generatorVersion: 2,
+      profile: snapshot.profile,
+      timezone: snapshot.timezone,
+    }), "en");
+
+    const out = await describeRoomExecute({}, opts({ view, locale: "en", timezone: "UTC" }));
+
+    expect(out).toBe(`${expected}\n\nDate and weather atmosphere are decorative fixed-room visuals, not real weather or a live observation.`);
+    expect(out).toContain("default-indoor-room-v1");
     expect(out).not.toContain("Placed strand doors");
   });
 });

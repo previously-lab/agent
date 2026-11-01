@@ -82,7 +82,7 @@ import {
 } from "@/app/api/chat/turn-workflow";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import { NEUTRAL_ROOM_PROFILE } from "@/lib/game/room-profile";
-import { ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
+import { LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimeSlice } from "@/lib/episodic";
@@ -200,7 +200,7 @@ describe("turnWorkflow — the v0.42 §5 failure floor", () => {
       surface: "room",
       snapshot: {
         sliceId: SLICE_ID,
-        generatorVersion: ROOM_SNAPSHOT_GENERATOR_VERSION,
+        generatorVersion: LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION,
         profile: NEUTRAL_ROOM_PROFILE,
         roomDoorCount: 2,
         corridorSide: "north",

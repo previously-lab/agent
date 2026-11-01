@@ -551,8 +551,8 @@
     "subtitleHousekeeping": "(tidying up…)"
   },
   "game": {
-    "title": "The Hotel",
-    "loading": "Preparing the corridor…",
+    "title": "Room",
+    "loading": "Preparing the room…",
     "roomPreparing": "Preparing this scenario…",
     "roomUnavailable": "This scenario could not be prepared.",
     "roomRetry": "Try again",
@@ -563,7 +563,11 @@
     "manuscripts": "Manuscripts",
     "workspace": "Full conversation",
     "scenario": "Scenario",
-    "lobby": "Lobby"
+    "lobby": "Room",
+    "timeHistory": "Room time",
+    "timePrevious": "Earlier moment",
+    "timeNext": "Later moment",
+    "timeEmpty": "No records yet — start a conversation and the room will meet you here."
   },
   "memory": {
     "emptyTitle": "No memories yet",
@@ -803,15 +807,15 @@
     "resume": "Continue",
     "paused": "The scene is waiting",
     "relatedRoom": "Related scenario",
-    "goToRoom": "Go to this record’s room"
+    "goToRoom": "View this moment in the room"
   },
   "workspace": {
     "nav": {
       "label": "Workspace",
       "conversation": "Conversation",
       "library": "Library",
-      "game": "Hotel",
-      "relatedRoom": "Go to this record’s room"
+      "game": "Room",
+      "relatedRoom": "View this moment in the room"
     },
     "browser": {
       "eyebrow": "Manuscripts",
