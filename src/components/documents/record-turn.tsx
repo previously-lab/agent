@@ -2,6 +2,7 @@
 
 import type { RecordTurnContent } from "@/lib/archive/actions";
 import { MarkdownRenderer } from "@/components/chat/markdown";
+import { ConversationTurn } from "@/components/chat/conversation-turn";
 import { SubmittedDocumentReferences } from "./submitted-document-references";
 
 export function RecordTurnView({
@@ -23,15 +24,18 @@ export function RecordTurnView({
       data-turn-role={turn.role}
       data-reading-focus={focused || undefined}
     >
-      <p className="document-record-speaker"><strong>{speaker}</strong></p>
-      <div data-no-selection>
-        <SubmittedDocumentReferences references={turn.documentContext ?? []} />
-      </div>
-      <MarkdownRenderer
-        content={turn.content}
-        nativeMode="paper"
-        nativeTurnId={`${docRef}:${turn.turnId ?? turn.index}:${turn.role}`}
-      />
+      <ConversationTurn role={turn.role} speaker={speaker}>
+        <div data-no-selection>
+          <SubmittedDocumentReferences references={turn.documentContext ?? []} />
+        </div>
+        <div className="conversation-prose">
+          <MarkdownRenderer
+            content={turn.content}
+            nativeMode="paper"
+            nativeTurnId={`${docRef}:${turn.turnId ?? turn.index}:${turn.role}`}
+          />
+        </div>
+      </ConversationTurn>
     </section>
   );
 }

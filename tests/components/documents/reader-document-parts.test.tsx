@@ -35,6 +35,9 @@ describe("reader document parts", () => {
     expect(html).toContain('data-record-turn-index="7"');
     expect(html).toContain('data-turn-id="turn-7"');
     expect(html).toContain('data-turn-role="user"');
+    expect(html).toContain('data-conversation-turn');
+    expect(html).toContain('data-role="user"');
+    expect(html).toContain('class="conversation-prose"');
     expect(html).toContain("data-reading-focus");
     expect(html).toContain("data-submitted-document-references");
     expect(html).toContain('data-document-ref="research/rest"');

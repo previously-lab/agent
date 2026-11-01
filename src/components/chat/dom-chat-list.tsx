@@ -55,6 +55,7 @@ import {
   useRef,
   useState,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ChatMessage } from "./chat-message";
@@ -141,6 +142,16 @@ export interface DomChatListProps {
   insetTop?: number;
   /** The floating composer's height at the pane's foot, px. */
   insetBottom?: number;
+  /** The live writer, seated after the last turn in the same reading column. */
+  composer?: ReactNode;
+  /** Empty-memory content swaps in this slot; the composer below never moves. */
+  emptyState?: ReactNode;
+  /** Keep the folded conversation out of the focus order without making the
+   *  pill composer inert with it. */
+  contentInert?: boolean;
+  /** At the pill tier the composer positions against the panel, so no nearer
+   *  ancestor may become its containing block. */
+  floatingComposer?: boolean;
 }
 
 export function DomChatList({
@@ -153,6 +164,10 @@ export function DomChatList({
   apiRef,
   insetTop = 0,
   insetBottom = 0,
+  composer,
+  emptyState,
+  contentInert = false,
+  floatingComposer = false,
 }: DomChatListProps) {
   const isMobile = useIsMobile();
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -368,7 +383,7 @@ export function DomChatList({
     el.scrollTop = el.scrollHeight;
     scrollTopRef.current = el.scrollTop;
     setScrollTopState(el.scrollTop);
-  }, [contentPx, items]);
+  }, [contentPx, items, insetBottom]);
 
   // Report the top item after programmatic moves too (the scroll event is
   // rAF-throttled and a jump can land between frames).
@@ -613,8 +628,10 @@ export function DomChatList({
   };
 
   return (
-    <div className="conversation-stream-shell relative mx-auto flex h-full flex-col">
-      {hasHistoryEntrance(items) && <HistoryEntrance />}
+    <div className={`conversation-stream-shell mx-auto flex h-full flex-col ${floatingComposer ? "" : "relative"}`}>
+      {hasHistoryEntrance(items) && (
+        <div inert={contentInert || undefined}><HistoryEntrance /></div>
+      )}
       {/* The scroller's top/bottom padding — the MEASURED chrome and
           composer heights (px) plus the static tail pad; see
           use-chrome-inset and ComposerHost. */}
@@ -631,41 +648,54 @@ export function DomChatList({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]"
         style={{
           paddingTop: insetTop,
-          paddingBottom: insetBottom + TAIL_PAD_PX,
+          // An in-flow composer contributes its own height. Reserve the old
+          // floating clearance only for skeleton/legacy uses without one.
+          paddingBottom: (composer ? 0 : insetBottom) + TAIL_PAD_PX,
         }}
       >
         {/* The windowed content's total height, px — the measured row
             offsets (+ the error reserve): the virtualizer's extent. */}
-        <div className="relative" style={{ height: innerPx }}>
-          {/* Each mounted row's absolute top, px — the row's offset in the
-              measured table (virtualizer placement). */}
-          {items.slice(start, end).map((item, k) => (
-            <div
-              key={item.key}
-              ref={rowRef}
-              data-key={item.key}
-              className="absolute inset-x-0"
-              style={{ top: originH + (offsets[start + k] ?? 0) }}
-            >
-              {renderItem(item)}
-            </div>
-          ))}
-          {/* The error banner sits just below the windowed content, px. */}
-          {error && (
-            <div
-              className="absolute inset-x-0"
-              style={{ top: contentPx }}
-            >
-              <ErrorBanner error={error} />
-            </div>
-          )}
-        </div>
+        {emptyState ? (
+          <div inert={contentInert || undefined}>{emptyState}</div>
+        ) : (
+          <div className="relative" style={{ height: innerPx }} inert={contentInert || undefined}>
+            {/* Each mounted row's absolute top, px — the row's offset in the
+                measured table (virtualizer placement). */}
+            {items.slice(start, end).map((item, k) => (
+              <div
+                key={item.key}
+                ref={rowRef}
+                data-key={item.key}
+                className="absolute inset-x-0"
+                style={{ top: originH + (offsets[start + k] ?? 0) }}
+              >
+                {renderItem(item)}
+              </div>
+            ))}
+            {/* The error banner sits just below the windowed content, px. */}
+            {error && (
+              <div
+                className="absolute inset-x-0"
+                style={{ top: contentPx }}
+              >
+                <ErrorBanner error={error} />
+              </div>
+            )}
+          </div>
+        )}
+        {composer && (
+          <div className="conversation-stream-row conversation-composer-tail" data-composer-tail>
+            {composer}
+          </div>
+        )}
       </div>
 
       {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
           retired — the 3D axis carries time. */}
       {isMobile && (
-        <StreamTimeIndicator timeIso={topTime} visible={indicatorVisible} />
+        <div inert={contentInert || undefined}>
+          <StreamTimeIndicator timeIso={topTime} visible={indicatorVisible} />
+        </div>
       )}
     </div>
   );

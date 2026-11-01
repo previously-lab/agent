@@ -3,13 +3,12 @@
 import { useState, useRef, useEffect, useLayoutEffect, useId, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUp, AtSign, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { appendNativeDraft, NATIVE_DRAFT_EVENT } from "@/lib/chat/native-draft";
+import { getComposerState } from "@/lib/chat/composer-state";
 import type { DocumentCatalogItem } from "@/lib/chat/document-catalog-actions";
 import {
   findDocumentMentionRange,
@@ -29,42 +28,18 @@ import {
 import "./writing.css";
 import "./document-mentions.css";
 
-/** The textarea's floor and ceiling, in px. The floor is what an empty
- *  composer reports so the box does not collapse while it is being typed
- *  into and back out of; the ceiling is where it starts scrolling instead of
- *  growing, so a pasted essay cannot push the toolbar off the screen. */
+/** The manuscript grows with the stream. Only the compact pill has an
+ *  internal ceiling; fullscreen writing uses a larger focused floor and then
+ *  follows its natural height. */
 const TEXTAREA_MIN_PX = 44;
-const TEXTAREA_MAX_PX = 160;
+const TEXTAREA_EDITING_MIN_PX = 88;
+const PILL_TEXTAREA_MIN_PX = 24;
+const PILL_TEXTAREA_MAX_PX = 44;
 
 interface ChatInputProps {
   onSubmit: (message: string, images: File[]) => void;
   isLoading: boolean;
   onStop?: () => void;
-  // The fixed model and thinking profile are owned by the server.
-  /**
-   * The COMPACT form: one row of controls, no textarea, no attachments.
-   *
-   * This is the composer at a card rung, where the reader is looking at the
-   * field and an empty box the size of a card would sit on top of it. What
-   * survives the collapse is the control that restores the full composer.
-   * The attach button does NOT survive: choosing a file is the first half of
-   * sending, and a send button is not on screen either. Model selection does
-   * not survive for the same reason — it is a setting for the next message,
-   * and there is no next message to write yet. (The memory-docs button that
-   * once survived here retired with v0.25b: the library's Dossier section is
-   * the archive's only door.)
-   *
-   * (Fully latent: the card rungs that asked for this form retired with the
-   * ladder — nothing renders the collapsed composer any more. The panel's
-   * collapsed tier draws the PILL form instead.)
-   *
-   * The component stays MOUNTED across the forms (this is one component
-   * with early returns, not several), so typed text and staged image
-   * attachments survive a form change in every direction.
-   */
-  collapsed?: boolean;
-  /** Restore the full composer. Required when `collapsed`. */
-  onExpand?: () => void;
 }
 
 /**
@@ -95,25 +70,52 @@ function HQStreamButton({
   );
 }
 
+function ImageAttachmentPreview({
+  file,
+  removeLabel,
+  onRemove,
+}: {
+  file: File;
+  removeLabel: string;
+  onRemove: () => void;
+}) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+
+  return (
+    <div className="relative group" data-attachment-preview>
+      <img src={url} alt={file.name} className="h-16 w-16 rounded-lg border border-border object-cover" />
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={removeLabel}
+        className="conversation-attachment-remove absolute -top-1.5 -right-1.5 h-6 w-6 bg-foreground text-background flex items-center justify-center"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 export function ChatInput({
   onSubmit,
   isLoading,
   onStop,
-  collapsed = false,
-  onExpand,
 }: ChatInputProps) {
   const t = useTranslations("chat.input");
-  const tComposer = useTranslations("composer");
+  const tDesk = useTranslations("desk");
   const tPanel = useTranslations("conversationPanel");
   const tier = usePanelTier();
-  const reducedMotion = useReducedMotion() ?? false;
   const mentionId = useId();
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const miniInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [mention, setMention] = useState<{
     open: boolean;
     manual: boolean;
@@ -123,7 +125,7 @@ export function ChatInput({
   const { references, addReference, removeReference } = useDocumentContext();
   const persona = useNativePersona() ?? "user";
   const catalog = useDocumentMentionCatalog(mention.open, mention.query, persona);
-  const { images, removeImage, clearImages, handlePaste, handleDrop, handleDragOver } = useImageAttachments();
+  const { images, removeImage, clearImages, handlePaste, handleDrop } = useImageAttachments();
 
   const closeMention = () => {
     setMention({ open: false, manual: false, query: "", range: null });
@@ -148,14 +150,23 @@ export function ChatInput({
     return () => window.removeEventListener(NATIVE_DRAFT_EVENT, onDraft);
   }, []);
 
-  // Expanding the pill mounts a new textarea with the existing draft. Measure
-  // after that DOM update as well as after typing, so wrapped text is visible.
+  // One textarea survives every tier. Re-measure after typing, focusing and
+  // crossing a tier so the same draft stays visible without remounting it.
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = `${TEXTAREA_MIN_PX}px`;
-    el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_PX) + "px";
-  }, [value, tier?.mode]);
+    const onPill = tier?.mode === "pill";
+    const floor = onPill
+      ? PILL_TEXTAREA_MIN_PX
+      : focused
+        ? TEXTAREA_EDITING_MIN_PX
+        : TEXTAREA_MIN_PX;
+    // Manuscript drafts belong to the page's scroll extent, not an inner
+    // textarea scrollbar. Only the compact pill caps and scrolls its input.
+    el.style.height = "0px";
+    const naturalHeight = Math.max(floor, el.scrollHeight);
+    el.style.height = `${onPill ? Math.min(naturalHeight, PILL_TEXTAREA_MAX_PX) : naturalHeight}px`;
+  }, [value, focused, tier?.mode]);
 
   const handleSubmit = (e?: FormEvent) => {
     e?.preventDefault();
@@ -196,17 +207,16 @@ export function ChatInput({
       setMention((current) => ({ ...current, query: "" }));
     } else {
       closeMention();
-      requestAnimationFrame(() => {
-        const target = tier?.mode === "pill" ? miniInputRef.current : textareaRef.current;
-        target?.focus();
-      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+      // Composition confirmation belongs to the IME. Do not cancel it, close
+      // the mention picker, or send the manuscript before composition ends.
       if (isImeKeyboardEvent(e.nativeEvent)) return;
+      e.preventDefault();
       if (mention.open) {
         const item = catalog.items[catalog.activeIndex];
         if (item) selectDocument(item);
@@ -256,123 +266,75 @@ export function ChatInput({
   };
 
   const hasContent = value.trim().length > 0 || images.length > 0;
-  const fade = reducedMotion
-    ? { duration: 0 }
-    : { duration: 0.22, ease: "easeOut" as const };
+  const onPill = tier?.mode === "pill";
+  const composerState = getComposerState({
+    focused,
+    value,
+    attachmentCount: images.length,
+    mentionOpen: mention.open,
+    isLoading,
+  });
 
-  // ── THE COMPACT FORM ──────────────────────────────────────────────────────
-  // One row, siblings throughout — because the control that restores the
-  // composer stands where the send button stands, and everything beside it is
-  // its peer rather than a subordinate. The arrow is last for the same reason
-  // it is last in the full form: the right edge is where "do the thing" lives,
-  // at both sizes, so the muscle memory carries across the collapse.
-  if (collapsed) {
-    return (
-      <div
-        data-composer-pill
-        className={`${ISLAND} flex items-center gap-0.5 p-1`}
-      >
-        <button
-          type="button"
-          data-composer-collapsed
-          aria-label={tComposer("open")}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
-          onFocus={() => setHovered(true)}
-          onBlur={() => setHovered(false)}
-          onClick={onExpand}
-          className="flex h-9 items-center gap-2 px-2.5 text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {/* The hint leads, the arrow stays pinned to the right edge — so the
-              button grows LEFTWARD and the target never moves out from under
-              the pointer that is already on it. */}
-          <motion.span
-            initial={false}
-            animate={{ opacity: hovered ? 1 : 0, width: hovered ? "auto" : 0 }}
-            transition={fade}
-            className="overflow-hidden text-xs whitespace-nowrap"
-          >
-            {tComposer("hint")}
-          </motion.span>
-          <ArrowUp className="size-4 shrink-0" />
-        </button>
-      </div>
-    );
-  }
+  return (
+    <div
+      data-manuscript-composer
+      data-composer-state={composerState}
+      data-panel-form={onPill ? "pill" : "manuscript"}
+      data-composer-pill={onPill ? "" : undefined}
+      data-pill-composer={onPill ? "" : undefined}
+      aria-busy={isLoading || undefined}
+      aria-live="off"
+      className={`conversation-composer composer-bar relative ${onPill ? "conversation-composer--pill" : "conversation-composer--manuscript"} ${isDragOver ? "is-dragover" : ""}`}
+      onPaste={handlePaste}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+      }}
+    >
+      <header className="conversation-byline conversation-composer-byline">
+        <span className="conversation-speaker">{tDesk("recordUser")}</span>
+      </header>
 
-  // ── THE PILL FORM (v0.13 §4) ─────────────────────────────────────────────
-  // The conversation panel's collapsed tier: the floating glass pill's ONE
-  // row. Reading order (the v0.21 composer ruling): the LEFT end holds the
-  // two entries that lead away from the row — attach, and the evolution
-  // stream's HQ panel; the single-line input takes the middle (no box of its
-  // own; the pill's chrome is the container); the RIGHT end walks towards
-  // the act — the fullscreen verb, and send/stop as the RIGHTMOST control,
-  // the outer corner "do the thing" owns in every form. Attach reuses the
-  // same `useImageAttachments` state as the full form (one component, early
-  // returns — a draft or a staged image survives expanding to fullscreen
-  // verbatim), and stop reuses the same `onStop` the full form's button
-  // calls.
-  if (tier?.mode === "pill") {
-    return (
-      <div className="relative min-w-0 flex-1">
-        {!mention.open && <DocumentReferenceChips references={references} onRemove={removeReference} floating />}
-        {mention.open && (
-          <DocumentMentionPicker
-            id={mentionId}
-            query={mention.query}
-            catalog={catalog}
-            manual={mention.manual}
-            floating
-            onQueryChange={(query) => setMention((current) => ({ ...current, query }))}
-            onSelect={selectDocument}
-            onClose={closeMention}
-            onKeyDown={handleKeyDown}
-          />
+      <div className="conversation-composer-writing">
+        {references.length > 0 && (
+          <div className="conversation-composer-references">
+            <DocumentReferenceChips references={references} onRemove={removeReference} floating={onPill} />
+          </div>
         )}
-        <div
-          data-pill-composer
-          onPaste={handlePaste}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          className="flex h-full min-w-0 flex-1 items-center gap-0.5"
-        >
-          <button
-            type="button"
-            data-attach
-            onClick={() => fileInputRef.current?.click()}
-            aria-label={t("attach")}
-            title={t("attach")}
-            className="composer-cell text-muted-foreground hover:text-foreground"
-          >
-            <Paperclip className="size-4" />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={handleFileChange}
-            className="hidden"
-            accept="image/*"
-          />
-          <HQStreamButton
-            className="composer-cell text-muted-foreground hover:text-foreground"
-            iconClassName="size-4"
-          />
-          <button
-            type="button"
-            data-document-mention
-            onClick={openManualMention}
-            aria-label={t("references.open")}
-            title={t("references.open")}
-            aria-expanded={mention.open && mention.manual}
-            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
-            className="composer-cell text-muted-foreground hover:text-foreground"
-          >
-            <AtSign aria-hidden className="size-4" />
-          </button>
-          <input
-            ref={miniInputRef}
+        {mention.open && (
+          <div className="conversation-composer-mention">
+            <DocumentMentionPicker
+              id={mentionId}
+              query={mention.query}
+              catalog={catalog}
+              manual={mention.manual}
+              floating={onPill}
+              onQueryChange={(query) => setMention((current) => ({ ...current, query }))}
+              onSelect={selectDocument}
+              onClose={closeMention}
+              onKeyDown={handleKeyDown}
+            />
+          </div>
+        )}
+        {images.length > 0 && (
+          <div className="conversation-composer-attachments" data-composer-attachments>
+            {images.map((file, i) => (
+              <ImageAttachmentPreview
+                key={`${file.name}:${file.lastModified}:${file.size}:${i}`}
+                file={file}
+                removeLabel={t("removeAttachment", { name: file.name })}
+                onRemove={() => removeImage(i)}
+              />
+            ))}
+          </div>
+        )}
+        <div className="conversation-composer-draft">
+          <textarea
+            ref={textareaRef}
+            data-manuscript-input
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
@@ -383,135 +345,14 @@ export function ChatInput({
             aria-expanded={mention.open}
             aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
             aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
-            className="min-w-0 flex-1 bg-transparent px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-          <button
-            type="button"
-            data-pill-expand
-            onClick={() =>
-              tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
-            }
-            aria-label={tPanel("expand")}
-            title={tPanel("expand")}
-            className="composer-cell text-muted-foreground hover:text-foreground"
-          >
-            <Maximize2 className="size-4" />
-          </button>
-          {isLoading && onStop && (
-            <button
-              type="button"
-              onClick={onStop}
-              aria-label={t("stopTooltip")}
-              title={t("stopTooltip")}
-              className="composer-cell text-destructive hover:border-l-destructive hover:opacity-90"
-            >
-              <Square className="size-3.5 fill-current" />
-            </button>
-          )}
-          <button
-            type="submit"
-            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
-            disabled={!hasContent}
-            aria-label={t("sendTooltip")}
-            title={t("sendTooltip")}
-            className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
-              hasContent
-                ? "is-active hover:border-l-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <ArrowUp className="size-4" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={`conversation-composer composer-bar relative overflow-hidden ${isDragOver ? "is-dragover" : ""}`}
-      onPaste={handlePaste}
-      onDrop={onDrop}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-    >
-      {references.length > 0 && (
-        <div className="px-4 pt-3">
-          <DocumentReferenceChips references={references} onRemove={removeReference} />
-        </div>
-      )}
-      {mention.open && (
-        <div className="px-4 pt-3">
-          <DocumentMentionPicker
-            id={mentionId}
-            query={mention.query}
-            catalog={catalog}
-            manual={mention.manual}
-            floating={false}
-            onQueryChange={(query) => setMention((current) => ({ ...current, query }))}
-            onSelect={selectDocument}
-            onClose={closeMention}
-            onKeyDown={handleKeyDown}
+            rows={1}
+            className="w-full resize-none bg-transparent focus:outline-none"
           />
         </div>
-      )}
-      {/* Image previews */}
-      {images.length > 0 && (
-        <div className="flex gap-2 px-4 pt-3 flex-wrap">
-          {images.map((file, i) => (
-            <div key={i} className="relative group">
-              <img
-                src={URL.createObjectURL(file)}
-                alt={file.name}
-                className="h-16 w-16 rounded-lg border border-border object-cover"
-              />
-              <button
-                type="button"
-                onClick={() => removeImage(i)}
-                aria-label={t("removeAttachment", { name: file.name })}
-                className="conversation-attachment-remove absolute -top-1.5 -right-1.5 h-6 w-6 bg-foreground text-background flex items-center justify-center"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* The draft grows naturally above the controls. Both forms share
-          the same translucent surface and persistent draft state. */}
-      <div className="px-4 pb-2 pt-3">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={t("placeholder")}
-          aria-label={t("placeholder")}
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={mention.open}
-          aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
-          aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
-          rows={1}
-          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
       </div>
 
-      {/* Attachments, companion activity and sending stay below the draft. */}
-      <div className="conversation-composer-toolbar">
-        {/* Left side */}
-        <div className="flex min-w-0 items-center gap-2">
-          {/* Attach — always available. Present in the full form only; see the
-              `collapsed` note above.
-
-              This used to be disabled unless the selected model reported image
-              support. That judgement was a hardcoded guess (providers do not
-              report modalities, and the live catalog falls back to a per-provider
-              default), so a model that gained vision was silently blocked from
-              using it. Attaching is now never prevented; if a model genuinely
-              cannot take the image, the provider says so and the turn surfaces
-              that error rather than us pre-empting it. */}
+      <div className="conversation-composer-toolbar" data-composer-mini-toolbar>
+        <div className="conversation-composer-toolbar-left">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -519,8 +360,6 @@ export function ChatInput({
                   type="button"
                   data-attach
                   onClick={() => fileInputRef.current?.click()}
-                  // A tooltip is not an accessible name — it is a description
-                  // that appears on hover, which a screen reader never does.
                   aria-label={t("attach")}
                   className="conversation-control"
                 >
@@ -538,14 +377,7 @@ export function ChatInput({
             className="hidden"
             accept="image/*"
           />
-
-          {/* The evolution stream — opens the companion pod's HQ panel (the
-              field↔HQ activity face). One panel, two doors: this button and
-              the pod's floating one. */}
-          <HQStreamButton
-            className="conversation-control"
-            iconClassName="h-3.5 w-3.5"
-          />
+          <HQStreamButton className="conversation-control" iconClassName="h-3.5 w-3.5" />
           <button
             type="button"
             data-document-mention
@@ -560,19 +392,23 @@ export function ChatInput({
           </button>
         </div>
 
-        {/* Right side — stop, then send: the walk towards the act, so the
-            send button keeps the outer corner it owns in every form. The
-            tier verbs are NOT here: the pill form carries the expand (above)
-            and the panel's slim bar carries the exit — a third mounted copy
-            in this row duplicated the control (two buttons shared one
-            aria-label, one of them zero-sized under the bar's `hidden`). */}
-        <div className="flex shrink-0 items-center gap-1.5">
-          {/* Send / stop coexist mid-run (v0.30 §4.1): the stop key is the
-              secondary, send keeps the outer corner and stays usable — the
-              message queues into the live episode. */}
+        <div className="conversation-composer-toolbar-right">
+          {onPill && (
+            <button
+              type="button"
+              data-pill-expand
+              onClick={() => tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))}
+              aria-label={tPanel("expand")}
+              title={tPanel("expand")}
+              className="conversation-control"
+            >
+              <Maximize2 aria-hidden className="size-4" />
+            </button>
+          )}
           {isLoading && onStop && (
             <button
               type="button"
+              data-composer-stop
               onClick={onStop}
               aria-label={t("stopTooltip")}
               className="conversation-control conversation-control--stop"
@@ -583,6 +419,7 @@ export function ChatInput({
           )}
           <button
             type="submit"
+            data-composer-send
             onClick={(e) => handleSubmit(e as unknown as FormEvent)}
             disabled={!hasContent}
             aria-label={t("sendTooltip")}

@@ -1,40 +1,13 @@
 "use client";
 
 /**
- * ComposerHost — WHERE the composer sits, and how much room the content
- * leaves for it.
+ * One persistent seat for the manuscript composer. Fullscreen places the
+ * writer after the last turn in the stream; the pill positions the same tree
+ * against the panel. Only classes change at a tier boundary, so drafts,
+ * attachments, focus and IME state retain one mount identity.
  *
- * IT ALWAYS FLOATS. It used to be a full-width footer — a `shrink-0` child of
- * the shell's column, so it TOOK its height from the content and pushed the
- * last message up. That made the composer a piece of the page furniture
- * rather than one of the app's floating controls, and the app has no page
- * furniture: everything else is an island over an infinite canvas. So it is
- * the same thing at every tier — a floating card over the content — and the
- * CONTENT reserves the room for it, which is the one arrangement that keeps
- * the composer off the text without making it part of the layout.
- *
- * THE PANEL TIER DECIDES THE SEAT (v0.13 §4). The host reads the surrounding
- * `ConversationPanel`'s tier through `PanelTierContext`: at the pill tier the
- * composer IS the pill — centred a `PILL_BOTTOM_GAP_PX` above the panel
- * box's bottom edge (the box is chromeless there), at most
- * `--pill-max-width` (globals.css) wide, and wearing the pill's chrome —
- * the square writing ledge (solid paper, hairline-ruled — see
- * `instrument.css` `.composer-bar`); at fullscreen it floats over the body
- * exactly as it always has. `ChatInput` reads the same context to draw its
- * pill form. One component instance throughout: the tier only ever changes
- * classes, never the mount.
- *
- * THE COMPOSER ITSELF IS NEVER UNMOUNTED. That is the whole reason this is a
- * component rather than a branch in `ChatPage`: the composer owns state that
- * is invisible and expensive to lose — the image attachments
- * (`useImageAttachments`) and whatever has been typed but not sent. So the
- * composer arrives as a plain child and the tier only ever changes the chrome
- * AROUND it: one component instance, and no state anywhere near a remount
- * boundary.
- *
- * Submitting is not handled here — `ChatPage` wraps the submit so a send from
- * the pill rises the panel first, because that is where the reply is going to
- * be written and watching it arrive is the point of sending.
+ * The measured height still travels upward. The list uses it as a live-edge
+ * signal while the in-flow writer supplies its own scroll extent.
  */
 import { useLayoutEffect, useRef } from "react";
 import { usePanelTier } from "./conversation-panel";
@@ -55,11 +28,12 @@ export interface ComposerHostProps {
    *  the chrome around it. */
   composer: React.ReactNode;
   /**
-   * How much room the content must leave at its foot, in px — the composer's
-   * own height plus its offset plus a gap.
+   * The composer's measured height plus its standard offset and gap. In the
+   * manuscript this signals growth to the live-edge pin; pill layouts also
+   * use it as their reserved clearance.
    *
    * MEASURED, BECAUSE IT CANNOT BE KNOWN. The composer grows with what is
-   * typed into it (a textarea that reaches 160px) and with what is attached
+   * typed into it (a naturally growing manuscript) and with what is attached
    * to it (a preview row), so the only honest source for "how much room does
    * this need" is the thing itself. It was a constant, and the constant was
    * wrong: the reserve said 144px while the composer could reach 300, so a
@@ -114,10 +88,11 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
             // from the world — only the pill's own glass box (the inner
             // wrapper) opts back in.
             "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-2 md:px-4"
-          : // One floating card. 44rem is the reading column's own order of
-            // magnitude, so the composer's edges sit near the content's
-            // edges without a second measurement to keep in step.
-            "absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom,0.75rem))] z-20 flex justify-center px-3"
+          : // At the manuscript tier the composer is the next paragraph in
+            // the stream, not a card floating over the last reply. Its own
+            // layout height supplies the stream extent; the measurement is
+            // still reported so the live-edge pin follows a growing draft.
+            "relative w-full shrink-0"
       }
     >
       <div
@@ -125,8 +100,8 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
           onPill
             ? // Only the floating glass pill takes pointer events; the
               // surrounding row lets the reader interact with the world.
-              "conversation-composer conversation-composer--pill pointer-events-auto pill-box composer-bar flex h-12 min-w-0 w-full items-center overflow-hidden"
-            : "w-[min(44rem,100%)]"
+              "pointer-events-auto pill-box flex h-12 min-w-0 w-full items-center"
+            : "w-full"
         }
       >
         {composer}

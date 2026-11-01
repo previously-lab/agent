@@ -1,17 +1,72 @@
-import type { Page } from "@playwright/test";
+import type { ElementHandle, Page } from "@playwright/test";
 import { test, expect } from "./test";
-import { clearEpisodic, makeSlice, seedSlices } from "./memory-fixture";
+import {
+  clearCases,
+  clearEpisodic,
+  makeSlice,
+  seedCases,
+  seedSlices,
+} from "./memory-fixture";
+
+
+function composerInput(page: Page) {
+  return page.locator("[data-manuscript-input]");
+}
 
 async function openConversation(page: Page) {
   const expand = page.getByRole("button", { name: "Expand to full screen" });
   const retry = page.getByRole("button", { name: "Retry", exact: true });
-  const textarea = page.locator(".conversation-composer textarea");
+  const textarea = composerInput(page);
   await expect(expand.or(retry).or(textarea).first()).toBeVisible({ timeout: 30_000 });
   if (await retry.isVisible()) await retry.click();
   await expect(expand.or(textarea).first()).toBeVisible({ timeout: 30_000 });
   if (await expand.isVisible()) await expand.click();
   await expect(textarea).toBeVisible();
   await expect(page.locator(".conversation-panel")).toHaveAttribute("data-panel-tier", "fullscreen");
+}
+
+function offlineSse(answer: string): string {
+  const chunks = [
+    { type: "start", messageId: "manuscript-fixture-reply" },
+    { type: "text-start", id: "text" },
+    { type: "text-delta", id: "text", delta: answer },
+    { type: "text-end", id: "text" },
+    { type: "finish" },
+  ];
+  return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}
+
+`).join("")}data: [DONE]
+
+`;
+}
+
+async function selectReference(page: Page, title: string): Promise<void> {
+  await page.locator("[data-document-mention]:visible").click();
+  const search = page.getByRole("combobox", { name: "Search documents" });
+  await expect(search).toBeVisible();
+  await search.fill(title);
+  const option = page.getByRole("option").filter({ hasText: title });
+  await expect(option).toHaveCount(1, { timeout: 30_000 });
+  await option.click();
+  await page.getByRole("button", { name: "Close document picker" }).click();
+  await expect(page.locator(".document-reference-chip").filter({ hasText: title })).toHaveCount(1);
+}
+
+async function attachFixture(page: Page): Promise<void> {
+  await page.locator("input[type=file]").first().setInputFiles({
+    name: "fixture-note.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64"),
+  });
+  await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
+}
+
+async function expectSameNode(
+  page: Page,
+  original: ElementHandle | null,
+): Promise<void> {
+  expect(original).not.toBeNull();
+  expect(await composerInput(page).evaluate((current, before) => current === before, original)).toBe(true);
 }
 
 for (const viewport of [
@@ -25,9 +80,12 @@ for (const viewport of [
       hasTouch: viewport.mobile,
     });
 
-    test.afterEach(async () => { await clearEpisodic(); });
+    test.afterEach(async () => {
+      await clearCases();
+      await clearEpisodic();
+    });
 
-    test("the manuscript stays readable and keeps the draft and attachment when folded", async ({ page }, testInfo) => {
+    test("mini controls keep the manuscript visible and retain the live editor, attachment and @ reference", async ({ page }, testInfo) => {
       test.setTimeout(120_000);
       await page.emulateMedia({ reducedMotion: "reduce" });
       const at = new Date().toISOString();
@@ -39,6 +97,7 @@ for (const viewport of [
         { role: "agent", at, content: "Manuscript answer: the room holds what we knew together at that moment.\n\nLater documents can add perspective while the original conversation keeps its place." },
       ];
       await seedSlices([slice]);
+      await seedCases([{ category: "research", name: "manuscript-context", opened: "2026-02-01", pieces: [] }]);
       await page.goto("/en/app");
       await openConversation(page);
 
@@ -62,34 +121,203 @@ for (const viewport of [
       if (viewport.mobile) expect(byline!.y + byline!.height).toBeLessThanOrEqual(agentBody!.y);
       else expect(byline!.x + byline!.width).toBeLessThan(agentBody!.x);
 
-      const input = page.getByRole("textbox", { name: "Send a message..." });
+      const input = composerInput(page);
+      await expect(page.locator("[data-composer-tail] [data-manuscript-input]")).toHaveCount(1);
+      expect(await input.evaluate((el, lastTurn) => Boolean(lastTurn!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING), await agent.elementHandle())).toBe(true);
+      const originalNode = await input.elementHandle();
       const draft = "This draft stays with me when I return to the room.";
       await input.fill(draft);
-      await page.locator(".conversation-composer input[type=file]").setInputFiles({
-        name: "fixture-note.png",
-        mimeType: "image/png",
-        buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64"),
-      });
-      await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
-      await input.press("Escape");
+      await selectReference(page, "manuscript-context");
+      await attachFixture(page);
+      await input.dispatchEvent("compositionstart", { data: "draft" });
+
+      await page.getByRole("button", { name: "Exit full screen" }).click();
       await expect(page.locator("[data-pill-composer]")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Exit full screen" })).toHaveCount(0);
+      await expect(page.locator("[data-conversation-field]")).toBeVisible();
+      await expect(agent).toBeVisible();
       await expect(input).toHaveValue(draft);
+      await expectSameNode(page, originalNode);
+      await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
+      await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
       expect(await input.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
-      const pill = await page.locator(".conversation-composer--pill").boundingBox();
+      const pill = await page.locator("[data-pill-composer]").boundingBox();
       expect(pill!.x).toBeGreaterThanOrEqual(0);
       expect(pill!.x + pill!.width).toBeLessThanOrEqual(viewport.width);
 
       await page.getByRole("button", { name: "Expand to full screen" }).click();
       await expect(input).toHaveValue(draft);
+      await expectSameNode(page, originalNode);
+      await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
+      await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
+      await input.dispatchEvent("compositionend", { data: draft });
       const remove = page.getByRole("button", { name: "Remove attachment: fixture-note.png" });
-      await expect(remove).toBeVisible();
       await remove.click();
       await expect(remove).toHaveCount(0);
       await expect(input).toHaveValue(draft);
-      await expect.poll(() => input.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
       const screenshot = await page.screenshot({ path: testInfo.outputPath("manuscript.png") });
       await testInfo.attach("manuscript", { body: screenshot, contentType: "image/png" });
     });
   });
 }
+
+test.describe("manuscript editing integration", () => {
+  test.afterEach(async () => {
+    await clearCases();
+    await clearEpisodic();
+  });
+
+  test("empty conversation sends the exact draft through mocked SSE without remounting the editor", async ({ page }, testInfo) => {
+    const posts: { messages?: { role?: string; parts?: { type: string; text?: string }[] }[] }[] = [];
+    const answer = "The first reply arrives directly after the unchanged paragraph.";
+    await page.route("**/api/chat", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      posts.push(route.request().postDataJSON());
+      await route.fulfill({ contentType: "text/event-stream", body: offlineSse(answer) });
+    });
+    await clearEpisodic();
+    await page.goto("/en/app");
+    const input = composerInput(page);
+    await expect(input).toBeVisible({ timeout: 30_000 });
+    const originalNode = await input.elementHandle();
+    const draft = "The first paragraph stays exactly as written.\n\nIts second paragraph remains part of the same user turn.";
+    await input.fill(draft);
+    await input.press("Enter");
+
+    const user = page.locator("[data-conversation-turn][data-role=user]").filter({ hasText: "The first paragraph stays exactly as written." });
+    const agent = page.locator("[data-conversation-turn]").filter({ hasText: answer });
+    await expect(user).toBeVisible();
+    await expect(agent).toBeVisible({ timeout: 30_000 });
+    await expectSameNode(page, originalNode);
+    await expect(input).toHaveValue("");
+    await expect(input).toBeEditable();
+    await expect(page.locator("[data-manuscript-composer]")).not.toHaveAttribute("aria-busy", "true");
+    await expect(page.locator("[data-composer-send]")).toBeDisabled();
+    expect(posts).toHaveLength(1);
+    const posted = posts[0]!.messages?.at(-1);
+    expect(posted?.role).toBe("user");
+    expect(posted?.parts?.filter((part) => part.type === "text").map((part) => part.text ?? "").join("")).toBe(draft);
+    expect(await user.evaluate((el) => el.textContent)).toContain("Its second paragraph remains part of the same user turn.");
+    expect(await agent.evaluate((el, userEl) => Boolean(userEl!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING), await user.elementHandle())).toBe(true);
+    await testInfo.attach("sent-manuscript", {
+      body: await page.screenshot({ path: testInfo.outputPath("sent-manuscript.png"), style: "nextjs-portal { visibility: hidden !important; }" }),
+      contentType: "image/png",
+    });
+  });
+
+  test("a long draft grows the manuscript instead of becoming an internal scrollbox", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "LONG-DRAFT" })]);
+    await page.goto("/en/app");
+    await openConversation(page);
+    const input = composerInput(page);
+    const field = page.locator("[data-conversation-field]");
+    await expect(field).toBeVisible();
+    await expect(page.locator("[data-conversation-turn]").first()).toBeVisible();
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
+    const before = await field.evaluate((el) => el.scrollHeight);
+    const draft = Array.from(
+      { length: 12 },
+      (_, index) => `Draft paragraph ${index + 1}: this sentence stays in the flowing manuscript while the editor grows.`,
+    ).join("\n\n");
+    await input.fill(draft);
+
+    await expect.poll(() => input.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(160);
+    await expect.poll(() => input.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+    expect(await field.evaluate((el) => el.scrollHeight)).toBeGreaterThan(before);
+    const toolbar = page.locator("[data-composer-mini-toolbar]");
+    await expect(toolbar).toBeVisible();
+    await expect(page.locator("[data-manuscript-input]")).toHaveCount(1);
+    await testInfo.attach("long-draft", {
+      body: await page.screenshot({ path: testInfo.outputPath("long-draft.png"), style: "nextjs-portal { visibility: hidden !important; }" }),
+      contentType: "image/png",
+    });
+
+    await field.evaluate((el) => { el.scrollTop = 0; });
+    await expect(toolbar).toBeVisible();
+    await expect(page.locator("[data-attach]:visible")).toBeVisible();
+    await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
+    await expect(page.locator("[data-composer-send]:visible")).toBeVisible();
+    const box = await toolbar.boundingBox();
+    const viewport = page.viewportSize();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+    await expect(page.locator("[data-manuscript-input]")).toHaveCount(1);
+  });
+
+  test("IME Enter stays uncancelled, Shift+Enter adds a newline and ordinary Enter sends", async ({ page }) => {
+    const posts: unknown[] = [];
+    await page.route("**/api/chat", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      posts.push(route.request().postDataJSON());
+      await route.fulfill({ contentType: "text/event-stream", body: offlineSse("Reply after composition") });
+    });
+    await seedSlices([makeSlice("2026-02-01T09:00:00.000Z", { tag: "IME" })]);
+    await page.goto("/en/app");
+    await openConversation(page);
+    const input = composerInput(page);
+    const originalNode = await input.elementHandle();
+    await input.fill("拼音草稿");
+    const imeEnterAllowed = await input.evaluate((el) => {
+      el.dispatchEvent(new CompositionEvent("compositionstart", { data: "pinyin", bubbles: true }));
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "keyCode", { value: 229 });
+      Object.defineProperty(event, "which", { value: 229 });
+      return el.dispatchEvent(event);
+    });
+    expect(imeEnterAllowed).toBe(true);
+    expect(posts).toHaveLength(0);
+    await expect(input).toHaveValue("拼音草稿");
+    await expectSameNode(page, originalNode);
+    await input.dispatchEvent("compositionend", { data: "拼音草稿" });
+
+    await input.press("Shift+Enter");
+    await input.pressSequentially("换行");
+    await expect(input).toHaveValue("拼音草稿\n换行");
+    expect(posts).toHaveLength(0);
+    await input.press("Enter");
+    await expect(page.getByText("Reply after composition", { exact: true })).toBeVisible();
+    expect(posts).toHaveLength(1);
+  });
+
+  test("archived records keep the live manuscript prose and typography", async ({ page }, testInfo) => {
+    const at = "2026-02-01T09:00:00.000Z";
+    const slice = makeSlice(at, { tag: "ARCHIVE-PARITY" });
+    slice.turns[1].content = "The room keeps the first paragraph intact.\n\nThe archived record carries the same second paragraph.";
+    await seedSlices([slice]);
+    await page.goto("/en/app");
+    await openConversation(page);
+    const live = page.locator("[data-conversation-turn][data-role=agent] .conversation-prose").filter({ hasText: "The room keeps the first paragraph intact." });
+    await expect(live).toBeVisible();
+    const liveText = await live.textContent();
+    const liveStyle = await live.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
+    });
+
+    await page.goto(`/en/app?doc=records/${slice.id}`);
+    const archived = page.locator(".document-record-turn .conversation-prose").filter({ hasText: "The room keeps the first paragraph intact." });
+    await expect(archived).toBeVisible({ timeout: 30_000 });
+    await expect(archived).toHaveText(liveText ?? "");
+    const archivedStyle = await archived.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
+    });
+    expect(archivedStyle).toEqual(liveStyle);
+    await testInfo.attach("archived-record", {
+      body: await page.screenshot({ path: testInfo.outputPath("archived-record.png") }),
+      contentType: "image/png",
+    });
+  });
+});

@@ -1394,8 +1394,8 @@ function Inner({
 
   // The panel tier this page is hosted at (null only outside a panel): at
   // the pill tier the conversation body is folded away and the stream goes
-  // inert with it — the pill is the only interactive surface. The composer
-  // is a sibling, not inside the stream column, so it stays live.
+  // inert with it — the list applies that guard to its content, leaving the
+  // single composer interactive at both tiers.
   const panelPill = panelTier?.mode === "pill";
 
   // Route policy owns send expansion; game and reader mini composers stay mini.
@@ -1423,26 +1423,23 @@ function Inner({
            below), so the list fills the pane and content passes under the
            floating chrome on its way past it. ── */}
       <div
-        className="relative flex-1 overflow-hidden"
-        // `inert` at the pill tier: the body folds to zero height there and
-        // the pill is the only interactive surface — `inert` keeps the folded
-        // content off the focus order and out of the accessibility tree.
-        inert={panelPill || undefined}
+        className={`${panelPill ? "" : "relative"} flex-1 overflow-hidden`}
       >
-        {emptyMemory ? (
-          // THIS ONE IS A REAL SCROLLER, and there the padding IS the content
-          // inset: a scroll container's scrollport is its padding box, so
-          // content scrolls INTO the padding and is visible there. It is the
-          // same reserve the field makes with its range — expressed the way a
-          // DOM scroller expresses it, which is the one shape this column could
-          // not use.
-          // The measured chrome (top) and composer (bottom) heights in px —
-          // content scrolls INTO the padding so it passes under the
-          // floating chrome; see use-chrome-inset / ComposerHost.
-          <div
-            style={{ paddingTop: insetTop, paddingBottom: insetBottom }}
-            className="h-full overflow-y-auto"
-          >
+        <DomChatList
+          items={items}
+          onTopItemChange={handleTopItemChange}
+          error={error}
+          // The FOLDED tier is not a surface: a zero-height body publishing
+          // progress and anchors for a conversation nobody can see is a lie
+          // the band cannot tell from a still one.
+          feed={feed}
+          publishing={publishing && !panelPill}
+          apiRef={streamApiRef}
+          insetTop={insetTop}
+          insetBottom={insetBottom}
+          contentInert={panelPill}
+          floatingComposer={panelPill}
+          emptyState={emptyMemory ? (
             <EmptyBriefing
               persona={persona}
               identity={identity}
@@ -1450,33 +1447,25 @@ function Inner({
               recent={timelineSlices}
               onSend={(msg) => void handleSubmit(msg, [])}
             />
-          </div>
-        ) : (
-          <DomChatList
-            items={items}
-            onTopItemChange={handleTopItemChange}
-            error={error}
-            // The FOLDED tier is not a surface: a zero-height body publishing
-            // progress and anchors for a conversation nobody can see is a lie
-            // the band cannot tell from a still one.
-            feed={feed}
-            publishing={publishing && !panelPill}
-            apiRef={streamApiRef}
-            insetTop={insetTop}
-            insetBottom={insetBottom}
-            briefing={
-              showBriefingCard
-                ? {
-                    persona,
-                    identity,
-                    active: activeSlice,
-                    recent: timelineSlices,
-                    onSend: (msg) => void handleSubmit(msg, []),
-                  }
-                : null
-            }
-          />
-        )}
+          ) : undefined}
+          composer={
+            <ComposerHost
+              onClearanceChange={onComposerClearanceChange}
+              composer={<ChatInput onSubmit={submitAndRise} isLoading={isLoading} onStop={handleStop} />}
+            />
+          }
+          briefing={
+            showBriefingCard
+              ? {
+                  persona,
+                  identity,
+                  active: activeSlice,
+                  recent: timelineSlices,
+                  onSend: (msg) => void handleSubmit(msg, []),
+                }
+              : null
+          }
+        />
 
         {/* ── Time-travel cover — an overlay ABOVE the stream (the list
              never unmounts, so the scroll position and the jump target
@@ -1545,23 +1534,6 @@ function Inner({
         </AnimatePresence>
       </div>
 
-      {/* ── The composer. A FLOATING overlay, not a footer: it used to be a
-           `shrink-0` child that took its height out of the column, which made
-           it page furniture in an app that has none. `ComposerHost` positions
-           it and reports how much room it needs, and that number travels up
-           to the layout-level provider, the one place above both the measurer
-           and the stream that clears it. See
-           `ChatPageProps.onComposerClearanceChange`. ── */}
-      <ComposerHost
-        onClearanceChange={onComposerClearanceChange}
-        composer={
-          <ChatInput
-            onSubmit={submitAndRise}
-            isLoading={isLoading}
-            onStop={handleStop}
-          />
-        }
-      />
     </>
   );
 }

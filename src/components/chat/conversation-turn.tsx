@@ -10,13 +10,16 @@ export function ConversationTurn({
   role,
   metadata,
   children,
+  speaker: speakerProp,
 }: {
   role: string;
   metadata?: ReactNode;
   children: ReactNode;
+  /** Archived records already resolved their localized speaker server-side. */
+  speaker?: string;
 }) {
   const t = useTranslations("desk");
-  const speaker = t(role === "user" ? "recordUser" : "recordAgent");
+  const speaker = speakerProp ?? t(role === "user" ? "recordUser" : "recordAgent");
 
   return (
     <article
