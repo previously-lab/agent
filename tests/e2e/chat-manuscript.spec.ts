@@ -1,4 +1,4 @@
-import type { ElementHandle, Page } from "@playwright/test";
+import type { ElementHandle, Locator, Page } from "@playwright/test";
 import { test, expect } from "./test";
 import {
   clearCases,
@@ -305,6 +305,27 @@ test.describe("manuscript editing integration", () => {
       const style = getComputedStyle(el);
       return { fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
     });
+    const input = composerInput(page);
+    await expect(input).toHaveCSS("font-size", liveStyle.fontSize);
+    const originalInput = await input.elementHandle();
+    // Exercise the shared token and the rem basis separately. A hard-coded
+    // 1rem passes root-only scaling but must fail the token-only change.
+    const expectResponsiveType = async (targets: Locator[]) => {
+      const rootSize = await page.evaluate(() => {
+        document.documentElement.style.setProperty("--text-base", "1.125rem");
+        return Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      });
+      for (const target of targets) await expect(target).toHaveCSS("font-size", `${rootSize * 1.125}px`);
+      await page.evaluate(() => { document.documentElement.style.fontSize = "20px"; });
+      for (const target of targets) await expect(target).toHaveCSS("font-size", "22.5px");
+      await page.evaluate(() => {
+        document.documentElement.style.removeProperty("--text-base");
+        document.documentElement.style.removeProperty("font-size");
+      });
+      for (const target of targets) await expect(target).toHaveCSS("font-size", liveStyle.fontSize);
+    };
+    await expectResponsiveType([live, live.locator("p").first(), input]);
+    await expectSameNode(page, originalInput);
 
     await page.goto(`/en/app?doc=records/${slice.id}`);
     const archived = page.locator(".document-record-turn .conversation-prose").filter({ hasText: "The room keeps the first paragraph intact." });
@@ -315,6 +336,7 @@ test.describe("manuscript editing integration", () => {
       return { fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
     });
     expect(archivedStyle).toEqual(liveStyle);
+    await expectResponsiveType([archived, archived.locator("p").first(), composerInput(page)]);
     await testInfo.attach("archived-record", {
       body: await page.screenshot({ path: testInfo.outputPath("archived-record.png") }),
       contentType: "image/png",

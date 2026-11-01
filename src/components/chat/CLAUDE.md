@@ -2,6 +2,8 @@
 
 ## Overview
 
+Typography uses the existing Tailwind/shadcn tokens: manuscript prose and input share `--text-base`, reader metadata uses `--text-xs`/`--text-sm`, and ordinary spacing/radii reuse `--spacing`/`--radius`. Keep the manuscript's readable unitless leading and relative layout; do not add separate font-size constants. Native theme messages also carry the host's computed root font size so iframe `rem` units track the host without remounting. Browser-measured pixels and thin rules are intentional exceptions; paper geometry stays independent.
+
 The chat rendering system uses project-owned `UIMessage` parts (`src/lib/chat/protocol.ts`) for text, reasoning, tools and custom data. `useDurableChat` posts a turn once; `readDurableChat` parses SSE and reconnects only to the same durable Vercel Workflow run. A replay rebuilds the assistant message from index zero, preserving original DeepSeek checkpoints without duplicated text. No AI SDK dependency is required.
 
 **Shared manuscript presentation.** `conversation-turn.tsx` and `writing.css` give live replies and saved turns the same reading column: serif prose, sans speaker/time metadata, and quiet ruled tool details. Both voices align in the column; a user turn has a light margin rule rather than a bubble. This conversation is responsive, naturally flowing text. Only the document desk uses fixed A4 geometry. Use `--background` and `--foreground` here, because the desk's `--paper` stays light even in dark mode. The persistent composer uses `--tool-glass` and `--shadow-float`, with round controls and visible attachment removal actions.

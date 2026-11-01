@@ -92,8 +92,12 @@ describe("native runtime lifecycle", () => {
     expect(h.sharedStyle.dataset.version).toBe("initial");
     send("styles", { styles: { id: "new", cssText: ".bg-primary { background: var(--primary) }" } });
     expect(h.sharedStyle.dataset.version).toBe("new");
-    send("theme", { theme: { ...DEFAULT_NATIVE_THEME, colorScheme: "dark", cssVariables: { "--primary": "host-brand" } } });
+    send("theme", { theme: { ...DEFAULT_NATIVE_THEME, colorScheme: "dark", rootFontSize: "20px", cssVariables: { "--primary": "host-brand", "--text-base": "1.125rem" } } });
     expect(h.values.get("--primary")).toBe("host-brand");
+    expect(h.values.get("--previously-root-font-size")).toBe("20px");
+    expect(h.values.get("--text-base")).toBe("1.125rem");
+    send("theme", { theme: { ...DEFAULT_NATIVE_THEME, rootFontSize: "18px" } });
+    expect(h.values.get("--previously-root-font-size")).toBe("18px");
     expect(h.sharedStyle.textContent).toContain(".bg-primary");
     expect(h.input.value).toBe("7");
     expect(h.messages.filter((message) => message.type === "ready")).toHaveLength(1);

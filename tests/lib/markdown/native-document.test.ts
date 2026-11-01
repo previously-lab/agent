@@ -63,11 +63,14 @@ describe("native iframe document policy", () => {
 
   it("layers default styles below utilities and applies surface tokens after shared CSS", () => {
     const result = buildNativeDocument({ source: '<body class="bg-primary"><p>fixture</p></body>', token: "token", locale: "en", interactive: true, fallback: "fallback",
-      theme: { ...DEFAULT_NATIVE_THEME, cssVariables: { "--primary": "host-brand" } },
+      theme: { ...DEFAULT_NATIVE_THEME, rootFontSize: "20px", cssVariables: { "--primary": "host-brand", "--text-base": "1.125rem" } },
       styles: { id: "host-css", cssText: '@layer utilities {.bg-primary{background:var(--primary)}}/* </style><script>breakout</script> */' },
     });
     expect(result.indexOf("@layer utilities")).toBeLessThan(result.indexOf("--primary:host-brand"));
     expect(result).toContain("@layer base{");
+    expect(result).toContain("--previously-root-font-size:20px");
+    expect(result).toContain("font-size:var(--previously-root-font-size)");
+    expect(result).toContain("font-size:var(--text-base,1em)");
     expect(result).not.toContain("</style><script>breakout</script>");
     expect(result).toContain("form-action 'none'");
     expect(result).not.toContain("unsafe-eval");

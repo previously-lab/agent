@@ -123,14 +123,15 @@ describe("native surface tokens", () => {
       colorScheme: "light", fontFamily: "var(--font-serif)",
       getPropertyValue: (name: string) => values[name as keyof typeof values] ?? "",
     });
-    const computed = vi.fn(() => styles);
+    const root = { classList: { contains: () => true } };
+    const computed = vi.fn((element) => Object.assign([...styles], styles, { fontSize: element === root ? "20px" : "15px" }));
     vi.stubGlobal("getComputedStyle", computed);
-    vi.stubGlobal("document", { documentElement: { classList: { contains: () => true } } });
+    vi.stubGlobal("document", { documentElement: root });
     const theme = readNativeTheme("paper", surface);
     expect(computed).toHaveBeenCalledWith(surface);
-    expect(theme).toMatchObject({ background: "paper-surface", foreground: "paper-ink", brand: "app-brand", colorScheme: "light", fontBody: "Georgia, serif", fontHeading: "Georgia, serif" });
+    expect(theme).toMatchObject({ background: "paper-surface", foreground: "paper-ink", brand: "app-brand", colorScheme: "light", fontBody: "Georgia, serif", fontHeading: "Georgia, serif", rootFontSize: "20px" });
     expect(theme.cssVariables).toMatchObject({ "--primary": "app-brand", "--background": "paper-surface" });
-    readNativeTheme("chat");
+    expect(readNativeTheme("chat").rootFontSize).toBe("20px");
     expect(computed).toHaveBeenLastCalledWith(document.documentElement);
   });
 });

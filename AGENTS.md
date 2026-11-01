@@ -45,6 +45,8 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 
 ## Design discipline (mandated by the user, 2026-10-20)
 
+- Prefer existing Tailwind/shadcn design tokens for typography, spacing, radius and color, and relative units for layout. Do not introduce independent font-size constants. Fixed pixels are reserved for necessary browser measurements/iframe bridges, thin borders and similar intrinsic constraints; preserve deliberate physical paper geometry and pixel-art coordinates.
+
 **The discussion is the spec. Nobody — the main agent or any subagent — may change a detail of an agreed design without flagging it first.** The only exceptions are a serious deviation in the agreed result, or an extreme technical cost; even then the deviation must be raised, never absorbed silently.
 
 - An agreed design decision is cited, not re-derived. If a design doc and the user's own words disagree, **the user's words win** and the doc is the thing that is wrong.

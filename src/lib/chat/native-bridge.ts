@@ -20,6 +20,8 @@ export interface NativeThemeTokens {
   fontBody: string;
   fontHeading: string;
   fontMono: string;
+  /** Computed host root size: rem units need the same basis across documents. */
+  rootFontSize?: string;
   colorScheme: "light" | "dark";
   /** Resolved values from the actual host surface, not a copied palette. */
   cssVariables?: Record<string, string>;

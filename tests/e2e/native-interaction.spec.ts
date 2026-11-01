@@ -195,6 +195,26 @@ test("chat and paper share live theme classes without reload and hand off one ca
       await expect(frame.locator("#result")).toHaveText("add:12");
       await expect(frame.locator("#level")).toHaveText("198");
     }
+    // rem-based utilities must use the host's root, including on light paper
+    // whose local font size differs. Theme updates must preserve this iframe.
+    const hostRootSize = await page.evaluate(() => getComputedStyle(document.documentElement).fontSize);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "20px";
+      document.documentElement.style.setProperty("--text-base", "1.125rem");
+    });
+    await compareThemeClasses(block);
+    await expect(frame.locator("html")).toHaveCSS("font-size", "20px");
+    await expect(frame.locator("body")).toHaveCSS("font-size", "22.5px");
+    expect(await iframe.evaluate((element, original) => element === original, node)).toBe(true);
+    await expect(frame.locator("html")).toHaveAttribute("data-fixture-run", instance!);
+    await expect(frame.locator("#result")).toHaveText("add:12");
+    await expect(frame.locator("#rsi")).toHaveValue(surface === "chat" ? "99" : "1");
+    await page.evaluate(() => {
+      document.documentElement.style.removeProperty("font-size");
+      document.documentElement.style.removeProperty("--text-base");
+    });
+    await compareThemeClasses(block);
+    await expect(frame.locator("html")).toHaveCSS("font-size", hostRootSize);
     // The next action changes surface immediately; no snapshot wait masks a
     // debounce race. The next owner must restore custom data AND its output.
     await frame.getByRole("button", { name: "Add saved step", exact: true }).click();
