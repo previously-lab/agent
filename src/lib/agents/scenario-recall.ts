@@ -5,6 +5,7 @@ import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { tool } from "@/lib/deepseek/tools";
 import type { PrepareStepFunction } from "@/lib/deepseek/types";
 import { parseTurns, type ParsedTurn } from "@/lib/episodic/turn-parser";
+import { conversationRole, RECORD_ATTRIBUTION_RULE } from "@/lib/episodic/record-attribution";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
 import {
   NATIVE_REPLY_OMISSION_MARKER,
@@ -30,6 +31,7 @@ const MAX_TURN_CONTENT_CHARS = 4_000;
 const MAX_READ_TURNS = 8;
 const MAX_EVIDENCE = 8;
 const MAX_QUOTE_CHARS = 1_200;
+const MAX_QUOTE_CONTEXT_CHARS = 240;
 const MAX_ANSWER_CHARS = 4_000;
 const MAX_STEPS = 8;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -40,10 +42,16 @@ export type ScenarioRecallRole = "user" | "assistant";
 
 export interface ScenarioRecallEvidence {
   ref: string;
+  source: "original_turn";
+  turnIndex: number;
+  boundary: ParsedTurn["boundary"];
   turnId?: string;
   role: ScenarioRecallRole;
   timestamp?: string;
   quote: string;
+  /** Adjacent visible original text, never model-authored or hidden source. */
+  context: { before: string; after: string };
+  /** Model interpretation; only quote bytes and source attribution are verified. */
   note: string;
 }
 
@@ -57,6 +65,7 @@ export interface ScenarioRecallCoverage {
 
 export interface ScenarioRecallResult {
   status: ScenarioRecallStatus;
+  verification: "quote_and_source_only";
   answer: string;
   evidence: ScenarioRecallEvidence[];
   coverage: ScenarioRecallCoverage;
@@ -127,6 +136,7 @@ Method:
 - Condition every part of the answer on the question. Do not produce a generic biography, a transcript dump, or an unrequested summary of everything read.
 - Summaries and search snippets are discovery aids. Before returning an exact quote, read the original record containing its user/assistant turn.
 - Specific numbers, dates, promises, decisions, and who said what require exact record evidence. Distinguish the user's statements from the assistant's claims.
+- ${RECORD_ATTRIBUTION_RULE}
 - Native HTML/JavaScript, generated controls and values, and omission markers are presentation, never evidence. Assistant semantic reads omit native HTML automatically; user bytes are not rewritten.
 - Stop when the question is answered or the bounded search is exhausted. No evidence is an honest result, never a cue to invent or generalize a memory. Incomplete coverage is not proof of absence.
 
@@ -145,6 +155,7 @@ function outcome(
 ): ScenarioRecallResult {
   return {
     status,
+    verification: "quote_and_source_only",
     answer: "",
     evidence: [],
     coverage,
@@ -176,10 +187,7 @@ function inWindow(ref: string, after?: string, before?: string): boolean {
 }
 
 function roleOf(turn: ParsedTurn): ScenarioRecallRole | null {
-  const role = /\((\w+)\)/.exec(turn.header)?.[1];
-  if (role === "user") return "user";
-  if (role === "agent" || role === "assistant") return "assistant";
-  return null;
+  return conversationRole(turn.role);
 }
 
 function summaryOf(raw: string): string {
@@ -276,7 +284,13 @@ async function loadRecord(
       throwIfCancelled(signal);
       const sourceTruncated = source.length > MAX_RAW_RECORD_CHARS;
       const raw = sourceTruncated ? source.slice(0, MAX_RAW_RECORD_CHARS) : source;
-      const turns = parseTurns(raw).turns.flatMap((turn): RecordTurn[] => {
+      const parsed = parseTurns(raw).turns;
+      const ambiguous = parsed.filter((turn) => turn.boundary === "ambiguous").length;
+      if (ambiguous > 0) {
+        state.truncated = true;
+        state.notes.push(`${ref}: ${ambiguous} ambiguous source block(s) were preserved in the archive but cannot authorize speaker-specific evidence`);
+      }
+      const turns = parsed.flatMap((turn): RecordTurn[] => {
         const role = roleOf(turn);
         return role ? [{ ...turn, role, semanticContent: projectNativeReplySemantics(turn.content, role) }] : [];
       });
@@ -365,8 +379,10 @@ function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): Render
     turns.push({
       turnId: turn.turnId,
       turnIndex: turn.index,
+      boundary: turn.boundary,
       role: turn.role,
       timestamp: turn.timestamp,
+      ...(turn.attachments?.length ? { attachments: { kind: "attachment_metadata_not_speech", items: turn.attachments } } : {}),
       charOffset: offset,
       endOffset,
       content,
@@ -436,12 +452,22 @@ function verifyEvidence(report: RecallReport, state: ReadState): {
     const key = `${candidate.ref}\0${turn.index}\0${quote}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const fragment = matches[0]!.fragment;
+    const quoteStart = fragment.indexOf(quote);
+    const quoteEnd = quoteStart + quote.length;
     evidence.push({
       ref: candidate.ref,
+      source: "original_turn",
+      turnIndex: turn.index,
+      boundary: turn.boundary,
       ...(turn.turnId ? { turnId: turn.turnId } : {}),
       role: turn.role,
       ...(turn.timestamp ? { timestamp: turn.timestamp } : {}),
       quote,
+      context: {
+        before: fragment.slice(Math.max(0, quoteStart - MAX_QUOTE_CONTEXT_CHARS), quoteStart),
+        after: fragment.slice(quoteEnd, quoteEnd + MAX_QUOTE_CONTEXT_CHARS),
+      },
       note: clip(candidate.note?.trim() || "Supports the focused recollection.", 300),
     });
   }
@@ -715,6 +741,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
     const truncated = state.truncated || coverage.omitted > 0 || verified.overflow > 0;
     return {
       status,
+      verification: "quote_and_source_only",
       answer,
       evidence: verified.evidence,
       coverage,

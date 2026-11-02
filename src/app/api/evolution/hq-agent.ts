@@ -76,6 +76,7 @@ import { mutateSkillLedger, readSkillLedger } from "@/lib/evolution/skill-store"
 import type { SkillEntry } from "@/lib/evolution/skill-policy";
 import { buildReflectionLearningTools, createReflectionReadState } from "./reflection-learning-tools";
 import { buildReflectionTaskTools } from "./reflection-task-tools";
+import { RECORD_ATTRIBUTION_RULE, renderAttributedRecord } from "@/lib/episodic/record-attribution";
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
@@ -389,7 +390,10 @@ function buildHqTools(
           try {
             const raw = await readSlicePart(sliceId, part, batch);
             if (part === "core") readState.recordRound(sliceId, raw);
-            sections.push(`## ${part} — ${label}\n\n${raw}`);
+            const content = part === "core"
+              ? renderAttributedRecord(`records/${sliceId}`, raw)
+              : JSON.stringify({ source: { ref: `records/${sliceId}/${part}`, kind: part === "agent" ? "agent_cognition" : "derived_profile" }, content: raw });
+            sections.push(`## ${part} — ${label}\n\n${content}`);
           } catch {
             if (part === "core") {
               return (
@@ -400,7 +404,7 @@ function buildHqTools(
             sections.push(`## ${part} — ${label}\n\n(${part} not found for ${sliceId}.)`);
           }
         }
-        return sections.join("\n\n");
+        return `${RECORD_ATTRIBUTION_RULE}\n\n${sections.join("\n\n")}`;
       },
     }),
 
@@ -444,10 +448,10 @@ function buildHqTools(
     writeCase: tool({
       description:
         "Apply ONE case write through the case write ops (per-case lock, fresh read inside, illegal transitions REJECTED with a structured reason). " +
-        "open: new case (category + caseName + body). rewriteIndex: rewrite the body of a case still inside its write window (body; " +
+        "open: new case (category + caseName + body); when a focused piece will follow, body is a distinct overview, never a copy of that piece. rewriteIndex: rewrite the body of a case still inside its write window (body; " +
         "pass expectedUpdated = the updated stamp you read from the case header — the rewrite is refused when the case moved since your read). " +
-        "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
-        "addPiece: a dated piece (title + body). reviseUnderstanding: replace only _current.md with body and evidence refs actually read in this run, preserving the historical index. Read the full target case before any update; survey is not a receipt. " +
+        "appendTail: ONE short dated correction or navigation line (line), never a compressed essay. " +
+        "addPiece: a focused dated piece (title + body), atomically linked from the index. Read relevant existing pieces first; their listed titles are not evidence. Open a new case's overview first, then read it and addPiece with the distinct full piece body. reviseUnderstanding: replace only _current.md with body and evidence refs actually read in this run; unchanged prose only refreshes metadata, while changed prose preserves its previous version. Read the full target case before any update; survey is not a receipt. " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
@@ -544,7 +548,7 @@ function buildHqTools(
           // Queued, NOT committed — the round's single end-of-round flush is
           // the commit. "written" is claimed only after a commit succeeds
           // (v0.37 §7-1): the honest word here is 「已记录，随本轮一次落盘」.
-          return `OK — 已记录，随本轮一次落盘: ${applied.path}${applied.created ? " (created)" : ""}`;
+          return `OK — 已记录，随本轮一次落盘: ${applied.path}${applied.created ? " (created)" : ""}${applied.warnings?.length ? `\n${applied.warnings.join("\n")}` : ""}`;
         } catch (e) {
           return `REJECTED: ${e instanceof Error ? e.message : String(e)}`;
         }
@@ -647,7 +651,7 @@ function buildHqTools(
             model,
             sliceId,
             ...(closed ? { closedSliceId: sliceId } : {}),
-            recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
+            recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content, turnId: t.turnId, timestamp: t.timestamp })),
             focus,
             signal: closed ? "slice_closed" : "field_report",
             readers: buildRunCardReaders(batch),

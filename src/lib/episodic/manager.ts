@@ -10,7 +10,9 @@
  * local-dev vs GitHub-production switch transparently.
  */
 import matter from "gray-matter";
+import { escapeTurnBody, parseTurns as parseRecordTurns } from "./turn-parser";
 import { decodeDocumentContext, encodeDocumentContext } from "@/lib/chat/document-context-codec";
+import { encodeImageAttachments, legacyRecordImageAttachments } from "@/lib/chat/image-attachments";
 import type {
   TimeSlice,
   Turn,
@@ -296,7 +298,10 @@ export function serializeSlice(slice: TimeSlice): string {
         `${turn.burst ? ` [burst ${turn.burst}]` : ""}` +
         `${turn.merge ? " [merge]" : ""}` +
         `${turn.clientMessageId ? ` [message ${encodeURIComponent(turn.clientMessageId)}]` : ""}` +
-        `${turn.documentContext?.length ? ` [documents ${encodeDocumentContext(turn.documentContext)}]` : ""}\n\n${turn.content}`
+        `${turn.documentContext?.length ? ` [documents ${encodeDocumentContext(turn.documentContext)}]` : ""}` +
+        `${turn.attachments?.length ? ` [attachments ${encodeImageAttachments(turn.attachments)}]` : ""}` +
+        `${turn.sourceRole ? ` [source-role ${encodeURIComponent(turn.sourceRole)}]` : ""}` +
+        ` [body-escaped v1]\n\n${escapeTurnBody(turn.content)}`
     )
     .join("\n\n");
 
@@ -327,7 +332,7 @@ export function parseSlice(raw: string): TimeSlice {
   const frontmatter = data as Partial<SliceFrontmatter>;
 
   // Parse turns from body content
-  const turns = parseTurns(content);
+  const turns = parseTurns(content, typeof frontmatter.slice_id === "string" ? frontmatter.slice_id : undefined);
 
   // Estimate tokens: rough 1 token per 4 characters
   const estimatedTokens = Math.ceil(raw.length / 4);
@@ -396,81 +401,39 @@ function isSlicingSignal(v: unknown): v is SlicingSignal {
  * Each turn starts with "## Turn {turnId} — ISO_TIMESTAMP (role)" (new) or
  * "## Turn N — ISO_TIMESTAMP (role)" (legacy, numeric index only).
  */
-function parseTurns(body: string): Turn[] {
-  const turns: Turn[] = [];
-  const trimmed = body.trim();
-  if (!trimmed) return turns;
-
-  // Match both old and new formats:
-  // New: ## Turn a3fk2w — ISO (role)
-  // Legacy: ## Turn 1 — ISO (role)
-  // Optional nested-bubble suffix (v0.30 §3.4): "… (agent) [reply-to q1w2e3]"
-  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?(?: \[burst (\S+)\])?( \[merge\])?(?: \[message (\S+)\])?(?: \[documents ([^\]]*)\])?$/gm;
-
-  // Collect turn headers with the position right after the header line
-  const headers: Array<{
-    turnLabel: string;
-    timestamp: string;
-    role: "user" | "agent";
-    replyTo?: string;
-    burst?: string;
-    merge?: boolean;
-    clientMessageId?: string;
-    documents?: string;
-    contentStart: number;
-  }> = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = turnHeaderRegex.exec(trimmed)) !== null) {
-    const afterHeader =
-      trimmed.indexOf("\n", match.index) === -1
-        ? trimmed.length
-        : trimmed.indexOf("\n", match.index) + 1;
-
-    headers.push({
-      turnLabel: match[1],
-      timestamp: match[2],
-      role: match[3] as "user" | "agent",
-      ...(match[4] ? { replyTo: match[4] } : {}),
-      ...(match[5] ? { burst: match[5] } : {}),
-      ...(match[6] ? { merge: true } : {}),
-      ...(match[7] ? { clientMessageId: decodeMessageId(match[7]) } : {}),
-      ...(match[8] ? { documents: match[8] } : {}),
-      contentStart: afterHeader,
-    });
-  }
-
-  // Extract the content between each header and the next.
-  // Search for "## Turn " as a generic delimiter — no longer relies on
-  // sequential numeric indices (which don't exist with base64url turnIds).
-  for (let i = 0; i < headers.length; i++) {
-    const nextHeaderIdx = trimmed.indexOf("## Turn ", headers[i].contentStart);
-    const contentEnd = nextHeaderIdx !== -1 ? nextHeaderIdx : trimmed.length;
-
-    const turnContent = trimmed
-      .slice(headers[i].contentStart, contentEnd)
-      .trim();
-
-    // Distinguish: numeric label → legacy format (no turnId), base64url → new
-    const isNumeric = /^\d+$/.test(headers[i].turnLabel);
-    const documentContext = headers[i].documents
-      ? decodeDocumentContext(headers[i].documents)
-      : [];
-
-    turns.push({
-      timestamp: headers[i].timestamp,
-      role: headers[i].role,
-      content: turnContent,
-      ...(isNumeric ? {} : { turnId: headers[i].turnLabel }),
-      ...(headers[i].replyTo ? { replyTo: headers[i].replyTo } : {}),
-      ...(headers[i].burst ? { burst: headers[i].burst } : {}),
-      ...(headers[i].merge ? { merge: true } : {}),
-      ...(headers[i].clientMessageId ? { clientMessageId: headers[i].clientMessageId } : {}),
+function parseTurns(body: string, sliceId?: string): Turn[] {
+  return parseRecordTurns(body).turns.map((turn) => {
+    // The shared parser owns boundaries; header-like text inside a message
+    // must neither truncate it nor create a new speaker. Decode suffixes only.
+    const replyTo = / \[reply-to (\S+)\]/.exec(turn.header)?.[1];
+    const burst = / \[burst (\S+)\]/.exec(turn.header)?.[1];
+    const message = / \[message (\S+)\]/.exec(turn.header)?.[1];
+    const documents = / \[documents ([^\]]*)\]/.exec(turn.header)?.[1];
+    const documentContext = documents && turn.boundary !== "ambiguous" ? decodeDocumentContext(documents) : [];
+    const role: Turn["role"] = turn.role === "assistant" ? "agent"
+      : turn.role === "user" || turn.role === "agent" || turn.role === "tool" || turn.role === "system" ? turn.role : "unknown";
+    const sourceRole = turn.sourceRole ?? (role !== turn.role ? turn.role : undefined);
+    // Only the old record format used a trailing server-added attachment list.
+    // New escaped records MUST use header metadata; body lookalikes are prose.
+    // Legacy refs are display hints, never proof of upload or user endorsement.
+    const attachments = turn.attachments?.length ? turn.attachments
+      : role === "user" && turn.boundary === "legacy_header" && sliceId
+        ? legacyRecordImageAttachments(turn.content, sliceId, turn.turnId) : [];
+    return {
+      timestamp: turn.timestamp,
+      role,
+      ...(sourceRole ? { sourceRole: decodeMessageId(sourceRole) } : {}),
+      ...(turn.boundary === "ambiguous" || role === "unknown" ? { attribution: "ambiguous" as const } : {}),
+      content: turn.content.trim(),
+      ...(!/^\d+$/.test(turn.turnId ?? "") ? { turnId: turn.turnId } : {}),
+      ...(replyTo ? { replyTo } : {}),
+      ...(burst ? { burst } : {}),
+      ...(/ \[merge\]/.test(turn.header) ? { merge: true } : {}),
+      ...(message ? { clientMessageId: decodeMessageId(message) } : {}),
       ...(documentContext.length ? { documentContext } : {}),
-    });
-  }
-
-  return turns;
+      ...(attachments.length ? { attachments } : {}),
+    };
+  });
 }
 
 /** Manually edited identity metadata must never make the record unreadable. */

@@ -66,8 +66,8 @@ const writeOpSchema = z.object({
   action: z
     .enum(["open", "updateIndex", "appendTail", "addPiece", "reviseUnderstanding"])
     .describe(
-      "open: a NEW case. updateIndex: rewrite an existing in-window index. " +
-      "appendTail: ONE dated line that never reopens the settled body. addPiece: a dated piece. " +
+      "open: a NEW case overview. updateIndex: rewrite an existing in-window index. " +
+      "appendTail: one short dated correction or navigation. addPiece: a focused dated piece, linked from the index in the same batch; read relevant existing pieces first. " +
       "reviseUnderstanding: change only _current.md (requires currentUnderstanding).",
     ),
   category: z.enum(CASE_CATEGORIES),
@@ -106,9 +106,9 @@ You are shown: the triggering question markers, a compact slice excerpt, and the
 ## Task
 
 Per question, judge: is there enough in the record to write something durable?
-- research: answer a question. Historical index.md text and dated pieces keep the record; update an in-window index or append once settled, and never reopen settled history through a tail.
+- research: answer a question a reader can return to. Use a distinct opening overview, focused dated pieces for independently useful questions, and short tails for corrections or navigation. Read relevant existing pieces before writing another. Never replay the entire argument in the overview or tail.
 - hypothesis: a guess WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused.
-- current understanding: use reviseUnderstanding with currentUnderstanding { body, evidence }, or attach that field to another write. It changes only free-prose _current.md, archives the previous view as dated history, and works for any category without a trait template.
+- current understanding: use reviseUnderstanding with currentUnderstanding { body, evidence }, or attach that field to another write. It changes only free-prose _current.md; changed prose preserves its previous view, while metadata-only refreshes do not duplicate history. It works for any category without a trait template.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
 

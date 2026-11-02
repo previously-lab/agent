@@ -12,7 +12,10 @@
  * A dead name is a 404 (a dead link is visible, never a 500).
  */
 import { isCaseCategory, isValidCaseName } from "@/lib/docs";
-import { attachmentMediaType, readCaseAttachment } from "@/lib/tools/attachments";
+import { attachmentMediaType, readCaseAttachment, readRecordImage } from "@/lib/tools/attachments";
+import { IMAGE_ASSET_ID, parseRecordImageRef } from "@/lib/chat/image-attachments";
+import { readStagedImage } from "@/lib/tools/staged-images";
+import { ImageAttachmentError } from "@/lib/tools/image-validation";
 
 function isPlainFileName(name: string): boolean {
   return (
@@ -29,6 +32,27 @@ function isPlainFileName(name: string): boolean {
 
 export async function GET(request: Request): Promise<Response> {
   const ref = new URL(request.url).searchParams.get("ref") ?? "";
+  if (ref.startsWith("drafts/") || parseRecordImageRef(ref)) {
+    try {
+      const draftId = ref.slice("drafts/".length);
+      if (ref.startsWith("drafts/") && !IMAGE_ASSET_ID.test(draftId)) return Response.json({ error: "Invalid image reference" }, { status: 400 });
+      const { data, mediaType } = ref.startsWith("drafts/")
+        ? await readStagedImage(draftId, new URL(request.url).searchParams.get("persona"))
+        : await readRecordImage(ref);
+      return new Response(new Uint8Array(data), { headers: {
+        "Content-Type": mediaType, "Content-Length": String(data.length), "X-Content-Type-Options": "nosniff",
+        // Read-only SVG legacy archives remain usable as images, never active documents.
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        // A URL may outlive a runtime datasource switch. Revalidate against
+        // the current store instead of showing cached bytes from the old one.
+        "Cache-Control": "no-store",
+      } });
+    } catch (error) {
+      if (error instanceof ImageAttachmentError) return Response.json({ error: error.message, code: error.code }, { status: error.status });
+      const absent = (error as { code?: string; status?: number })?.code === "ENOENT" || (error as { status?: number })?.status === 404 || /^File not found:/.test((error as Error)?.message ?? "");
+      return Response.json({ error: absent ? "Image not found" : "Could not read image" }, { status: absent ? 404 : 503 });
+    }
+  }
   const segments = ref.split("/").filter((s) => s !== "");
   const [category, caseName, fileName] = [segments[0] ?? "", segments[1] ?? "", segments[2] ?? ""];
 

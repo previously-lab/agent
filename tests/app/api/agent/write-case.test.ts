@@ -71,7 +71,7 @@ vi.mock("@/lib/episodic/io-helpers", async (importOriginal) => {
 import { writeCaseExecute, recallReadExecute, type ToolContext } from "@/app/api/agent/tool-executors";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { caseIndexPath } from "@/lib/docs";
-import { createCase, serializeCaseDoc, caseStorageRevision } from "@/lib/docs/case-doc";
+import { createCase, parseCaseDoc, serializeCaseDoc, caseStorageRevision } from "@/lib/docs/case-doc";
 
 const ctx: ToolContext = {
   repo: "local",
@@ -97,7 +97,7 @@ async function actualRead(ref: string, context = ctx): Promise<{ messages: Model
 }
 
 async function call(
-  input: { category?: string; caseName: string; body: string; pieceTitle?: string },
+  input: { category?: string; caseName: string; body: string; pieceTitle?: string; overviewBody?: string },
   toolCallId = "call-1",
 ) {
   const ref = `${input.category ?? "research"}/${input.caseName}`;
@@ -298,8 +298,12 @@ describe("writeCase — addPiece on an existing case", () => {
     const piece = io.files.get((r as { path: string }).path)!;
     expect(piece).toContain("三家报价对比。");
     expect(piece).not.toContain("source:");
-    // the index was NOT rewritten
-    expect(io.files.get("memory/research/手机调研/index.md")).toBe(indexBefore);
+    // The historical body stays intact; the only addition is a piece pointer.
+    const after = parseCaseDoc(io.files.get("memory/research/手机调研/index.md")!, { category: "research", caseName: "手机调研", fileName: "index.md" });
+    const before = parseCaseDoc(indexBefore, { category: "research", caseName: "手机调研", fileName: "index.md" });
+    expect(after.body).toBe(before.body);
+    expect(after.updated).toBe(before.updated);
+    expect(after.tail.at(-1)?.text).toContain("[报价篇](previously:research/手机调研/");
   });
 
   it("existing case WITHOUT pieceTitle is refused with an actionable reason — never a silent rewrite", async () => {
@@ -334,17 +338,30 @@ describe("writeCase — addPiece on an existing case", () => {
 });
 
 describe("writeCase — one commit per call (open + first piece coalesced)", () => {
+  it("exposes overviewBody to the model and gives recoverable feedback before queueing a duplicate opening", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const schema = chatTools.writeCase.inputSchema as unknown as { parse(value: unknown): Record<string, unknown> };
+    expect(schema.parse({ caseName: "灯具", body: "试验全文。", pieceTitle: "供电", overviewBody: "灯具供电的资料入口。" }).overviewBody).toBe("灯具供电的资料入口。");
+    expect(chatTools.writeCase.description).toContain("overviewBody");
+    for (const overviewBody of [undefined, "试验全文。"]) {
+      const result = await call({ caseName: "灯具", body: "试验全文。", pieceTitle: "供电", overviewBody });
+      expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("overviewBody") });
+      expect(io.files.size).toBe(0);
+    }
+  });
   it("open WITH pieceTitle lands the index AND the first piece in ONE flush", async () => {
     const { flushBatch } = await import("@/lib/episodic/io-helpers");
     const r = await call(
-      { caseName: "合并案", body: "案件正文。", pieceTitle: "开题" },
+      { caseName: "合并案", body: "案件正文。", pieceTitle: "开题", overviewBody: "本案研究灯具的选择。" },
       "call-9",
     );
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.action).toBe("addPiece");
     expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(flushBatch).mock.calls[0][1]).toBe("writeCase research/合并案");
-    expect(io.files.get("memory/research/合并案/index.md")).toContain("案件正文。");
+    expect(io.files.get("memory/research/合并案/index.md")).toContain("本案研究灯具的选择。");
+    expect(io.files.get("memory/research/合并案/index.md")).not.toContain("案件正文。");
+    expect(io.files.get("memory/research/合并案/index.md")).toContain("[开题](previously:research/合并案/");
     expect(
       [...io.files.keys()].some((k) =>
         /^memory\/research\/合并案\/\d{4}-\d{2}-\d{2}-开题\.md$/.test(k),
@@ -367,7 +384,7 @@ describe("writeCase — one commit per call (open + first piece coalesced)", () 
     // and the model, told the call failed, retried into extra commits. (This
     // harness keeps queued files private until flush, matching production.)
     const r = await call(
-      { caseName: "半截案", body: "正文。", pieceTitle: "2026新品" },
+      { caseName: "半截案", body: "正文。", pieceTitle: "2026新品", overviewBody: "不同的概述。" },
       "call-11",
     );
     expect(r.ok).toBe(false);

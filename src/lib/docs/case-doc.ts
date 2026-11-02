@@ -604,7 +604,7 @@ function sameCurrentText(doc: CaseCurrentDoc, input: CaseCurrentInput): boolean 
   );
 }
 
-/** Replace only the current view; prior prose and its basis remain as dated history. */
+/** Archive changed prose, not a refresh of its date or evidence metadata. */
 export function reviseCaseCurrent(
   previous: CaseCurrentDoc | null,
   input: CaseCurrentInput,
@@ -617,8 +617,11 @@ export function reviseCaseCurrent(
     throw new Error("reviseUnderstanding requires at least one evidence reference");
   }
   const basis = input.basis === undefined ? previous?.basis ?? null : input.basis;
-  if (previous && sameCurrentText(previous, { ...input, body, evidence })) {
-    return sameBasis(previous.basis, basis) ? previous : { ...previous, basis };
+  if (previous && previous.body === body) {
+    if (sameCurrentText(previous, { ...input, body, evidence }) && sameBasis(previous.basis, basis)) {
+      return previous;
+    }
+    return { ...previous, asOf: input.asOf, evidence, basis };
   }
   const archive = previous?.body
     ? [

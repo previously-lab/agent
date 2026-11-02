@@ -70,6 +70,33 @@
       "attach": "附件",
       "stopTooltip": "停止生成",
       "sendTooltip": "发送消息",
+      "tools": "写作工具：添加图片和引用文档",
+      "keyboardSendCaption": "Enter 发送 · Shift+Enter 换行",
+      "keyboardCaption": "Enter 换行 · Ctrl/Command+Enter 发送",
+      "source": {
+        "unknown": "来源不明的文本",
+        "tool": "工具输出",
+        "system": "系统文本"
+      },
+      "images": {
+        "open": "打开图片：{name}",
+        "attached": "附带图片",
+        "unreferenced": "未引用的附件",
+        "notReady": "图片尚未上传完成，请等待，或重试、移除失败的图片后发送。",
+        "sendFailed": "消息尚未被接收，草稿已保留，可以重试。",
+        "preparing": "正在处理图片…",
+        "uploading": "正在上传…",
+        "failed": "上传失败",
+        "originalTooLarge": "原始图片不能超过 10 MB。",
+        "tooLarge": "处理后的图片超过 5 MB 上传限制。",
+        "retry": "重试上传",
+        "limit": "每条消息最多附带 4 张图片。",
+        "removed": "已移除 {name}。",
+        "undo": "撤销",
+        "submitting": "正在发送这份草稿…你可以继续写。"
+      },
+      "keyboardHint": "Enter 换行，Ctrl 或 Command 加 Enter 发送。按 Tab 可访问写作工具、发送按钮，以及回复进行时的停止按钮。",
+      "keyboardSendHint": "Enter 发送，Shift 加 Enter 换行。按 Tab 可访问写作工具、发送按钮，以及回复进行时的停止按钮。",
       "modelTooltip": "切换 AI 模型",
       "modelLabel": "模型",
       "modelGroup": {

@@ -120,9 +120,12 @@ describe("runner wiring", () => {
     await runPreviouslyAgent(baseInput({ recentTurns, closedSliceId: SLICE }));
 
     const opts = runSubAgentMock.mock.calls[0][0];
-    expect(opts.prompt).toContain("agent before\n[Interactive visual omitted]agent after");
+    const conversation = JSON.parse(opts.prompt!.split("## Recent Conversation (your window into what changed)\n\n")[1]);
+    expect(conversation).toMatchObject([
+      { role: "user", content: user },
+      { role: "assistant", content: "agent before\n[Interactive visual omitted]agent after" },
+    ]);
     expect(opts.prompt).not.toContain("<button>generated</button>");
-    expect(opts.prompt).toContain(user);
     expect(opts.prompt).toContain("conversation excerpt is below");
     expect(opts.prompt).not.toContain("full conversation is below");
     expect(recentTurns).toEqual(snapshot);

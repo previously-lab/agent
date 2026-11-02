@@ -820,7 +820,7 @@ function userLocalDate(timezone: string | undefined): string {
  * to say where it came from says so in prose). records get zero write-back.
  */
 export async function writeCaseExecute(
-  input: { category?: string; caseName: string; body: string; pieceTitle?: string },
+  input: { category?: string; caseName: string; body: string; pieceTitle?: string; overviewBody?: string },
   { context: ctx, messages }: ExecuteOpts<ToolContext>,
 ): Promise<WriteCaseResult> {
   "use step";
@@ -904,8 +904,10 @@ export async function writeCaseExecute(
 
   if (!exists) {
     try {
+      const { caseOpeningBody } = await import("@/lib/docs/organization");
+      const indexBody = caseOpeningBody({ category, caseName, date, body, pieceTitle, overviewBody: input.overviewBody });
       const applied = await applyCaseWriteIntent(
-        { action: "open", category, caseName, body },
+        { action: "open", category, caseName, body: indexBody },
         date,
         batch,
       );

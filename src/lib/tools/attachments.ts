@@ -43,6 +43,9 @@ import {
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { sliceDir } from "@/lib/episodic/paths";
+import { recordImageRef, parseRecordImageRef, isAttachmentFileName, parseImageAttachments,
+  type ImageAttachmentEvidence, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
+import { inspectImage, ImageAttachmentError } from "./image-validation";
 
 // ─── Fuses (§C.1) ──────────────────────────────────────────────────────────
 
@@ -295,6 +298,52 @@ export async function readCaseAttachment(input: {
     `${caseAttachmentsDir(category, caseName)}/${fileName}`,
   );
   return { data, mediaType: attachmentMediaType(fileName) };
+}
+
+/** Record reads are confined to the attachment directory of a real UTC slice. */
+export async function readRecordImage(ref: string): Promise<{ data: Buffer; mediaType: string }> {
+  const parsed = parseRecordImageRef(ref);
+  if (!parsed) throw new ImageAttachmentError("invalid_reference", "Invalid record image reference");
+  const data = await fsReadBinaryFile(`${recordAttachmentsDir(parsed.sliceId)}/${parsed.fileName}`);
+  return { data, mediaType: attachmentMediaType(parsed.fileName) };
+}
+
+/** Stage all evidence into the summary's existing batch. Deterministic names
+ * make a retry after partial local I/O reuse the same binary, never -2 copies.
+ * Capacity or corrupt data rejects the batch instead of dropping an image. */
+export async function persistImageAttachments(input: {
+  sliceId: string; turnId: string; images: ImageAttachmentEvidence[]; batch: WriteBatch;
+}): Promise<ImageAttachmentSnapshot[]> {
+  const { sliceId, turnId, images, batch } = input;
+  if (!isAttachmentFileName(turnId)) throw new Error("Invalid attachment turn identity");
+  const dir = recordAttachmentsDir(sliceId);
+  const snapshots = parseImageAttachments(images.map((image) => image.snapshot));
+  if (snapshots.length !== images.length) throw new Error("Invalid attachment snapshots");
+  let total = 0;
+  const existing = new Map<string, number>();
+  const entries = await fsListFiles(dir).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as { status?: number }).status === 404 || /^Directory not found:/.test((error as Error).message)) return [];
+    throw error;
+  });
+  for (const entry of entries) if (entry.type === "file") existing.set(entry.path, entry.size ?? (await fsReadBinaryFile(entry.path)).length);
+  for (const [path, content] of batch.entries) if (path.startsWith(`${dir}/`) && batch.encodings?.get(path) === "base64" && content !== null) existing.set(path, Buffer.from(content, "base64").length);
+  for (const size of existing.values()) total += size;
+  const writes: Array<{ path: string; data: Buffer; snapshot: ImageAttachmentSnapshot }> = [];
+  for (const image of images) {
+    const data = Buffer.from(image.dataBase64, "base64"), format = inspectImage(data);
+    if (data.length !== image.snapshot.byteSize || format.mediaType !== image.snapshot.mediaType) throw new Error("Attachment bytes do not match their snapshot");
+    const fileName = `${turnId}-${image.snapshot.assetId}.${format.extension}`;
+    const path = `${dir}/${fileName}`;
+    if (existing.has(path)) {
+      const queued = batch.entries.get(path);
+      const previous = typeof queued === "string" && batch.encodings?.get(path) === "base64" ? Buffer.from(queued, "base64") : await fsReadBinaryFile(path);
+      if (!previous.equals(data)) throw new Error("Stored attachment identity has different bytes");
+    } else { total += data.length; existing.set(path, data.length); }
+    if (total > MAX_CASE_ATTACHMENTS_BYTES) throw new ImageAttachmentError("record_capacity", "Record attachments exceed the 25MB limit", 413);
+    writes.push({ path, data, snapshot: { ...image.snapshot, ref: recordImageRef(sliceId, fileName) } });
+  }
+  for (const write of writes) await fsWriteBinaryFile(write.path, write.data, batch);
+  return writes.map((write) => write.snapshot);
 }
 
 /** Decode a `data:<mime>;base64,<payload>` URL into bytes (null when malformed). */

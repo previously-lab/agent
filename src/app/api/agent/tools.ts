@@ -138,7 +138,9 @@ export const chatTools = {
       "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
       "a bounded recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
       "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
-      "the narrative answer remains a derived interpretation. Ask another focused recallScenario question when more original detail is needed. " +
+      "verification=quote_and_source_only: the narrative answer and evidence notes remain interpretations, not verified user facts. " +
+      "Read each quote's role, timestamp and adjacent context: an assistant suggestion is not user confirmation, and a user may quote or deny a claim. " +
+      "Ask another focused recallScenario question when more original detail is needed. " +
       "For semantic documents, case understandings and other existing prose, use recallRead directly: they are already compressed and this tool cannot read them. " +
       "Incomplete coverage or no evidence is not proof that the user never said something. This tool does not create write authority or task evidence.",
     inputSchema: scenarioRecallRequestSchema,
@@ -500,9 +502,10 @@ export const chatTools = {
       "specific enough that a scope change means a new case). If it ALREADY " +
       "exists, pass pieceTitle to ADD one dated piece (the date prefix is " +
       "stamped mechanically — pass the bare title); a pieceTitle on the OPEN " +
-      "call also lands that first piece in the same call (one commit). " +
+      "call also lands that first piece in the same call (one commit), but " +
+      "requires a distinct overviewBody for the index: body belongs only to the piece. " +
       "Omitting pieceTitle on an existing case is refused — this tool never " +
-      "rewrites an index. What you write is exactly what lands: no machine " +
+      "rewrites an index body. A new piece and its short index navigation link land together. What you write is exactly what lands: no machine " +
       "fields are added (dates and the updated stamp are stamped " +
       "mechanically). If the piece should say where it came from (which " +
       "conversation, when), say it in prose. " +
@@ -548,8 +551,11 @@ export const chatTools = {
           "The dated piece's title (the date prefix is stamped " +
           "mechanically — pass the bare title, e.g. '报价篇'). On an existing " +
           "case it adds the piece; on the OPEN call it also lands that first " +
-          "piece in the same call. Omit for a bare open.",
+          "piece in the same call; provide overviewBody for that new case. Omit for a bare open.",
         ),
+      overviewBody: z.string().min(1).optional().describe(
+        "Required when opening a NEW case with pieceTitle. A distinct overview of the case and its reading purpose; body is the piece's full text. Never copy the piece into the overview. Existing cases do not need this field.",
+      ),
     }),
     contextSchema: toolContextSchema,
     execute: writeCaseExecute,

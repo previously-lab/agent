@@ -3,6 +3,7 @@ import { tool } from "@/lib/deepseek/tools";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
 import { createCaseReadScope, type CaseReadScope } from "@/lib/episodic/flash/librarian";
 import { parseTurns } from "@/lib/episodic/turn-parser";
+import { conversationRole } from "@/lib/episodic/record-attribution";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import { readSelfSopSnapshot, writeSelfSopVersioned, type SelfSopSnapshot } from "@/lib/evolution/store";
@@ -32,7 +33,9 @@ export function createReflectionReadState(): ReflectionReadState {
     scope, rawRecords, hasReadEvidence: () => read,
     recordRound(sliceId, raw) {
       rawRecords.set(sliceId, raw);
-      scope.recordEvidence(`records/${sliceId}`, { revision: caseStorageRevision(raw), coverage: "full" });
+      if (parseTurns(raw).turns.some((turn) => conversationRole(turn.role) && turn.content.trim())) {
+        scope.recordEvidence(`records/${sliceId}`, { revision: caseStorageRevision(raw), coverage: "full" });
+      }
     },
   };
 }
@@ -47,8 +50,8 @@ export function requireReadRawEvidence(state: ReflectionReadState, refs: string[
     const raw = state.rawRecords.get(scenario);
     if (raw === undefined) return `readRound ${scenario} before citing it`;
     const turnId = normalized.slice(scenario.length + 1);
-    if (turnId && !parseTurns(raw).turns.some((turn) => turn.turnId === turnId)) {
-      return `record ${scenario} does not contain turn ${turnId}`;
+    if (!parseTurns(raw).turns.some((turn) => (!turnId || turn.turnId === turnId) && conversationRole(turn.role) && turn.content.trim())) {
+      return `record ${scenario} does not contain unambiguous conversation evidence${turnId ? ` for turn ${turnId}` : ""}`;
     }
   }
   return null;

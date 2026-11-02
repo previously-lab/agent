@@ -444,7 +444,7 @@ export function DeskField({
         passage: {
           text,
           ...(turn?.turnId ? { turnId: turn.turnId } : {}),
-          ...(turn ? { role: turn.role } : {}),
+          ...(turn?.role === "user" || turn?.role === "assistant" ? { role: turn.role } : {}),
         },
       });
     };

@@ -8,6 +8,8 @@ import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
 import type { UIMessage } from "@/lib/chat/protocol";
 import { ChatInput } from "./chat-input";
+import { messageImageAttachments, stagedImageReferences } from "@/lib/chat/image-attachment-message";
+import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { ComposerHost } from "./composer-host";
 import { NativePersonaProvider, useNativeSourceScope } from "./native-source-scope";
 import { DocumentContextPersonaSync, useDocumentContext } from "./document-context-provider";
@@ -632,14 +634,17 @@ function Inner({
       const view = getView?.();
       const lastUser = [...workingMessages].reverse().find((message) => message.role === "user");
       const documentContext = documentContextFromMetadata(lastUser?.metadata);
+      const stagedAttachments = stagedImageReferences(messageImageAttachments(lastUser?.metadata));
       return {
         messages: messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         locale,
+        persona,
         loadedSliceIds: timelineSlices.map((slice) => slice.slice_id),
         ...(view ? { view } : {}),
         ...screenContextRequestField(() => screen),
         ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
+        ...(stagedAttachments.length ? { stagedAttachments } : {}),
         ...(burstIdRef.current ? { burstId: burstIdRef.current } : {}),
         ...(regenerate ? { regenerate: true } : {}),
       };
@@ -689,8 +694,8 @@ function Inner({
         additions.push({
           id: lane.laneId,
           role: "user",
-          metadata: createDocumentContextMetadata(parallelDocumentContextsRef.current.get(lane.laneId) ?? []),
-          parts: [{ type: "text" as const, text: lane.userText }],
+          metadata: lane.userMessage?.metadata ?? createDocumentContextMetadata(parallelDocumentContextsRef.current.get(lane.laneId) ?? []),
+          parts: lane.userMessage?.parts ?? [{ type: "text" as const, text: lane.userText }],
         });
       }
       if (lane.text) {
@@ -931,6 +936,7 @@ function Inner({
               : undefined,
           provisionalTurnId: laneTurn?.provisionalTurnId,
           userText: lane.userText,
+          userMessage: lane.userMessage,
           summary: lane.summary,
           collapsed: i < parallelLanes.length - 1,
           text: lane.laneId === "main" ? mainText : lane.text,
@@ -1057,8 +1063,10 @@ function Inner({
     withStream((api) => api.scrollToBottom());
   }, [withStream]);
 
-  const handleSubmit = async (message: string, images: File[]) => {
+  const handleSubmit = async (message: string, images: File[], attachments: readonly ImageAttachmentSnapshot[] = [], messageId?: string) => {
     const documentContext = getSnapshot();
+    const metadata = { ...createDocumentContextMetadata(documentContext), ...(attachments.length ? { attachments } : {}) };
+    const stagedAttachments = stagedImageReferences(attachments);
     const screen = captureScreenContext(getScreenContext);
     // Sending snaps back to the present: the jump target is cleared and the
     // stream follows the new turn to the bottom.
@@ -1100,12 +1108,12 @@ function Inner({
         ...fileParts,
         ...(message ? [{ type: "text" as const, text: message }] : []),
       ];
-      const clientId = mintTurnId();
+      const clientId = messageId ?? mintTurnId();
       const userMsg: UIMessage = {
         id: clientId,
         role: "user",
         parts,
-        metadata: createDocumentContextMetadata(documentContext),
+        metadata,
       };
       parallelDocumentContextsRef.current.set(clientId, documentContext);
       // Seat the collapsed main lane first (the in-flight answer folds into a
@@ -1116,7 +1124,7 @@ function Inner({
           ? []
           : ([{ laneId: "main", userText: "", text: "", settled: false }] as ParallelLane[])),
         ...prev,
-        { laneId: clientId, userText: message, text: "", settled: false },
+        { laneId: clientId, userText: message, userMessage: userMsg, text: "", settled: false },
       ]);
       const view = getView?.();
       try {
@@ -1132,18 +1140,20 @@ function Inner({
                 ? Intl.DateTimeFormat().resolvedOptions().timeZone
                 : "UTC",
             locale,
+            persona,
             loadedSliceIds: timelineSlices.map((s) => s.slice_id),
             ...(view ? { view } : {}),
             ...screenContextRequestField(() => screen),
             ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
+            ...(stagedAttachments.length ? { stagedAttachments } : {}),
             ...(burstId ? { burstId } : {}),
           }),
         });
-        clearReferences(documentContext);
         const runId = res.headers.get("x-workflow-run-id");
         if (!res.ok || !runId) {
           throw new Error(`parallel send HTTP ${res.status}`);
         }
+        clearReferences(documentContext);
         rememberTurnRun(runId);
         // The lane reads via the reconnect route — this response's body is
         // only the first attachment onto the same durable stream.
@@ -1154,6 +1164,7 @@ function Inner({
         console.error("[chat] parallel send failed:", err);
         setParallelLanes((prev) => prev.filter((l) => l.laneId !== clientId));
         toast.error(t("parallel.sendFailed"));
+        throw err;
       }
       requestAnimationFrame(scrollToBottom);
       return;
@@ -1174,7 +1185,9 @@ function Inner({
       ...fileParts,
       ...(message ? [{ type: "text" as const, text: message }] : []),
     ];
-    sendMessage({ role: "user", parts, metadata: createDocumentContextMetadata(documentContext) }, screen);
+    await new Promise<void>((resolve, reject) => {
+      void sendMessage({ id: messageId, role: "user", parts, metadata }, screen, { accepted: resolve, rejected: reject });
+    });
     clearReferences(documentContext);
     requestAnimationFrame(scrollToBottom);
     // v0.7b: self-evolution runs INLINE inside housekeeping (the turn's stream

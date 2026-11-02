@@ -33,9 +33,9 @@
  */
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
+import { RECORD_ATTRIBUTION_RULE, renderAttributedTurns } from "../record-attribution";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
-import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { EmotionalTone, Turn } from "@/lib/episodic/types";
 import type { EmotionalSignal } from "@/lib/turn-priming";
@@ -193,10 +193,7 @@ const analyzeSchema = z.object({
 function compressSliceTurns(turns: Turn[]): string {
   if (turns.length === 0) return "(empty slice)";
   const pick = turns.length <= 11 ? turns : [turns[0], ...turns.slice(-10)];
-  const body = pick
-    .map((t) => `${t.role}: ${projectNativeReplySemantics(t.content, t.role).slice(0, 300)}`)
-    .join("\n");
-  return body.length > 6000 ? body.slice(-6000) : body;
+  return renderAttributedTurns(pick, 300);
 }
 
 /**
@@ -205,6 +202,8 @@ function compressSliceTurns(turns: Turn[]): string {
  * content (message, closing slice) goes into the user prompt.
  */
 const ANALYZER_SYSTEM = buildSubAgentSystem(`You are the memory analyzer for a personal AI platform. One pass, four tasks (Task 4 ONLY when the user message includes a closing slice). Keep every field short — this is metadata, not prose.
+
+${RECORD_ATTRIBUTION_RULE}
 
 ## Task 1 — Classify the user's intent
 
@@ -252,7 +251,7 @@ ${compressSliceTurns(input.closingSlice.turns)}
 Return closed_marking per your Task 4 instructions.`
     : "";
 
-  return `Message: "${input.userMessage.slice(0, 1000)}"${closingSection}`;
+  return `Current user message (JSON string): ${JSON.stringify(input.userMessage.slice(0, 1000))}${closingSection}`;
 }
 
 const EMPTY_BASE: TurnAnalysis = {

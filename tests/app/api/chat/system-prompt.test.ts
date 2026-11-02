@@ -248,15 +248,18 @@ describe("the field/reflection charter (v0.30)", () => {
   });
 
   it("teaches the write-window lifecycle, not the retired closed/draft one (v0.21 §12)", () => {
-    // The header is opened + a mechanical updated stamp the model never touches.
-    expect(CHARTER_MD).toContain("`updated`, a mechanical stamp");
+    // Edit timestamps remain mechanical; only actual body edits renew the window.
+    expect(CHARTER_MD).toContain("mechanical edit timestamps");
+    expect(CHARTER_MD).toContain("You never set these mechanical stamps yourself");
+    expect(CHARTER_MD).toContain("`body_updated` tracks actual body edits");
     // The window decides rewriting: whole-body rewrites only while it is open.
     expect(CHARTER_MD).toContain("**write window**");
     expect(CHARTER_MD).toContain("each body edit within 30 minutes of the last");
-    expect(CHARTER_MD).toContain("without reopening the body");
+    expect(CHARTER_MD).toContain("after it closes, preserve it");
     expect(CHARTER_MD).toContain("the body may be rewritten whole");
-    // Past the window: dated tail lines / new pieces / a pointer at a new document.
-    expect(CHARTER_MD).toContain("open a NEW document and leave one line in the original pointing at it");
+    // Past the window, preserve history and choose corrections or focused pieces.
+    expect(CHARTER_MD).toContain("short dated corrections or focused pieces");
+    expect(CHARTER_MD).toContain("**a short tail** for a correction or navigation");
     // The retired lifecycle is gone.
     expect(CHARTER_MD).not.toContain("an optional `closed`");
     expect(CHARTER_MD).not.toContain("may be rewritten freely");

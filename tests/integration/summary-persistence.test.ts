@@ -58,6 +58,53 @@ async function recordFiles(): Promise<Array<{ file: string; raw: string }>> {
 }
 
 describe("real summary persistence and Git ledger", { timeout: 30_000 }, () => {
+  it("persists image-only submission metadata once at its final slice and keeps draft preview readable", async () => {
+    const { persistTurnSummary } = await import("@/app/api/chat/steps");
+    const service = await import("@/lib/tools/staged-images");
+    const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64");
+    const image = await service.stageImage({ data: bytes, name: "fictional.png" });
+    const reservation = await service.reserveStagedImages([{ assetId: image.assetId, ordinal: 2 }], "message-image");
+    await reservation.confirm();
+    const input = payload("image1");
+    input.own.userText = ""; input.own.clientMessageId = "message-image"; input.own.imageAttachments = reservation.attachments;
+    const first = await persistTurnSummary(input); expect(first.kind).toBe("committed");
+    const second = await persistTurnSummary(input); expect(second.kind).toBe("deduped");
+    const files = await recordFiles(); expect(files).toHaveLength(1);
+    const { parseSlice } = await import("@/lib/episodic/manager");
+    const slice = parseSlice(files[0].raw);
+    const turn = slice.turns.find((entry) => entry.role === "user" && entry.clientMessageId === "message-image");
+    expect(turn?.content).toBe(""); expect(turn?.attachments?.[0]).toMatchObject({ assetId: image.assetId, ordinal: 2 });
+    expect(turn?.attachments?.[0].ref).toContain(slice.slice_id.replace(/-/g, "/"));
+    expect((await service.readStagedImage(image.assetId)).data).toEqual(bytes);
+    const binaryFiles = (await git.listFiles({ fs, dir: process.env.MEMORY_ROOT! })).filter((file) => file.includes("/attachments/"));
+    expect(binaryFiles).toHaveLength(1);
+  });
+  it("retries a local core write failure after image bytes landed without duplicating evidence", async () => {
+    const { persistTurnSummary } = await import("@/app/api/chat/steps");
+    const { legacyMessageImages } = await import("@/lib/tools/chat-image-input");
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=";
+    const part = { type: "file" as const, mediaType: "image/png", url: `data:image/png;base64,${png}`, filename: "same.png" };
+    const input = payload("retryimage");
+    input.own.imageAttachments = legacyMessageImages([{ id: "m", role: "user", parts: [part, part] }]);
+    const local = await import("@/lib/tools/local-fs"); const write = local.writeFileLocal;
+    let interrupted = false;
+    const spy = vi.spyOn(local, "writeFileLocal").mockImplementation(async (file, content) => {
+      if (!interrupted && file.endsWith("/core.md")) {
+        interrupted = true;
+        const dir = path.join(process.env.MEMORY_ROOT!, file.replace(/^memory\//, "").replace(/core\.md$/, "attachments"));
+        expect(fs.readdirSync(dir)).toHaveLength(2);
+        throw new Error("fixture core disk write interrupted");
+      }
+      return write(file, content);
+    });
+    try {
+      const result = await persistTurnSummary(input); expect(result.kind).toBe("committed"); expect(interrupted).toBe(true);
+      const files = await recordFiles(); expect(files).toHaveLength(1);
+      const { parseSlice } = await import("@/lib/episodic/manager");
+      expect(parseSlice(files[0].raw).turns.find((turn) => turn.role === "user")?.attachments).toHaveLength(2);
+      expect((await git.listFiles({ fs, dir: process.env.MEMORY_ROOT! })).filter((file) => file.includes("/attachments/"))).toHaveLength(2);
+    } finally { spy.mockRestore(); }
+  });
   it("persists a fresh user-only legacy record before returning a receipt", async () => {
     const { persistTurnSummary } = await import("@/app/api/chat/steps");
     const input = payload("useronly");
@@ -108,6 +155,26 @@ describe("real summary persistence and Git ledger", { timeout: 30_000 }, () => {
     expect(cores.reduce((n, { raw }) => n + (raw.match(/## Turn first1 .*\(agent\)/g)?.length ?? 0), 0)).toBe(1);
     const log = await git.log({ fs, dir: process.env.MEMORY_ROOT! });
     expect(log.filter((c) => c.commit.message.startsWith("Summary"))).toHaveLength(2);
+  });
+
+  it("legacy regeneration without a client ID reuses the saved user turn", async () => {
+    const { persistTurnSummary } = await import("@/app/api/chat/steps");
+    const original = payload("legacy1", { slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 40 } });
+    delete original.own.clientMessageId;
+    const first = await persistTurnSummary(original);
+    const sliceId = first.receipt!.records[0]!.sliceId;
+    for (const turnId of ["legacyregen1", "legacyregen2"]) {
+      const result = await persistTurnSummary({ ...original, sliceId, own: { ...original.own, sliceId, turnId, regenerate: true, replyText: `Answer ${turnId}` } });
+      expect(result.kind).toBe("committed");
+    }
+    const cores = await recordFiles();
+    expect(cores).toHaveLength(1);
+    const { parseSlice } = await import("@/lib/episodic/manager");
+    const turns = parseSlice(cores[0].raw).turns;
+    expect(turns.filter((turn) => turn.role === "user")).toEqual([expect.objectContaining({ turnId: "legacy1", content: original.own.userText })]);
+    expect(turns.find((turn) => turn.role === "user")?.clientMessageId).toBeUndefined();
+    expect(turns.filter((turn) => turn.role === "agent")).toHaveLength(3);
+    expect(turns.find((turn) => turn.turnId === "legacyregen2")?.replyTo).toBe("legacy1");
   });
 
   it("multiple regenerated answers share one user identity; a normal same-text message is distinct", async () => {

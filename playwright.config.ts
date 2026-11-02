@@ -4,6 +4,8 @@ import {
   E2E_BASE_URL,
   E2E_HOME,
   E2E_MEMORY_ROOT,
+  E2E_TASKS_ROOT,
+  E2E_SESSIONS_ROOT,
   E2E_PORT,
   E2E_WORKFLOW_ROOT,
 } from "./tests/e2e/env";
@@ -57,6 +59,8 @@ export default defineConfig({
             PREVIOUSLY_MODE: "client",
             PREVIOUSLY_HOME: E2E_HOME,
             MEMORY_ROOT: E2E_MEMORY_ROOT,
+            TASKS_ROOT: E2E_TASKS_ROOT,
+            SESSIONS_ROOT: E2E_SESSIONS_ROOT,
             WORKFLOW_LOCAL_DATA_DIR: E2E_WORKFLOW_ROOT,
             // withWorkflow otherwise overwrites the data dir with .next/workflow-data.
             WORKFLOW_TARGET_WORLD: "local",

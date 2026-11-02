@@ -22,11 +22,12 @@ vi.mock("@/lib/deepseek/generate", () => ({
 }));
 
 import { POST } from "@/app/api/chat/route";
+import { convertToModelMessages } from "@/lib/chat/server-stream";
 
 function createRequest(body: unknown): Request {
   return new Request("http://localhost:3000/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Host: "localhost:3000" },
     body: JSON.stringify(body),
   });
 }
@@ -59,7 +60,7 @@ describe("POST /api/chat validation", () => {
   it("rejects invalid JSON body", async () => {
     const req = new Request("http://localhost:3000/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Host: "localhost:3000" },
       body: "not json",
     });
     const res = await POST(req);
@@ -69,9 +70,29 @@ describe("POST /api/chat validation", () => {
 });
 
 describe("POST /api/chat durable turn", () => {
+  it("normalizes the legacy content-only request before real model-message conversion", async () => {
+    const response = await POST(createRequest({ messages: [{ role: "user", content: "legacy hi" }] }));
+    expect(response.status).toBe(200);
+    const input = mockStartTurn.mock.calls.at(-1)![0];
+    expect(input.originalUserText).toBe("legacy hi");
+    expect(input.messages[0].id).toBeUndefined();
+    expect(await convertToModelMessages(input.messages)).toEqual([{ role: "user", content: [{ type: "text", text: "legacy hi" }] }]);
+  });
+  it("does not invent a message ID for a legacy request claiming staged images", async () => {
+    vi.stubEnv("STORAGE", "local");
+    try {
+      const response = await POST(createRequest({
+        messages: [{ role: "user", content: "legacy hi" }],
+        stagedAttachments: [{ assetId: `img_${"a".repeat(32)}`, ordinal: 2 }],
+      }));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "message_identity" });
+      expect(mockStartTurn).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("returns 200 streaming with the workflow run-id header", async () => {
     const res = await POST(
-      createRequest({ messages: [{ role: "user", content: "hello" }] })
+      createRequest({ messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hello" }] }] })
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/event-stream");
@@ -82,7 +103,7 @@ describe("POST /api/chat durable turn", () => {
   it("forwards model and timezone to startTurn (thinking/effort are pinned server-side)", async () => {
     await POST(
       createRequest({
-        messages: [{ role: "user", content: "hi" }],
+        messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hi" }] }],
         model: "deepseek-v4-pro",
         // thinking/effort in the body are deliberately ignored — startTurn
         // pins thinking ON at low effort regardless of the client.
@@ -102,7 +123,7 @@ describe("POST /api/chat durable turn", () => {
 
   it("omits optional overrides when not provided (config defaults apply downstream)", async () => {
     await POST(
-      createRequest({ messages: [{ role: "user", content: "hi" }] })
+      createRequest({ messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hi" }] }] })
     );
     expect(mockStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -115,7 +136,7 @@ describe("POST /api/chat durable turn", () => {
   it("forwards an optional machineContext block to startTurn (v0.11 §13)", async () => {
     await POST(
       createRequest({
-        messages: [{ role: "user", content: "hi" }],
+        messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hi" }] }],
         machineContext: "[visit-log]\n池厅(09:41)\n[/visit-log]",
       })
     );
@@ -129,13 +150,13 @@ describe("POST /api/chat durable turn", () => {
     mockStartTurn.mockImplementation(() =>
       Promise.resolve({ runId: "wrun_test123", readable: new ReadableStream() })
     );
-    await POST(createRequest({ messages: [{ role: "user", content: "hi" }] }));
+    await POST(createRequest({ messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hi" }] }] }));
     let call = mockStartTurn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.machineContext).toBeUndefined();
 
     await POST(
       createRequest({
-        messages: [{ role: "user", content: "hi" }],
+        messages: [{ id: "user-fixture", role: "user", parts: [{ type: "text", text: "hi" }] }],
         machineContext: 42,
       })
     );

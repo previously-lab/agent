@@ -490,6 +490,19 @@ describe("getSliceContent", () => {
     expect(content!.totalTurns).toBe(9);
   });
 
+  it("preserves immutable attachment snapshots and neutral source attribution in framed and full reads", async () => {
+    const turns = seedRead(2);
+    const attachments: NonNullable<Turn["attachments"]> = [{ version: 1, assetId: `img_${"a".repeat(32)}`, ref: "records/2026/08/11/1000/image.png", name: "image.png", mediaType: "image/png", ordinal: 2 }];
+    turns[0] = { ...turns[0], role: "unknown", sourceRole: "user", attribution: "ambiguous", attachments };
+    const framed = await getSliceContent("2026-08-11-1000");
+    const full = await getSliceContent("2026-08-11-1000", undefined, { full: true });
+    for (const result of [framed, full]) {
+      expect(result!.turns[0]).toMatchObject({ role: "unknown", sourceRole: "user", attribution: "ambiguous" });
+      expect(result!.turns[0].attachments).toBe(attachments);
+      expect(result!.turns[0].attachments![0]).toBe(attachments[0]);
+    }
+  });
+
   it("projects native agent replies only in framed excerpts and preserves full reads", async () => {
     const turns = seedRead(2);
     const user = "user native\n```html live\n<button>user example</button>\n```";

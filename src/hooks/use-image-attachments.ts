@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useCallback, type DragEvent, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { parseImageAttachments } from "@/lib/chat/image-attachments";
+import { createImageAttachmentDraft } from "@/lib/chat/image-attachment-draft";
 
-const MAX_SIZE = 10 * 1024 * 1024; // 10MB
 /**
  * Longest-side cap before upload. Vision APIs bill images by dimensions
  * (DeepSeek converts pixels to input tokens), so a 24MP phone photo costs the
@@ -19,11 +20,23 @@ const JPEG_QUALITY = 0.85;
  */
 async function compressImage(file: File): Promise<File> {
   try {
+    // Keep animated formats intact. PNG stays PNG so transparent pixels never
+    // become a JPEG's opaque black background; APNG must keep its frames too.
+    if (file.type !== "image/jpeg" && file.type !== "image/png") return file;
+    if (file.type === "image/png") {
+      const bytes = new DataView(await file.arrayBuffer());
+      for (let offset = 8; offset + 12 <= bytes.byteLength;) {
+        const kind = bytes.getUint32(offset + 4);
+        if (kind === 0x6163544c) return file; // acTL, before the first IDAT
+        if (kind === 0x49444154) break;
+        offset += bytes.getUint32(offset) + 12;
+      }
+    }
     const bitmap = await createImageBitmap(file);
     const { width, height } = bitmap;
     const scale = Math.min(1, MAX_DIMENSION / Math.max(width, height));
     // Already small enough AND already a web-efficient format — send as-is.
-    if (scale >= 1 && (file.type === "image/jpeg" || file.type === "image/webp")) {
+    if (scale >= 1) {
       bitmap.close();
       return file;
     }
@@ -38,56 +51,40 @@ async function compressImage(file: File): Promise<File> {
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY),
+      canvas.toBlob(resolve, file.type, JPEG_QUALITY),
     );
     if (!blob || blob.size >= file.size) return file;
-    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {
-      type: "image/jpeg",
+    return new File([blob], file.name, {
+      type: file.type,
     });
   } catch {
     return file;
   }
 }
 
-export function useImageAttachments() {
-  const [images, setImages] = useState<File[]>([]);
-
-  const addFiles = useCallback((files: FileList | File[]) => {
-    const valid = Array.from(files).filter((f) => {
-      if (f.size > MAX_SIZE) return false;
-      return f.type.startsWith("image/");
-    });
-    if (valid.length === 0) return;
-    void Promise.all(valid.map(compressImage)).then((compressed) =>
-      setImages((prev) => [...prev, ...compressed]),
-    );
-  }, []);
-
-  const removeImage = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  }, []);
-
-  const clearImages = useCallback(() => setImages([]), []);
-
-  const handlePaste = useCallback(
-    (e: ClipboardEvent) => {
-      const items = e.clipboardData?.files;
-      if (items?.length) addFiles(items);
+export function useImageAttachments({ scope, persona }: { scope: string; persona: string }) {
+  const { draft } = useMemo(() => ({ scope, draft: createImageAttachmentDraft({
+    prepare: compressImage,
+    mintId: () => crypto.randomUUID(),
+    upload: async (file, signal) => {
+      const body = new FormData();
+      body.set("file", file);
+      body.set("persona", persona);
+      const response = await fetch("/api/attachments/upload", { method: "POST", body, signal });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(typeof result?.error === "string" ? result.error.slice(0, 500) : "upload-failed");
+      const attachment = parseImageAttachments([result?.attachment])[0];
+      if (!attachment) throw new Error("upload-failed");
+      return attachment;
     },
-    [addFiles]
-  );
-
-  const handleDrop = useCallback(
-    (e: DragEvent) => {
-      e.preventDefault();
-      if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
+    cancel: async (assetId) => {
+      await fetch(`/api/attachments/upload/${encodeURIComponent(assetId)}/cancel?persona=${encodeURIComponent(persona)}`, {
+        method: "POST",
+      });
     },
-    [addFiles]
-  );
-
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-  }, []);
-
-  return { images, addFiles, removeImage, clearImages, handlePaste, handleDrop, handleDragOver };
+  }) }), [scope, persona]);
+  const state = useSyncExternalStore(draft.subscribe, draft.getSnapshot, draft.getSnapshot);
+  useEffect(() => () => draft.dispose(), [draft]);
+  return { ...state, addFiles: draft.add, removeImage: draft.remove, retryImage: draft.retry,
+    undoRemove: draft.undo, acceptImages: draft.accept };
 }

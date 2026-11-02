@@ -41,7 +41,9 @@ import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
+import { conversationRole, RECORD_ATTRIBUTION_RULE } from "../record-attribution";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { caseOpeningBody, casePieceCatalog, casePieceNavigation, renderCasePieceCatalog } from "@/lib/docs/organization";
 import type { ModelConfig } from "@/lib/models/registry";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
@@ -72,6 +74,7 @@ import {
   fsReadFile,
   fsWriteFile,
   fsListFiles,
+  flushBatch,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
@@ -82,6 +85,7 @@ import {
   parseSliceId,
   parseTurns,
   reassembleSlice,
+  renderedTurnBody,
 } from "@/lib/episodic/turn-parser";
 import {
   caseCurrentPath,
@@ -120,19 +124,24 @@ export function buildSliceExcerpt(slice: {
   slice_id?: string;
   focus?: string;
   summary?: string;
-  turns: Array<{ role: string; content: string }>;
+  turns: Array<{ role: string; content: string; turnId?: string; timestamp?: string }>;
 }): SliceExcerpt {
   const totalTurns = slice.turns.length;
   const firstIncluded = Math.max(0, totalTurns - 8);
   let cappedTurns = 0;
   const turnsExcerpt = slice.turns
     .slice(-8)
-    .map((t) => {
+    .map((t, index) => {
       const projected = projectNativeReplySemantics(t.content, t.role)
         .replace(/\s+/g, " ")
         .trim();
       if (projected.length > 300) cappedTurns += 1;
-      return `${t.role === "user" ? "user" : "agent"}: ${projected.slice(0, 300)}`;
+      return JSON.stringify({
+        ref: slice.slice_id ? `records/${slice.slice_id}` : undefined,
+        turnIndex: firstIncluded + index, turnId: t.turnId, timestamp: t.timestamp,
+        role: conversationRole(t.role) ?? t.role,
+        content: projected.slice(0, 300), contentTruncated: projected.length > 300,
+      });
     })
     .join("\n");
   const coverage = totalTurns === 0
@@ -150,6 +159,7 @@ export function buildSliceExcerpt(slice: {
     turnsExcerpt,
     notice:
       `Compact excerpt (${coverage}; ${completeness}; ${capNotice}). ` +
+      `Focus/summary are derived archive metadata, not user speech. ${RECORD_ATTRIBUTION_RULE} ` +
       `Native generated sections are omission-marked in this derived-memory view only; the raw record is unchanged. ` +
       `Use readSlice${slice.slice_id ? ` for ${slice.slice_id}` : ""} with zero-based turn ranges and cursor continuation for complete semantic evidence.`,
     totalTurns,
@@ -179,6 +189,8 @@ export interface SliceEvidencePage {
   totalTurns: number;
   revision: string;
   containsTurnContent: boolean;
+  /** Page-local source ranges remain available even when the header was on a prior page. */
+  attribution: Array<{ role: string; turnId?: string; turnIndex: number; timestamp: string; start: number; end: number }>;
 }
 
 export const SLICE_EVIDENCE_DEFAULT_PAGE_CHARS = 12_000;
@@ -198,7 +210,7 @@ export function readSliceEvidencePage(
     ...turn,
     content: projectNativeReplySemantics(
       turn.content,
-      /\((\w+)\)/.exec(turn.header)?.[1] ?? "",
+      turn.role,
     ),
   }));
   const selected = input.range ? applyRange(projected, input.range) : projected;
@@ -223,11 +235,19 @@ export function readSliceEvidencePage(
   }
   let turnOffset = frontmatter.length;
   let containsTurnContent = false;
+  const attribution: SliceEvidencePage["attribution"] = [];
   for (const turn of selected) {
     const contentStart = turnOffset + 2 + turn.header.length + 1;
-    const contentEnd = contentStart + turn.content.length;
-    if (selectedRaw.slice(Math.max(start, contentStart), Math.min(end, contentEnd)).trim() &&
-        Math.max(start, contentStart) < Math.min(end, contentEnd)) containsTurnContent = true;
+    const contentEnd = contentStart + renderedTurnBody(turn).length;
+    const from = Math.max(start, contentStart);
+    const to = Math.min(end, contentEnd);
+    if (from < to) {
+      if (selectedRaw.slice(from, to).trim()) containsTurnContent = true;
+      attribution.push({
+        role: conversationRole(turn.role) ?? turn.role, turnId: turn.turnId,
+        turnIndex: turn.index, timestamp: turn.timestamp, start: from - start, end: to - start,
+      });
+    }
     turnOffset = contentEnd;
   }
   return {
@@ -240,6 +260,7 @@ export function readSliceEvidencePage(
     totalTurns: turns.length,
     revision,
     containsTurnContent,
+    attribution,
   };
 }
 
@@ -311,6 +332,8 @@ async function executeSliceEvidenceRead(
       `Slice ${sliceId} — original semantic evidence (native generated sections omission-marked; stored raw record unchanged).\n` +
       `Selected ${page.selectedTurns} of ${page.totalTurns} turns. Page characters [${page.start}, ${page.end}) of ${page.totalChars}.\n` +
       `Source revision: ${page.revision}.\n` +
+      `Source ref: records/${sliceId}. Page-local speech ranges: ${JSON.stringify(page.attribution)}. Text outside these ranges is archive metadata/header material, not speech.\n` +
+      `${RECORD_ATTRIBUTION_RULE}\n` +
       `${continuation}.\n\n${page.content}`
     );
   } catch (error) {
@@ -631,6 +654,18 @@ export async function readCaseIndexForScope(input: {
   return read;
 }
 
+/** Expose discovery separately from the receipts kept by the writer. */
+function renderWriterCaseRead(read: CaseIndexRead, scope?: CaseReadScope): string {
+  const entries = casePieceCatalog({ category: read.category, caseName: read.caseName, paths: read.pieceInventory ?? null });
+  for (const entry of entries ?? []) {
+    entry.read = scope?.getEvidenceReads(entry.ref).some((proof) => proof.coverage === "full") === true;
+  }
+  const warnings = read.currentContent === null ? [] : caseCurrentFreshnessWarnings(
+    parseCaseCurrent(read.currentContent), currentReadBasis(read, scope),
+  );
+  return `${renderCasePieceCatalog(entries)}\n\n${renderCaseWithCurrent(read.content, read.currentContent, { freshnessWarnings: warnings })}`;
+}
+
 /** Tree-backed on GitHub; no per-piece content fetches. */
 async function readCasePieceInventory(category: CaseCategory, caseName: string, batch?: WriteBatch): Promise<string[] | null> {
   const directory = caseIndexPath(category, caseName).replace(/\/index\.md$/, "");
@@ -875,14 +910,27 @@ export async function applyCaseWriteIntent(
             existing.body === doc.body &&
             existing.preserved === doc.preserved &&
             JSON.stringify(existing.tail) === JSON.stringify(doc.tail);
+          // Reuse an identical historical product without retrofitting its
+          // old navigation or claiming the piece was newly written.
           if (same) return { path: piecePath, created: false, noop: true };
-          throw new WriteRefusal(
+          if (!same) throw new WriteRefusal(
             "already_exists",
             `piece ${piecePath} already exists with different content; it was not overwritten. ` +
             "Choose a new piece title or read the existing piece and cite it in a dated tail supplement.",
           );
         }
-        await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), batch);
+        const navigation = casePieceNavigation({ category, caseName, date, title: intent.title });
+        const linked = current.body.includes(navigation.line) || current.tail.some((tail) => tail.text.includes(navigation.line));
+        // Stage this pair before merging into the caller's existing batch. A
+        // failed second queue must not leave a piece without its navigation.
+        const pending: WriteBatch = { entries: new Map(), baseHeadSha: batch?.baseHeadSha };
+        await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), pending);
+        if (!linked) await fsWriteFile(indexPath, serializeCaseDoc(appendTail(current, { date, text: navigation.line })), pending);
+        if (batch) {
+          for (const [path, text] of pending.entries) batch.entries.set(path, text);
+        } else {
+          await flushBatch(pending, `addPiece ${identity}`);
+        }
         return { path: piecePath, created: true };
       }
       case "reviseUnderstanding": {
@@ -998,7 +1046,7 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
   return tool({
     description:
       "Read a case by 'category/caseName' (full index.md) or 'category/caseName/pieceTitle'. " +
-      "An existing _current.md appears first; the unchanged full historical index follows under its own label. " +
+      "Lists exact piece refs with this run's read status, then _current.md and the unchanged full historical index. A listed piece is not a read receipt; read relevant pieces before reusing them. " +
       "Only a successful full new-root index read is an update receipt; dead links and read failures are not.",
     inputSchema: z.object({ ref: z.string() }),
     execute: async ({ ref }: { ref: string }) => {
@@ -1013,11 +1061,7 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
               batch,
               scope,
             });
-            const warnings = read.currentContent === null ? [] : caseCurrentFreshnessWarnings(
-              parseCaseCurrent(read.currentContent), currentReadBasis(read, scope),
-            );
-            if (read.pieceInventory === null) warnings.push("case piece inventory is unavailable; freshness cannot be verified");
-            return renderCaseWithCurrent(read.content, read.currentContent, { freshnessWarnings: warnings });
+            return renderWriterCaseRead(read, scope);
           }
           const content = await fsReadFile(path, batch);
           if (parsed.kind === "case") {
@@ -1132,10 +1176,10 @@ A conversation slice just closed. You have a compact excerpt plus readSlice for 
 ## Task
 
 Per case you judge touched:
-- A new durable home → open (body = the historical index.md body).
+- A new durable home → open (body = its opening overview; a focused piece gets its own distinct body).
 - An existing in-window index → updateIndex with the whole new historical body.
-- A settled index → appendTail or addPiece; neither reopens the historical body for rewriting.
-- Revise the independent current view → reviseUnderstanding with currentUnderstanding { body, evidence }. You may also attach currentUnderstanding to another action or skip. This writes free-prose _current.md, never the frozen index. Its as-of date is mechanical, and the previous current view becomes dated history.
+- A settled index → appendTail for a short correction/link, or addPiece for a question worth revisiting independently. Read relevant existing pieces before adding another. A piece and its index navigation land together; neither reopens historical prose.
+- Revise the independent current view → reviseUnderstanding with currentUnderstanding { body, evidence }. You may also attach currentUnderstanding to another action or skip. This writes free-prose _current.md, never the frozen index. Its as-of date is mechanical. Changed prose preserves its previous view; metadata-only refreshes do not duplicate history.
 - Nothing worth writing → skip (an empty run is legal).
 
 ## Rules
@@ -1323,8 +1367,15 @@ const scribeSchema = z.object({
     .array(
       z.object({
         id: z.string().describe("The marker id this entry answers."),
-        /** The case's new full body (open/updateIndex) or ONE dated tail line. */
-        body: z.string().describe("The historical prose, grounded in actual evidence and the marker note."),
+        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "reviseUnderstanding", "covered", "skip"]).optional().describe(
+          "Choose by reading purpose. covered finishes a marker using a fully read coveredRef; skip leaves it pending. Legacy body-only reports cannot append to a settled case.",
+        ),
+        body: z.string().optional().describe("Authored prose for open, rewriteIndex or addPiece; never a compressed tail essay."),
+        line: z.string().optional().describe("appendTail: one short correction or navigation line."),
+        title: z.string().optional().describe("addPiece: the focused reading question, without a date prefix."),
+        overviewBody: z.string().optional().describe("addPiece on a NEW case: a distinct opening overview; body belongs only to the piece."),
+        coveredRef: z.string().optional().describe("covered: exact case/piece ref fully read in this run that already covers this marker."),
+        reason: z.string().optional().describe("covered: explain what that read document already covers; skip: explain why no write is warranted now."),
         currentUnderstanding: currentUnderstandingSchema.optional(),
       }),
     )
@@ -1336,23 +1387,30 @@ const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memo
 
 ${MEMORY_IS_GIT_RULE}
 
-You are shown: a compact slice excerpt, and per marker the marker itself plus the full current index.md and any _current.md of its target. Those successful preloads are your case read receipts. readSlice is bound to this slice for any earlier turn, long message, or turning point the excerpt omitted; use ranges and continuation explicitly.
+You are shown: a compact slice excerpt, and per marker the marker itself plus the full current index.md, any _current.md, and an inventory of dated pieces. The successful index preloads are your case read receipts; listed pieces remain UNREAD. Use readCase to inspect relevant pieces before reusing them or adding another. readSlice is bound to this slice for any earlier turn, long message, or turning point the excerpt omitted; use ranges and continuation explicitly.
 
 ## Task
 
-One entry per marker — body is the NEW case's opening historical text, an IN-WINDOW case's whole new historical text, or a SETTLED case's ONE dated supplement. Optionally add currentUnderstanding { body, evidence } to revise only _current.md; the previous current view becomes dated history and the index stays separate.
+One decision per marker, chosen by what a future reader needs:
+- covered: a document actually read already covers it; supply coveredRef and reason. This completes the marker without rewriting the document. A title in the inventory is not coverage.
+- skip: no useful write now; give a reason. This leaves the marker pending, as does omitting it.
+- open / rewriteIndex: a new case's opening prose or a whole in-window revision, in body.
+- appendTail: one short correction or navigation in line, never a multi-paragraph argument.
+- addPiece: a focused document in body with a bare title. If the case is new, supply a distinct overviewBody. The piece and its index navigation land together.
+- reviseUnderstanding: currentUnderstanding { body, evidence }, without duplicating it in a historical tail. This changes only _current.md.
+Other write actions may also carry currentUnderstanding. Pasted source material must go in addPiece, preserving its original line breaks; engineering appends that source after your interpretation. Do not reproduce it in your authored body.
 
 ## Rules
 
 1. Ground facts in the marker, the preloaded case text, and evidence actually returned by readSlice. Do not invent evidence; label interpretation, counterevidence, questions, and unknowns honestly.
-2. currentUnderstanding.evidence may cite only the preloaded target case or records/... read through readSlice in this run. Any category may have a free-prose current view.
+2. currentUnderstanding.evidence may cite only the preloaded target case, pieces actually read through readCase, or records/... read through readSlice in this run. Any category may have a free-prose current view.
 3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping; cite current-view evidence explicitly.
 4. Never contradict shown existing text silently — preserve contrary evidence and label your interpretation.
 5. ${DOC_WRITE_WINDOW_RULE} Tail supplements and current-view revisions never reopen a settled index.
 
 ## Output
 
-Call \`scribeOutput\` with one entry per marker you wrote + a short reasoning note. Writing nothing for a marker leaves it for a later pass.
+Call \`scribeOutput\` with your decisions + a short reasoning note. A verified covered outcome completes a marker without a document write; skipped or refused decisions stay for a later pass.
 
 ${DOC_HOUSE_STYLE}`);
 
@@ -1432,6 +1490,27 @@ export interface ScribePassResult {
   skipped: Array<{ id: string; reason: string }>;
 }
 
+/** Coverage must name a real full read, still at that version when accepted. */
+async function requireCoveredDocument(ref: string, scope: CaseReadScope, batch: WriteBatch): Promise<string> {
+  const parsed = parseCaseRef(ref);
+  const normalized = normalizeEvidenceRef(ref);
+  if (!normalized || !parsed || parsed.kind === "legacy") throw new Error("covered requires a canonical case or piece ref");
+  const proof = scope.getEvidenceReads(normalized).find((entry) => entry.coverage === "full" && entry.path);
+  if (!proof?.path) throw new Error(`covered requires a successful full readCase of ${normalized}; a listed title is not coverage`);
+  const raw = await readOptionalCaseFile(proof.path, batch, true);
+  if (raw === null || caseStorageRevision(raw) !== proof.revision) {
+    throw new Error(`covered refused: ${normalized} changed since it was read; re-read and decide again`);
+  }
+  if (parsed.kind === "case") {
+    const read = requireCaseIndexRead(scope, parsed.category, parsed.caseName);
+    const current = await readOptionalCaseFile(read.currentPath, batch, true);
+    if ((current === null ? null : caseStorageRevision(current)) !== read.currentRevision) {
+      throw new Error(`covered refused: ${normalized}/_current.md changed since it was read`);
+    }
+  }
+  return normalized;
+}
+
 /**
  * The scribe pass: read the slice's agent.md, pick up unprocessed
  * sediment/task markers, write their cases (read-before-write under the
@@ -1439,7 +1518,9 @@ export interface ScribePassResult {
  * into the same agent.md. Never throws.
  */
 export async function runScribePass(input: ScribePassInput): Promise<ScribePassResult> {
-  const { model, sliceId, excerpt, date, batch } = input;
+  const { model, sliceId, excerpt, date, batch: parentBatch } = input;
+  const startingEntries = new Map(parentBatch?.entries);
+  const batch: WriteBatch = { entries: new Map(startingEntries), baseHeadSha: parentBatch?.baseHeadSha };
   const skipped: Array<{ id: string; reason: string }> = [];
   const scope = createCaseReadScope();
 
@@ -1477,7 +1558,7 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
         fresh: true,
       });
       currentText = read.content;
-      displayText = renderCaseWithCurrent(read.content, read.currentContent);
+      displayText = renderWriterCaseRead(read, scope);
     } catch (error) {
       if (!isAbsentReadError(error)) {
         skipped.push({
@@ -1505,6 +1586,7 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
         `${marker.entityKind ? `/${marker.entityKind}` : ""})\n` +
         `title: ${marker.title}\nnote: ${marker.note || "(none)"}` +
         `${marker.dateAnchor ? `\ndateAnchor: ${marker.dateAnchor}` : ""}\n` +
+        `${marker.body?.trim() ? "sourceMaterial: preserved separately; use addPiece or verified covered, never a tail\n" : ""}` +
         `target case: ${category}/${caseName} (${existed ? "exists — full index and current view below" : "to be opened"})`;
       return displayText ? `${head}\n\n${displayText.trim()}` : head;
     })
@@ -1533,6 +1615,7 @@ Report one entry per marker as instructed.`;
     maxSteps: 50,
     tools: {
       readSlice: makeSliceReadTool({ sliceId, batch, scope }),
+      readCase: makeCaseReadTool(batch, scope),
       scribeOutput: tool({
         description: "Report the per-marker case entries.",
         inputSchema: scribeSchema,
@@ -1554,18 +1637,19 @@ Report one entry per marker as instructed.`;
   const byMarker = new Map(targets.map((t) => [t.marker.id, t]));
   const written: string[] = [];
   const recordLines: string[] = [];
+  const accepted = new Set<string>();
 
   for (const entry of result.report.entries) {
     const target = byMarker.get(entry.id);
-    if (!target) {
+    if (!target || accepted.has(entry.id)) {
       skipped.push({ id: entry.id, reason: "report answers an unknown marker" });
       continue;
     }
-    const body = entry.body?.trim();
-    if (!body) {
-      skipped.push({ id: entry.id, reason: "empty entry body" });
+    if (entry.action === "skip") {
+      skipped.push({ id: entry.id, reason: entry.reason?.trim() || "no write warranted now" });
       continue;
     }
+    const body = entry.body?.trim() ?? "";
     const { marker, category, caseName } = target;
     // The task's date anchor is a mechanical fact — it rides the entry
     // whether the prose remembers it or not.
@@ -1577,53 +1661,68 @@ Report one entry per marker as instructed.`;
     // case with the TEXT as the evidence — origin stamped, verbatim. The
     // model's prose frames it above the original.
     const pastedBlock = marker.body?.trim()
-      ? `\n\n—— 原文 ——\n用户于 ${date} 在切片 ${sliceId} 粘贴：\n\n${marker.body.trim()}\n`
+      ? `\n\n—— 原文 ——\n原始材料（${date}，切片 ${sliceId}；归属以原始记录为准）：\n\n${marker.body}\n\n—— 原文结束 ——`
       : "";
     const stamped = stampEvidence(anchorLine + body + pastedBlock, sliceId);
+    const pending: WriteBatch = { entries: new Map(batch.entries), baseHeadSha: batch.baseHeadSha };
+    const entryWritten: string[] = [];
+    let productRef = `${category}/${caseName}`;
     try {
-      let intent: CaseWriteIntent;
-      if (!target.existed) {
-        intent = { action: "open", category, caseName, body: stamped };
+      await ensureCaseBatchBasis(batch);
+      pending.baseHeadSha = batch.baseHeadSha;
+      if (entry.action === "covered") {
+        if (!entry.coveredRef || !entry.reason?.trim()) throw new Error("covered requires coveredRef and a reason grounded in that document");
+        productRef = await requireCoveredDocument(entry.coveredRef, scope, pending);
       } else {
-        const current = parseCaseDoc(target.currentText ?? "", {
-          category,
-          caseName,
-          fileName: "index.md",
-        });
-        intent = isWithinWriteWindow(current.bodyUpdated, Date.now())
-          ? {
-              action: "rewriteIndex",
-              category,
-              caseName,
-              body: stamped,
-              expectedUpdated: current.updated,
+        let action = entry.action;
+        if (!action) {
+          if (!target.existed) action = "open";
+          else if (isWithinWriteWindow(parseCaseDoc(target.currentText ?? "", { category, caseName, fileName: "index.md" }).bodyUpdated, Date.now())) action = "rewriteIndex";
+          else throw new Error("Legacy body-only result cannot append to a settled case. Replan with appendTail + a short line, addPiece + title/body, reviseUnderstanding, or covered + a fully read ref.");
+        }
+        if (pastedBlock && action !== "addPiece") throw new Error("Pasted source material requires addPiece so its wording and line breaks remain intact; provide title and overviewBody for a new case");
+        let intent: CaseWriteIntent | null = null;
+        if (action === "reviseUnderstanding") {
+          if (!entry.currentUnderstanding) throw new Error("reviseUnderstanding requires currentUnderstanding");
+        } else if (action === "appendTail") {
+          const line = entry.line?.trim();
+          if (!line || /[\r\n]/.test(line)) throw new Error("appendTail requires one short line; put multi-line material in addPiece instead");
+          intent = { action, category, caseName, line: `${anchorLine.replace(/\s+/g, " ")}${line} (refs: ${sliceId})` };
+        } else {
+          if (!body) throw new Error(`${action} requires body`);
+          if (action === "addPiece") {
+            const title = sanitizeCaseSegment(entry.title?.trim() ?? "");
+            if (!title) throw new Error("addPiece requires a focused title");
+            if (!target.existed) {
+              const indexBody = caseOpeningBody({ category, caseName, date, body, pieceTitle: title, overviewBody: entry.overviewBody });
+              const opened = await applyCaseWriteIntent({ action: "open", category, caseName, body: indexBody }, date, pending);
+              entryWritten.push(opened.path.replace(/^memory\//, ""));
+              await readCaseIndexForScope({ category, caseName, batch: pending, scope, fresh: true });
             }
-          : { action: "appendTail", category, caseName, line: stamped };
+            intent = { action, category, caseName, title, body: stamped };
+          } else {
+            intent = { action, category, caseName, body: stamped };
+          }
+        }
+        if (intent) {
+          const applied = await applyCaseWriteIntent(intent, date, pending, target.existed || action === "addPiece" ? scope : undefined);
+          if (!applied.noop) entryWritten.push(applied.path.replace(/^memory\//, ""));
+          productRef = intent.action === "addPiece" ? applied.path.replace(/^memory\//, "").replace(/\.md$/, "") : `${category}/${caseName}`;
+        }
+        if (entry.currentUnderstanding) {
+          const applied = await applyCaseCurrentUnderstanding({ category, caseName, current: entry.currentUnderstanding, date, batch: pending, scope, refreshRead: intent !== null });
+          if (!applied.noop) entryWritten.push(applied.path.replace(/^memory\//, ""));
+        }
       }
-      const applied = await applyCaseWriteIntent(intent, date, batch, scope);
-      if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
+      for (const [path, text] of pending.entries) batch.entries.set(path, text);
+      written.push(...entryWritten);
     } catch (e) {
       skipped.push({ id: entry.id, reason: e instanceof Error ? e.message : String(e) });
       continue;
     }
-    if (entry.currentUnderstanding) {
-      try {
-        const applied = await applyCaseCurrentUnderstanding({
-          category,
-          caseName,
-          current: entry.currentUnderstanding,
-          date,
-          batch,
-          scope,
-          refreshRead: true,
-        });
-        if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
-      } catch (e) {
-        skipped.push({ id: `${entry.id} (_current.md)`, reason: e instanceof Error ? e.message : String(e) });
-      }
-    }
+    accepted.add(entry.id);
     recordLines.push(
-      `${SCRIBE_RECORD_PREFIX} {"id":${JSON.stringify(entry.id)},"doc":${JSON.stringify(`${category}/${caseName}`)}}`,
+      `${SCRIBE_RECORD_PREFIX} ${JSON.stringify({ id: entry.id, doc: productRef, outcome: entry.action === "covered" ? "covered" : "written" })}`,
     );
   }
 
@@ -1641,9 +1740,17 @@ Report one entry per marker as instructed.`;
         ? `${fresh.trimEnd()}\n\n${recordLines.join("\n")}\n`
         : `${recordLines.join("\n")}\n`;
       await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next, batch);
-    } catch {
-      // record loss means a marker may be re-processed — the case tail is
-      // append-only, so that is a duplicate dated line: visible, non-fatal.
+      if (parentBatch) {
+        if (parentBatch.baseHeadSha && parentBatch.baseHeadSha !== batch.baseHeadSha) throw new Error("scribe batch basis changed before merge");
+        parentBatch.baseHeadSha = batch.baseHeadSha;
+        for (const [path, text] of batch.entries) {
+          if (startingEntries.get(path) !== text) parentBatch.entries.set(path, text);
+        }
+      } else {
+        await flushBatch(batch, `scribe ${sliceId}`);
+      }
+    } catch (error) {
+      return { ran: true, written: [], skipped: [...skipped, { id: "*", reason: `scribe publication failed: ${error instanceof Error ? error.message : String(error)}` }] };
     }
   }
 

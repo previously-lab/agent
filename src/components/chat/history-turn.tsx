@@ -7,6 +7,8 @@ import { TimeDisplay, sameDay } from "./time-display";
 import { ConversationTurn } from "./conversation-turn";
 import { SubmittedDocumentReferences } from "@/components/documents/submitted-document-references";
 import type { DocumentContextSnapshot } from "@/lib/chat/document-context";
+import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
+import { ConversationImageBody } from "./conversation-images";
 
 /** Saved turns share the live manuscript's voice and reading measure. Their
  * timestamps remain visible on touch; the original cognition is still openable. */
@@ -17,6 +19,8 @@ export function HistoryTurn({
   turnId,
   timestamp,
   documentContext,
+  attachments = [],
+  sourceRole,
 }: {
   role: string;
   content: string;
@@ -24,10 +28,13 @@ export function HistoryTurn({
   turnId?: string;
   timestamp: string;
   documentContext?: DocumentContextSnapshot;
+  attachments?: readonly ImageAttachmentSnapshot[];
+  sourceRole?: string;
   /** @deprecated Retired with the strand layer; accepted for old callers. */
   strands?: string[];
 }) {
   const isUser = role === "user";
+  const isAgent = role === "agent" || role === "assistant";
 
   return (
     <ConversationTurn
@@ -38,16 +45,17 @@ export function HistoryTurn({
             timestamp={timestamp}
             mode={sameDay(timestamp) ? "time" : "full"}
           />
-          {!isUser && turnId && (
+          {sourceRole && !isUser && !isAgent && <span>{sourceRole}</span>}
+          {isAgent && turnId && (
             <CognitionPopover sliceId={sliceId} turnId={turnId} />
           )}
         </>
       }
     >
-      {isUser ? (
+      {!isAgent ? (
         <>
           <SubmittedDocumentReferences references={documentContext ?? []} />
-          <div className="conversation-prose conversation-prose--literal">{content}</div>
+          <ConversationImageBody content={content} images={attachments} />
         </>
       ) : (
         <div className="conversation-prose">

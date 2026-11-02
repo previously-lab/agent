@@ -573,16 +573,10 @@ describe("evolutionSummary round-trip", () => {
   });
 });
 
-// ─── KNOWN LIMITATION pin: turn-header collision ─────────────────────────
-//
-// parseTurns' header regex (/^## Turn (\S+) — (\S+) \((\w+)\)$/gm) matches ANY
-// line shaped like a turn header — including one embedded in a message body
-// (e.g. the user pastes a slice excerpt). Such a line splits one real turn
-// into two parsed turns. This test PINS the current (wrong) behavior so a
-// future fix deliberately flips it.
-
-describe("parseSlice — turn-header collision (KNOWN LIMITATION pin)", () => {
-  it("a body line shaped like a turn header currently splits the parse", () => {
+// Reserved body boundaries are escaped by the serializer, then decoded only
+// under its versioned header marker. They must not fabricate another speaker.
+describe("parseSlice — turn-header collision regression", () => {
+  it("round-trips a body line shaped like a turn header without a phantom turn", () => {
     const md = serializeSlice({
       ...sampleSlice,
       turns: [
@@ -596,11 +590,8 @@ describe("parseSlice — turn-header collision (KNOWN LIMITATION pin)", () => {
       ],
     });
     const parsed = parseSlice(md);
-    // 1 real user turn + 1 phantom turn parsed out of the message body.
-    expect(parsed.turns).toHaveLength(2);
-    expect(parsed.turns[1].turnId).toBe("abc");
-    expect(parsed.turns[1].timestamp).toBe("2026-01-01T00:00:00Z");
-    expect(parsed.turns[1].content).toBe("isn't it odd");
+    expect(parsed.turns).toHaveLength(1);
+    expect(parsed.turns[0]).toMatchObject({ turnId: "a3fk2w", timestamp: "2024-03-15T10:00:00.000Z", content: "look at this line:\n## Turn abc — 2026-01-01T00:00:00Z (user)\nisn't it odd" });
   });
 });
 
@@ -783,8 +774,8 @@ describe("replyTo — the nested-bubble header suffix (v0.30 §3.4, D7)", () => 
     expect(md).toContain(
       "## Turn nb4gl3x — 2024-03-15T10:03:00.000Z (agent) [reply-to b4gl3x]",
     );
-    // the plain rounds carry no suffix
-    expect(md).toContain("## Turn a3fk2w — 2024-03-15T10:00:00.000Z (user)\n");
+    // Plain rounds still carry the body-encoding marker, but no reply target.
+    expect(md).toContain("## Turn a3fk2w — 2024-03-15T10:00:00.000Z (user) [body-escaped v1]\n");
     expect(md).not.toContain("[reply-to a3fk2w]");
   });
 

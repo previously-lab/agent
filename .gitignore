@@ -77,6 +77,8 @@ memory/orgs/
 memory/tasks/
 memory/self/
 memory/config/
+# Unsent image uploads are runtime staging, not committed session records.
+/sessions/attachment-drafts/
 
 # ===== Testing =====
 coverage/

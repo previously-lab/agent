@@ -2,6 +2,7 @@
  * Shared turn-parsing utilities used by both tool executors and the evolution
  * workflow steps. Pure functions — no I/O, no side effects.
  */
+import { decodeImageAttachments, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 
 /** Parse "YYYY-MM-DD-HHMM" into path segments. Returns null unless the calendar date and time exist. */
 export function parseSliceId(sliceId: string): { y: string; m: string; d: string; hm: string } | null {
@@ -35,6 +36,10 @@ export interface ParsedTurn {
    *  answers — from the optional ` [reply-to {id}]` header suffix. */
   replyTo?: string;
   header: string;   // "## Turn {id} — TIMESTAMP (role)"
+  role: string;     // source role; unknown/tool roles must never default to user
+  sourceRole?: string;
+  attachments?: ImageAttachmentSnapshot[];
+  boundary: "escaped_v1" | "legacy_header" | "ambiguous";
   content: string;   // turn body text
   timestamp: string; // ISO 8601
 }
@@ -43,9 +48,34 @@ export interface ParsedTurn {
  *  Matches both legacy numeric IDs ("1", "2") and new base64url IDs ("a3fk2w").
  *  Separator is em-dash (U+2014), consistent with manager.ts serializeSlice.
  *  An optional ` [reply-to {id}]` suffix (v0.30 §3.4, nested bubbles) is
- *  captured when present; no end anchor, so unknown future suffixes stay
- *  tolerated. */
-export const TURN_HEADER_RE = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?/;
+ *  captured when present. Future bracketed metadata stays tolerated; prose
+ *  after a header is not trusted structural metadata. */
+export const TURN_HEADER_RE = /^## Turn ([A-Za-z0-9_-]{1,128}|\?) — (\S+) \(([A-Za-z][A-Za-z0-9_-]*)\)(?: \[reply-to ([A-Za-z0-9_-]+)\])?(?: \[[a-z][a-z0-9_-]*(?: [^\]\r\n]*)?\])*\r?$/;
+
+/** Versioned escaping is only decoded when the actual header opts in. */
+export function escapeTurnBody(content: string): string {
+  return content.replace(/^(\\*)## Turn /gm, "\\$&");
+}
+
+function decodeTurnBody(header: string, content: string): string {
+  return header.includes(" [body-escaped v1]")
+    ? content.replace(/^\\(\\*## Turn )/gm, "$1")
+    : content;
+}
+
+export function renderedTurnBody(turn: Pick<ParsedTurn, "header" | "content">): string {
+  return turn.header.includes(" [body-escaped v1]") ? escapeTurnBody(turn.content) : turn.content;
+}
+
+function validTimestamp(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  return Boolean(match && parseSliceId(`${match[1]}-${match[2]}-${match[3]}-${match[4]}${match[5]}`)
+    && Number(match[6]) < 60 && Number.isFinite(Date.parse(value)));
+}
+
+function isSerializedBoundary(turn: Pick<ParsedTurn, "boundary"> | null, line: string): boolean {
+  return turn?.boundary === "escaped_v1" && line.includes(" [body-escaped v1]");
+}
 
 /**
  * Parse core.md content into frontmatter + array of parsed turns.
@@ -58,30 +88,76 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
   const lines = raw.split("\n");
   const turns: ParsedTurn[] = [];
   const frontmatterLines: string[] = [];
-  let currentTurn: { turnId?: string; replyTo?: string; header: string; timestamp: string; contentLines: string[] } | null = null;
+  let currentTurn: { turnId?: string; replyTo?: string; header: string; role: string; sourceRole?: string; attachments?: ImageAttachmentSnapshot[]; boundary: ParsedTurn["boundary"]; timestamp: string; contentLines: string[] } | null = null;
   let inFrontmatter = true;
   let turnOrdinal = 0;
+  let yaml = lines[0]?.trim() === "---";
+  let fence: { char: string; length: number; ambiguous: boolean } | null = null;
 
-  for (const line of lines) {
-    const match = line.match(TURN_HEADER_RE);
+  for (const [lineIndex, line] of lines.entries()) {
+    // A quoted transcript/code example is part of its enclosing speaker's
+    // message, never a new speaker. Frontmatter is metadata, not speech either.
+    const inYaml = yaml;
+    if (yaml && lineIndex > 0 && /^(---|\.\.\.)\s*$/.test(line)) yaml = false;
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const inFence = fence !== null;
+    const ambiguousFence = fence?.ambiguous === true;
+    if (marker && !inYaml) {
+      if (fence) {
+        if (marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      } else if (marker[1][0] !== "`" || !marker[2].includes("`")) {
+        let closed = false;
+        for (let next = lineIndex + 1; next < lines.length; next += 1) {
+          const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[next]);
+          if (!boundary || boundary[1][0] !== marker[1][0] || boundary[1].length < marker[1].length) continue;
+          if (!boundary[2].trim()) { closed = true; break; }
+          // An info-bearing fence inside a block is ordinary code content.
+          // Balanced Markdown wins over guesses about damaged legacy turns;
+          // only the versioned escaped format can disambiguate those bytes.
+        }
+        fence = { char: marker[1][0], length: marker[1].length, ambiguous: !closed };
+      }
+    }
+    // New serialized turns cannot contain an unescaped boundary. Their real
+    // next header also terminates a truncated/unclosed fence in that turn.
+    const serializedBoundary = isSerializedBoundary(currentTurn, line);
+    const candidateLine: boolean = !inYaml && (!inFence || ambiguousFence || serializedBoundary);
+    const strictMatch: RegExpMatchArray | null = candidateLine ? line.match(TURN_HEADER_RE) : null;
+    const match: RegExpMatchArray | null = strictMatch ?? (candidateLine ? /^## Turn (\S+) — (\S+) \(([^)]+)\).*\r?$/.exec(line) : null);
     if (match) {
+      // In legacy text a header inside a fence might be an example OR the
+      // next real turn after a truncated reply. Preserve the block as unknown
+      // rather than trusting its claimed speaker or swallowing its body.
+      const unambiguous: boolean = Boolean(strictMatch && validTimestamp(match[2]) && (!inFence || serializedBoundary));
+      const attachments: ImageAttachmentSnapshot[] = unambiguous
+        ? decodeImageAttachments(/ \[attachments ([^\]]*)\]/.exec(line)?.[1]) : [];
       if (currentTurn) {
         turns.push({
           index: turnOrdinal++,
           turnId: currentTurn.turnId,
           replyTo: currentTurn.replyTo,
           header: currentTurn.header,
+          role: currentTurn.role,
+          ...(currentTurn.sourceRole ? { sourceRole: currentTurn.sourceRole } : {}),
+          ...(currentTurn.attachments?.length ? { attachments: currentTurn.attachments } : {}),
+          boundary: currentTurn.boundary,
           timestamp: currentTurn.timestamp,
-          content: currentTurn.contentLines.join("\n").trimEnd(),
+          content: decodeTurnBody(currentTurn.header, currentTurn.contentLines.join("\n").trimEnd()),
         });
       }
       currentTurn = {
-        turnId: match[1],
-        ...(match[4] ? { replyTo: match[4] } : {}),
+        ...(strictMatch ? { turnId: match[1] } : {}),
+        ...(strictMatch?.[4] ? { replyTo: strictMatch[4] } : {}),
         header: line,
+        role: unambiguous ? match[3] : "unknown",
+        ...(!unambiguous || / \[source-role ([^\]]*)\]/.test(line)
+          ? { sourceRole: / \[source-role ([^\]]*)\]/.exec(line)?.[1] ?? match[3] } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        boundary: !unambiguous ? "ambiguous" : line.includes(" [body-escaped v1]") ? "escaped_v1" : "legacy_header",
         timestamp: match[2],
         contentLines: [],
       };
+      if (!inFence || serializedBoundary) fence = null;
       inFrontmatter = false;
     } else if (inFrontmatter) {
       frontmatterLines.push(line);
@@ -96,11 +172,33 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
       turnId: currentTurn.turnId,
       replyTo: currentTurn.replyTo,
       header: currentTurn.header,
+      role: currentTurn.role,
+      ...(currentTurn.sourceRole ? { sourceRole: currentTurn.sourceRole } : {}),
+      ...(currentTurn.attachments?.length ? { attachments: currentTurn.attachments } : {}),
+      boundary: currentTurn.boundary,
       timestamp: currentTurn.timestamp,
-      content: currentTurn.contentLines.join("\n").trimEnd(),
+      content: decodeTurnBody(currentTurn.header, currentTurn.contentLines.join("\n").trimEnd()),
     });
   }
 
+  // A shared id for user + agent is intentional. Two headers claiming the
+  // same id AND speaker are ambiguous, not two independent user confirmations.
+  // Wall-clock order is not a gate: asynchronous replies can arrive out of order.
+  const identities = new Map<string, ParsedTurn[]>();
+  for (const turn of turns) {
+    if (!turn.turnId || turn.turnId === "?") continue;
+    const key = `${turn.turnId}:${turn.role === "assistant" ? "agent" : turn.role}`;
+    identities.set(key, [...(identities.get(key) ?? []), turn]);
+  }
+  for (const duplicates of identities.values()) {
+    if (duplicates.length < 2) continue;
+    for (const turn of duplicates) {
+      turn.sourceRole ??= turn.role;
+      turn.role = "unknown";
+      turn.boundary = "ambiguous";
+      delete turn.attachments;
+    }
+  }
   return { frontmatter: frontmatterLines.join("\n").trimEnd(), turns };
 }
 
@@ -134,7 +232,7 @@ export function applyRange(
 export function reassembleSlice(frontmatter: string, turns: ParsedTurn[]): string {
   const parts = [frontmatter];
   for (const t of turns) {
-    parts.push(`\n${t.header}\n${t.content}`);
+    parts.push(`\n${t.header}\n${renderedTurnBody(t)}`);
   }
   return parts.join("\n");
 }

@@ -6,7 +6,8 @@ import {
   analyzeTurn, readSlicePart, writeAgentTimeline, readPreviously, writePreviously,
   type TimeSlice, type WriteBatch, type SlicingSignal,
 } from "@/lib/episodic";
-import { persistEvidenceAttachments } from "@/lib/tools/attachments";
+import { persistEvidenceAttachments, persistImageAttachments } from "@/lib/tools/attachments";
+import { settleStagedImages } from "@/lib/tools/staged-images";
 import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
 import { seedGitHubReadHead, withGitHubReadView } from "@/lib/github/read-view";
 
@@ -94,7 +95,7 @@ async function persistSummaryMembersInView(
       t.turnId === m.turnId || (m.clientMessageId && t.clientMessageId === m.clientMessageId)
     )) ?? legacyQuestion;
     const userId = question?.turnId ?? m.turnId;
-    if (m.userText && !question) {
+    if ((m.userText || m.imageAttachments?.length) && !question) {
       appendTurn(slice, { timestamp: m.at, role: "user", content: m.userText, turnId: userId,
         ...(m.clientMessageId ? { clientMessageId: m.clientMessageId } : {}),
         ...(m.documentContext?.length ? { documentContext: m.documentContext } : {}),
@@ -119,6 +120,10 @@ async function persistSummaryMembersInView(
       }
     }
     const user = slice.turns.find((t) => t.role === "user" && t.turnId === userId);
+    if (m.imageAttachments?.length && user && !user.attachments?.length) {
+      user.attachments = await persistImageAttachments({ sliceId: slice.slice_id, turnId: userId, images: m.imageAttachments, batch });
+      touched.set(slice.slice_id, slice);
+    }
     if (m.attachments?.length && user && !user.content.includes("[attachments:")) {
       const result = await persistEvidenceAttachments({ sliceId: slice.slice_id, turnId: userId,
         files: m.attachments.map((a) => ({ name: a.name, data: Buffer.from(a.dataBase64, "base64") })), batch });
@@ -177,6 +182,9 @@ async function persistSummaryMembersInView(
     sliceId, turnIds: [...targets].filter(([, slice]) => slice.slice_id === sliceId).map(([turnId]) => turnId),
   }));
   const taskProof = verifiedTaskReplies.length > 0 ? { verifiedTaskReplies } : {};
+  const submittedAssets = new Set(members.flatMap((member) => member.imageAttachments?.map((image) => image.snapshot.assetId) ?? []));
+  const imagesToSettle = [...new Map([...targets.values()].flatMap((slice) => slice.turns.flatMap((turn) => turn.attachments ?? []))
+    .filter((image) => submittedAssets.has(image.assetId)).map((image) => [image.assetId, image])).values()];
   const own = payload.own;
   const ownReply = own.replyText.trim().length > 0 && ownSlice.turns.some((turn) =>
     turn.role === "agent" && turn.turnId === own.turnId && turn.content === own.replyText
@@ -184,6 +192,8 @@ async function persistSummaryMembersInView(
     ? { status: "persisted" as const, sliceId: ownSlice.slice_id, turnId: own.turnId }
     : undefined;
   if (batch.entries.size === 0) {
+    await settleStagedImages(imagesToSettle)
+      .catch((error) => console.warn("[Images] staging cleanup needs retry", error));
     return { kind: "deduped",
       ...(verifiedCommit ? { receipt: { version: 1 as const, commitSha: verifiedCommit, records } } : {}),
       ...taskProof,
@@ -197,6 +207,8 @@ async function persistSummaryMembersInView(
   }
   const message = COMMIT_PREFIX.summary(defaultSlice.slice_id) + `\n\n${body.map((line) => `- ${line}`).join("\n")}`;
   const commitSha = await flush(batch, message, defaultSlice);
+  await settleStagedImages(imagesToSettle)
+    .catch((error) => console.warn("[Images] staging cleanup needs retry", error));
   for (const record of records) await deliverReflectionWake(record);
   console.log(`[Summary] ${defaultSlice.slice_id} committed: ${body.join(", ")}`);
   return { kind: "committed", segments: body,

@@ -1,5 +1,9 @@
 import type { ElementHandle, Locator, Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import path from "node:path";
 import { test, expect } from "./test";
+import { E2E_MEMORY_ROOT, E2E_SESSIONS_ROOT } from "./env";
 import {
   clearCases,
   clearEpisodic,
@@ -41,6 +45,9 @@ function offlineSse(answer: string): string {
 }
 
 async function selectReference(page: Page, title: string): Promise<void> {
+  if (!(await page.locator("[data-document-mention]").isVisible())) {
+    await page.locator("[data-composer-tools-trigger]").click();
+  }
   await page.locator("[data-document-mention]:visible").click();
   const search = page.getByRole("combobox", { name: "Search documents" });
   await expect(search).toBeVisible();
@@ -52,13 +59,41 @@ async function selectReference(page: Page, title: string): Promise<void> {
   await expect(page.locator(".document-reference-chip").filter({ hasText: title })).toHaveCount(1);
 }
 
-async function attachFixture(page: Page): Promise<void> {
+async function attachFixture(page: Page): Promise<string> {
+  // These requests deliberately use the real isolated local attachment
+  // routes. Only model endpoints are mocked by the shared test fixture.
+  const uploading = page.waitForResponse(response => new URL(response.url()).pathname === "/api/attachments/upload" && response.request().method() === "POST");
+  const reading = page.waitForResponse(response => new URL(response.url()).pathname === "/api/attachments" && response.request().method() === "GET");
   await page.locator("input[type=file]").first().setInputFiles({
     name: "fixture-note.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64"),
   });
+  const uploaded = await uploading;
+  expect(uploaded.status()).toBe(201);
+  expect(uploaded.request().headers()["content-type"]).toContain("multipart/form-data; boundary=");
+  const form = uploaded.request().postDataBuffer()!.toString("latin1");
+  expect(form).toContain('name="file"; filename="fixture-note.png"');
+  expect(form).toContain('name="persona"\r\n\r\nuser');
+  const { attachment } = await uploaded.json();
+  expect(attachment).toMatchObject({ version: 1, name: "fixture-note.png", mediaType: "image/png" });
+  expect(attachment.assetId).toMatch(/^img_[a-f0-9]{32}$/);
+  expect(attachment.ref).toBe(`drafts/${attachment.assetId}`);
+  // Exercise the real server's path resolution: a successful HTTP upload must
+  // have landed in the fixture root, never the repo's default sessions/.
+  const scopeKey = createHash("sha256").update(JSON.stringify({ source: "local", origin: [E2E_MEMORY_ROOT, E2E_SESSIONS_ROOT], persona: "user" })).digest("hex");
+  const manifest = JSON.parse(await readFile(path.join(E2E_SESSIONS_ROOT, "attachment-drafts", scopeKey, `${attachment.assetId}.json`), "utf8"));
+  expect(manifest.scope).toEqual({ source: "local", key: scopeKey, persona: "user" });
+  expect(manifest.snapshot.assetId).toBe(attachment.assetId);
+  const read = await reading;
+  expect(read.status()).toBe(200);
+  expect(read.headers()["content-type"]).toBe("image/png");
+  expect(new URL(read.url()).searchParams.get("ref")).toBe(attachment.ref);
+  expect(new URL(read.url()).searchParams.get("persona")).toBe("user");
+  expect((await read.body()).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
+  await expect.poll(() => page.locator('[data-attachment-preview] img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+  return attachment.assetId;
 }
 
 async function expectSameNode(
@@ -128,14 +163,14 @@ for (const viewport of [
       const draft = "This draft stays with me when I return to the room.";
       await input.fill(draft);
       await selectReference(page, "manuscript-context");
-      await attachFixture(page);
+      const assetId = await attachFixture(page);
       await input.dispatchEvent("compositionstart", { data: "draft" });
 
       await page.getByRole("button", { name: "Exit full screen" }).click();
       await expect(page.locator("[data-pill-composer]")).toBeVisible();
       await expect(page.locator("[data-conversation-field]")).toBeVisible();
       await expect(agent).toBeVisible();
-      await expect(input).toHaveValue(draft);
+      await expect(input).toHaveValue(`${draft}〔图1〕`);
       await expectSameNode(page, originalNode);
       await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
       await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
@@ -145,15 +180,20 @@ for (const viewport of [
       expect(pill!.x + pill!.width).toBeLessThanOrEqual(viewport.width);
 
       await page.getByRole("button", { name: "Expand to full screen" }).click();
-      await expect(input).toHaveValue(draft);
+      await expect(input).toHaveValue(`${draft}〔图1〕`);
       await expectSameNode(page, originalNode);
       await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
       await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
       await input.dispatchEvent("compositionend", { data: draft });
       const remove = page.getByRole("button", { name: "Remove attachment: fixture-note.png" });
+      const cancellation = page.waitForResponse(response => new URL(response.url()).pathname === `/api/attachments/upload/${assetId}/cancel` && response.request().method() === "POST");
       await remove.click();
+      const cancelled = await cancellation;
+      expect(cancelled.status()).toBe(204);
+      expect(new URL(cancelled.url()).searchParams.get("persona")).toBe("user");
+      console.log(`Real local PNG upload/GET/cancel PASS (${viewport.name}; persona=user; stable draft ref)`);
       await expect(remove).toHaveCount(0);
-      await expect(input).toHaveValue(draft);
+      await expect(input).toHaveValue(`${draft}〔图1〕`);
       const screenshot = await page.screenshot({ path: testInfo.outputPath("manuscript.png") });
       await testInfo.attach("manuscript", { body: screenshot, contentType: "image/png" });
     });
@@ -235,8 +275,10 @@ test.describe("manuscript editing integration", () => {
       contentType: "image/png",
     });
 
-    await field.evaluate((el) => { el.scrollTop = 0; });
+    // Tools float only within this editor, not as a fixed conversation footer.
     await expect(toolbar).toBeVisible();
+    await expect(toolbar).toHaveCSS("position", "sticky");
+    await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]:visible")).toBeVisible();
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
     await expect(page.locator("[data-composer-send]:visible")).toBeVisible();
@@ -248,7 +290,7 @@ test.describe("manuscript editing integration", () => {
     await expect(page.locator("[data-manuscript-input]")).toHaveCount(1);
   });
 
-  test("IME Enter stays uncancelled, Shift+Enter adds a newline and ordinary Enter sends", async ({ page }) => {
+  test("IME Enter stays uncancelled, Shift+Enter adds lines, and Enter sends", async ({ page }) => {
     const posts: unknown[] = [];
     await page.route("**/api/chat", async (route) => {
       if (route.request().method() !== "POST") {
@@ -285,6 +327,9 @@ test.describe("manuscript editing integration", () => {
     await input.press("Shift+Enter");
     await input.pressSequentially("换行");
     await expect(input).toHaveValue("拼音草稿\n换行");
+    expect(posts).toHaveLength(0);
+    await input.press("Shift+Enter");
+    await expect(input).toHaveValue("拼音草稿\n换行\n");
     expect(posts).toHaveLength(0);
     await input.press("Enter");
     await expect(page.getByText("Reply after composition", { exact: true })).toBeVisible();

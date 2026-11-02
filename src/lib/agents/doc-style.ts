@@ -24,7 +24,20 @@ export const DOC_LANGUAGE_RULE =
 /** The shared epistemic contract for every memory-document writer. */
 export const DOC_EPISTEMIC_RULE = `## Evidence and uncertainty
 
-Distinguish what the user reported, what the record directly shows, what an external source verified, your interpretation, and what remains unknown. Grounded questions, competing explanations, and honest first-person concern are welcome when their status is clear; never present an interpretation as an observed fact. Do not invent evidence or external verification. Do not perform emotion, and do not force a rigid research template. Every case category can hold this kind of understanding, not only people. Claims about the user must trace to the user's raw records, not to derived memory alone.`;
+Distinguish what the user reported, what the record directly shows, what an external source verified, your interpretation, and what remains unknown. Grounded questions, competing explanations, and honest first-person concern are welcome when their status is clear; never present an interpretation as an observed fact. Do not invent evidence or external verification. Do not perform emotion, and do not force a rigid research template. Every case category can hold this kind of understanding, not only people. Claims about the user must trace to the user's raw records, not to derived memory alone.
+
+A recorded role establishes who wrote the words, not whether the user endorsed their content. Preserve whether the user was quoting, hypothesizing, denying, or confirming. Assistant suggestions, tool results, titles, summaries, and derived portraits cannot become confirmed user facts through repetition. Confirmation requires explicit user words in context; silence, a successful read, or your own repeated recommendation is not confirmation. Keep contrary evidence and unresolved conflicts visible.`;
+
+/** Shared authorship decisions; storage limits do not decide a document's subject. */
+export const DOC_ORGANIZATION_RULE = `## Write for a future reader's question
+
+Before writing, identify what this document will help the reader understand or do, and what new evidence or changed understanding earns the write. The conversation already preserves the exchange. If a document you actually read already covers the material, reuse it without restating it merely to complete a marker.
+
+A case holds a continuing subject; its pieces answer questions worth returning to independently. Inspect the available piece titles, read the relevant pieces, and reuse their exact references before opening another. A directory entry is a reading pointer, never evidence that you read or verified the piece. Different questions can deserve separate pieces from the beginning, even when they are short. A different subject belongs in its own case, connected by a link.
+
+Use a short dated tail for a correction or navigation, not another essay. Put an argument, procedure, comparison, or long source passage in a focused piece and link to it. Preserve quoted source wording and line breaks with its origin; keep your interpretation separate. An opening overview introduces the case and its reading paths; do not duplicate the first piece in the overview.
+
+The current understanding explains what holds now, why, and what remains unresolved, with links for supporting detail. Revise it when evidence changes that understanding or its organization, not to replay the latest conversation. Carry forward still-valid conclusions without repeating their full derivation. Date or evidence-metadata refreshes do not create another historical edition of the same prose. A changed recommendation is still a recommendation until the user explicitly adopts it.`;
 
 /** How a memory document reads — the six rules plus the two before/after pairs. */
 export const DOC_HOUSE_STYLE = `## Document house style — how memory documents read
@@ -43,4 +56,6 @@ RIGHT: 2026-10-05: the panel vendor quoted USD 40/unit (slice 2026-10-04-0610). 
 WRONG: 用户在沟通中提出了一个想法，agent 经过仔细认真的分析研究之后，觉得可以尝试一下之前被提到过的那个通道，结果发现它其实是可行的，这不是没有意义的。
 RIGHT: 2026-10-05：用户让实测读片的 range 过滤。对 2026-10-04-0610 取第 3–5 轮，返回恰好三条——行为与文档一致，已记入 self/工具笔记。
 
-${DOC_EPISTEMIC_RULE}`;
+${DOC_EPISTEMIC_RULE}
+
+${DOC_ORGANIZATION_RULE}`;

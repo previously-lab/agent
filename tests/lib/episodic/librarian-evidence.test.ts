@@ -14,6 +14,12 @@ const io = vi.hoisted(() => ({
   failReadPath: null as string | null,
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
+  flushBatch: vi.fn(async (batch: { entries: Map<string, string | null> }) => {
+    for (const [path, content] of batch.entries) {
+      if (content === null) io.files.delete(path); else io.files.set(path, content);
+    }
+    batch.entries.clear();
+  }),
   fsReadFile: vi.fn(
     async (path: string, batch?: { entries: Map<string, string | null> }) => {
       if (io.failReadPath === path) throw new Error("injected backend read failure");
@@ -51,6 +57,7 @@ import {
   createCaseReadScope,
   makeCaseReadTool,
   makeSliceReadTool,
+  readSliceEvidencePage,
   readCaseIndexForScope,
   runLibrarianPass,
 } from "@/lib/episodic/flash/librarian";
@@ -116,6 +123,19 @@ async function callSliceTool(tool: SliceTool, input: SliceToolInput): Promise<st
 }
 
 describe("original slice evidence", () => {
+  it("carries source role/id/time when a page starts inside an assistant suggestion", async () => {
+    const raw = `---\nsummary: User approved (metadata only)\n---\n## Turn a — 2026-08-09T13:00:00Z (agent)\n\n${"Proposal. ".repeat(80)}\n## Turn u — 2026-08-09T13:01:00Z (user)\n\nNo, I reject that.`;
+    const first = readSliceEvidencePage(raw, { maxChars: 120 });
+    const cursor = first.nextCursor!;
+    const page = readSliceEvidencePage(raw, { cursor, revision: first.revision, maxChars: 120 });
+    expect(page.content).not.toContain("## Turn");
+    expect(page.attribution).toEqual([{ role: "assistant", turnId: "a", turnIndex: 0, timestamp: "2026-08-09T13:00:00Z", start: 0, end: 120 }]);
+    const output = await callSliceTool(makeSliceReadTool({ sliceId: SLICE_ID, reader: async () => raw }), { cursor, revision: first.revision, maxChars: 120 });
+    expect(output).toContain(`Source ref: records/${SLICE_ID}`);
+    expect(output).toContain(JSON.stringify(page.attribution));
+    expect(readSliceEvidencePage(raw, { maxChars: 30 }).attribution).toEqual([]);
+  });
+
   it("invalid, empty, and failed pages do not authorize evidence", async () => {
     const raw = "---\n---\n\n## Turn x — 2026-08-09T13:00:00.000Z (user)\n\n真正的原话。\n";
     for (const input of [{ cursor: 999999 }, { maxChars: 2 }, { range: { type: "turns" as const, indices: [999] } }]) {

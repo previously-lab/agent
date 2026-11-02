@@ -14,13 +14,19 @@ const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
-  fsReadFile: vi.fn(async (path: string) => {
-    const content = io.files.get(path);
-    if (content === undefined) throw new Error(`ENOENT: ${path}`);
+  flushBatch: vi.fn(async (batch: { entries: Map<string, string | null> }) => {
+    for (const [path, content] of batch.entries) {
+      if (content === null) io.files.delete(path); else io.files.set(path, content);
+    }
+    batch.entries.clear();
+  }),
+  fsReadFile: vi.fn(async (path: string, batch?: { entries: Map<string, string | null> }) => {
+    const content = batch?.entries.has(path) ? batch.entries.get(path) : io.files.get(path);
+    if (content == null) throw new Error(`ENOENT: ${path}`);
     return content;
   }),
-  fsWriteFile: vi.fn(async (path: string, content: string) => {
-    io.files.set(path, content);
+  fsWriteFile: vi.fn(async (path: string, content: string, batch?: { entries: Map<string, string | null> }) => {
+    if (batch) batch.entries.set(path, content); else io.files.set(path, content);
     return { path, created: true };
   }),
   fsListFiles: vi.fn(async (path: string) => {

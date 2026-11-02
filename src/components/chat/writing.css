@@ -159,6 +159,7 @@
 .conversation-composer--manuscript.composer-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "byline" "tools" "writing";
   gap: 0.7rem;
   padding-block: 1.35rem;
 }
@@ -194,6 +195,9 @@
   align-self: start;
 }
 
+.conversation-composer--manuscript .conversation-composer-byline { grid-area: byline; }
+.conversation-composer--manuscript .conversation-composer-writing { grid-area: writing; }
+
 .conversation-composer-writing {
   position: relative;
   min-width: 0;
@@ -219,12 +223,17 @@
 
 .conversation-composer--manuscript textarea {
   display: block;
-  min-height: 2.75rem;
+  min-height: calc(var(--spacing) * 11);
+  max-height: none;
   padding-inline-start: calc(var(--spacing) * 4);
   border-inline-start: 1px solid color-mix(in oklab, var(--foreground) 19%, transparent);
   overflow: hidden;
   font-size: var(--text-base);
   line-height: 1.95;
+}
+
+.conversation-composer--manuscript:focus-within textarea {
+  min-height: calc(var(--spacing) * 22);
 }
 
 .conversation-composer--manuscript[data-composer-state="editing"] textarea,
@@ -247,8 +256,12 @@
   padding-inline: 0.35rem;
 }
 
+.conversation-composer--pill [data-composer-keyboard-caption] { display: none; }
+
 .conversation-composer--pill textarea {
   display: block;
+  min-height: calc(var(--spacing) * 6);
+  max-height: calc(var(--spacing) * 11);
   overflow-y: auto;
 }
 
@@ -295,27 +308,39 @@
   gap: calc(var(--spacing) * 3);
 }
 
-.conversation-composer--manuscript .conversation-composer-writing {
-  /* The fixed mini bar is not part of the stream's layout height. Leave its
-     footprint after the draft so the last sentence can scroll fully clear. */
-  margin-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
-}
-
 .conversation-composer--manuscript .conversation-composer-toolbar {
-  position: fixed;
+  /* A small tool seat at the manuscript's upper left. Sticky is bounded by
+     this composer, so a long draft retains its actions without a page footer. */
+  grid-area: tools;
+  position: sticky;
+  align-self: start;
+  justify-self: start;
   z-index: 30;
-  inset-inline-start: 50%;
-  bottom: max(0.75rem, env(safe-area-inset-bottom, 0.75rem));
-  width: min(44rem, calc(100vw - 1.5rem));
-  min-height: 2.75rem;
-  padding: 0.3rem 0.45rem;
-  transform: translateX(-50%);
+  top: max(calc(var(--spacing) * 2), env(safe-area-inset-top, 0px));
+  width: max-content;
+  max-width: 100%;
+  gap: var(--spacing);
+  padding: var(--spacing);
   border: 1px solid color-mix(in oklab, var(--foreground) 13%, transparent);
   border-radius: 999rem;
   background: var(--tool-glass, var(--background));
   box-shadow: var(--shadow-float);
   backdrop-filter: blur(1.125rem);
 }
+
+.conversation-composer--manuscript[data-editor-active="false"] .conversation-composer-toolbar:not(:focus-within) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conversation-composer--manuscript .conversation-composer-toolbar-left {
+  /* The disclosure expands sideways within its own seat. A dropdown below
+     this row would cover the very first line the reader is editing. */
+  position: static;
+}
+
+.conversation-composer-toolbar-left[hidden] { display: none; }
+.conversation-composer--pill .conversation-composer-tools-trigger { display: none; }
 
 .conversation-composer-toolbar-left,
 .conversation-composer-toolbar-right {
@@ -413,6 +438,7 @@
   }
   .conversation-composer--manuscript.composer-bar {
     grid-template-columns: 6rem minmax(0, 1fr);
+    grid-template-areas: ". tools" "byline writing";
     gap: calc(var(--spacing) * 6);
     padding-block: 1.65rem;
   }

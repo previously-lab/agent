@@ -1820,6 +1820,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(mergeLine ? { mergeLine } : {}),
     ...(input.burstId ? { burstId: input.burstId } : {}),
     ...(hk.evidenceAttachments ? { attachments: hk.evidenceAttachments } : {}),
+    ...(input.verifiedImages?.length ? { imageAttachments: input.verifiedImages } : {}),
     ...(hk.previouslyUpdate ? { previously: hk.previouslyUpdate } : {}),
   };
   // v0.42 §5 [11279] — the failure floor: even a turn whose answer died

@@ -18,14 +18,14 @@ vi.mock("../document-context-provider", () => ({
     removeReference: vi.fn(),
   }),
 }));
-vi.mock("../native-source-scope", () => ({ useNativePersona: () => "user" }));
+vi.mock("../native-source-scope", () => ({ useNativePersona: () => "user", useNativeSourceScope: () => "test:user" }));
 vi.mock("../document-mention-picker", () => ({
   DocumentReferenceChips: ({ references }: { references: Array<{ title: string }> }) => React.createElement("div", { "data-reference-chips": true }, references[0]?.title),
   DocumentMentionPicker: () => null,
   useDocumentMentionCatalog: () => ({ items: [], activeIndex: -1, setActiveIndex: vi.fn() }),
 }));
 vi.mock("@/hooks/use-image-attachments", () => ({
-  useImageAttachments: () => ({ images: [], removeImage: vi.fn(), clearImages: vi.fn(), handlePaste: vi.fn(), handleDrop: vi.fn() }),
+  useImageAttachments: () => ({ images: [], removed: null, limitReached: false, addFiles: vi.fn(), removeImage: vi.fn(), retryImage: vi.fn(), undoRemove: vi.fn(), acceptImages: vi.fn() }),
 }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, {}, children),
@@ -44,12 +44,16 @@ function renderInput() {
 }
 
 describe("the single manuscript input contract", () => {
-  it("keeps direct input, mini controls and reference chips in fullscreen", () => {
+  it("keeps one direct input with discoverable floating tools and shortcut help", () => {
     panelMode = "fullscreen";
     const html = renderInput();
     expect(html.match(/data-manuscript-input/g)).toHaveLength(1);
     expect(html.match(/<textarea/g)).toHaveLength(1);
     expect(html).toContain('data-composer-mini-toolbar');
+    expect(html).toContain('data-composer-tools-trigger');
+    expect(html).toContain('aria-keyshortcuts="Enter Control+Enter Meta+Enter"');
+    expect(html).toContain('chat.input.keyboardSendHint');
+    expect(html).toContain('data-composer-tools="true" hidden=""');
     expect(html).toContain('data-panel-form="manuscript"');
     expect(html).toContain('data-composer-state="idle"');
     expect(html).toContain("Rest discussion");

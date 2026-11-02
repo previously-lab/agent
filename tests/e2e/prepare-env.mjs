@@ -1,9 +1,9 @@
 /**
  * Prepares the isolated e2e state roots before the dev server boots — chained
- * into the Playwright webServer command, so it reads the same PREVIOUSLY_HOME /
- * MEMORY_ROOT env vars the server gets (set in playwright.config.ts).
+ * into the Playwright webServer command, so it reads the same home and data
+ * root env vars the server gets (set in playwright.config.ts).
  *
- * Wipes only the three known roots for a clean, offline run.
+ * Wipes only the known roots for a clean, offline run.
  */
 import { rm, mkdir, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -12,19 +12,22 @@ import os from "node:os";
 
 const home = process.env.PREVIOUSLY_HOME;
 const memoryRoot = process.env.MEMORY_ROOT;
+const tasksRoot = process.env.TASKS_ROOT;
+const sessionsRoot = process.env.SESSIONS_ROOT;
 const workflowRoot = process.env.WORKFLOW_LOCAL_DATA_DIR;
-if (!home || !memoryRoot) {
-  throw new Error("prepare-env: PREVIOUSLY_HOME and MEMORY_ROOT must be set");
+if (!home || !memoryRoot || !tasksRoot || !sessionsRoot) {
+  throw new Error("prepare-env: PREVIOUSLY_HOME, MEMORY_ROOT, TASKS_ROOT and SESSIONS_ROOT must be set");
 }
 // Resolve every recursive-delete target and require the exact intended paths.
 const fixtureRoot = path.resolve(os.tmpdir(), "previously-e2e");
-for (const [name, dir] of [["home", home], ["memory", memoryRoot], ...(workflowRoot ? [["workflow", workflowRoot]] : [])]) {
+const roots = [["home", home], ["memory", memoryRoot], ["tasks", tasksRoot], ["sessions", sessionsRoot], ...(workflowRoot ? [["workflow", workflowRoot]] : [])];
+for (const [name, dir] of roots) {
   if (path.resolve(dir) !== path.join(fixtureRoot, name)) {
     throw new Error(`prepare-env: refusing to wipe unexpected path: ${dir}`);
   }
 }
 
-for (const dir of [home, memoryRoot, ...(workflowRoot ? [workflowRoot] : [])]) {
+for (const [, dir] of roots) {
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 }

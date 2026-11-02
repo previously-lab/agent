@@ -341,6 +341,10 @@ describe("recallReadExecute", () => {
 
 describe("doc_rework probe (§4.4)", () => {
   const evidence: ScenarioRecallEvidence = {
+    source: "original_turn",
+    boundary: "legacy_header",
+    turnIndex: 0,
+    context: { before: "", after: "" },
     ref: "records/2026-09-04-2130",
     turnId: "1",
     role: "user",
@@ -350,6 +354,7 @@ describe("doc_rework probe (§4.4)", () => {
 
   function recollection(items: ScenarioRecallEvidence[] = [evidence]): ScenarioRecallResult {
     const result: ScenarioRecallResult = {
+      verification: "quote_and_source_only",
       status: items.length ? "ok" : "insufficient_evidence",
       answer: items.length ? "预算为 5000。" : "",
       evidence: items,

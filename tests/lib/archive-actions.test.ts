@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
   sliceEntryFromDisk: vi.fn(),
   enumerateSliceIds: vi.fn(),
   enumerateTreePaths: vi.fn(),
+  getSliceContent: vi.fn(),
 }));
+
+vi.mock("@/lib/episodic/actions", () => ({ getSliceContent: mocks.getSliceContent }));
 
 vi.mock("@/lib/demo/demo-fs", () => ({
   getDemoPersona: vi.fn(() => "user"),
@@ -52,7 +55,27 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
   flushBatch: vi.fn(),
 }));
 
-import { getRoomPapers, verifyRefs } from "@/lib/archive/actions";
+import { getRecordDoc, getRoomPapers, verifyRefs } from "@/lib/archive/actions";
+
+describe("getRecordDoc attribution", () => {
+  it("preserves neutral roles and the same attachment metadata without relabeling it as speech", async () => {
+    const attachments = [{ version: 1 as const, assetId: "img_" + "a".repeat(32), ref: "records/2026/10/05/1430/u-image.png", name: "image.png", mediaType: "image/png", ordinal: 2 }];
+    mocks.getSliceContent.mockResolvedValue({ totalTurns: 5, timezone: "UTC", turns: [
+      { role: "user", timestamp: "2026-10-05T14:30:00Z", content: "confirmed", attachments },
+      { role: "agent", timestamp: "2026-10-05T14:31:00Z", content: "suggestion" },
+      { role: "tool", timestamp: "2026-10-05T14:32:00Z", content: "tool output" },
+      { role: "system", timestamp: "2026-10-05T14:33:00Z", content: "system output" },
+      { role: "unknown", sourceRole: "narrator", attribution: "ambiguous", timestamp: "2026-10-05T14:34:00Z", content: "unattributed" },
+    ] });
+    const doc = await getRecordDoc("records/2026-10-05-1430", { user: "User", agent: "Assistant", unknown: "Unattributed" });
+    expect(doc?.turns.map((turn) => turn.role)).toEqual(["user", "assistant", "tool", "system", "unknown"]);
+    expect(doc?.turns[0].attachments).toBe(attachments);
+    expect(doc?.turns[4]).toMatchObject({ sourceRole: "narrator", attribution: "ambiguous" });
+    expect(doc?.markdown).toContain("**tool**\n\ntool output");
+    expect(doc?.markdown).toContain("**Unattributed**\n\nunattributed");
+    expect(doc?.markdown).not.toContain("**User**\n\nunattributed");
+  });
+});
 
 const INDEX_RAW = (opened: string, body = ""): string =>
   `---\nopened: ${JSON.stringify(opened)}\n---\n\n# 案\n\n${body}\n`;

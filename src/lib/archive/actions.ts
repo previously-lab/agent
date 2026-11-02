@@ -286,7 +286,10 @@ export async function getArchiveRecords(
 export interface RecordTurnContent {
   index: number;
   turnId?: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool" | "system" | "unknown";
+  sourceRole?: string;
+  attribution?: import("@/lib/episodic/types").Turn["attribution"];
+  attachments?: import("@/lib/chat/image-attachments").ImageAttachmentSnapshot[];
   timestamp: string;
   content: string;
   documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
@@ -322,7 +325,10 @@ export async function getRecordDoc(
   const turns = slice.turns.map((turn, index): RecordTurnContent => ({
     index,
     ...(turn.turnId ? { turnId: turn.turnId } : {}),
-    role: turn.role === "user" ? "user" : "assistant",
+    role: turn.role === "agent" ? "assistant" : turn.role,
+    ...(turn.sourceRole ? { sourceRole: turn.sourceRole } : {}),
+    ...(turn.attribution ? { attribution: turn.attribution } : {}),
+    ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
     timestamp: turn.timestamp,
     content: turn.content,
     ...(turn.documentContext?.length ? { documentContext: turn.documentContext } : {}),
@@ -330,7 +336,7 @@ export async function getRecordDoc(
   const markdown = slice.turns
     .map(
       (turn) =>
-        `**${turn.role === "user" ? labels.user : labels.agent}**\n\n${turn.content}`,
+        `**${labels[turn.role] ?? turn.role}**\n\n${turn.content}`,
     )
     .join("\n\n");
 

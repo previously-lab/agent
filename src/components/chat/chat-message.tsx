@@ -14,6 +14,8 @@ import { RecallReferencesBar } from "./recall-references-bar";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { ConversationTurn } from "./conversation-turn";
+import { ConversationImageBody } from "./conversation-images";
+import { messageImageAttachments } from "@/lib/chat/image-attachment-message";
 import { SubmittedDocumentReferencesFromMetadata } from "@/components/documents/submitted-document-references";
 import { TimeDisplay, sameDay } from "./time-display";
 import {
@@ -147,7 +149,6 @@ export const ChatMessage = memo(function ChatMessage({
   const t = useTranslations("chat.phase");
   const tChat = useTranslations("chat");
   const reducedMotion = useReducedMotion() ?? false;
-  const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const parts = useMemo(
     () => (message.parts ?? []) as AnyPart[],
@@ -216,7 +217,7 @@ export const ChatMessage = memo(function ChatMessage({
   ) : undefined;
 
   // ── User message ──────────────────────────────────────────────────
-  if (isUser) {
+  if (!isAssistant) {
     const userText = parts
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
@@ -224,8 +225,9 @@ export const ChatMessage = memo(function ChatMessage({
     // File parts (attachments): images render inline from their data URL;
     // anything else collapses to a small file chip.
     const fileParts = parts.filter((p) => p.type === "file" && p.url);
+    const images = messageImageAttachments(message.metadata);
     return (
-      <ConversationTurn role="user" metadata={timestamp}>
+      <ConversationTurn role={message.role} metadata={timestamp}>
         {fileParts.length > 0 && (
           <div className="conversation-attachments">
             {fileParts.map((p, i) =>
@@ -249,11 +251,7 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
         <SubmittedDocumentReferencesFromMetadata metadata={message.metadata} />
-        {(userText || fileParts.length === 0) && (
-          <div className="conversation-prose">
-            <MarkdownRenderer content={userText} />
-          </div>
-        )}
+        <ConversationImageBody content={userText} images={images} />
       </ConversationTurn>
     );
   }

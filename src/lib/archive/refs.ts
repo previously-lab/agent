@@ -64,4 +64,7 @@ export function deskRefKind(refText: string): DeskRefKind {
 export interface RecordSpeakerLabels {
   user: string;
   agent: string;
+  tool?: string;
+  system?: string;
+  unknown?: string;
 }

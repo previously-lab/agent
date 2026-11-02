@@ -19,7 +19,10 @@ export function ConversationTurn({
   speaker?: string;
 }) {
   const t = useTranslations("desk");
-  const speaker = speakerProp ?? t(role === "user" ? "recordUser" : "recordAgent");
+  const tInput = useTranslations("chat.input");
+  const speaker = role === "user" || role === "assistant" || role === "agent"
+    ? speakerProp ?? t(role === "user" ? "recordUser" : "recordAgent")
+    : tInput(role === "system" ? "source.system" : role === "tool" ? "source.tool" : "source.unknown");
 
   return (
     <article

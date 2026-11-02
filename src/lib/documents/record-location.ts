@@ -3,7 +3,9 @@ import type { DocumentTurnRole } from "./document-link";
 export interface RecordAnchorTurn {
   index: number;
   turnId?: string;
-  role: DocumentTurnRole;
+  // Unknown historical sources still have navigable turn identities. Only
+  // the optional citation role is restricted to the two confirmed voices.
+  role: string;
 }
 
 export type RecordAnchorMatch =

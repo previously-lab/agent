@@ -25,6 +25,8 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronRight, Split, WrapText } from "lucide-react";
 import { ConversationTurn } from "./conversation-turn";
+import { ConversationImageBody } from "./conversation-images";
+import { messageImageAttachments } from "@/lib/chat/image-attachment-message";
 import { MarkdownRenderer } from "./markdown";
 import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
 import { PERSISTENCE_HANDOFF_CHUNK } from "@/lib/chat/turn-types";
@@ -45,6 +47,7 @@ export interface ParallelLane {
   runId?: string;
   /** The echoed user message ("" for the summary lane). */
   userText: string;
+  userMessage?: UIMessage;
   /** The batch-closing lane. */
   summary?: boolean;
   /** Live/settled answer text — the reader patches this per network batch. */
@@ -231,11 +234,7 @@ export function ParallelLaneView({ lane }: { lane: ParallelLaneSeat }) {
           </button>
           {!collapsed && (
             <div>
-              {lane.userText && (
-                <div className="mb-1 text-xs text-muted-foreground">
-                  {lane.userText}
-                </div>
-              )}
+              {(lane.userText || lane.userMessage) && <ConversationImageBody content={lane.userText} images={messageImageAttachments(lane.userMessage?.metadata)} />}
               {lane.text ? (
                 <div className="conversation-prose">
                   <MarkdownRenderer

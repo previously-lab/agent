@@ -18,6 +18,13 @@ export interface DurableChatOptions {
   onError?: (error: Error) => void;
 }
 
+/** Draft ownership transfers when the POST is accepted, independently of the
+ * reply stream's completion. A failed/aborted POST leaves the draft intact. */
+export interface ChatSubmissionHandoff {
+  accepted: () => void;
+  rejected: (error: Error) => void;
+}
+
 /** Own one durable conversation lane. Parallel sends keep their independent
  * readers; the page's existing fold/recovery logic owns their seating. */
 export function useDurableChat(options: DurableChatOptions) {
@@ -42,7 +49,7 @@ export function useDurableChat(options: DurableChatOptions) {
     updateMessages(next);
   }, []);
 
-  const execute = useCallback(async (base: UIMessage[], mode: "send" | "regenerate" | "resume", screen?: ScreenContext) => {
+  const execute = useCallback(async (base: UIMessage[], mode: "send" | "regenerate" | "resume", screen?: ScreenContext, handoff?: ChatSubmissionHandoff) => {
     active.current?.abort();
     const controller = new AbortController();
     active.current = controller;
@@ -53,6 +60,13 @@ export function useDurableChat(options: DurableChatOptions) {
     setMessages(base);
     let runId = mode === "resume" ? latest.current.getRunId() : null;
     let assistantId = runId ? `assistant-run-${runId}` : crypto.randomUUID();
+    let accepted = false;
+    let handoffSettled = false;
+    const rejectHandoff = (error: Error) => {
+      if (handoffSettled) return;
+      handoffSettled = true;
+      handoff?.rejected(error);
+    };
     try {
       let response: Response | undefined;
       if (mode !== "resume") {
@@ -64,10 +78,16 @@ export function useDurableChat(options: DurableChatOptions) {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error((await response.text()) || `Chat HTTP ${response.status}`);
+        // The server owns this turn now, even if a local notification throws
+        // or the reader was cancelled while the response arrived.
+        accepted = true;
+        handoffSettled = true;
+        handoff?.accepted();
         if (!current()) return;
         runId = response.headers.get("x-workflow-run-id");
         if (runId) assistantId = `assistant-run-${runId}`;
-        latest.current.onRunStarted?.(response, chatId.current);
+        try { latest.current.onRunStarted?.(response, chatId.current); }
+        catch (cause) { console.error("[chat] run-start notification failed", cause); }
       }
       if (!response && !runId) { if (current()) setStatus("ready"); return; }
       setStatus("streaming");
@@ -85,13 +105,27 @@ export function useDurableChat(options: DurableChatOptions) {
         latest.current.onEnd?.();
       }
     } catch (cause) {
+      const failure = cause instanceof Error ? cause : new Error(String(cause));
+      if (!accepted) rejectHandoff(failure);
       if (current()) {
-        const failure = cause instanceof Error ? cause : new Error(String(cause));
+        // A rejected optimistic send remains in the editor for retry, not as
+        // a second user paragraph. Remove only this attempt's own message.
+        if (!accepted && mode === "send") {
+          const pendingId = base.at(-1)?.id;
+          setMessages(previous => previous.filter(message => message.id !== pendingId));
+        }
         setError(failure);
         setStatus("error");
         latest.current.onError?.(failure);
       }
     } finally {
+      if (!accepted && controller.signal.aborted) {
+        rejectHandoff(new Error("Submission cancelled"));
+        if (mode === "send") {
+          const pendingId = base.at(-1)?.id;
+          setMessages(previous => previous.filter(message => message.id !== pendingId));
+        }
+      }
       if (generation.current === ticket) active.current = null;
     }
   }, [setMessages]);
@@ -101,9 +135,9 @@ export function useDurableChat(options: DurableChatOptions) {
     return cancelActive;
   }, [execute, cancelActive]);
 
-  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string; metadata?: unknown }, screen?: ScreenContext) => {
+  const sendMessage = useCallback((message: { role?: "user"; parts: UIMessage["parts"]; id?: string; metadata?: unknown }, screen?: ScreenContext, handoff?: ChatSubmissionHandoff) => {
     const next: UIMessage = { ...message, id: message.id ?? crypto.randomUUID(), role: "user" };
-    return execute([...messagesRef.current, next], "send", screen);
+    return execute([...messagesRef.current, next], "send", screen, handoff);
   }, [execute]);
 
   const regenerate = useCallback((request: { messageId?: string } = {}, screen?: ScreenContext) => {

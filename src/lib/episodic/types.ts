@@ -32,8 +32,11 @@ export type EmotionalTone =
 export interface Turn {
   /** UTC ISO 8601 timestamp of this message */
   timestamp: string;
-  /** "user" or "agent" */
-  role: "user" | "agent";
+  /** Historical non-conversation sources are retained, never coerced to user. */
+  role: "user" | "agent" | "tool" | "system" | "unknown";
+  /** Original role label when normalized or quarantined; not an authorship proof. */
+  sourceRole?: string;
+  attribution?: "escaped_v1" | "legacy_header" | "ambiguous";
   /** The message content (plain text or markdown) */
   content: string;
   /**
@@ -45,6 +48,9 @@ export interface Turn {
   clientMessageId?: string;
   /** Explicit reading pointers selected for this user turn; never source evidence or write authorization. */
   documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
+  /** Structured image identities, separate from authored prose. Legacy-* display
+   * hints are reconstructed from old records, not proof of a verified upload. */
+  attachments?: import("@/lib/chat/image-attachments").ImageAttachmentSnapshot[];
   /**
    * Nested-bubble provenance (v0.30 §3.4, D7): on an AGENT turn produced by an
    * inner episode instance, the turnId of the USER turn it answers. Absent on

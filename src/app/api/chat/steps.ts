@@ -169,6 +169,7 @@ import {
 } from "@/lib/chat/slice-landing";
 import { readLatestReflectionNote } from "@/lib/chat/hq-log";
 import { persistSummaryMembers } from "@/lib/chat/persist-summary";
+import { recordTurnsToMessages, renderAttributedRecord } from "@/lib/episodic/record-attribution";
 import {
   runCardEvolution,
   type CardEvolutionReaders,
@@ -176,7 +177,7 @@ import {
 import { readFile, readFileFresh } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
 import { readFileDemo } from "@/lib/demo/demo-fs";
-import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
+import { parseSliceId } from "@/lib/episodic/turn-parser";
 import { localDateKey } from "@/lib/time/relative";
 import {
   shouldEmitProgress,
@@ -379,15 +380,7 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
       if (!parsed) return `ERROR: Invalid slice ID.`;
       // Dual-root (v0.19 R2): the cited slice may predate the records root move.
       const raw = await readSliceDual(parsed, "core");
-      if (range && range.type === "last") {
-        const { turns } = parseTurns(raw);
-        const n = range.count ?? 3;
-        return turns
-          .slice(-n)
-          .map((t) => `${t.header}\n${t.content}`)
-          .join("\n");
-      }
-      return raw;
+      return renderAttributedRecord(`records/${sid}`, raw, range);
     },
     readAgentTimeline: async (sid) => {
       const parsed = parseSliceId(sid);
@@ -434,6 +427,9 @@ function collectTurnAttachments(input: TurnInput): {
   files: EvidenceAttachmentInput[];
   unfetched: string[];
 } {
+  // Verified images have their own stable snapshot channel through summary;
+  // decoding model/imageAttachments again would create duplicate evidence.
+  if (input.verifiedImages?.length) return { files: [], unfetched: [] };
   const files: EvidenceAttachmentInput[] = [];
   const unfetched: string[] = [];
   const seen = new Set<string>();
@@ -482,10 +478,7 @@ function collectTurnAttachments(input: TurnInput): {
 
 /** Slice turns → wire messages (the shape the model history window uses). */
 function sliceTurnsToMessages(turns: TimeSlice["turns"]): ModelMessage[] {
-  return turns.map((t) => ({
-    role: t.role === "agent" ? "assistant" : "user",
-    content: t.content,
-  }));
+  return recordTurnsToMessages(turns);
 }
 
 /**
@@ -2224,7 +2217,7 @@ async function resolveLanding(
   }
   if (landing.kind === "open-new" && edge) {
     const slice = createSlice(
-      first?.userText || "(empty)",
+      first?.imageAttachments?.length ? first.userText : first?.userText || "(empty)",
       payload.clientTimezone,
       first?.turnId ?? payload.own.turnId,
       landing.checkpoint ? edge.slice_id : undefined,
@@ -2233,7 +2226,7 @@ async function resolveLanding(
   }
   // fresh — no edge on disk at all: mint the first page, nothing to seal.
   const slice = createSlice(
-    first?.userText || "(empty)",
+    first?.imageAttachments?.length ? first.userText : first?.userText || "(empty)",
     payload.clientTimezone,
     first?.turnId ?? payload.own.turnId,
   );

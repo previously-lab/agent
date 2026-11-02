@@ -565,7 +565,7 @@ function sliceExcerpt(raw: string): { excerpt: string; title: string; closed: bo
   let firstUserLine = "";
   try {
     const { turns } = parseTurns(raw);
-    const firstUser = turns.find((t) => /\((\w+)\)/.exec(t.header)?.[1] === "user");
+    const firstUser = turns.find((t) => t.role === "user");
     firstUserLine = firstUser?.content.split("\n").find((l) => l.trim())?.trim() ?? "";
   } catch {
     // leave empty

@@ -141,6 +141,7 @@ export interface ParallelLaneSeat {
   provisionalTurnId?: string;
   /** The echoed user message ("" for the summary lane and "main"). */
   userText: string;
+  userMessage?: UIMessage;
   /** The batch-closing lane — renders with the summary label. */
   summary?: boolean;
   /** The page's collapse verdict: every lane but the newest folds. */

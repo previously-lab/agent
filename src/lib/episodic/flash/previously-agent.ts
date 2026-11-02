@@ -67,7 +67,7 @@ import { z } from "zod";
 import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
-import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
+import { RECORD_ATTRIBUTION_RULE, renderAttributedTurns } from "../record-attribution";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import type { SelfAgent } from "@/lib/evolution/paths";
@@ -167,7 +167,7 @@ export interface PreviouslyAgentInput {
   /** The current card — pre-loaded by the executor. */
   previouslyContent: string;
   /** The recent exchange (the closed slice's turns, or the active exchange). */
-  recentTurns: Array<{ role: string; content: string }>;
+  recentTurns: Array<{ role: string; content: string; turnId?: string; timestamp?: string }>;
   /** @deprecated Slice tags stopped being written in v0.19 R2 (always `[]`);
    *  the prompt no longer renders them. Tolerated for older callers only. */
   currentSliceTags?: string[];
@@ -389,7 +389,7 @@ FIRST check the current card's structure in the task. If it is NOT the v5 card (
 **Semantic merging:** the same concept across languages (e.g. "self-evolution" and "自我进化") is ONE fact — merge, never duplicate.`;
 
 /** Fully static system prompt — one shared prefix-cache entry across calls. */
-const PREVIOUSLY_SYSTEM = buildSubAgentSystem(PREVIOUSLY_ROLE);
+const PREVIOUSLY_SYSTEM = buildSubAgentSystem(`${PREVIOUSLY_ROLE}\n\n${RECORD_ATTRIBUTION_RULE}`);
 
 function buildTimeContext(input: PreviouslyAgentInput): string {
   const doc = input.previouslyContent.trim()
@@ -540,7 +540,7 @@ ${previouslyContent || "(empty — new card. Build it from the structure in your
 ## Recent Conversation (your window into what changed)
 
 ${recentTurns.length > 0
-  ? recentTurns.map((t) => `**${t.role}**: ${projectNativeReplySemantics(t.content, t.role)}`).join("\n\n")
+  ? renderAttributedTurns(recentTurns)
   : "(No recent conversation provided.)"}`;
 }
 

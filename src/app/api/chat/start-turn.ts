@@ -28,8 +28,13 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { withGitHubReadBudget } from "@/lib/github/client";
 import { screenContextSchema, type ScreenContext } from "@/lib/chat/screen-context";
 import { parseDocumentContext } from "@/lib/chat/document-context";
+import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
 
 export interface StartTurnArgs {
+  /** Server-verified images; never copied directly from a request field. */
+  verifiedImages?: ImageAttachmentEvidence[];
+  /** Raw user prose before the server adds image/tool mapping annotations. */
+  originalUserText?: string;
   /** Raw UI messages from the client. */
   messages: UIMessage[];
   /** Optional model override; falls back to the user config default. */
@@ -261,7 +266,7 @@ export async function startTurn(
 
   const userMessages = inbound.filter((m) => m.role === "user");
   const lastUser = userMessages[userMessages.length - 1];
-  const lastUserMessage = extractLastUserText(lastUser);
+  const lastUserMessage = args.originalUserText ?? extractLastUserText(lastUser);
   // The client's own UIMessage id for the answered message — the orchestrator
   // (v0.31) stamps it as the first bubble's anchorId (see TurnInput).
   const clientMessageId =
@@ -299,6 +304,7 @@ export async function startTurn(
     startedAtIso: new Date().toISOString(),
     turnId,
     imageAttachments,
+    ...(args.verifiedImages?.length ? { verifiedImages: args.verifiedImages } : {}),
     ...(clientMessageId ? { clientMessageId } : {}),
     ...(args.regenerate === true ? { regenerate: true } : {}),
     ...(machineContext ? { machineContext } : {}),

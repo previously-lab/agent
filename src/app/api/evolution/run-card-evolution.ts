@@ -77,7 +77,7 @@ export interface RunCardEvolutionInput {
   /** When set (slice_closed), enables the deep whole-slice review. */
   closedSliceId?: string;
   /** Recent conversation to evaluate — the closed slice's turns or the active exchange. */
-  recentTurns: Array<{ role: string; content: string }>;
+  recentTurns: Array<{ role: string; content: string; turnId?: string; timestamp?: string }>;
   /** @deprecated Slice tags stopped being written in v0.19 R2 (always `[]`);
    *  the review prompt no longer renders them. Tolerated for older callers. */
   currentSliceTags?: string[];

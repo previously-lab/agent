@@ -18,7 +18,7 @@ const MAX_LEGACY_RECONCILE = 100;
 function evidenceError(rawRecords: Map<string, string>, evidence: TaskEvidence): string | null {
   const raw = rawRecords.get(evidence.sliceId);
   if (raw === undefined) return `readRound ${evidence.sliceId} before using its user evidence`;
-  const turn = parseTurns(raw).turns.find((item) => item.turnId === evidence.turnId && /\(user\)/.test(item.header));
+  const turn = parseTurns(raw).turns.find((item) => item.turnId === evidence.turnId && item.role === "user");
   if (!turn || !evidence.statement.trim() || !turn.content.includes(evidence.statement)) {
     return "task evidence must quote the identified RAW USER turn; agent prose and summaries do not authorize lifecycle changes";
   }

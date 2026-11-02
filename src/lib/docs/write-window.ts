@@ -95,8 +95,11 @@ export class CaseWriteRefusal extends WriteRefusal {
 export const DOC_WRITE_WINDOW_RULE =
   "Write-window discipline: a document's first write is its FULL text. " +
   `While the write window is open (continuous editing — each write within ${DOC_WRITE_WINDOW_MINUTES} minutes of the last) the document may be rewritten whole; ` +
-  "once the window has closed, it grows only by dated corrections or supplements appended at the tail. " +
-  "When the content outgrows the length cap, open a NEW document and leave one line in the original pointing at it.";
+  "once the window has closed, preserve its body. Use a short dated tail for a correction or a link, " +
+  "a dated piece for a question the reader should be able to revisit on its own, " +
+  "and _current.md for changed understanding. Choose by reading purpose, not by a length cap. " +
+  "Read relevant existing pieces before adding another; link to the piece instead of copying its argument into the tail. " +
+  "Keep long source material and its line breaks in a piece, never flatten it into a tail.";
 
 /**
  * The "memory is a git tree" contract sentence — the SINGLE SOURCE every

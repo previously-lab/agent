@@ -31,6 +31,7 @@ import type { TaskAckIntent } from "@/lib/chat/task-followups";
  * stay JSON-serializable end to end.
  */
 export interface TurnInput {
+  verifiedImages?: import("./image-attachments").ImageAttachmentEvidence[];
   /**
    * Converted chat history from the client (capped at a broad payload limit
    * in start-turn). The workflow cuts the slice-aligned window from its tail
@@ -512,6 +513,7 @@ export interface TurnRunResult extends TaskAckSource {
    * persisted user turn with the landed names.
    */
   attachments?: Array<{ name: string; dataBase64: string }>;
+  imageAttachments?: import("./image-attachments").ImageAttachmentEvidence[];
   /**
    * The people/user mid-life snapshot update for an EXISTING slice (a birth
    * carries its own) — written to previously.md by the summary stream.

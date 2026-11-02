@@ -594,6 +594,8 @@ export function DomChatList({
               turnId={item.turn.turnId}
               timestamp={item.turn.timestamp}
               documentContext={item.turn.documentContext}
+              attachments={item.turn.attachments}
+              sourceRole={item.turn.sourceRole}
             />
           </div>
         );

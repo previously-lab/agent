@@ -19,7 +19,8 @@ import {
   slicePartPathCandidates,
   type SlicePart,
 } from "@/lib/episodic";
-import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
+import { parseSliceId } from "@/lib/episodic/turn-parser";
+import { renderAttributedRecord } from "@/lib/episodic/record-attribution";
 import { fsListFiles, fsReadFile, type WriteBatch } from "@/lib/episodic/io-helpers";
 import type { CaseWriterManifest } from "@/lib/episodic/flash/librarian";
 import { getModel, getDefaultModelId } from "@/lib/models/registry";
@@ -91,15 +92,7 @@ export function buildRunCardReaders(batch?: WriteBatch): CardEvolutionReaders {
     readSlice: async (sid, range) => {
       if (!parseSliceId(sid)) return `ERROR: Invalid slice ID.`;
       const raw = await readDual(sid, "core");
-      if (range && range.type === "last") {
-        const { turns } = parseTurns(raw);
-        const n = range.count ?? 3;
-        return turns
-          .slice(-n)
-          .map((t) => `${t.header}\n${t.content}`)
-          .join("\n");
-      }
-      return raw;
+      return renderAttributedRecord(`records/${sid}`, raw, range);
     },
     readAgentTimeline: async (sid) => {
       if (!parseSliceId(sid)) return `(invalid slice: ${sid})`;

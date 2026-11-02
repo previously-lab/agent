@@ -13,15 +13,6 @@ import { useLayoutEffect, useRef } from "react";
 import { usePanelTier } from "./conversation-panel";
 import "./writing.css";
 
-/** The gap between the bottom edge the composer hangs from and the bottom of
- *  the viewport — the same number the container's `bottom-*` carries. Named
- *  once so the clearance reported upward cannot drift from the position
- *  actually used. */
-const COMPOSER_OFFSET_PX = 12;
-/** Breathing room between the composer's top edge and the content it floats
- *  over. Small: the composer is chrome, and a large gap reads as a footer. */
-const COMPOSER_GAP_PX = 16;
-
 export interface ComposerHostProps {
   /** The live composer. A plain node: the host dictates no form (the card
    *  rungs' collapsed form retired with the ladder) — the tier only changes
@@ -64,15 +55,21 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
     const report = (): void => {
       const h = el.getBoundingClientRect().height;
       if (h > 0) {
-        onClearanceChange(Math.ceil(h) + COMPOSER_OFFSET_PX + COMPOSER_GAP_PX);
+        const bottom = onPill ? Number.parseFloat(getComputedStyle(el).bottom) || 0 : 0;
+        // Pill padding is the actual transparent breathing room; its measured
+        // height already includes it. In-flow manuscripts need no extra reserve.
+        onClearanceChange(Math.ceil(h + bottom));
       }
     };
     report();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(report);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [onClearanceChange]);
+    const observer = new MutationObserver(report);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
+    window.addEventListener("resize", report);
+    return () => { ro.disconnect(); observer.disconnect(); window.removeEventListener("resize", report); };
+  }, [onClearanceChange, onPill]);
 
   return (
     <div
@@ -81,13 +78,13 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
       className={
         onPill
           ? // The pill's seat: centred over the panel box (which spans the
-            // viewport) with side margins, bottom-4 (= PILL_BOTTOM_GAP_PX)
+            // viewport) with token-sized margins and transparent top padding
             // above the box's bottom edge. The row itself stays
             // POINTER-TRANSPARENT: it spans the full viewport width, and
             // letting it eat clicks would wall off the whole bottom edge
             // from the world — only the pill's own glass box (the inner
             // wrapper) opts back in.
-            "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-2 md:px-4"
+            "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-2 pt-4 md:px-4"
           : // At the manuscript tier the composer is the next paragraph in
             // the stream, not a card floating over the last reply. Its own
             // layout height supplies the stream extent; the measurement is

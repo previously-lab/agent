@@ -14,6 +14,12 @@ const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
+  flushBatch: vi.fn(async (batch: { entries: Map<string, string | null> }) => {
+    for (const [path, content] of batch.entries) {
+      if (content === null) io.files.delete(path); else io.files.set(path, content);
+    }
+    batch.entries.clear();
+  }),
   fsReadFile: vi.fn(
     async (path: string, batch?: { entries: Map<string, string | null> }) => {
       // Mirror the real contract: the pending queue is consulted first.
@@ -598,7 +604,7 @@ describe("runScribePass — case model, no strands", () => {
     expect(io.files.get(AGENT_MD)).toContain(SCRIBE_RECORD_PREFIX);
   });
 
-  it("an OUT-OF-WINDOW entry with a multi-line body lands as ONE collapsed tail line (never corrupts the tail)", async () => {
+  it("an OUT-OF-WINDOW body-only result must replan instead of flattening its prose", async () => {
     io.files.set(
       AGENT_MD,
       [
@@ -628,10 +634,11 @@ describe("runScribePass — case model, no strands", () => {
       excerpt: EXCERPT,
       date: DATE,
     });
-    expect(result.written).toEqual(["research/封case/index.md"]);
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("Replan");
     const sealed = io.files.get("memory/research/封case/index.md")!;
-    // The whole stamped entry collapsed into ONE dated line.
-    expect(sealed).toContain(`2026-08-09：第一行 第二行 第四行 (refs: ${SLICE_ID})`);
+    expect(sealed).not.toContain("第一行");
+    expect(io.files.get(AGENT_MD)).not.toContain(SCRIBE_RECORD_PREFIX);
     // A re-parse finds a clean tail — nothing degrades into preserved.
     const reparsed = parseCaseDoc(sealed, {
       category: "research",
@@ -641,7 +648,6 @@ describe("runScribePass — case model, no strands", () => {
     expect(reparsed.warnings).toEqual([]);
     expect(reparsed.tail.map((t) => t.text)).toEqual([
       "结案。",
-      `第一行 第二行 第四行 (refs: ${SLICE_ID})`,
     ]);
   });
 
@@ -694,7 +700,7 @@ describe("runScribePass — case model, no strands", () => {
           input: {
             entries: [
               { id: "m1", body: "草稿 + 新情况。" },
-              { id: "m2", body: "封口后的一条补充。" },
+              { id: "m2", action: "appendTail", line: "封口后的一条补充。" },
             ],
             reasoning: "r",
           },
@@ -735,7 +741,7 @@ describe("runScribePass — case model, no strands", () => {
     expect(io.files.size).toBe(1); // only the agent.md itself
   });
 
-  it("证据·大段文字 (§C.1): a marker carrying `body` opens the case with the FULL text + origin stamped", async () => {
+  it("keeps pasted source material in a focused piece with its original line breaks", async () => {
     const longText = "第一行原文。\n\n第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。";
     io.files.set(
       AGENT_MD,
@@ -748,7 +754,7 @@ describe("runScribePass — case model, no strands", () => {
         {
           toolName: "scribeOutput",
           input: {
-            entries: [{ id: "t9-1", body: "用户粘贴的一段配置资料，值得长期留存。" }],
+            entries: [{ id: "t9-1", action: "addPiece", title: "配置原稿", overviewBody: "本案用于查阅配置资料。", body: "配置资料，归属以原始记录为准。" }],
             reasoning: "r",
           },
         },
@@ -760,10 +766,12 @@ describe("runScribePass — case model, no strands", () => {
       excerpt: EXCERPT,
       date: DATE,
     });
-    expect(result.written).toEqual(["research/配置参考/index.md"]);
-    const raw = io.files.get("memory/research/配置参考/index.md")!;
+    expect(result.written).toEqual(["research/配置参考/index.md", `research/配置参考/${DATE}-配置原稿.md`]);
+    const raw = io.files.get(`memory/research/配置参考/${DATE}-配置原稿.md`)!;
     // 出处 stamped at the head of the original-text block
-    expect(raw).toContain(`用户于 ${DATE} 在切片 ${SLICE_ID} 粘贴`);
+    expect(raw).toContain(`原始材料（${DATE}，切片 ${SLICE_ID}`);
+    expect(raw).toContain(longText);
+    expect(io.files.get("memory/research/配置参考/index.md")).not.toContain(longText);
     // the FULL text is carried verbatim — not the one-line note
     expect(raw).toContain("第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。");
     expect(raw).toContain(`(refs: ${SLICE_ID})`);

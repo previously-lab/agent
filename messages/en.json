@@ -70,6 +70,33 @@
       "attach": "Attach files",
       "stopTooltip": "Stop generation",
       "sendTooltip": "Send message",
+      "tools": "Writing tools: attach images and reference documents",
+      "keyboardSendCaption": "Enter to send · Shift+Enter for a new line",
+      "keyboardCaption": "Enter for a new line · Ctrl/Cmd+Enter to send",
+      "source": {
+        "unknown": "Unattributed text",
+        "tool": "Tool output",
+        "system": "System text"
+      },
+      "images": {
+        "open": "Open image: {name}",
+        "attached": "Attached images",
+        "unreferenced": "Unreferenced attachments",
+        "notReady": "Wait for image uploads, or retry or remove the failed images before sending.",
+        "sendFailed": "Message was not accepted. Your draft is still here; you can retry.",
+        "preparing": "Preparing image…",
+        "uploading": "Uploading…",
+        "failed": "Upload failed",
+        "originalTooLarge": "Choose an original image no larger than 10 MB.",
+        "tooLarge": "The prepared image exceeds the 5 MB upload limit.",
+        "retry": "Retry upload",
+        "limit": "You can attach up to 4 images per message.",
+        "removed": "Removed {name}.",
+        "undo": "Undo",
+        "submitting": "Sending this draft… You can keep writing."
+      },
+      "keyboardHint": "Enter starts a new line. Control or Command plus Enter sends. Tab reaches writing tools, Send, and Stop while a reply is running.",
+      "keyboardSendHint": "Enter sends. Shift plus Enter starts a new line. Tab reaches writing tools, Send, and Stop while a reply is running.",
       "modelTooltip": "Switch AI model",
       "modelLabel": "Model",
       "modelGroup": {
