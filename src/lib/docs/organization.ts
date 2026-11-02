@@ -2,6 +2,7 @@
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { buildPieceFileName, parsePieceFileName } from "./case-naming";
 import { caseDirPath, casePiecePath, type CaseCategory } from "./paths";
+import { isHistoryArchiveFileName } from "./history-archive";
 
 export interface CasePieceCatalogEntry {
   ref: string;
@@ -20,7 +21,7 @@ export function casePieceCatalog(input: {
   if (input.paths === null) return null;
   const prefix = `${caseDirPath(input.category, input.caseName)}/`;
   return [...new Set(input.paths)].flatMap((path) => {
-    if (!path.startsWith(prefix)) return [];
+    if (!path.startsWith(prefix) || isHistoryArchiveFileName(path)) return [];
     const piece = parsePieceFileName(path.slice(prefix.length));
     if (!piece) return [];
     const ref = path.slice("memory/".length, -".md".length);

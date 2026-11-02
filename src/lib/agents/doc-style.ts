@@ -31,6 +31,8 @@ A recorded role establishes who wrote the words, not whether the user endorsed t
 /** Shared authorship decisions; storage limits do not decide a document's subject. */
 export const DOC_ORGANIZATION_RULE = `## Write for a future reader's question
 
+State the new conclusion, the reader's question, and the newly available evidence before choosing to write. A new turn or a full file is not itself a reason for a new report. Short progress belongs in 1–2 conclusion sentences with records references, not another retelling of the exchange. Check server-verified existing product refs across writing flows, actually read relevant products, and choose covered when they suffice; a directory listing or a model's claim of a prior write is not proof. The same source can legitimately support different reading questions. Do not invent quotas or claim semantic deduplication is automatic.
+
 Before writing, identify what this document will help the reader understand or do, and what new evidence or changed understanding earns the write. The conversation already preserves the exchange. If a document you actually read already covers the material, reuse it without restating it merely to complete a marker.
 
 A case holds a continuing subject; its pieces answer questions worth returning to independently. Inspect the available piece titles, read the relevant pieces, and reuse their exact references before opening another. A directory entry is a reading pointer, never evidence that you read or verified the piece. Different questions can deserve separate pieces from the beginning, even when they are short. A different subject belongs in its own case, connected by a link.

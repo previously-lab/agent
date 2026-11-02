@@ -45,6 +45,7 @@ export function isWithinWriteWindow(updatedIso: string, nowMs: number): boolean 
  * — a refusal is a normal flow, not a failure.
  */
 export type WriteRefusalCode =
+  | "document_full"
   | "rewrite_conflict"
   | "rewrite_window_closed"
   | "already_exists"

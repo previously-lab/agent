@@ -1,3 +1,4 @@
+import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 /**
  * The memory-read facade (v0.36) — the field agent's read vocabulary over the
  * memory tree: five verbs (recallRecent / recallFind / recallSearch /
@@ -362,7 +363,7 @@ export function buildTreeIndex(paths: string[]): MemoryTreeIndex {
       segs.length === 4 &&
       typeof segs[1] === "string" &&
       CASE_TREE_DIR_SET.has(segs[1] as CaseCategory) &&
-      PIECE_NAME_RE.test(segs[3]!)
+      PIECE_NAME_RE.test(segs[3]!) && !isHistoryArchiveFileName(path)
     ) {
       nodeFor(segs[1], segs[2]!).pieces.push(path);
     }
@@ -1825,6 +1826,7 @@ function classifyChangedPath(
   change: RecallChange,
 ): { ref: string; category: RecallCategory } | null {
   const path = normalizeChangedPath(rawPath);
+  if (isHistoryArchiveFileName(path)) return null;
   if (path.startsWith("memory/config/") || path === "memory/user/config.json") return null;
   if (path.includes("/attachments/")) return null;
 

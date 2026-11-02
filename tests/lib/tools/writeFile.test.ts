@@ -36,7 +36,7 @@ describe("writeFile", () => {
   });
 
   it("creates a new file in allowed path", async () => {
-    mockGetContent.mockRejectedValue(new Error("Not Found"));
+    mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile(
@@ -63,6 +63,8 @@ describe("writeFile", () => {
       data: {
         type: "file",
         sha: "existing-sha-123",
+        encoding: "base64",
+        content: Buffer.from("Original content").toString("base64"),
       },
     });
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
@@ -78,12 +80,13 @@ describe("writeFile", () => {
     expect(mockCreateOrUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         sha: "existing-sha-123",
+        content: Buffer.from("Updated").toString("base64"),
       })
     );
   });
 
   it("accepts empty content", async () => {
-    mockGetContent.mockRejectedValue(new Error("Not Found"));
+    mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile(
@@ -104,7 +107,7 @@ describe("writeFile", () => {
   });
 
   it("uses custom commit message when provided", async () => {
-    mockGetContent.mockRejectedValue(new Error("Not Found"));
+    mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     await writeFile(

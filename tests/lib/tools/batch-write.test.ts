@@ -20,14 +20,14 @@ const mockOctokit = vi.hoisted(() => {
     createCommit: vi.fn(),
     updateRef: vi.fn(),
   };
-  return { git: api, reposGet: vi.fn() };
+  return { git: api, reposGet: vi.fn(), getContent: vi.fn() };
 });
 
 vi.mock("@/lib/github/client", () => ({
   getOctokit: () => ({
     rest: {
       git: mockOctokit.git,
-      repos: { get: mockOctokit.reposGet },
+      repos: { get: mockOctokit.reposGet, getContent: mockOctokit.getContent },
     },
   }),
 }));
@@ -56,6 +56,7 @@ import { getGitHubReadHead, withGitHubReadView } from "@/lib/github/read-view";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockOctokit.getContent.mockRejectedValue(Object.assign(new Error("Not found"), { status: 404 }));
   _resetDefaultBranchCache();
   _resetHeadStateCache();
   mockOctokit.reposGet.mockResolvedValue({
@@ -93,6 +94,20 @@ describe("commitBatchToGitHub", () => {
     });
     mockOctokit.git.updateRef.mockResolvedValue({ data: {} });
   }
+
+  it("preflights document caps before creating any blobs, including direct batch entries", async () => {
+    setupMocks();
+    await expect(commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: "x".repeat(12_001) }], "oversize")).rejects.toMatchObject({ code: "document_full" });
+    expect(mockOctokit.git.createBlob).not.toHaveBeenCalled();
+    expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+  });
+  it("makes a byte-identical oversize retry a real no-op and refuses an unproved shrink", async () => {
+    setupMocks(); const old = "x".repeat(13_000);
+    mockOctokit.getContent.mockResolvedValue({ data: { type: "file", content: Buffer.from(old).toString("base64") } });
+    expect(await commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: old }], "retry")).toBe(HEAD_SHA);
+    expect(mockOctokit.git.createBlob).not.toHaveBeenCalled();
+    await expect(commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: "short" }], "unproved")).rejects.toMatchObject({ code: "document_full" });
+  });
 
   it("makes the correct API call sequence: getRef → getCommit → blobs → tree → commit → updateRef", async () => {
     setupMocks();

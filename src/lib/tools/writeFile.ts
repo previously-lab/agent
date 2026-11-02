@@ -3,6 +3,10 @@ import { assertPortableRepoPath } from "@/lib/portable-path";
 import { isPathAllowed } from "@/lib/whitelist";
 import { invalidateReadCache } from "@/lib/tools/readFile";
 import { noteRepoHead } from "@/lib/tools/batch-write";
+import { validateDocumentEntries, absentDocumentError } from "@/lib/docs/write-validation";
+import { WriteRefusal } from "@/lib/docs/write-window";
+import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
+import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
 
@@ -24,6 +28,8 @@ export async function writeFile(
   }
   assertPortableRepoPath(path);
 
+  if (isHistoryArchiveFileName(path)) throw new WriteRefusal("commit_failed", "History archives require the batch writer so the archive and its Git byte-preservation rule commit together");
+
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
     throw new Error(
       `Content is too large (${Buffer.byteLength(content, "utf-8")} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`
@@ -34,6 +40,7 @@ export async function writeFile(
 
   try {
     let sha: string | undefined;
+    let previous: string | null = null;
 
     // Check if file already exists (to get SHA for update)
     try {
@@ -44,10 +51,18 @@ export async function writeFile(
       });
       if (!Array.isArray(existing.data)) {
         sha = existing.data.sha;
+        if (isAuthoredDocumentPath(path)) {
+          if (!("content" in existing.data)) throw new Error(`Document source unreadable: ${path}`);
+          previous = Buffer.from(existing.data.content, "base64").toString("utf8");
+        }
       }
-    } catch {
+    } catch (error) {
+      if (!absentDocumentError(error)) throw error;
       // File doesn't exist — that's fine, we'll create it
     }
+
+    await validateDocumentEntries([{ path, content }], async () => previous);
+    if (previous === content) return { path, created: false };
 
     const commitMessage = message ?? `Update ${path}`;
 
@@ -80,6 +95,7 @@ export async function writeFile(
 
     return { path, created: !sha };
   } catch (error) {
+    if (error instanceof WriteRefusal) throw error;
     if (error instanceof Error && error.message.startsWith("Access denied")) {
       throw error;
     }
@@ -101,6 +117,7 @@ export async function deleteFile(
   owner: string,
   message?: string
 ): Promise<void> {
+  if (isHistoryArchiveFileName(path)) throw new Error("History archives are immutable");
   if (!isPathAllowed(path)) {
     throw new Error(
       `Access denied: path "${path}" is outside allowed directories`
@@ -153,6 +170,7 @@ export async function writeBinaryFile(
   owner: string,
   message?: string
 ): Promise<{ path: string; created: boolean }> {
+  if (isAuthoredDocumentPath(path)) throw new Error("Authored Markdown must use the guarded text writer");
   if (!isPathAllowed(path)) {
     throw new Error(
       `Access denied: path "${path}" is outside allowed directories`

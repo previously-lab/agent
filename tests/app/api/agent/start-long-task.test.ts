@@ -30,6 +30,16 @@ vi.mock("@/lib/tools/local-fs", () => ({
     io.files.set(p, content);
     return { path: p, created };
   },
+  commitLocalBatch: async (entries: readonly { path: string; content: string | null }[]) => {
+    for (const { path, content } of entries) {
+      if (content === null) io.files.delete(path);
+      else {
+        if (path.endsWith("agent.md")) io.order.push("append");
+        io.files.set(path, content);
+      }
+    }
+    return entries.map(({ path }) => path);
+  },
   listFilesLocal: vi.fn(async () => []),
 }));
 vi.mock("@/lib/tools/readFile", () => ({

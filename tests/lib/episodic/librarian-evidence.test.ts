@@ -63,6 +63,7 @@ import {
 } from "@/lib/episodic/flash/librarian";
 import { CaseWriteRefusal, WriteRefusal } from "@/lib/docs";
 import { parseCaseCurrent, caseStorageRevision, renderCaseWithCurrent, caseCurrentFreshnessWarnings } from "@/lib/docs/case-doc";
+import { parseHistoryArchive } from "@/lib/docs/history-archive";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
 
@@ -385,8 +386,10 @@ describe("worker currentUnderstanding reports", () => {
     const current = parseCaseCurrent(io.files.get(currentPath)!);
     expect(current.body).toContain("后续记录是反证");
     expect(current.body).toContain("两种解释");
-    expect(current.history).toContain("初步解释：可能是电池故障");
-    expect(current.history).toContain(`## ${DATE} — previous understanding`);
+    expect(current.history).toBe("");
+    const archive = parseHistoryArchive(io.files.get(`memory/${current.historyHead}.md`)!);
+    expect(archive?.payload).toContain("初步解释：可能是电池故障");
+    expect(archive?.metadata.kind).toBe("current-revision");
     expect(current.evidence).toEqual(["things/老设备"]);
     expect(current.asOf).toBe(DATE);
     expect(io.files.get(indexPath)).toBe(historical);

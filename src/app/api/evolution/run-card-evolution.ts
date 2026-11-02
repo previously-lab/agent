@@ -57,6 +57,7 @@ import {
   retireExpiredHypotheses,
 } from "@/lib/evolution/direction-agent";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
+import { documentSize, exceededSize } from "@/lib/docs/write-limits";
 
 export interface CardEvolutionReaders {
   readSlice: (sliceId: string, range?: {
@@ -169,6 +170,10 @@ export async function runCardEvolution(
   // The folded user model (people/user/index.md, §B.7) — the card half is
   // the agent's working copy; tolerant read falls back to the legacy roots.
   const model = await readUserModel(input.batch);
+  if (model && exceededSize(documentSize(model.full)).length) {
+    return { ran: false, changed: false, droppedRecent: 0, note: "User model needs evidence-backed reorganization",
+      error: "document_full: readCase people/user and relevant raw records, then use HQ reorganizeUserModel with bounded card/direction and focused pieces. It preserves the full original source; profile.md remains user-owned. Resume evolveProfile afterwards." };
+  }
   const baseCard = model?.card ?? "";
   const requestedSignal = input.signal ?? "new_observation";
   const signal: PreviouslySignal = VALID_SIGNALS.includes(requestedSignal)
@@ -342,7 +347,11 @@ export async function runCardEvolution(
   if (changed) {
     // The folded model — the next turn's conversation reads this. The
     // direction half is preserved inside index.md by the store helper.
-    await writeUserModelCard(result.updatedCard, input.batch);
+    try { await writeUserModelCard(result.updatedCard, input.batch); }
+    catch (error) {
+      return { ran: true, changed: directionMoved, droppedRecent: 0, note: "The proposed card was not saved",
+        error: error instanceof Error ? error.message : String(error), ...(directionOutcome ? { direction: directionOutcome } : {}) };
+    }
   }
   if (changed || directionMoved) {
     // Per-slice snapshot — previously.md now freezes the FULL people/user/

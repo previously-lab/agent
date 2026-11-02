@@ -61,6 +61,9 @@ export function isPortableRepoPath(path: string): boolean {
  * never reaches GitHub (or a shared memory tree) at all.
  */
 export function assertPortableRepoPath(path: string): void {
+  let decoded = path;
+  try { decoded = decodeURIComponent(path); } catch { throw new Error("Write paths must use canonical, unencoded repository paths"); }
+  if (decoded !== path || path.endsWith("/")) throw new Error("Write paths must use canonical, unencoded repository paths without a trailing slash");
   if (!isPortableRepoPath(path)) {
     throw new Error(
       `Refused: path "${path}" would break a Windows checkout — a segment carries ` +

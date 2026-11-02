@@ -19,6 +19,7 @@ import {
   resetGitHubDefaultBranches,
 } from "@/lib/github/read-view";
 import { isPathAllowed } from "@/lib/whitelist";
+import { absentDocumentError, validateDocumentEntries, withHistoryAttributes, type DocumentWriteChecks } from "@/lib/docs/write-validation";
 
 export interface BatchEntry {
   path: string;
@@ -176,6 +177,7 @@ export async function commitBatchToGitHub(
   message: string,
   /** The read-modify-write source version; a newer parent must conflict. */
   expectedHeadSha?: string,
+  checks: DocumentWriteChecks = {},
 ): Promise<string> {
   // Whitelist re-check, per path, before anything reaches the GitHub API —
   // the single-write path validates inside writeFile/readFile; the batch path
@@ -224,6 +226,21 @@ export async function commitBatchToGitHub(
     });
     baseTree = commit.tree.sha;
   }
+
+  const sourceContents = new Map<string, string | null>();
+  const readBasis = async (path: string) => {
+    if (sourceContents.has(path)) return sourceContents.get(path)!;
+    try {
+      const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref: headSha });
+      if (Array.isArray(data) || data.type !== "file" || !("content" in data)) throw new Error(`Document source unreadable: ${path}`);
+      const content = Buffer.from(data.content, "base64").toString("utf8");
+      sourceContents.set(path, content); return content;
+    } catch (error) { if (absentDocumentError(error)) { sourceContents.set(path, null); return null; } throw error; }
+  };
+  entries = await withHistoryAttributes(entries, readBasis);
+  await validateDocumentEntries(entries, readBasis, checks);
+  entries = entries.filter((entry) => !sourceContents.has(entry.path) || sourceContents.get(entry.path) !== entry.content);
+  if (entries.length === 0) return headSha;
 
   // 3. Create blobs for each file; a null content is a DELETE (tree item
   //    with sha: null removes the path from the tree). Binary payloads

@@ -32,6 +32,7 @@
 import {
   fsReadFile,
   fsWriteFile,
+  fsListFiles,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import {
@@ -45,6 +46,25 @@ import {
   type SelfAgent,
 } from "./paths";
 import { opaqueContentRevision } from "./skill-revision";
+import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
+import { formatDocumentLink } from "@/lib/documents/document-link";
+
+/** Discovery only: preserves the runtime card grammar and does not inject piece bodies as facts. */
+async function userModelReadingLinks(batch?: WriteBatch): Promise<string> {
+  const directory = "memory/people/user";
+  const paths = new Set<string>();
+  try { for (const entry of await fsListFiles(directory)) if (entry.type === "file") paths.add(`${directory}/${entry.name}`); }
+  catch { /* Keep the existing model readable when listing is unavailable. */ }
+  for (const [path, content] of batch?.entries ?? []) if (path.startsWith(`${directory}/`) && content !== null) paths.add(path);
+  const catalog = casePieceCatalog({ category: "people", caseName: "user", paths: [...paths] });
+  const sections = catalog?.length ? [renderCasePieceCatalog(catalog)] : [];
+  try {
+    const metadata = JSON.parse(await fsReadFile("memory/config/user-model-history.json", batch));
+    const href = metadata.v === 1 && typeof metadata.history_head === "string" ? formatDocumentLink(metadata.history_head) : null;
+    if (href) sections.push(`HISTORICAL USER MODEL — preserved older source, not current facts: [archive](${href})`);
+  } catch { /* Optional navigation; never replace the actual model with it. */ }
+  return sections.join("\n\n");
+}
 
 // ─── people/user/index.md — the folded user model (§B.7) ──────────────────
 
@@ -58,6 +78,8 @@ import { opaqueContentRevision } from "./skill-revision";
 export const USER_MODEL_DIRECTION_SEPARATOR = "\n\n---\n\n";
 
 export interface UserModel {
+  /** Navigation is separate from both mutable runtime halves; it is never source evidence. */
+  readingLinks?: string;
   /** The card half — what the user did / is doing / plans. */
   card: string;
   /** The direction half (portrait + hypotheses) — null when absent. */
@@ -92,10 +114,11 @@ export function splitUserModel(full: string): { card: string; direction: string 
  */
 export async function readUserModel(batch?: WriteBatch): Promise<UserModel | null> {
   try {
-    const full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch);
+    const full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch, { fresh: true });
     if (full.trim()) {
       const { card, direction } = splitUserModel(full);
-      return { card, direction, full: full.trim() };
+      const readingLinks = await userModelReadingLinks(batch);
+      return { card, direction, full: full.trim(), ...(readingLinks ? { readingLinks } : {}) };
     }
   } catch {
     // new root absent — fall through to the legacy roots

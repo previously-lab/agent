@@ -23,6 +23,10 @@ import {
 } from "@/lib/cache/data-cache";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from "fs";
 import { join, dirname } from "path";
+import { withSliceLock } from "@/lib/episodic/slice-mutex";
+import { validateDocumentEntries, withHistoryAttributes, type GuardedEntry, type DocumentWriteChecks } from "@/lib/docs/write-validation";
+import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
+import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
@@ -140,25 +144,56 @@ export async function writeFileLocal(
   path: string,
   content: string
 ): Promise<{ path: string; created: boolean }> {
-  if (!isPathAllowed(path)) {
-    throw new Error(`Access denied: path "${path}" is outside allowed directories`);
-  }
-  assertPortableRepoPath(path);
+  const created = !existsSync(resolveLocalDataPath(path));
+  await commitLocalBatch([{ path, content }]);
+  return { path, created };
+}
 
-  if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
-    throw new Error(`Content too large. Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`);
-  }
-
-  const fullPath = resolveLocalDataPath(path);
-  const dir = dirname(fullPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  const existed = existsSync(fullPath);
-  writeFileSync(fullPath, content, "utf-8");
-
-  return { path, created: !existed };
+/** Final fresh comparison and all validation happen before the first disk mutation. */
+export async function commitLocalBatch(entries: readonly GuardedEntry[], checks: DocumentWriteChecks = {}): Promise<string[]> {
+  return withSliceLock("storage:local-commit", async () => {
+    entries = await withHistoryAttributes(entries, async (path) => {
+      const full = resolveLocalDataPath(path);
+      return existsSync(full) ? readFileSync(full, "utf8") : null;
+    });
+    const before = new Map<string, Buffer | null>();
+    for (const entry of entries) {
+      if (!isPathAllowed(entry.path)) throw new Error(`Access denied: path "${entry.path}" is outside allowed directories`);
+      assertPortableRepoPath(entry.path);
+      if (entry.content !== null && (entry.encoding === "base64" ? Buffer.from(entry.content, "base64").length > MAX_BINARY_FILE_SIZE_BYTES : Buffer.byteLength(entry.content, "utf8") > MAX_FILE_SIZE_BYTES)) throw new Error("Content too large for storage");
+      const full = resolveLocalDataPath(entry.path);
+      before.set(entry.path, existsSync(full) ? readFileSync(full) : null);
+    }
+    await validateDocumentEntries(entries, async (path) => {
+      const full = resolveLocalDataPath(path);
+      return existsSync(full) ? readFileSync(full, "utf8") : null;
+    }, checks);
+    const changed: string[] = [];
+    try {
+      // Synchronous publication cannot interleave another in-process writer.
+      for (const entry of entries) {
+        const full = resolveLocalDataPath(entry.path);
+        const original = before.get(entry.path);
+        const replacement = entry.content === null ? null : Buffer.from(entry.content, entry.encoding === "base64" ? "base64" : "utf8");
+        if (original === null && replacement === null || original && replacement && original.equals(replacement)) continue;
+        changed.push(entry.path);
+        if (entry.content === null) rmSync(full, { force: true });
+        else {
+          mkdirSync(dirname(full), { recursive: true });
+          writeFileSync(full, Buffer.from(entry.content, entry.encoding === "base64" ? "base64" : "utf8"));
+        }
+      }
+    } catch (error) {
+      for (const path of changed.reverse()) {
+        const old = before.get(path);
+        const full = resolveLocalDataPath(path);
+        if (old === null) rmSync(full, { force: true });
+        else if (old) writeFileSync(full, old);
+      }
+      throw error;
+    }
+    return changed;
+  });
 }
 
 /**
@@ -167,6 +202,8 @@ export async function writeFileLocal(
  * file that never landed, and the settle path re-reads listings anyway).
  */
 export async function deleteFileLocal(path: string): Promise<void> {
+  assertPortableRepoPath(path);
+  if (isHistoryArchiveFileName(path)) throw new Error("History archives are immutable");
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
@@ -188,6 +225,7 @@ export async function writeBinaryFileLocal(
   path: string,
   data: Buffer
 ): Promise<{ path: string; created: boolean }> {
+  if (isAuthoredDocumentPath(path)) throw new Error("Authored Markdown must use the guarded text writer");
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }

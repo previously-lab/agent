@@ -1,0 +1,2 @@
+# History payload hashes require byte-identical Git checkout.
+**/*-history-v1-*.md -text

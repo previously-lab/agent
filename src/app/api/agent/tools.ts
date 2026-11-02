@@ -1,3 +1,4 @@
+import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 /**
  * Shared tool definitions for the WorkflowAgent — the chat agent binds its
  * tool set here.
@@ -509,7 +510,7 @@ export const chatTools = {
       "fields are added (dates and the updated stamp are stamped " +
       "mechanically). If the piece should say where it came from (which " +
       "conversation, when), say it in prose. " +
-      DOC_WRITE_WINDOW_RULE +
+      DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE +
       `\n\n${MEMORY_IS_GIT_RULE}\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
       category: z

@@ -974,7 +974,7 @@ export async function housekeeping(
 
   return {
     slice,
-    previouslyContent,
+    previouslyContent: userModel?.readingLinks ? `${previouslyContent}\n\n${userModel.readingLinks}` : previouslyContent,
     sliceHeadBlock,
     identityPrompt,
     analysis,

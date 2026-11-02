@@ -1,3 +1,4 @@
+import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 /**
  * The question run's research/hypothesis pass (v0.19 §A.2.3-b).
  *
@@ -117,7 +118,7 @@ Writing nothing is a legal outcome — the record may simply be too thin. A ques
 1. Ground facts in evidence actually returned by readCase/readSlice. Label user report, direct observation, external verification, interpretation, counterevidence, and unknowns honestly; grounded competing explanations are welcome.
 2. currentUnderstanding.evidence must contain only records/... or case refs actually read in this run. Do not invent evidence or verification.
 3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping; cite current-view evidence explicitly.
-4. ${DOC_WRITE_WINDOW_RULE} Tail supplements and current-view revisions never reopen a settled index.
+4. ${DOC_WRITE_WINDOW_RULE} ${DOCUMENT_BUDGET_RULE} Tail supplements and current-view revisions never reopen a settled index.
 5. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
 6. Every write names the question(s) it answers via \`questionIds\` — the exact marker ids shown above. A shared write serving several questions must list every one of them; unknown or already-processed ids are rejected wholesale, so never invent or reuse an old id. With exactly one question on the agenda you may omit \`questionIds\` (it is inferred); with several, omitting it means the write still lands in the case tree but is credited to no question.
 

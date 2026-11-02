@@ -244,6 +244,26 @@ const DOCKET = {
   agendaDue: [],
 };
 
+it("offers reachable user-model recovery after evolveProfile feedback, with real read receipts", async () => {
+  const path = "memory/people/user/index.md";
+  const card = "# Previously On\n## Identity\n- name: Example\n## Past\nQualified profile.\n## Now\n## Horizon\n";
+  io.files.set(path, card + "x".repeat(18_000));
+  passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, droppedRecent: 0, note: "needs reorganization", error: "document_full: use reorganizeUserModel" });
+  runSubAgentMock.mockImplementation(async (opts) => {
+    expect(opts.tools.reorganizeUserModel).toBeDefined();
+    expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "new evidence" })).toContain("reorganizeUserModel");
+    const input = { card, direction: null, pieces: [], evidence: [`records/${SLICE_ID}`] };
+    expect(await callTool(opts, "reorganizeUserModel", input)).toContain("REJECTED");
+    await callTool(opts, "readCase", { ref: "people/user" });
+    await readEvidence(opts);
+    expect(await callTool(opts, "reorganizeUserModel", input)).toContain("Queued user-model reorganization");
+    return { ok: true, report: { actions: [], note: "" }, text: "" };
+  });
+  await handleBrief(DOCKET);
+  expect(io.files.get(path)).toBe(card.trim());
+  expect([...io.files.keys()].some((name) => name.includes("history-v1-index"))).toBe(true);
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   io.files.clear();

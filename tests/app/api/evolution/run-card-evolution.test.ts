@@ -110,6 +110,24 @@ beforeEach(() => {
 });
 
 describe("write-back rules", () => {
+  it("returns the dedicated recovery before calling the model for an oversized persisted runtime index", async () => {
+    const old = BASE + "x".repeat(18_000);
+    readModelMock.mockResolvedValue({ card: old, direction: null, full: old });
+    const result = await runCardEvolution(baseInput());
+    expect(result).toMatchObject({ ran: false, changed: false });
+    expect(result.error).toContain("reorganizeUserModel");
+    expect(runPreviouslyAgentMock).not.toHaveBeenCalled();
+    expect(writeCardMock).not.toHaveBeenCalled();
+    expect(writeSliceMock).not.toHaveBeenCalled();
+  });
+  it("surfaces a proposed oversize card as recoverable feedback without saving a snapshot", async () => {
+    runPreviouslyAgentMock.mockResolvedValue({ updatedCard: CHANGED, reasoning: "new evidence", summary: "updated", mutations: [] });
+    writeCardMock.mockRejectedValueOnce(new Error("document_full: shorten the proposed card; existing stored model is intact"));
+    const result = await runCardEvolution(baseInput());
+    expect(result.error).toContain("document_full");
+    expect(result.changed).toBe(false);
+    expect(writeSliceMock).not.toHaveBeenCalled();
+  });
   it("a PARTIAL pass is written back with the note flagged, not treated as an error", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: CHANGED,

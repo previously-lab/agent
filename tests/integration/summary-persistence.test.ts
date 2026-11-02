@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
 import git from "isomorphic-git";
 import type { SummaryRunPayload } from "@/lib/chat/turn-types";
 
@@ -86,24 +87,32 @@ describe("real summary persistence and Git ledger", { timeout: 30_000 }, () => {
     const part = { type: "file" as const, mediaType: "image/png", url: `data:image/png;base64,${png}`, filename: "same.png" };
     const input = payload("retryimage");
     input.own.imageAttachments = legacyMessageImages([{ id: "m", role: "user", parts: [part, part] }]);
-    const local = await import("@/lib/tools/local-fs"); const write = local.writeFileLocal;
+    // The batch adapter publishes directly to disk, so fail at the actual
+    // core write after the preceding image writes, not the single-file wrapper.
+    const write = fs.writeFileSync;
     let interrupted = false;
-    const spy = vi.spyOn(local, "writeFileLocal").mockImplementation(async (file, content) => {
-      if (!interrupted && file.endsWith("/core.md")) {
+    let coreAttempts = 0;
+    const spy = vi.spyOn(fs, "writeFileSync").mockImplementation((file, content, options) => {
+      const isCore = typeof file === "string" && path.basename(file) === "core.md";
+      if (isCore) coreAttempts++;
+      if (!interrupted && isCore) {
         interrupted = true;
-        const dir = path.join(process.env.MEMORY_ROOT!, file.replace(/^memory\//, "").replace(/core\.md$/, "attachments"));
+        const dir = path.join(path.dirname(file), "attachments");
         expect(fs.readdirSync(dir)).toHaveLength(2);
         throw new Error("fixture core disk write interrupted");
       }
-      return write(file, content);
+      return write(file, content, options);
     });
+    // local-fs imports the named built-in export; synchronize it with the spy.
+    syncBuiltinESMExports();
     try {
       const result = await persistTurnSummary(input); expect(result.kind).toBe("committed"); expect(interrupted).toBe(true);
+      expect(coreAttempts).toBe(2);
       const files = await recordFiles(); expect(files).toHaveLength(1);
       const { parseSlice } = await import("@/lib/episodic/manager");
       expect(parseSlice(files[0].raw).turns.find((turn) => turn.role === "user")?.attachments).toHaveLength(2);
       expect((await git.listFiles({ fs, dir: process.env.MEMORY_ROOT! })).filter((file) => file.includes("/attachments/"))).toHaveLength(2);
-    } finally { spy.mockRestore(); }
+    } finally { spy.mockRestore(); syncBuiltinESMExports(); }
   });
   it("persists a fresh user-only legacy record before returning a receipt", async () => {
     const { persistTurnSummary } = await import("@/app/api/chat/steps");

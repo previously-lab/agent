@@ -1,3 +1,6 @@
+import { stageDocumentProduct } from "@/lib/episodic/document-products";
+import { reorganizeUserModel } from "@/lib/evolution/user-model-maintenance";
+import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 /**
  * The HQ agent (v0.21 §2/§4/§5; v0.34 R2 — the docket-driven round) — ONE
  * agent + a tool set, no mouth.
@@ -334,6 +337,7 @@ function buildHqTools(
   batch: WriteBatch,
   flags: { evolutionRan: boolean },
   mutateTask: BatchTaskMutation,
+  sourceScope: ScopedSlice[],
 ) {
   const readState = createReflectionReadState();
   const currentManifest = async () => {
@@ -455,10 +459,10 @@ function buildHqTools(
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
-        DOC_WRITE_WINDOW_RULE +
+        DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE + " reorganize: evidence-backed shrink of an over-budget index after a full read; preserves the complete source in immutable history shards. " +
         `\n\n${MEMORY_IS_GIT_RULE}`,
       inputSchema: z.object({
-        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "reviseUnderstanding"]),
+        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "reviseUnderstanding", "reorganize"]),
         category: z
           .enum([
             "people",
@@ -515,6 +519,10 @@ function buildHqTools(
         if (args.action === "open" && !readState.hasReadEvidence()) return "REJECTED: readRound/readCase evidence before opening a document; a docket or survey is not evidence";
         let intent: CaseWriteIntent;
         switch (args.action) {
+          case "reorganize":
+            if (!args.body || !args.evidence?.length) return "REJECTED: reorganize requires a shorter body and evidence read in this run; the source is preserved byte-for-byte";
+            intent = { action: "reorganize", ...base, body: args.body, evidence: args.evidence };
+            break;
           case "open":
             if (!args.body) return "REJECTED: open requires body";
             intent = { action: "open", ...base, body: args.body };
@@ -545,6 +553,7 @@ function buildHqTools(
         }
         try {
           const applied = await applyCaseWriteIntent(intent, date, batch, readState.scope);
+          for (const source of sourceScope) if (readState.scope.hasEvidence(`records/${source.sliceId}`)) await stageDocumentProduct(batch, source, applied.path);
           // Queued, NOT committed — the round's single end-of-round flush is
           // the commit. "written" is claimed only after a commit succeeds
           // (v0.37 §7-1): the honest word here is 「已记录，随本轮一次落盘」.
@@ -573,10 +582,13 @@ function buildHqTools(
           slice = null;
         }
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
-        const excerpt = buildSliceExcerpt(slice);
+        const sourceTurnIds = sourceScope.find((source) => source.sliceId === sliceId)?.turnIds ?? [];
+        if (!sourceTurnIds.length) return "No owed source turns in this round; read the slice explicitly for context instead of deriving its documents again.";
+        const excerpt = buildSliceExcerpt(slice, sourceTurnIds);
         const result = await runLibrarianPass({
           model,
           closedSliceId: sliceId,
+          sourceTurnIds,
           excerpt,
           manifest: await currentManifest(),
           date,
@@ -588,6 +600,7 @@ function buildHqTools(
           model,
           sliceId,
           excerpt,
+          sourceTurnIds,
           date,
           batch,
         });
@@ -601,6 +614,17 @@ function buildHqTools(
             ? `\nscribe skipped: ${scribe.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}`
             : "")
         );
+      },
+    }),
+
+    reorganizeUserModel: tool({
+      description: "Recover an oversized people/user/index.md without truncation. First readCase people/user and relevant raw records. Author shorter runtime card and direction halves, preserving the Previously On Identity/Past/Now/Horizon and Portrait/Hypotheses grammar, uncertainty and user evidence. Put independent evidence topics into focused pieces. The complete prior model is archived byte-identically; pieces and history are discoverable through readUserModel/readCase. This never edits the user's own profile.md. Resume evolveProfile after recovery.",
+      inputSchema: z.object({ card: z.string().min(1), direction: z.string().nullable(),
+        pieces: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).default([]),
+        evidence: z.array(z.string().min(1)).min(1) }),
+      execute: async (args) => {
+        try { const result = await reorganizeUserModel({ ...args, date }, readState.scope, batch); return `Queued user-model reorganization with preserved source: ${JSON.stringify(result)}`; }
+        catch (error) { return `REJECTED: ${error instanceof Error ? error.message : String(error)}`; }
       },
     }),
 
@@ -832,7 +856,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,
-    tools: buildHqTools(date, model, batch, flags, mutateTask),
+    tools: buildHqTools(date, model, batch, flags, mutateTask, scope),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
@@ -879,7 +903,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   // writes are its visible product even when the sub-agent never reported
   // (a timeout cuts the hqReport call, not the writes that preceded it).
   const queuedPaths = [...batch.entries.keys()]
-    .filter((p) => batch.entries.get(p) !== null)
+    .filter((p) => batch.entries.get(p) !== null && !p.startsWith("memory/config/document-products/"))
     .sort();
   const rep = result.ok && result.report ? result.report : null;
   const roundFailed = rep === null;
@@ -1007,7 +1031,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       `[HQ] round failed unexpectedly — landing queued writes degraded (cursor holds): ${msg}`,
     );
     const queuedPaths = [...batch.entries.keys()]
-      .filter((p) => batch.entries.get(p) !== null)
+      .filter((p) => batch.entries.get(p) !== null && !p.startsWith("memory/config/document-products/"))
       .sort();
     let landed: string[] = [];
     if (queuedPaths.length > 0) {

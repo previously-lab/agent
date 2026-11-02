@@ -49,6 +49,7 @@ import {
   readBinaryFileLocal,
   fileModifiedDateLocal,
   MAX_BINARY_FILE_SIZE_BYTES,
+  commitLocalBatch,
 } from "@/lib/tools/local-fs";
 import {
   readFileDemo,
@@ -59,6 +60,13 @@ import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { getMemoryRoot, isPathAllowed } from "@/lib/whitelist";
 import { commitEmpty, commitPaths, isGitRepo } from "./local-git";
+import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
+import { historyDigest } from "@/lib/docs/history-archive";
+import { absentDocumentError, validateDocumentEntries, type DocumentMaintenance } from "@/lib/docs/write-validation";
+import { getGitHubReadHead } from "@/lib/github/read-view";
+import { assertPortableRepoPath } from "@/lib/portable-path";
+import { assertBatchOpen } from "@/lib/docs/write-batch";
+import { WriteRefusal } from "@/lib/docs/write-window";
 
 // ─── Environment detection ───────────────────────────────────────────────
 
@@ -74,6 +82,9 @@ const DEMO_MODE = isDemo(DATA_SOURCE);
  * which replaces a stale slice file with a re-merged one before retrying).
  */
 export interface WriteBatch {
+  state?: "open" | "flushing" | "committed";
+  documentBases?: Map<string, string | null>;
+  maintenance?: Map<string, DocumentMaintenance>;
   /** Read-modify-write basis; a moved branch must reject a stale snapshot. */
   baseHeadSha?: string;
   readonly entries: Map<string, string | null>;
@@ -83,7 +94,7 @@ export interface WriteBatch {
    * out of `entries`' value type so the existing string contract (and every
    * current caller, incl. the finalize-turn self-heal) is untouched.
    */
-  readonly encodings?: Map<string, "base64">;
+  encodings?: Map<string, "base64">;
 }
 
 /** Begin collecting writes into a fresh batch. */
@@ -111,7 +122,22 @@ export async function flushBatch(
   batch: WriteBatch,
   message: string,
 ): Promise<string | null> {
+  assertBatchOpen(batch);
   if (batch.entries.size === 0) return null;
+  batch.state = "flushing";
+  try { return await publishBatch(batch, message); }
+  catch (error) { if (batch.state === "flushing") batch.state = "open"; throw error; }
+}
+
+function finishBatch(batch: WriteBatch, entries: BatchEntry[]): void {
+  for (const entry of entries) if (batch.entries.get(entry.path) === entry.content && batch.encodings?.get(entry.path) === entry.encoding) {
+    batch.entries.delete(entry.path); batch.encodings?.delete(entry.path);
+  }
+  batch.documentBases?.clear(); batch.maintenance?.clear(); batch.baseHeadSha = undefined;
+  batch.state = "committed";
+  if (batch.entries.size) throw new WriteRefusal("rewrite_conflict", "The captured snapshot committed; direct Map edits during publication remain uncommitted in the closed batch. Re-read and move them to a new batch.");
+}
+async function publishBatch(batch: WriteBatch, message: string): Promise<string | null> {
 
   const entries: BatchEntry[] = [];
   for (const [path, content] of batch.entries) {
@@ -123,29 +149,22 @@ export async function flushBatch(
       if (content !== null) await writeFileDemo(path, content);
       // demo data is read-only — queued deletes are dropped
     }
-    batch.entries.clear();
+    finishBatch(batch, entries);
     return null;
   }
 
   if (USE_GITHUB) {
-    const commitSha = await commitBatchToGitHub(entries, message, batch.baseHeadSha);
-    batch.entries.clear();
-    batch.encodings?.clear();
+    const commitSha = await commitBatchToGitHub(entries, message, batch.baseHeadSha, { bases: batch.documentBases, maintenance: batch.maintenance });
+    finishBatch(batch, entries);
     return commitSha;
   }
 
   // Local filesystem — apply individually, then record one git commit for
   // the whole batch (mirrors the GitHub backend's N-files-1-commit batch).
-  for (const { path, content, encoding } of entries) {
-    if (content === null) await deleteFileLocal(path);
-    else if (encoding === "base64") {
-      await writeBinaryFileLocal(path, Buffer.from(content, "base64"));
-    } else await writeFileLocal(path, content);
-  }
-  batch.entries.clear();
-  batch.encodings?.clear();
+  const committedPaths = await commitLocalBatch(entries, { bases: batch.documentBases, maintenance: batch.maintenance });
+  finishBatch(batch, entries);
   return await commitLocalWrites(
-    entries.map((e) => e.path),
+    committedPaths,
     message,
   );
 }
@@ -205,6 +224,21 @@ export async function fsReadFile(
     return pending;
   }
 
+  if (batch && opts?.fresh && isAuthoredDocumentPath(path) && !DEMO_MODE) {
+    if (USE_GITHUB && batch.baseHeadSha === undefined) {
+      const { owner, repo } = getRepoConfig();
+      batch.baseHeadSha = (await getGitHubReadHead(repo, owner, { fresh: true })).headSha;
+    }
+    batch.documentBases ??= new Map();
+    try {
+      const content = await fsReadFile(path, undefined, opts);
+      if (!batch.documentBases.has(path)) batch.documentBases.set(path, historyDigest(content));
+      return content;
+    } catch (error) {
+      if (absentDocumentError(error) && !batch.documentBases.has(path)) batch.documentBases.set(path, null);
+      throw error;
+    }
+  }
   if (DEMO_MODE) return readFileDemo(path, undefined, opts);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
@@ -238,8 +272,30 @@ export async function fsWriteFile(
   content: string,
   batch?: WriteBatch,
 ): Promise<{ path: string; created: boolean }> {
+  if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
+  assertPortableRepoPath(path);
   // With a batch: queue the write, don't touch the backend yet.
   if (batch) {
+    assertBatchOpen(batch);
+    if (isAuthoredDocumentPath(path) && !DEMO_MODE) {
+      if (USE_GITHUB && batch.baseHeadSha === undefined) {
+        const { owner, repo } = getRepoConfig();
+        batch.baseHeadSha = (await getGitHubReadHead(repo, owner, { fresh: true })).headSha;
+      }
+      const readFresh = async (target: string): Promise<string | null> => {
+        try { return await fsReadFile(target, undefined, { fresh: true }); }
+        catch (error) { if (absentDocumentError(error)) return null; throw error; }
+      };
+      const base = await readFresh(path);
+      const before = batch.entries.has(path) ? batch.entries.get(path)! : base;
+      const staged = [...batch.entries].filter(([key]) => key !== path).map(([key, text]) => ({ path: key, content: text, encoding: batch.encodings?.get(key) }));
+      // Maintenance proves the persisted source, even after earlier repairs in this batch.
+      await validateDocumentEntries([...staged, { path, content }], async (target) => target === path ? (batch.maintenance?.has(path) ? base : before) : readFresh(target), { maintenance: batch.maintenance }, path);
+      assertBatchOpen(batch);
+      batch.documentBases ??= new Map();
+      if (!batch.documentBases.has(path)) batch.documentBases.set(path, base === null ? null : historyDigest(base));
+    }
+    assertBatchOpen(batch);
     batch.entries.set(path, content);
     return { path, created: true };
   }
@@ -265,10 +321,13 @@ export async function fsDeleteFile(
   path: string,
   batch?: WriteBatch,
 ): Promise<void> {
+  if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
+  assertPortableRepoPath(path);
   if (batch) {
     // A queued delete shadows any queued write of the same path (Map
     // last-set-wins) — this is what lets a settle convert this turn's own
     // not-yet-flushed appends into deletes.
+    assertBatchOpen(batch);
     batch.entries.set(path, null);
     return;
   }
@@ -298,6 +357,8 @@ export async function fsWriteBinaryFile(
   data: Buffer,
   batch?: WriteBatch,
 ): Promise<{ path: string; created: boolean }> {
+  if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
+  assertPortableRepoPath(path);
   if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
     throw new Error(
       `Attachment too large (${data.byteLength} bytes). Maximum is ${Math.round(MAX_BINARY_FILE_SIZE_BYTES / 1024 / 1024)}MB — the file was NOT saved (nothing is truncated silently).`,
@@ -305,8 +366,10 @@ export async function fsWriteBinaryFile(
   }
 
   if (batch) {
+    assertBatchOpen(batch);
     batch.entries.set(path, data.toString("base64"));
-    batch.encodings?.set(path, "base64");
+    batch.encodings ??= new Map();
+    batch.encodings.set(path, "base64");
     return { path, created: true };
   }
 

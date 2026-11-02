@@ -40,7 +40,7 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
 
   it("complete write-read-update lifecycle on memory/", async () => {
     // Step 1: Write a file
-    mockGetContent.mockRejectedValueOnce(new Error("Not Found")); // file doesn't exist yet
+    mockGetContent.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { status: 404 })); // file doesn't exist yet
     mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const writeResult = await writeFile("memory/test.md", "Hello, World!", repo, owner);
@@ -65,13 +65,22 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
 
     // Step 3: Update the file
     mockGetContent.mockResolvedValueOnce({
-      data: { type: "file", sha: "abc123" },
+      data: {
+        type: "file",
+        sha: "abc123",
+        encoding: "base64",
+        content: Buffer.from("Hello, World!").toString("base64"),
+      },
     });
     mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const updateResult = await writeFile("memory/test.md", "Updated content", repo, owner);
     expect(updateResult.path).toBe("memory/test.md");
     expect(updateResult.created).toBe(false);
+    expect(mockCreateOrUpdate).toHaveBeenLastCalledWith(expect.objectContaining({
+      sha: "abc123",
+      content: Buffer.from("Updated content").toString("base64"),
+    }));
   });
 
   it("whitelist blocks unauthorized paths across all tools", async () => {
@@ -129,18 +138,20 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
 
   it("error recovery: write fails then succeeds on retry", async () => {
     // First attempt: GitHub API error
-    mockGetContent.mockRejectedValueOnce(new Error("Not Found"));
+    mockGetContent.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockRejectedValueOnce(new Error("Network error"));
 
     await expect(
       writeFile("memory/retry.md", "content", repo, owner)
     ).rejects.toThrow("Network error");
+    expect(mockCreateOrUpdate).toHaveBeenCalledTimes(1);
 
     // Second attempt: succeeds
-    mockGetContent.mockRejectedValueOnce(new Error("Not Found"));
+    mockGetContent.mockRejectedValueOnce(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile("memory/retry.md", "content", repo, owner);
     expect(result.created).toBe(true);
+    expect(mockCreateOrUpdate).toHaveBeenCalledTimes(2);
   });
 });

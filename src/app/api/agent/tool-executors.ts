@@ -774,8 +774,8 @@ export async function noteForSedimentExecute(
 // ─── writeCase — the reply segment's ONE bounded write (v0.20 §2.2) ────────
 
 export type WriteCaseResult =
-  | { ok: true; action: "open" | "addPiece"; path: string }
-  | { ok: false; reason: string };
+  | { ok: true; action: "open" | "addPiece"; path: string; noop?: boolean; warnings?: string[] }
+  | { ok: false; reason: string; code?: string; details?: unknown };
 
 /** User-local YYYY-MM-DD (the write-date convention background runs use). */
 function userLocalDate(timezone: string | undefined): string {
@@ -915,12 +915,12 @@ export async function writeCaseExecute(
       // the queued open is read back by the addPiece intent (batch
       // read-your-writes) and both files ride the call's single commit.
       if (!pieceTitle) {
-        return { ok: true, action: "open", path: applied.path };
+        return { ok: true, action: "open", path: applied.path, ...(applied.warnings ? { warnings: applied.warnings } : {}) };
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.includes("already exists")) {
-        return { ok: false, reason: `open refused: ${msg}` };
+        return { ok: false, reason: `open refused: ${msg}`, ...documentRefusalFields(e) };
       }
       exists = true; // raced — another writer opened it; fall through
     }
@@ -953,15 +953,27 @@ export async function writeCaseExecute(
       batch,
       readScope ?? undefined,
     );
-    return { ok: true, action: "addPiece", path: applied.path };
+    return { ok: true, action: "addPiece", path: applied.path, ...(applied.noop ? { noop: true } : {}), ...(applied.warnings ? { warnings: applied.warnings } : {}) };
   } catch (e) {
-    return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}` };
+    return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}`, ...documentRefusalFields(e) };
   }
   })();
   if (result.ok) {
-    await flushBatch(batch, `writeCase ${category}/${caseName}`);
+    try {
+      const { stageDocumentProduct } = await import("@/lib/episodic/document-products");
+      for (const path of [...batch.entries.keys()]) await stageDocumentProduct(batch, { sliceId: ctx.sliceId, turnIds: [ctx.turnId] }, path);
+      await flushBatch(batch, `writeCase ${category}/${caseName}`);
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error), ...documentRefusalFields(error) };
+    }
   }
   return result;
+}
+
+function documentRefusalFields(error: unknown): { code?: string; details?: unknown } {
+  if (!error || typeof error !== "object") return {};
+  const value = error as { code?: unknown; details?: unknown };
+  return { ...(typeof value.code === "string" ? { code: value.code } : {}), ...(value.details ? { details: value.details } : {}) };
 }
 
 

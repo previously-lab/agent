@@ -52,6 +52,8 @@ import {
   parsePieceFileName,
 } from "./case-naming";
 import { caseDirPath, type CaseCategory } from "./paths";
+import { isHistoryArchiveFileName } from "./history-archive";
+import { formatDocumentLink } from "@/lib/documents/document-link";
 
 /** Compact, stable revision of the exact UTF-8 storage bytes. */
 export function caseStorageRevision(raw: string): string {
@@ -70,6 +72,7 @@ export interface TailLine {
 
 /** A parsed case document (`index.md` or a dated piece). */
 export interface CaseDoc {
+  historyHead?: string | null;
   /** `index.md`, or `<出生日期>-<标题>.md` for a piece. */
   fileName: string;
   category: CaseCategory;
@@ -184,7 +187,7 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
 
   const unknownFields = Object.keys(data).filter(
     (k) =>
-      !["opened", "updated", "body_updated", "closed", "status"].includes(k),
+      !["opened", "updated", "body_updated", "closed", "status", "history_head"].includes(k),
   );
   if (unknownFields.length > 0) {
     warnings.push(`忽略未知 header 字段: ${unknownFields.join(", ")}`);
@@ -334,6 +337,7 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
 
   return {
     fileName,
+    ...(typeof data.history_head === "string" ? { historyHead: data.history_head } : {}),
     category,
     caseName,
     opened,
@@ -358,17 +362,24 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
  * at the end. Emits ONLY the new shape — a doc that round-trips here is
  * new-format on disk (legacy bytes in `preserved` excepted).
  */
+export function serializeTailEntries(tail: readonly TailLine[]): string {
+  return tail.map((line) => `${line.date}：${line.text}`).join("\n");
+}
+export function serializeCaseTail(tail: readonly TailLine[]): string {
+  return tail.length ? `—— 尾部 ——\n${serializeTailEntries(tail)}` : "";
+}
 export function serializeCaseDoc(doc: CaseDoc): string {
   const fm: Record<string, unknown> = {};
   if (doc.opened) fm.opened = doc.opened;
   if (doc.updated) fm.updated = doc.updated;
   if (doc.bodyUpdated) fm.body_updated = doc.bodyUpdated;
   if (doc.closed) fm.closed = doc.closed;
+  if (doc.historyHead) fm.history_head = doc.historyHead;
 
   const parts: string[] = [doc.body];
   if (doc.tail.length > 0) {
     parts.push(
-      "—— 尾部 ——\n" + doc.tail.map((t) => `${t.date}：${t.text}`).join("\n"),
+      serializeCaseTail(doc.tail),
     );
   }
   if (doc.preserved) parts.push(doc.preserved);
@@ -488,6 +499,7 @@ export interface CaseCurrentBasis {
 }
 
 export interface CaseCurrentDoc {
+  historyHead?: string | null;
   /** User-local as-of date. Empty only on tolerant reads of legacy/free text. */
   asOf: string;
   /** Canonical records/... or case references actually read by the writer. */
@@ -555,6 +567,7 @@ export function parseCaseCurrent(raw: string): CaseCurrentDoc {
     .filter(Boolean);
   return {
     asOf: normalizeDateValue(data.as_of ?? data.asOf),
+    ...(typeof data.history_head === "string" ? { historyHead: data.history_head } : {}),
     evidence,
     body,
     basis: parseCurrentBasis(data.basis),
@@ -564,6 +577,7 @@ export function parseCaseCurrent(raw: string): CaseCurrentDoc {
 
 export function serializeCaseCurrent(doc: CaseCurrentDoc): string {
   const fm: Record<string, unknown> = {};
+  if (doc.historyHead) fm.history_head = doc.historyHead;
   if (doc.asOf) fm.as_of = doc.asOf;
   if (doc.evidence.length > 0) fm.evidence = doc.evidence;
   if (doc.basis) {
@@ -635,7 +649,7 @@ export function reviseCaseCurrent(
       ].join("\n")
     : "";
   const history = [archive, previous?.history.trim() ?? ""].filter(Boolean).join("\n\n");
-  return { asOf: input.asOf, evidence, body, basis, history };
+  return { asOf: input.asOf, evidence, body, basis, history, ...(previous?.historyHead ? { historyHead: previous.historyHead } : {}) };
 }
 
 export function isSameCaseCurrent(doc: CaseCurrentDoc, input: CaseCurrentInput): boolean {
@@ -655,13 +669,14 @@ export function caseCurrentFreshnessWarnings(
   if (current.basis.indexRevision !== actual.indexRevision) {
     warnings.push("index.md changed after the current view's basis");
   }
-  const actualByPath = new Map(actual.pieces.map((piece) => [piece.path, piece.revision]));
-  const basisPaths = current.basis.pieces.map((piece) => piece.path).sort();
+  const activePieces = current.basis.pieces.filter((piece) => !isHistoryArchiveFileName(piece.path));
+  const actualByPath = new Map(actual.pieces.filter((piece) => !isHistoryArchiveFileName(piece.path)).map((piece) => [piece.path, piece.revision]));
+  const basisPaths = activePieces.map((piece) => piece.path).sort();
   const actualPaths = [...actualByPath.keys()].sort();
   if (JSON.stringify(basisPaths) !== JSON.stringify(actualPaths)) {
     warnings.push("the case piece inventory changed after the current view's basis");
   }
-  for (const piece of current.basis.pieces) {
+  for (const piece of activePieces) {
     if (!piece.revision) continue;
     const actualRevision = actualByPath.get(piece.path);
     if (actualRevision === undefined) continue;
@@ -695,6 +710,10 @@ export function renderCaseWithCurrent(
   const sections = [
     `CURRENT UNDERSTANDING (_current.md)\n${metadata.join("\n")}\n\n${current.body || "(empty current understanding)"}`,
   ];
+  if (current.historyHead) {
+    const href = formatDocumentLink(current.historyHead);
+    sections.push(`HISTORICAL SOURCE — earlier views, not new evidence or a read receipt: ${href ? `[archive](${href})` : current.historyHead}`);
+  }
   if (options.includeHistory && current.history) {
     sections.push(`CURRENT-VIEW HISTORY (earlier revisions)\n\n${current.history}`);
   }
