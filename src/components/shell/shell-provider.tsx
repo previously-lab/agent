@@ -57,6 +57,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -80,6 +81,8 @@ import {
   type ScreenContextTracker,
 } from "@/lib/chat/screen-context-tracker";
 import { useNativeSourceScope } from "@/components/chat/native-source-scope";
+import { flushNativeReading } from "@/components/chat/native-reading-flush";
+import { createNativeNavigationGuard, workspaceNativeNavigationIntent } from "@/lib/chat/native-navigation";
 import { usePathname, useRouter } from "@/i18n/navigation";
 import {
   buildConversationHref,
@@ -189,6 +192,20 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
   const worldFrozen = panelMode === "fullscreen";
   const sourceScope = useNativeSourceScope();
+  const navigationRef = useRef<ReturnType<typeof createNativeNavigationGuard> | null>(null);
+  navigationRef.current ??= createNativeNavigationGuard(
+    () => flushNativeReading(document.body),
+    () => window.location.href,
+    workspaceNativeNavigationIntent,
+  );
+  const nativeNavigation = navigationRef.current;
+  useLayoutEffect(() => {
+    nativeNavigation.cancel();
+    return () => nativeNavigation.cancel();
+  }, [nativeNavigation, sourceScope, pathname, panelMode]);
+  const afterNativeFlush = useCallback((action: () => void) => {
+    void nativeNavigation.run(action);
+  }, [nativeNavigation]);
 
   const screenRef = useRef<ScreenContextTracker | null>(null);
   screenRef.current ??= createScreenContextTracker();
@@ -248,10 +265,10 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const onPopState = () => { restoreNavigationRef.current = true; };
+    const onPopState = () => { nativeNavigation.cancel(); restoreNavigationRef.current = true; };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [nativeNavigation]);
 
   const syncDeskRoute = useCallback((target: WorkspaceDocumentTarget | null) => {
     const restoring = restoreNavigationRef.current;
@@ -280,40 +297,44 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     origin: ScreenOrigin = "observed",
     options?: DeskOpenOptions,
   ) => {
-    const target = workspaceDocumentTarget(ref, options);
-    if (!target) return;
-    if (pathname === "/app" && deskTargetEqual(deskTargetRef.current, target)) {
+    afterNativeFlush(() => {
+      const target = workspaceDocumentTarget(ref, options);
+      if (!target) return;
+      if (pathname === "/app" && deskTargetEqual(deskTargetRef.current, target)) {
+        applyDeskTarget(target, origin, true);
+        return;
+      }
+      const href = buildDocumentHref(target, window.location.search);
+      rememberPanelOnEntry();
+      if (pathname === "/app") {
+        window.history.pushState(
+          markDeskHistoryState(markOriginPanelMode({}, panelModeRef.current), href),
+          "",
+          `${window.location.pathname}${href.slice("/app".length)}`,
+        );
+      } else {
+        pendingDeskTargetRef.current = target;
+        router.push(href, { scroll: false });
+      }
       applyDeskTarget(target, origin, true);
-      return;
-    }
-    const href = buildDocumentHref(target, window.location.search);
-    rememberPanelOnEntry();
-    if (pathname === "/app") {
-      window.history.pushState(
-        markDeskHistoryState(markOriginPanelMode({}, panelModeRef.current), href),
-        "",
-        `${window.location.pathname}${href.slice("/app".length)}`,
-      );
-    } else {
-      pendingDeskTargetRef.current = target;
-      router.push(href, { scroll: false });
-    }
-    applyDeskTarget(target, origin, true);
-  }, [applyDeskTarget, pathname, rememberPanelOnEntry, router]);
+    });
+  }, [afterNativeFlush, applyDeskTarget, pathname, rememberPanelOnEntry, router]);
 
   const closeDesk = useCallback(() => {
-    const target = deskTargetRef.current;
-    if (!target) return;
-    const href = buildDocumentHref(target, window.location.search);
-    const owned = pathname === "/app" && deskHistoryOwnsTarget(window.history.state, href);
-    clearDesk("manual");
-    if (owned) {
-      window.history.back();
-      return;
-    }
-    setPanelMode("pill");
-    router.replace(buildLibraryHref(window.location.search), { scroll: false });
-  }, [clearDesk, pathname, router, setPanelMode]);
+    afterNativeFlush(() => {
+      const target = deskTargetRef.current;
+      if (!target) return;
+      const href = buildDocumentHref(target, window.location.search);
+      const owned = pathname === "/app" && deskHistoryOwnsTarget(window.history.state, href);
+      clearDesk("manual");
+      if (owned) {
+        window.history.back();
+        return;
+      }
+      setPanelMode("pill");
+      router.replace(buildLibraryHref(window.location.search), { scroll: false });
+    });
+  }, [afterNativeFlush, clearDesk, pathname, router, setPanelMode]);
 
   const resetDeskForLane = useCallback(() => {
     clearDesk("observed");
@@ -325,40 +346,46 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [clearDesk, pathname, router, screen]);
 
   const openLibrary = useCallback((history = false) => {
-    const href = buildLibraryHref(window.location.search, history);
-    const current = new URLSearchParams(window.location.search);
-    const unchanged = pathname === "/app" &&
-      current.get("view") === "field" &&
-      !current.has("doc") &&
-      (current.get("history") === "1") === history;
-    if (!unchanged) rememberPanelOnEntry();
-    cleanupDesk();
-    setPanelMode("pill");
-    if (!unchanged) router.push(href, { scroll: false });
-  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
+    afterNativeFlush(() => {
+      const href = buildLibraryHref(window.location.search, history);
+      const current = new URLSearchParams(window.location.search);
+      const unchanged = pathname === "/app" &&
+        current.get("view") === "field" &&
+        !current.has("doc") &&
+        (current.get("history") === "1") === history;
+      if (!unchanged) rememberPanelOnEntry();
+      cleanupDesk();
+      setPanelMode("pill");
+      if (!unchanged) router.push(href, { scroll: false });
+    });
+  }, [afterNativeFlush, cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
 
   const openConversation = useCallback(() => {
-    const href = buildConversationHref(window.location.search);
-    const current = new URLSearchParams(window.location.search);
-    const unchanged = pathname === "/app" &&
-      !current.has("doc") &&
-      current.get("view") !== "field" &&
-      current.get("view") !== "game" &&
-      current.get("history") !== "1";
-    if (!unchanged) rememberPanelOnEntry();
-    cleanupDesk();
-    setPanelMode("fullscreen");
-    if (!unchanged) router.push(href, { scroll: false });
-  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
+    afterNativeFlush(() => {
+      const href = buildConversationHref(window.location.search);
+      const current = new URLSearchParams(window.location.search);
+      const unchanged = pathname === "/app" &&
+        !current.has("doc") &&
+        current.get("view") !== "field" &&
+        current.get("view") !== "game" &&
+        current.get("history") !== "1";
+      if (!unchanged) rememberPanelOnEntry();
+      cleanupDesk();
+      setPanelMode("fullscreen");
+      if (!unchanged) router.push(href, { scroll: false });
+    });
+  }, [afterNativeFlush, cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
 
   const openGame = useCallback(() => {
-    if (pathname !== "/game") rememberPanelOnEntry();
-    cleanupDesk();
-    setPanelMode("pill");
-    if (pathname !== "/game") {
-      router.push(buildGameHref(window.location.search), { scroll: false });
-    }
-  }, [cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
+    afterNativeFlush(() => {
+      if (pathname !== "/game") rememberPanelOnEntry();
+      cleanupDesk();
+      setPanelMode("pill");
+      if (pathname !== "/game") {
+        router.push(buildGameHref(window.location.search), { scroll: false });
+      }
+    });
+  }, [afterNativeFlush, cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
 
   useEffect(() => {
     if (previousSourceScope.current === sourceScope) return;

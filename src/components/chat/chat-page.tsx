@@ -11,6 +11,7 @@ import { ChatInput } from "./chat-input";
 import { messageImageAttachments, stagedImageReferences } from "@/lib/chat/image-attachment-message";
 import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { ComposerHost } from "./composer-host";
+import { ConversationPrimaryPlaceholder } from "./conversation-controls";
 import { NativePersonaProvider, useNativeSourceScope } from "./native-source-scope";
 import { DocumentContextPersonaSync, useDocumentContext } from "./document-context-provider";
 import {
@@ -157,6 +158,7 @@ export function ChatPage(props: ChatPageProps) {
 }
 
 function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: string }) {
+  const arrivalTier = usePanelTier();
   const t = useTranslations("chat");
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
   const [arrivalFailure, setArrivalFailure] = useState<"failed" | "timeout" | null>(null);
@@ -196,7 +198,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
   }, [arrivalAttempt, persona]);
   if (arrivalFailure) {
     return (
-      <ComposerHost composer={
+      <><ComposerHost composer={
         <div data-chat-arrival-error data-arrival-failure={arrivalFailure} className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
           <p role="alert" className="min-w-0 flex-1 text-sm text-muted-foreground">
             {t(arrivalFailure === "timeout" ? "arrivalTimeout" : "arrivalError")}
@@ -206,7 +208,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
             {t("arrivalRetry")}
           </button>
         </div>
-      } />
+      } /><ConversationPrimaryPlaceholder inline={arrivalTier?.mode === "pill"} /></>
     );
   }
   if (!verdict) return <ChatPageSkeleton />;

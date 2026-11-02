@@ -22,6 +22,7 @@ import { TaskPanel } from "@/components/tasks/task-panel";
 import type { TaskPanelEvent } from "@/components/tasks/events";
 import { useNativeSourceScope } from "@/components/chat/native-source-scope";
 import { useShell } from "@/components/shell/shell-provider";
+import { workspaceSurface } from "@/lib/workspace/navigation";
 
 export function WorkspaceFeatures() {
   const pathname = usePathname();
@@ -29,7 +30,7 @@ export function WorkspaceFeatures() {
   const sourceScope = useNativeSourceScope();
   const persona = searchParams.get("persona") ?? "user";
   const lane = JSON.stringify([sourceScope, persona]);
-  const { screen } = useShell();
+  const { screen, panelMode } = useShell();
   const reducedMotion = useReducedMotion() ?? false;
   const tCompanion = useTranslations("companion");
   const [narrateTarget, setNarrateTarget] = useState<NarrationTarget | null>(null);
@@ -67,6 +68,7 @@ export function WorkspaceFeatures() {
     <div data-workspace-features className="workspace-features">
       <TaskPanel key={lane} onEvent={onTaskPanelEvent} />
       <CompanionPod
+        hideNavigation={workspaceSurface(pathname, searchParams.toString()) === "conversation" || panelMode === "fullscreen"}
         target={narrateTarget}
         onDismiss={() => setNarrateTarget(null)}
         onRetry={startNarration}

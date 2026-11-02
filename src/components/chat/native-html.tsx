@@ -25,6 +25,9 @@ import {
   subscribeNativeStyles,
 } from "@/lib/markdown/native-document";
 import "./native-html.css";
+import { buildNativeContainer } from "@/lib/markdown/native-container";
+import { readingFlushers } from "./native-reading-flush";
+export { flushNativeReading } from "./native-reading-flush";
 
 /** Execution is independent of the surface: reader uses paper colors while
  * its active copy executes; paper is reserved for static/print presentation. */
@@ -48,14 +51,6 @@ interface NativeHtmlBlockProps {
 }
 
 const MAX_NATIVE_SOURCE_CHARS = 262_144;
-const readingFlushers = new Map<Element, () => Promise<void>>();
-
-/** Finish a bounded snapshot handoff before a paper turn unmounts its writer.
- * A nonresponsive figure never blocks navigation indefinitely. */
-export async function flushNativeReading(root: Element | null): Promise<void> {
-  if (!root) return;
-  await Promise.allSettled([...readingFlushers].filter(([element]) => root.contains(element)).map(([, flush]) => flush()));
-}
 
 function NativePreparing({ label }: { label?: string }): React.JSX.Element {
   const t = useTranslations("chat.native");
@@ -108,6 +103,7 @@ function NativeFrame({
   const stylesIdRef = useRef<string | undefined>(undefined);
   const localeRef = useRef(locale);
   const fallbackRef = useRef(t("empty"));
+  const frameTitleRef = useRef(t(interactive ? "frameTitle" : "staticFrameTitle", { index: ordinal + 1 }));
   const suggestionRef = useRef(onSuggestion);
   suggestionRef.current = onSuggestion;
   const measureRef = useRef(onMeasure);
@@ -157,7 +153,7 @@ function NativeFrame({
 
   const srcDoc = useMemo(() => {
     if (!token || initialStateJson === undefined) return null;
-    return buildNativeDocument({
+    return buildNativeContainer({ token, interactive, title: frameTitleRef.current, document: buildNativeDocument({
       source,
       token,
       theme: themeRef.current,
@@ -166,7 +162,7 @@ function NativeFrame({
       interactive,
       initialStateJson,
       fallback: fallbackRef.current,
-    });
+    }) });
   }, [token, source, interactive, initialStateJson]);
 
   useEffect(() => {
@@ -217,6 +213,11 @@ function NativeFrame({
       } else if (message.type === "followup") {
         suggestionRef.current(message.prompt);
       } else if (message.type === "error") {
+        if (message.message === "navigation") {
+          blockedRef.current = true;
+          readyRef.current = false;
+          setReady(false);
+        }
         setFailed(message.message || "error");
       }
     };

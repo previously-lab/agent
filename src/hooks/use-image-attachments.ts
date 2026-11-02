@@ -64,7 +64,17 @@ async function compressImage(file: File): Promise<File> {
 
 export function useImageAttachments({ scope, persona }: { scope: string; persona: string }) {
   const { draft } = useMemo(() => ({ scope, draft: createImageAttachmentDraft({
-    prepare: compressImage,
+    prepare: async (file) => {
+      const prepared = await compressImage(file);
+      // Reserve the real media ratio before upload starts. Measuring a first
+      // frame never changes the file or flattens animated/transparent inputs.
+      try {
+        const bitmap = await createImageBitmap(prepared);
+        const result = { file: prepared, width: bitmap.width, height: bitmap.height };
+        bitmap.close();
+        return result;
+      } catch { return { file: prepared }; }
+    },
     mintId: () => crypto.randomUUID(),
     upload: async (file, signal) => {
       const body = new FormData();

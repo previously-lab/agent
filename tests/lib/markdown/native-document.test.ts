@@ -31,6 +31,7 @@ describe("native iframe document policy", () => {
     expect(result).toContain("object-src 'none'");
     expect(result).toContain("base-uri 'none'");
     expect(result).toContain("form-action 'none'");
+    expect(result).not.toContain("navigate-to");
     expect(result).toContain("script-src 'unsafe-inline'");
     expect(result).not.toContain("script-src 'self'");
     expect(result).toContain("img-src data: blob:");

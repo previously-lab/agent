@@ -23,6 +23,24 @@ function setup() {
 }
 
 describe("image draft ownership", () => {
+  it("retains prepared aspect ratio through upload failure, retry and undo", async () => {
+    const pending = deferred<ImageAttachmentSnapshot>();
+    const draft = createImageAttachmentDraft({
+      prepare: async input => ({ file: input, width: 600, height: 420 }),
+      upload: () => pending.promise, cancel: async () => {}, mintId: () => "photo",
+    });
+    const [image] = draft.add([file()]);
+    await tick();
+    expect(draft.getSnapshot().images[0]).toMatchObject({ status: "uploading", width: 600, height: 420 });
+    pending.reject(new Error("offline")); await tick();
+    expect(draft.getSnapshot().images[0]).toMatchObject({ status: "error", width: 600, height: 420 });
+    draft.retry(image.localClientId);
+    expect(draft.getSnapshot().images[0]).toMatchObject({ status: "preparing", width: 600, height: 420 });
+    draft.remove(image.localClientId); draft.undo();
+    expect(draft.getSnapshot().images[0]).toMatchObject({ status: "preparing", width: 600, height: 420 });
+    draft.dispose(); await tick();
+  });
+
   it("allocates ordinals before upload and never reindexes reverse completions or removals", async () => {
     const { draft, uploads, cancel } = setup();
     const [one, two] = draft.add([file("one.png"), file("two.png")]);

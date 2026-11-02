@@ -21,6 +21,8 @@
  * instead of as loading. Everything carries `motion-reduce:animate-none`.
  */
 
+import { ConversationPrimaryPlaceholder } from "./conversation-controls";
+import { usePanelTier } from "./conversation-panel";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import "./writing.css";
 
@@ -246,26 +248,13 @@ export function ChatStreamSkeleton({
 
 /** The translucent composer, textarea and controls as inert bars. */
 export function ChatInputSkeleton() {
-  return (
-    <div
-      aria-hidden
-      className="conversation-composer composer-bar relative overflow-hidden"
-    >
-      {/* Textarea line */}
-      <div className="px-4 pb-2 pt-3">
-        <Bar className="h-[24px] w-2/5" />
-      </div>
-      {/* Toolbar — left controls + send button */}
-      <div className="flex items-center justify-between gap-2 px-3 pb-2">
-        <div className="flex items-center gap-2">
-          <span className="size-7 rounded-full animate-pulse motion-reduce:animate-none bg-foreground/8" />
-          <Bar className="h-5 w-16" delay={80} />
-          <Bar className="h-5 w-24" delay={140} />
-        </div>
-        <span className="size-8 shrink-0 rounded-full bg-primary/70 animate-pulse motion-reduce:animate-none" />
-      </div>
+  const tier = usePanelTier();
+  return <>
+    <div aria-hidden className="conversation-composer-skeleton px-4 py-3">
+      <Bar className="h-6 w-2/5" />
     </div>
-  );
+    <ConversationPrimaryPlaceholder inline={tier?.mode === "pill"} />
+  </>;
 }
 
 /**

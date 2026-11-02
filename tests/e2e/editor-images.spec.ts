@@ -8,7 +8,7 @@ import { imageFile, imageId, imageSnapshot, mockPhotoReads, mockUploads, replySs
 
 const input = (page: Page) => page.locator("[data-manuscript-input]");
 const composer = (page: Page) => page.locator("[data-manuscript-composer]");
-const photos = (page: Page) => composer(page).locator("[data-image-asset]");
+const photos = (page: Page) => composer(page).locator("figure[data-image-asset]");
 async function open(page: Page) {
   await clearEpisodic(); await page.goto("/en/app");
   await expect(input(page)).toBeVisible({ timeout: 30_000 });
@@ -36,17 +36,17 @@ for (const view of [
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
     await attach(page, ["coast.svg", "evening.svg"]);
     await expect(photos(page)).toHaveCount(2);
-    await expect(input(page)).toHaveValue("A place I want to remember. 〔图1〕〔图2〕");
+    await expect(input(page)).toHaveAttribute("data-editor-text", "A place I want to remember. 〔图1〕〔图2〕");
     await expect(input(page)).toHaveCount(1);
     expect(await input(page).evaluate((el, before) => el === before, original)).toBe(true);
     await expect(composer(page)).toHaveCSS("box-shadow", "none");
     await expect(composer(page)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(page.locator("[data-composer-floating-controls]")).not.toHaveCSS("position", "fixed");
+    await expect(page.locator("[data-conversation-controls]")).toHaveCSS("position", "fixed");
     await expect(page.locator("[data-composer-send]")).toBeEnabled();
     await expect(page.locator("[data-composer-keyboard-caption]")).toContainText("Enter to send");
-    const toolbarBox = await page.locator("[data-composer-floating-controls]").boundingBox();
-    const inputBox = await input(page).boundingBox();
-    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(inputBox!.y);
+    const toolbarBox = await page.locator("[data-conversation-primary]").boundingBox();
+    expect(toolbarBox!.x + toolbarBox!.width).toBeLessThanOrEqual(view.width);
+    expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(view.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (view.touch) {
       const bounds = await page.locator("[data-composer-send]").boundingBox();
@@ -85,7 +85,7 @@ test("image-only paste waits for composition, and drop adds exactly one later ma
     element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
   }, fixture);
   await expect(photos(page)).toHaveCount(0);
-  await expect(input(page)).toHaveValue("A place I want to remember. ");
+  await expect(input(page)).toHaveAttribute("data-editor-text", "A place I want to remember. ");
   await input(page).dispatchEvent("compositionend", { data: "拼音" });
   await expect(photos(page)).toHaveCount(1);
   await composer(page).evaluate((element, svg) => {
@@ -93,7 +93,7 @@ test("image-only paste waits for composition, and drop adds exactly one later ma
     element.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
   }, fixture);
   await expect(photos(page)).toHaveCount(2);
-  await expect(input(page)).toHaveValue("A place I want to remember. 〔图1〕〔图2〕");
+  await expect(input(page)).toHaveAttribute("data-editor-text", "A place I want to remember. 〔图1〕〔图2〕");
 });
 
 test("upload success alone flies; reverse completion, removal and retry keep stable ordinals", async ({ page }) => {
@@ -121,9 +121,7 @@ test("upload success alone flies; reverse completion, removal and retry keep sta
   await expect(photos(page)).toHaveCount(2);
   // Select the earlier marker: the front photo changes without stealing the caret.
   await input(page).focus();
-  await input(page).press("End");
-  for (let n = 0; n < 4; n++) await input(page).press("ArrowLeft");
-  for (let n = 0; n < 4; n++) await input(page).press("Shift+ArrowLeft");
+  await input(page).locator('[data-image-reference]').first().click();
   await expect(composer(page).locator('[data-image-ordinal="1"]')).toHaveAttribute("data-image-selected", "true");
   await expect(input(page)).toBeFocused();
   await composer(page).getByRole("button", { name: "Remove attachment: one.svg" }).click();
@@ -155,13 +153,16 @@ test("HTTP acceptance transfers only frozen photos and preserves ABA edits befor
       });
     };
   });
-  const text = await input(page).inputValue();
+  const text = (await input(page).getAttribute("data-editor-text"))!;
   await input(page).press("Enter");
-  await expect(page.locator("[data-composer-send]")).toBeDisabled();
+  await expect(page.locator("[data-conversation-primary]")).toHaveAttribute("data-primary-action", "stop");
+  await expect(photos(page)).toHaveCount(1); // HTTP acceptance has not transferred the frozen photo yet.
   await input(page).fill(""); await input(page).fill(text); // Same text, different draft revision.
   await page.evaluate(() => (window as unknown as { acceptChat: () => void }).acceptChat());
   await expect(photos(page)).toHaveCount(0);
-  await expect(input(page)).toHaveValue(text);
+  await expect(input(page)).toHaveAttribute("data-editor-text", text);
+  await input(page).press("Control+z");
+  await expect(input(page)).toHaveAttribute("data-editor-text", text); // Acceptance cleared only undo, not the ABA draft.
   await expect(page.locator("[data-composer-stop]")).toBeVisible();
   const posted = await page.evaluate(() => (window as unknown as { chatBody: { stagedAttachments: unknown; persona: string; messages: { parts: { type: string }[] }[] } }).chatBody);
   expect(posted.persona).toBe("user");
@@ -172,7 +173,7 @@ test("HTTP acceptance transfers only frozen photos and preserves ABA edits befor
   const sent = page.locator('[data-conversation-turn][data-role="user"]');
   await expect(sent).toHaveCount(1);
   await sent.locator("[data-image-reference]").click();
-  await expect(sent.locator("[data-image-asset]")).toBeFocused();
+  await expect(sent.locator("figure[data-image-asset]")).toBeFocused();
 });
 
 test("rejected sends retain the draft and retry one stable message without a duplicate paragraph", async ({ page }) => {
@@ -184,14 +185,15 @@ test("rejected sends retain the draft and retry one stable message without a dup
     return bodies.length === 1 ? route.fulfill({ status: 503, json: { error: "Fixture refusal" } })
       : route.fulfill({ contentType: "text/event-stream", body: replySse("Retry accepted") });
   });
-  const text = await input(page).inputValue();
+  const text = (await input(page).getAttribute("data-editor-text"))!;
   await input(page).press("Enter");
   await expect(page.locator("[data-composer-send]")).toBeEnabled();
-  await expect(input(page)).toHaveValue(text); await expect(photos(page)).toHaveCount(1);
+  await expect(input(page)).toHaveAttribute("data-editor-text", text); await expect(photos(page)).toHaveCount(1);
   await expect(page.locator('[data-conversation-turn][data-role="user"]')).toHaveCount(0);
   await input(page).press("Control+Enter");
   await expect(page.getByText("Retry accepted", { exact: true })).toBeVisible();
-  await expect(input(page)).toHaveValue(""); await expect(photos(page)).toHaveCount(0);
+  await expect(input(page)).toHaveAttribute("data-editor-text", ""); await expect(photos(page)).toHaveCount(0);
+  await input(page).press("Control+z"); await expect(input(page)).toHaveAttribute("data-editor-text", "");
   await expect(page.locator('[data-conversation-turn][data-role="user"]')).toHaveCount(1);
   expect(bodies).toHaveLength(2);
   expect(bodies[0].messages.at(-1)!.id).toBe(bodies[1].messages.at(-1)!.id);
@@ -210,13 +212,13 @@ test("history refresh and record reader share referenced photos and an unreferen
   await writeFile(core, source.replace(`(${slice.turns[0].role})\n`, `(${slice.turns[0].role}) [attachments ${envelope}] [body-escaped v1]\n`), "utf8");
   await mockPhotoReads(page); await page.goto("/en/app");
   const live = page.locator('[data-conversation-turn][data-role="user"]').filter({ hasText: "The coast appears here" });
-  await expect(live.locator("[data-image-asset]")).toHaveCount(2);
+  await expect(live.locator("figure[data-image-asset]")).toHaveCount(2);
   await expect(live.locator(".conversation-image-annex [data-image-ordinal='1']")).toHaveCount(1);
   await live.locator("[data-image-reference]").click(); await expect(live.locator('[data-image-ordinal="2"]')).toBeFocused();
-  await page.reload(); await expect(live.locator("[data-image-asset]")).toHaveCount(2);
+  await page.reload(); await expect(live.locator("figure[data-image-asset]")).toHaveCount(2);
   await page.goto(`/en/app?doc=records/${slice.id}`);
   const record = page.locator('.desk-shell--top .document-record-turn[data-turn-role="user"]');
-  await expect(record.locator("[data-image-asset]")).toHaveCount(2);
+  await expect(record.locator("figure[data-image-asset]")).toHaveCount(2);
   await record.locator("[data-image-reference]").click(); await expect(record.locator('[data-image-ordinal="2"]')).toBeFocused();
   expect(await record.locator("img").evaluateAll(images => images.map(image => image.getAttribute("src")))).toEqual(attachments.slice().reverse().map(image => `/api/attachments?ref=${encodeURIComponent(image.ref)}&persona=user`));
 });

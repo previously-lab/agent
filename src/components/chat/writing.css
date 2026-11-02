@@ -159,9 +159,9 @@
 .conversation-composer--manuscript.composer-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "byline" "tools" "writing";
+  grid-template-areas: "byline" "writing";
   gap: 0.7rem;
-  padding-block: 1.35rem;
+  padding-block: 1.35rem calc(var(--spacing) * 24 + env(safe-area-inset-bottom, 0px));
 }
 
 /* The manuscript is prose, not a composer card. Reset the shared ledge's
@@ -215,13 +215,13 @@
   gap: calc(var(--spacing) * 2);
 }
 
-.conversation-composer textarea,
+.conversation-composer [data-manuscript-input],
 .conversation-composer input:not([type="file"]) {
   font: var(--text-base)/var(--leading-relaxed) var(--font-serif, serif);
   color: var(--foreground);
 }
 
-.conversation-composer--manuscript textarea {
+.conversation-composer--manuscript [data-manuscript-input] {
   display: block;
   min-height: calc(var(--spacing) * 11);
   max-height: none;
@@ -232,13 +232,13 @@
   line-height: 1.95;
 }
 
-.conversation-composer--manuscript:focus-within textarea {
-  min-height: calc(var(--spacing) * 22);
+.conversation-composer--manuscript:focus-within [data-manuscript-input] {
+  min-height: calc(var(--spacing) * 11);
 }
 
-.conversation-composer--manuscript[data-composer-state="editing"] textarea,
-.conversation-composer--manuscript textarea:focus-visible,
-.conversation-composer--manuscript.composer-bar.is-dragover textarea {
+.conversation-composer--manuscript[data-composer-state="editing"] [data-manuscript-input],
+.conversation-composer--manuscript [data-manuscript-input]:focus-visible,
+.conversation-composer--manuscript.composer-bar.is-dragover [data-manuscript-input] {
   border-inline-start-color: var(--ring);
   outline: 0;
 }
@@ -258,7 +258,7 @@
 
 .conversation-composer--pill [data-composer-keyboard-caption] { display: none; }
 
-.conversation-composer--pill textarea {
+.conversation-composer--pill [data-manuscript-input] {
   display: block;
   min-height: calc(var(--spacing) * 6);
   max-height: calc(var(--spacing) * 11);
@@ -295,7 +295,7 @@
   transform: translateX(-50%);
 }
 
-.conversation-composer textarea::placeholder,
+.conversation-composer [data-manuscript-input]::placeholder,
 .conversation-composer input::placeholder {
   color: var(--muted-foreground);
   font-weight: 400;
@@ -306,37 +306,6 @@
   align-items: center;
   justify-content: space-between;
   gap: calc(var(--spacing) * 3);
-}
-
-.conversation-composer--manuscript .conversation-composer-toolbar {
-  /* A small tool seat at the manuscript's upper left. Sticky is bounded by
-     this composer, so a long draft retains its actions without a page footer. */
-  grid-area: tools;
-  position: sticky;
-  align-self: start;
-  justify-self: start;
-  z-index: 30;
-  top: max(calc(var(--spacing) * 2), env(safe-area-inset-top, 0px));
-  width: max-content;
-  max-width: 100%;
-  gap: var(--spacing);
-  padding: var(--spacing);
-  border: 1px solid color-mix(in oklab, var(--foreground) 13%, transparent);
-  border-radius: 999rem;
-  background: var(--tool-glass, var(--background));
-  box-shadow: var(--shadow-float);
-  backdrop-filter: blur(1.125rem);
-}
-
-.conversation-composer--manuscript[data-editor-active="false"] .conversation-composer-toolbar:not(:focus-within) {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.conversation-composer--manuscript .conversation-composer-toolbar-left {
-  /* The disclosure expands sideways within its own seat. A dropdown below
-     this row would cover the very first line the reader is editing. */
-  position: static;
 }
 
 .conversation-composer-toolbar-left[hidden] { display: none; }
@@ -438,9 +407,9 @@
   }
   .conversation-composer--manuscript.composer-bar {
     grid-template-columns: 6rem minmax(0, 1fr);
-    grid-template-areas: ". tools" "byline writing";
+    grid-template-areas: "byline writing";
     gap: calc(var(--spacing) * 6);
-    padding-block: 1.65rem;
+    padding-block: 1.65rem calc(var(--spacing) * 24 + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -452,4 +421,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-control { transition: none; }
+}
+
+.conversation-manuscript-editor[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  float: inline-start;
+  height: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
 }

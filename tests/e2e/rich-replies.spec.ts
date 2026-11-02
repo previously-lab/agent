@@ -71,10 +71,10 @@ function nativeFixture({
 
 async function setRange(page: Page, value: number, index = 0, turnId?: string, blockId?: string): Promise<void> {
   const frame = blockId
-    ? page.frameLocator(`[data-native-block="${blockId}"] iframe`)
+    ? page.frameLocator(`[data-native-block="${blockId}"] iframe`).frameLocator("[data-native-content]")
     : turnId
-      ? page.frameLocator(`[data-native-turn="${turnId}"] iframe`)
-      : page.frameLocator("[data-native-frame]").nth(index);
+      ? page.frameLocator(`[data-native-turn="${turnId}"] iframe`).frameLocator("[data-native-content]")
+      : page.frameLocator("[data-native-frame]").nth(index).frameLocator("[data-native-content]");
   await frame.locator("#amount").evaluate((input, next) => {
     const range = input as HTMLInputElement;
     range.value = String(next);
@@ -85,21 +85,21 @@ async function setRange(page: Page, value: number, index = 0, turnId?: string, b
 
 async function rangeValue(page: Page, index = 0, turnId?: string): Promise<string> {
   const frame = turnId
-    ? page.frameLocator(`[data-native-turn="${turnId}"] iframe`)
-    : page.frameLocator("[data-native-frame]").nth(index);
+    ? page.frameLocator(`[data-native-turn="${turnId}"] iframe`).frameLocator("[data-native-content]")
+    : page.frameLocator("[data-native-frame]").nth(index).frameLocator("[data-native-content]");
   return frame.locator("#amount").inputValue();
 }
 
 async function outputValue(page: Page, index = 0): Promise<string> {
-  return page.frameLocator("[data-native-frame]").nth(index).locator("#value").innerText();
+  return page.frameLocator("[data-native-frame]").nth(index).frameLocator("[data-native-content]").locator("#value").innerText();
 }
 
 async function circleRadius(page: Page, index = 0): Promise<string | null> {
-  return page.frameLocator("[data-native-frame]").nth(index).locator("#amount-circle").getAttribute("r");
+  return page.frameLocator("[data-native-frame]").nth(index).frameLocator("[data-native-content]").locator("#amount-circle").getAttribute("r");
 }
 
 async function nativeRun(page: Page, index = 0): Promise<string | null> {
-  const root = page.frameLocator("[data-native-frame]").nth(index).locator("html");
+  const root = page.frameLocator("[data-native-frame]").nth(index).frameLocator("[data-native-content]").locator("html");
   await expect(root).toHaveAttribute("data-native-run", /.+/);
   return root.getAttribute("data-native-run");
 }
@@ -314,13 +314,13 @@ test("identical blocks in one history turn restore independent states after relo
   await page.reload();
   await openConversation(page);
   await page.locator("[data-conversation-field]").evaluate((element) => { element.scrollTop = 0; });
-  const first = page.frameLocator('[data-native-block="native-0"] iframe');
+  const first = page.frameLocator('[data-native-block="native-0"] iframe').frameLocator("[data-native-content]");
   await expect(page.locator('[data-native-block="native-0"] iframe')).toBeVisible();
   expect(await first.locator("#amount").inputValue()).toBe("41");
   expect(await first.locator("#value").innerText()).toBe("41");
   expect(await first.locator("#amount-circle").getAttribute("r")).toBe("8.1");
   await page.locator("[data-conversation-field]").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  const second = page.frameLocator('[data-native-block="native-1"] iframe');
+  const second = page.frameLocator('[data-native-block="native-1"] iframe').frameLocator("[data-native-content]");
   await expect(page.locator('[data-native-block="native-1"] iframe')).toBeVisible();
   expect(await second.locator("#amount").inputValue()).toBe("19");
   expect(await second.locator("#value").innerText()).toBe("19");
@@ -364,7 +364,7 @@ for (const viewport of [
       await page.setViewportSize({ width: viewport.mobile ? 430 : 1100, height: viewport.height });
       expect(await rangeValue(page)).toBe("64");
       expect(await nativeRun(page)).toBe(run);
-      await page.frameLocator("[data-native-frame]").getByRole("button", { name: "Add saved step", exact: true }).click();
+      await page.frameLocator("[data-native-frame]").frameLocator("[data-native-content]").getByRole("button", { name: "Add saved step", exact: true }).click();
       await page.locator("[data-manuscript-input]").press("Escape");
       await page.getByRole("button", { name: "Expand to full screen" }).click();
       // Folding intentionally releases execution. Reopening restores state;
@@ -372,15 +372,15 @@ for (const viewport of [
       expect(await rangeValue(page)).toBe("64");
       expect(await outputValue(page)).toBe("64");
       expect(await circleRadius(page)).toBe("10.4");
-      await expect(page.frameLocator("[data-native-frame]").locator("#custom-total")).toHaveText("14");
-      expect(await page.frameLocator("[data-native-frame]").locator("html").evaluate(() =>
+      await expect(page.frameLocator("[data-native-frame]").frameLocator("[data-native-content]").locator("#custom-total")).toHaveText("14");
+      expect(await page.frameLocator("[data-native-frame]").frameLocator("[data-native-content]").locator("html").evaluate(() =>
         (window as unknown as { previously: { getState(): unknown } }).previously.getState())).toEqual({ clicks: 2 });
       await page.reload();
       await openConversation(page);
       expect(await rangeValue(page)).toBe("64");
       expect(await outputValue(page)).toBe("64");
       expect(await circleRadius(page)).toBe("10.4");
-      await expect(page.frameLocator("[data-native-frame]").locator("#custom-total")).toHaveText("14");
+      await expect(page.frameLocator("[data-native-frame]").frameLocator("[data-native-content]").locator("#custom-total")).toHaveText("14");
       fixtureSlice.turns[1].content = nativeFixture({ value: 35 });
       await seedSlices([fixtureSlice]);
       await page.reload();
@@ -442,12 +442,12 @@ test("sandbox denies parent, storage and network; only host acceptance appends o
     if (request.url().startsWith("https://example.com")) external++;
   });
   await seedAndOpen(page, malicious);
-  const frame = page.frameLocator("[data-native-frame]").first();
+  const frame = page.frameLocator("[data-native-frame]").first().frameLocator("[data-native-content]");
   await expect(frame.locator("html")).toHaveAttribute("data-parent-access", "denied");
   await expect(frame.locator("html")).toHaveAttribute("data-storage-access", "denied");
   await expect(frame.locator("html")).toHaveAttribute("data-fetch-denied", "yes");
   const input = page.locator("[data-manuscript-input]");
-  await expect(input).toHaveValue("");
+  await expect(input).toHaveAttribute("data-editor-text", "");
   await expect(page.locator("[data-native-suggestion]")).toHaveCount(1);
   await input.fill("Existing draft");
   await page.locator("input[type=file]").first().setInputFiles({
@@ -455,6 +455,7 @@ test("sandbox denies parent, storage and network; only host acceptance appends o
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=", "base64"),
   });
+  await expect(input).toHaveAttribute("data-editor-text", "Existing draft〔图1〕");
   await frame.locator("#follow").click();
   await frame.locator("#follow").click();
   await expect(page.locator("[data-native-suggestion]")).toHaveCount(1);
@@ -462,12 +463,12 @@ test("sandbox denies parent, storage and network; only host acceptance appends o
   const accept = page.getByRole("button", { name: "Add to draft", exact: true });
   await accept.focus();
   await page.keyboard.press("Space");
-  await expect(input).toHaveValue("Existing draft\n\nButton suggestion");
+  await expect(input).toHaveAttribute("data-editor-text", "Existing draft〔图1〕\n\nButton suggestion");
   await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
   await expect(page.locator("[data-native-suggestion]")).toHaveCount(0);
   await frame.locator("#follow").click();
   await expect(page.locator("[data-native-suggestion]")).toHaveCount(0);
-  await expect(input).toHaveValue("Existing draft\n\nButton suggestion");
+  await expect(input).toHaveAttribute("data-editor-text", "Existing draft〔图1〕\n\nButton suggestion");
   expect(posts).toBe(0);
   expect(external).toBe(0);
 });
@@ -487,7 +488,7 @@ test("terminal incomplete source stays inert with a readable message and keyboar
   await expect(incomplete.locator(".native-source, .native-controls")).toHaveCount(0);
   await incomplete.getByRole("button", { name: "Retry", exact: true }).focus();
   await page.keyboard.press("Space");
-  await expect(page.locator("[data-manuscript-input]")).toHaveValue("Please finish the incomplete interactive HTML block from the previous reply.");
+  await expect(page.locator("[data-manuscript-input]")).toHaveAttribute("data-editor-text", "Please finish the incomplete interactive HTML block from the previous reply.");
   expect(posts).toBe(0);
 });
 
@@ -516,7 +517,7 @@ test("paper copies execute once per scope and page turns retain independent slid
   await page.goto("/en/app?doc=research/native-paper");
   await expect(page.locator(".desk-shell--top .desk-title")).toHaveText("native-paper");
   await expect.poll(async () => Number((await page.locator(".desk-page-position").innerText()).split("/")[1])).toBeGreaterThan(1);
-  const first = page.locator('.desk-shell--top [data-native-block="native-0"] iframe[sandbox~="allow-scripts"]').contentFrame();
+  const first = page.locator('.desk-shell--top [data-native-block="native-0"] iframe[sandbox~="allow-scripts"]').contentFrame().frameLocator("[data-native-content]");
   await first.getByLabel("Level A").press("End");
   await first.getByLabel("Level A").press("ArrowLeft");
   await expect(first.locator("#value")).toHaveText("198");
@@ -535,7 +536,7 @@ test("paper copies execute once per scope and page turns retain independent slid
     await expect(page.locator(".desk-shell--travel-next, .desk-shell--travel-prev")).toHaveCount(0);
   }
   expect(await inPage()).toBe(true);
-  const second = secondElement.contentFrame();
+  const second = secondElement.contentFrame().frameLocator("[data-native-content]");
   await expect(second.getByLabel("Level B")).toHaveValue("60");
   await second.getByLabel("Level B").press("Home");
   await second.getByLabel("Level B").press("ArrowRight");
@@ -637,7 +638,7 @@ test("timed chunks do not replay settled prose or replace the completed iframe",
 
 test("early script errors survive ready and script-only content keeps a readable fallback", async ({ page }) => {
   await seedAndOpen(page, "```html live\n<script>throw new Error('early fixture')</script>\n```");
-  const frame = page.frameLocator("[data-native-frame]").first();
+  const frame = page.frameLocator("[data-native-frame]").first().frameLocator("[data-native-content]");
   await expect(frame.locator("#previously-native-fallback")).toBeVisible();
   await expect(page.locator(".native-error")).toContainText("script problem");
   await expect(page.locator(".native-controls, .native-source")).toHaveCount(0);
@@ -664,7 +665,7 @@ test("native height follows content both ways without expansion controls", async
     `,
   });
   await seedAndOpen(page, fixture);
-  const frame = page.frameLocator("[data-native-frame]").first();
+  const frame = page.frameLocator("[data-native-frame]").first().frameLocator("[data-native-content]");
   const shell = page.locator(".native-frame-shell").first();
   const run = await nativeRun(page);
   const height = async () => (await shell.boundingBox())?.height ?? 0;
@@ -738,7 +739,7 @@ for (const viewport of [
     await expect(block).toHaveCSS("animation-name", "none");
     await expect(page.locator('.code-block svg[id^="mmd-"]').first()).toBeVisible({ timeout: 30_000 });
     await block.scrollIntoViewIfNeeded();
-    const frame = page.frameLocator("[data-native-frame]").first();
+    const frame = page.frameLocator("[data-native-frame]").first().frameLocator("[data-native-content]");
     await expect(page.locator(".native-frame-shell").first()).toHaveAttribute("data-ready");
     await expect.poll(async () => frame.locator("html").evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1)).toBe(true);
     const bounds = await block.boundingBox();
@@ -954,7 +955,7 @@ test("live provisional state restores under the canonical authoritative history 
   await seedSlices([saved]);
   await page.reload();
   await openConversation(page);
-  const history = page.frameLocator('[data-native-turn="native-live-turn"] iframe');
+  const history = page.frameLocator('[data-native-turn="native-live-turn"] iframe').frameLocator("[data-native-content]");
   await expect(page.locator('[data-native-turn="native-live-turn"] iframe')).toBeVisible();
   expect(await history.locator("#amount").inputValue()).toBe("46");
   expect(await history.locator("#value").innerText()).toBe("46");

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useLayoutEffect, useId, type FormEvent, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useId, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUp, AtSign, Maximize2, Plus, Square, Paperclip, Radio } from "lucide-react";
 import { toast } from "sonner";
@@ -22,8 +22,10 @@ import { reducePanelMode, usePanelTier } from "./conversation-panel";
 import { useDocumentContext } from "./document-context-provider";
 import { useNativePersona, useNativeSourceScope } from "./native-source-scope";
 import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
-import { imageMarkerText, insertImageMarker, selectedImageMarker } from "@/lib/chat/image-markers";
-import { ImagePolaroid } from "./conversation-images";
+import { imageMarkerText } from "@/lib/chat/image-markers";
+import { ImagePolaroid, DraftImagePlaceholder } from "./conversation-images";
+import { ConversationControls } from "./conversation-controls";
+import { ManuscriptEditor, type ManuscriptEditorHandle, type ManuscriptSelection } from "./manuscript-editor";
 import {
   DocumentMentionPicker,
   DocumentReferenceChips,
@@ -91,7 +93,8 @@ export function ChatInput({
     value: typeof next === "function" ? next(current.value) : next,
     revision: current.revision + 1,
   }));
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<ManuscriptEditorHandle>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -118,17 +121,15 @@ export function ChatInput({
     setMention({ open: false, manual: false, query: "", range: null });
   };
 
+  const ownsTarget = (target: EventTarget | null) => target instanceof Node &&
+    Boolean(composerRef.current?.contains(target) || controlsRef.current?.contains(target));
   const rememberSelection = () => {
-    const input = textareaRef.current;
-    if (input) selectionRef.current = { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection };
+    if (editorRef.current) selectionRef.current = editorRef.current.getSelection();
   };
-
   const restoreSelection = () => {
     if (composingRef.current) return;
-    const input = textareaRef.current;
-    if (!input) return;
-    input.focus({ preventScroll: true });
-    input.setSelectionRange(selectionRef.current.start, selectionRef.current.end, selectionRef.current.direction);
+    editorRef.current?.focus({ preventScroll: true });
+    editorRef.current?.setSelection(selectionRef.current);
   };
 
   const openManualMention = () => {
@@ -137,12 +138,13 @@ export function ChatInput({
     setMention((current) => current.open && current.manual
       ? { open: false, manual: false, query: "", range: null }
       : { open: true, manual: true, query: "", range: null });
+    requestAnimationFrame(() => composerRef.current?.scrollIntoView({ block: "nearest" }));
   };
 
   useEffect(() => {
     if (!toolsOpen) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !composerRef.current?.contains(event.target)) setToolsOpen(false);
+      if (event.target instanceof Node && !composerRef.current?.contains(event.target) && !controlsRef.current?.contains(event.target)) setToolsOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
@@ -160,21 +162,6 @@ export function ChatInput({
     window.addEventListener(NATIVE_DRAFT_EVENT, onDraft);
     return () => window.removeEventListener(NATIVE_DRAFT_EVENT, onDraft);
   }, []);
-
-  // One textarea survives every tier. Re-measure after typing, focusing and
-  // crossing a tier so the same draft stays visible without remounting it.
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const style = getComputedStyle(el);
-    const floor = Number.parseFloat(style.minHeight) || 0;
-    const ceiling = Number.parseFloat(style.maxHeight) || Infinity;
-    // Manuscript drafts belong to the page's scroll extent, not an inner
-    // textarea scrollbar. Only the compact pill caps and scrolls its input.
-    el.style.height = "0px";
-    const naturalHeight = Math.max(floor, el.scrollHeight);
-    el.style.height = `${Math.min(naturalHeight, ceiling)}px`;
-  }, [value, focused, toolsOpen, mention.open, tier?.mode, images.length]);
 
   const handleSubmit = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -196,6 +183,7 @@ export function ChatInput({
       await onSubmit(submittedText, [], attachments, submissionRef.current.id);
       setDraft(current => current.revision === submittedRevision ? { value: "", revision: current.revision + 1 } : current);
       acceptImages(submittedImages);
+      editorRef.current?.clearHistory();
       submissionRef.current = null;
     } catch {
       toast.error(t("images.sendFailed"));
@@ -205,14 +193,11 @@ export function ChatInput({
     }
   };
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const next = e.target.value;
-    const caret = e.target.selectionStart ?? next.length;
-    if (e.target === textareaRef.current) rememberSelection();
+  const handleChange = (next: string, selection: ManuscriptSelection) => {
+    selectionRef.current = selection;
     setValue(next);
-    if (queuedFilesRef.current.length && !composingRef.current) requestAnimationFrame(drainQueuedFiles);
-    setMention((current) => {
-      const range = findDocumentMentionRange(next, caret);
+    setMention(current => {
+      const range = findDocumentMentionRange(next, selection.end);
       if (range) return { open: true, manual: false, query: range.query, range };
       return current.manual ? current : { open: false, manual: false, query: "", range: null };
     });
@@ -236,9 +221,10 @@ export function ChatInput({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLDivElement>) => {
     if (composingRef.current || isImeKeyboardEvent(e.nativeEvent)) return;
-    const intent = composerEnterIntent(e.nativeEvent, { enterBehavior, mentionOpen: mention.open });
+    if (!mention.open) return;
+    const intent = composerEnterIntent(e.nativeEvent, { enterBehavior, mentionOpen: true });
     if (intent !== "native") {
       e.preventDefault();
       if (intent === "select-mention") {
@@ -263,19 +249,13 @@ export function ChatInput({
   };
 
   const addImageFiles = (files: File[]) => {
+    setIsDragOver(false);
     if (composingRef.current) { queuedFilesRef.current.push(...files); return; }
     rememberSelection();
     const added = addFiles(files);
     if (!added.length) return;
-    let next = textareaRef.current?.value ?? value;
-    let caret = selectionRef.current.end;
-    for (const image of added) {
-      const insertion = insertImageMarker(next, caret, image.ordinal);
-      next = insertion.text;
-      caret = insertion.caret;
-    }
-    setValue(next);
-    selectionRef.current = { start: caret, end: caret, direction: "none" };
+    editorRef.current?.insertAtCaret(added.map(image => imageMarkerText(image.ordinal)).join(""), { afterSelection: true });
+    rememberSelection();
     requestAnimationFrame(restoreSelection);
   };
 
@@ -284,27 +264,10 @@ export function ChatInput({
     e.target.value = "";
   };
 
-  const handlePaste = (event: React.ClipboardEvent) => {
-    const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith("image/"));
-    if (!files.length) return;
-    // Keep mixed text intact; consume image-only paste once, without a second
-    // browser insertion of a filename or HTML clipboard representation.
-    const text = event.clipboardData.getData("text/plain");
-    if (!text) { event.preventDefault(); addImageFiles(files); }
-    else { queuedFilesRef.current.push(...files); }
-  };
-
   const drainQueuedFiles = () => {
     if (composingRef.current || !queuedFilesRef.current.length) return;
     const files = queuedFilesRef.current.splice(0);
     addImageFiles(files);
-  };
-
-  const selectImageMarker = () => {
-    rememberSelection();
-    const marker = selectedImageMarker(textareaRef.current?.value ?? value, selectionRef.current,
-      images.map(image => ({ id: image.localClientId, ordinal: image.ordinal })));
-    setSelectedPhoto(marker?.id);
   };
 
   const onDragOver = (e: React.DragEvent) => {
@@ -322,6 +285,10 @@ export function ChatInput({
   };
 
   const hasContent = value.trim().length > 0 || images.length > 0;
+  // A failed upload must not leave its retry action buried behind a photo.
+  // Explicit reader selection still wins; the index includes pending images.
+  const frontPhoto = selectedPhoto && images.some(image => image.localClientId === selectedPhoto)
+    ? selectedPhoto : (images.find(image => image.status === "error") ?? images.at(-1))?.localClientId;
   const onPill = tier?.mode === "pill";
   const composerState = getComposerState({
     focused,
@@ -343,13 +310,12 @@ export function ChatInput({
       aria-busy={isLoading || undefined}
       aria-live="off"
       className={`conversation-composer composer-bar relative ${onPill ? "conversation-composer--pill" : "conversation-composer--manuscript"} ${isDragOver ? "is-dragover" : ""}`}
-      onPaste={handlePaste}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        if (!ownsTarget(event.relatedTarget)) {
           setFocused(false);
           setToolsOpen(false);
         }
@@ -391,47 +357,43 @@ export function ChatInput({
         {images.length > 0 && (
           <div className="conversation-composer-attachments conversation-draft-photos" data-composer-attachments>
             <div className="conversation-image-stack" data-image-stack>
-              {images.filter(image => image.status === "ready" && image.attachment).map((image, index, ready) => (
-                <div key={image.localClientId} className="conversation-photo-seat" data-attachment-preview
-                  data-photo-front={selectedPhoto === image.localClientId || (!selectedPhoto && index === ready.length - 1) || undefined}
+              {images.map((image, index) => (
+                <div key={image.localClientId} className="conversation-photo-seat" data-attachment-preview={image.status === "ready" || undefined}
+                  data-photo-front={frontPhoto === image.localClientId || undefined}
                   style={{ "--photo-offset": index } as React.CSSProperties}>
-                  <ImagePolaroid image={image.attachment!} animate selected={selectedPhoto === image.localClientId}
+                  {image.status === "ready" && image.attachment ? <ImagePolaroid image={image.attachment} animate selected={selectedPhoto === image.localClientId}
                     onSelect={() => { setSelectedPhoto(image.localClientId); photoRefs.current.get(image.localClientId)?.focus({ preventScroll: true }); }}
                     onRemove={() => removeImage(image.localClientId)}
                     figureRef={(node) => { if (node) photoRefs.current.set(image.localClientId, node); else photoRefs.current.delete(image.localClientId); }} />
+                    : <DraftImagePlaceholder image={image} onRetry={() => retryImage(image.localClientId)} onRemove={() => removeImage(image.localClientId)} />}
                 </div>
               ))}
             </div>
-            {images.filter(image => image.status === "ready").length > 1 && <div className="conversation-photo-index" role="group" aria-label={t("images.attached")}>
-              {images.filter(image => image.status === "ready").map(image => <button key={image.localClientId} type="button"
+            {images.length > 1 && <div className="conversation-photo-index" role="group" aria-label={t("images.attached")}>
+              {images.map(image => <button key={image.localClientId} type="button"
                 aria-label={`${imageMarkerText(image.ordinal)} ${image.file.name}`} aria-pressed={selectedPhoto === image.localClientId}
                 onClick={() => { setSelectedPhoto(image.localClientId); photoRefs.current.get(image.localClientId)?.focus({ preventScroll: true }); }}>{imageMarkerText(image.ordinal)}</button>)}
             </div>}
-            <div aria-live="polite">
-              {images.filter(image => image.status !== "ready").map(image => (
-                <div key={image.localClientId} className="conversation-upload-status" data-upload-id={image.localClientId} data-upload-state={image.status}>
-                  <span>{imageMarkerText(image.ordinal)} {image.file.name}: {t(image.status === "error" ? "images.failed" : image.status === "preparing" ? "images.preparing" : "images.uploading")}</span>
-                  {image.error && <p>{image.error === "original-too-large" ? t("images.originalTooLarge") : image.error === "too-large" ? t("images.tooLarge") : image.error}</p>}
-                  {image.status === "error" && <button type="button" onClick={() => retryImage(image.localClientId)}>{t("images.retry")}</button>}
-                  <button type="button" onClick={() => removeImage(image.localClientId)} aria-label={t("removeAttachment", { name: image.file.name })}>×</button>
-                </div>
-              ))}
-            </div>
+
           </div>
         )}
         {limitReached && <p className="conversation-upload-status" role="alert">{t("images.limit")}</p>}
         {removed && <p className="conversation-upload-status" role="status">{t("images.removed", { name: removed.file.name })} <button type="button" onClick={undoRemove}>{t("images.undo")}</button></p>}
         {submitting && <p className="conversation-upload-status" role="status">{t("images.submitting")}</p>}
         <div className="conversation-composer-draft">
-          <textarea
-            ref={textareaRef}
-            data-manuscript-input
+          <ManuscriptEditor
+            ref={editorRef}
             value={value}
+            scope={JSON.stringify([source, persona])}
+            bindings={images.map(image => ({ id: image.localClientId, ordinal: image.ordinal, assetId: image.attachment?.assetId }))}
             onChange={handleChange}
+            onSelectionChange={selection => { selectionRef.current = selection; }}
+            onReferenceSelect={setSelectedPhoto}
             onKeyDown={handleKeyDown}
-            onSelect={selectImageMarker}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={() => { composingRef.current = false; rememberSelection(); requestAnimationFrame(drainQueuedFiles); }}
+            onSubmit={() => { void handleSubmit(); }}
+            onFiles={addImageFiles}
+            onCompositionChange={composing => { composingRef.current = composing; if (!composing) requestAnimationFrame(drainQueuedFiles); }}
+            enterBehavior={enterBehavior}
             placeholder={t("placeholder")}
             aria-label={t("placeholder")}
             aria-describedby={`${toolsId}-hint`}
@@ -441,15 +403,14 @@ export function ChatInput({
             aria-expanded={mention.open}
             aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
             aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
-            rows={1}
-            enterKeyHint={enterBehavior === "send" ? "send" : "enter"}
-            className="w-full resize-none bg-transparent focus:outline-none"
+            className="conversation-manuscript-editor w-full bg-transparent focus:outline-none"
           />
           <p className="conversation-upload-status" data-composer-keyboard-caption>{t(enterBehavior === "send" ? "keyboardSendCaption" : "keyboardCaption")}</p>
         </div>
       </div>
 
       <span id={`${toolsId}-hint`} className="sr-only">{t(enterBehavior === "send" ? "keyboardSendHint" : "keyboardHint")}</span>
+      <ConversationControls inline={onPill} exposed={focused || toolsOpen || mention.open} rootRef={controlsRef}>
       <div className="conversation-composer-toolbar" data-composer-mini-toolbar data-composer-floating-controls>
         <button
           ref={toolsTriggerRef}
@@ -502,6 +463,11 @@ export function ChatInput({
           >
             <AtSign aria-hidden className="h-3.5 w-3.5" />
           </button>
+          <button type="button" data-composer-secondary-send onClick={() => { void handleSubmit(); }}
+            disabled={!hasContent || submitting || images.some(image => image.status !== "ready")}
+            aria-label={t("sendTooltip")} title={t("sendTooltip")} className="conversation-control">
+            <ArrowUp aria-hidden className="size-4" />
+          </button>
         </div>
 
         <div className="conversation-composer-toolbar-right">
@@ -517,32 +483,24 @@ export function ChatInput({
               <Maximize2 aria-hidden className="size-4" />
             </button>
           )}
-          {isLoading && onStop && (
-            <button
-              type="button"
-              data-composer-stop
-              onClick={onStop}
-              aria-label={t("stopTooltip")}
-              className="conversation-control conversation-control--stop"
-              title={t("stopTooltip")}
-            >
-              <Square className="h-3 w-3 fill-current" />
-            </button>
-          )}
           <button
-            type="submit"
-            data-composer-send
-            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
-            disabled={!hasContent || submitting || images.some(image => image.status !== "ready")}
-            aria-label={t("sendTooltip")}
-            aria-keyshortcuts={enterBehavior === "send" ? "Enter Control+Enter Meta+Enter" : "Control+Enter Meta+Enter"}
-            className={`conversation-control ${hasContent ? "conversation-send" : ""}`}
-            title={t("sendTooltip")}
+            type="button"
+            data-conversation-primary
+            data-primary-action={isLoading && onStop ? "stop" : "send"}
+            data-composer-send={!isLoading || !onStop ? "" : undefined}
+            data-composer-stop={isLoading && onStop ? "" : undefined}
+            onClick={() => { if (isLoading && onStop) onStop(); else void handleSubmit(); }}
+            disabled={isLoading && onStop ? false : !hasContent || submitting || images.some(image => image.status !== "ready")}
+            aria-label={t(isLoading && onStop ? "stopTooltip" : "sendTooltip")}
+            aria-describedby={`${toolsId}-hint`}
+            className="conversation-primary-action"
+            title={t(isLoading && onStop ? "stopTooltip" : "sendTooltip")}
           >
-            <ArrowUp className="h-4 w-4" />
+            {isLoading && onStop ? <Square aria-hidden className="size-4 fill-current" /> : <ArrowUp aria-hidden className="size-5" />}
           </button>
         </div>
       </div>
+      </ConversationControls>
     </div>
   );
 }

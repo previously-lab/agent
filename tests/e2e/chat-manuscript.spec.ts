@@ -170,7 +170,7 @@ for (const viewport of [
       await expect(page.locator("[data-pill-composer]")).toBeVisible();
       await expect(page.locator("[data-conversation-field]")).toBeVisible();
       await expect(agent).toBeVisible();
-      await expect(input).toHaveValue(`${draft}〔图1〕`);
+      await expect(input).toHaveAttribute("data-editor-text", `${draft}〔图1〕`);
       await expectSameNode(page, originalNode);
       await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
       await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
@@ -180,7 +180,7 @@ for (const viewport of [
       expect(pill!.x + pill!.width).toBeLessThanOrEqual(viewport.width);
 
       await page.getByRole("button", { name: "Expand to full screen" }).click();
-      await expect(input).toHaveValue(`${draft}〔图1〕`);
+      await expect(input).toHaveAttribute("data-editor-text", `${draft}〔图1〕`);
       await expectSameNode(page, originalNode);
       await expect(page.getByRole("button", { name: "Remove attachment: fixture-note.png" })).toBeVisible();
       await expect(page.locator(".document-reference-chip").filter({ hasText: "manuscript-context" })).toHaveCount(1);
@@ -193,7 +193,7 @@ for (const viewport of [
       expect(new URL(cancelled.url()).searchParams.get("persona")).toBe("user");
       console.log(`Real local PNG upload/GET/cancel PASS (${viewport.name}; persona=user; stable draft ref)`);
       await expect(remove).toHaveCount(0);
-      await expect(input).toHaveValue(`${draft}〔图1〕`);
+      await expect(input).toHaveAttribute("data-editor-text", `${draft}〔图1〕`);
       const screenshot = await page.screenshot({ path: testInfo.outputPath("manuscript.png") });
       await testInfo.attach("manuscript", { body: screenshot, contentType: "image/png" });
     });
@@ -231,7 +231,7 @@ test.describe("manuscript editing integration", () => {
     await expect(user).toBeVisible();
     await expect(agent).toBeVisible({ timeout: 30_000 });
     await expectSameNode(page, originalNode);
-    await expect(input).toHaveValue("");
+    await expect(input).toHaveAttribute("data-editor-text", "");
     await expect(input).toBeEditable();
     await expect(page.locator("[data-manuscript-composer]")).not.toHaveAttribute("aria-busy", "true");
     await expect(page.locator("[data-composer-send]")).toBeDisabled();
@@ -267,7 +267,7 @@ test.describe("manuscript editing integration", () => {
     await expect.poll(() => input.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(160);
     await expect.poll(() => input.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
     expect(await field.evaluate((el) => el.scrollHeight)).toBeGreaterThan(before);
-    const toolbar = page.locator("[data-composer-mini-toolbar]");
+    const toolbar = page.locator("[data-conversation-controls]");
     await expect(toolbar).toBeVisible();
     await expect(page.locator("[data-manuscript-input]")).toHaveCount(1);
     await testInfo.attach("long-draft", {
@@ -275,9 +275,9 @@ test.describe("manuscript editing integration", () => {
       contentType: "image/png",
     });
 
-    // Tools float only within this editor, not as a fixed conversation footer.
+    // The new viewport control seat remains reachable while prose grows.
     await expect(toolbar).toBeVisible();
-    await expect(toolbar).toHaveCSS("position", "sticky");
+    await expect(toolbar).toHaveCSS("position", "fixed");
     await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]:visible")).toBeVisible();
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
@@ -320,16 +320,16 @@ test.describe("manuscript editing integration", () => {
     });
     expect(imeEnterAllowed).toBe(true);
     expect(posts).toHaveLength(0);
-    await expect(input).toHaveValue("拼音草稿");
+    await expect(input).toHaveAttribute("data-editor-text", "拼音草稿");
     await expectSameNode(page, originalNode);
     await input.dispatchEvent("compositionend", { data: "拼音草稿" });
 
     await input.press("Shift+Enter");
     await input.pressSequentially("换行");
-    await expect(input).toHaveValue("拼音草稿\n换行");
+    await expect(input).toHaveAttribute("data-editor-text", "拼音草稿\n换行");
     expect(posts).toHaveLength(0);
     await input.press("Shift+Enter");
-    await expect(input).toHaveValue("拼音草稿\n换行\n");
+    await expect(input).toHaveAttribute("data-editor-text", "拼音草稿\n换行\n");
     expect(posts).toHaveLength(0);
     await input.press("Enter");
     await expect(page.getByText("Reply after composition", { exact: true })).toBeVisible();

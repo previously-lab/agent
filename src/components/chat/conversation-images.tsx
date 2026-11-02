@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { imageAttachmentUrl, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { findImageMarkers, imageMarkerText } from "@/lib/chat/image-markers";
 import { useNativePersona } from "./native-source-scope";
+import type { DraftImage } from "@/lib/chat/image-attachment-draft";
 import "./conversation-images.css";
 
 export function ImagePolaroid({ image, selected, animate = false, onSelect, onRemove, figureRef }: {
@@ -17,15 +18,36 @@ export function ImagePolaroid({ image, selected, animate = false, onSelect, onRe
 }) {
   const t = useTranslations("chat.input");
   const persona = useNativePersona() ?? "user";
+  const [attempt, setAttempt] = useState(0);
+  const decodeTicket = useRef(0);
+  const src = imageAttachmentUrl(image.ref, persona) + (attempt ? `&previewAttempt=${attempt}` : "");
+  const [decoded, setDecoded] = useState<{ src: string; status: "loading" | "ready" | "error" }>({ src, status: "loading" });
+  // A new protected ref/persona must earn its own decoded status. An old
+  // image's late decode can never expose an unready replacement source.
+  const preview = decoded.src === src ? decoded.status : "loading";
+  const ratio = image.width && image.height ? image.width / image.height : 4 / 3;
   return (
     <figure ref={figureRef} tabIndex={-1} className="conversation-polaroid" data-image-asset={image.assetId}
-      data-image-ordinal={image.ordinal} data-image-selected={selected || undefined} data-image-arrival={animate || undefined}
-      style={{ "--photo-tilt": `${((image.ordinal ?? 1) % 3 - 1) * 1.2}deg` } as CSSProperties}>
+      data-image-ordinal={image.ordinal} data-image-selected={selected || undefined} data-image-arrival={animate && preview === "ready" || undefined}
+      data-preview-state={preview}
+      style={{ "--photo-aspect": ratio, "--photo-tilt": `${((image.ordinal ?? 1) % 3 - 1) * 1.2}deg` } as CSSProperties}>
+      <div className="conversation-photo-media" data-photo-media aria-busy={preview === "loading" || undefined}>
       <a href={imageAttachmentUrl(image.ref, persona)} target="_blank" rel="noreferrer" aria-label={t("images.open", { name: image.name })}>
         {/* The protected attachment endpoint owns image bytes and MIME checks. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageAttachmentUrl(image.ref, persona)} alt={image.name} loading="lazy" />
+        <img key={src} src={src} alt={image.name} width={image.width} height={image.height} loading={animate ? "eager" : "lazy"}
+          onLoad={async event => {
+            const element = event.currentTarget;
+            const ticket = ++decodeTicket.current;
+            try { await element.decode(); if (decodeTicket.current === ticket) setDecoded({ src, status: "ready" }); }
+            catch { if (decodeTicket.current === ticket) setDecoded({ src, status: "error" }); }
+          }} onError={() => { decodeTicket.current++; setDecoded({ src, status: "error" }); }} />
       </a>
+      {preview !== "ready" && <div className="conversation-photo-status" role="status">
+        <span>{t(preview === "error" ? "images.previewFailed" : "images.previewLoading")}</span>
+        {preview === "error" && <button type="button" onClick={() => { decodeTicket.current++; setAttempt(current => current + 1); }}>{t("images.previewRetry")}</button>}
+      </div>}
+      </div>
       <figcaption>
         <button type="button" className="conversation-photo-label" onClick={onSelect}>
           {image.ordinal ? imageMarkerText(image.ordinal) : image.name}
@@ -35,6 +57,28 @@ export function ImagePolaroid({ image, selected, animate = false, onSelect, onRe
       </figcaption>
     </figure>
   );
+}
+
+/** Upload and failure use the same media seat as the eventual photograph. */
+export function DraftImagePlaceholder({ image, onRetry, onRemove }: {
+  image: DraftImage; onRetry: () => void; onRemove: () => void;
+}) {
+  const t = useTranslations("chat.input");
+  return <figure className="conversation-polaroid conversation-photo-placeholder" data-upload-id={image.localClientId} data-upload-state={image.status}
+    style={{ "--photo-aspect": image.width && image.height ? image.width / image.height : 4 / 3,
+      "--photo-tilt": `${(image.ordinal % 3 - 1) * 1.2}deg` } as CSSProperties}>
+    <div className="conversation-photo-media" data-photo-media aria-busy={image.status !== "error" || undefined}>
+      <div className="conversation-photo-status" role="status">
+        <span>{t(image.status === "error" ? image.error === "original-too-large" ? "images.originalTooLarge" : image.error === "too-large" ? "images.tooLarge" : "images.failed" : image.status === "preparing" ? "images.preparing" : "images.uploading")}</span>
+        {image.status === "error" && <button type="button" onClick={onRetry}>{t("images.retry")}</button>}
+      </div>
+    </div>
+    <figcaption>
+      <span>{imageMarkerText(image.ordinal)}</span><span className="truncate" title={image.file.name}>{image.file.name}</span>
+      <button className="conversation-photo-remove" type="button" onClick={onRemove} aria-label={t("removeAttachment", { name: image.file.name })}>×</button>
+    </figcaption>
+    {image.error && <span className="sr-only">{image.error === "original-too-large" ? t("images.originalTooLarge") : image.error === "too-large" ? t("images.tooLarge") : image.error}</span>}
+  </figure>;
 }
 
 /** Saved and live user paragraphs resolve exactly the same bounded snapshot.

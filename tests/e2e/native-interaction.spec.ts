@@ -34,7 +34,7 @@ async function compareThemeClasses(block: Locator) {
         fontSize: style.fontSize, fontFamily: style.fontFamily, fontWeight: style.fontWeight };
     });
   }, THEME_PROBES);
-  const frame = block.locator('[data-native-frame][sandbox~="allow-scripts"]').contentFrame();
+  const frame = block.locator('[data-native-frame][sandbox~="allow-scripts"]').contentFrame().frameLocator("[data-native-content]");
   await expect.poll(() => frame.locator("body").evaluate((_, ids) => ids.map((id) => {
     const style = getComputedStyle(document.getElementById(id)!);
     return { id, color: style.color, background: style.backgroundColor, border: style.borderColor,
@@ -55,7 +55,7 @@ test("full HTML runs head, module, inline click, slider and local submit handler
   await expect(page.locator("[data-manuscript-input]")).toBeEditable();
   const iframe = page.locator("[data-native-frame]").first();
   await expect(iframe).toBeVisible();
-  const frame = iframe.contentFrame();
+  const frame = iframe.contentFrame().frameLocator("[data-native-content]");
   await frame.getByLabel("Left", { exact: true }).fill("9");
   await frame.getByLabel("Right", { exact: true }).fill("3");
   await frame.getByRole("button", { name: "Add with head script", exact: true }).click();
@@ -77,7 +77,7 @@ test("DOMContentLoaded-bound calculator restores its derived output after reload
   await seedSlices([interactiveRecord(calculatorDocument())]);
   await page.goto("/en/app");
   await expect(page.locator("[data-manuscript-input]")).toBeEditable();
-  const frame = activeFrames(page).contentFrame();
+  const frame = activeFrames(page).contentFrame().frameLocator("[data-native-content]");
   await frame.locator("#rsi").press("End");
   await frame.locator("#rsi").press("ArrowLeft");
   await expect(frame.locator("#level")).toHaveText("198");
@@ -114,15 +114,15 @@ test("chat and paper share live theme classes without reload and hand off one ca
     sample();
   });
   // Do not wait for the old 180ms save debounce before hiding the frame.
-  await activeFrames(page).contentFrame().getByRole("button", { name: "Add saved step", exact: true }).click();
+  await activeFrames(page).contentFrame().frameLocator("[data-native-content]").getByRole("button", { name: "Add saved step", exact: true }).click();
   await page.getByRole("button", { name: "Exit full screen", exact: true }).click();
   await page.getByRole("button", { name: "Expand to full screen", exact: true }).click();
-  await expect(activeFrames(page).contentFrame().locator("#custom-count")).toHaveText("2");
-  await expect(activeFrames(page).contentFrame().locator("#custom-total")).toHaveText("14");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-count")).toHaveText("2");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-total")).toHaveText("14");
   const captured = new Set<string>();
   const styleSnapshots: { stage: string; elementId: string; snapshotId: string; bytes: number; styleIds: string[] }[] = [];
   const recordStyles = async (block: Locator, stage: string) => {
-    const snapshot = await block.locator('[data-native-frame][sandbox~="allow-scripts"]').contentFrame()
+    const snapshot = await block.locator('[data-native-frame][sandbox~="allow-scripts"]').contentFrame().frameLocator("[data-native-content]")
       .locator("#previously-native-styles").evaluate((element) => ({
         elementId: element.id,
         snapshotId: (element as HTMLElement).dataset.version ?? "",
@@ -139,7 +139,7 @@ test("chat and paper share live theme classes without reload and hand off one ca
     await expect(activeFrames(page)).toHaveCount(1);
     const block = surface === "paper" ? page.locator(".desk-shell--top [data-native-block]").first() : page.locator("[data-native-block]").first();
     const iframe = block.locator('[data-native-frame][sandbox~="allow-scripts"]');
-    const frame = iframe.contentFrame();
+    const frame = iframe.contentFrame().frameLocator("[data-native-content]");
     const node = await iframe.elementHandle();
     await expect(frame.locator("html")).toHaveAttribute("data-fixture-run", /.+/);
     const instance = await frame.locator("html").getAttribute("data-fixture-run");
@@ -179,7 +179,7 @@ test("chat and paper share live theme classes without reload and hand off one ca
       if (!captured.has(shot)) {
         await expect(page.locator(".pulse-delay:visible")).toHaveCount(0);
         await page.evaluate(() => document.fonts.ready);
-        await page.screenshot({ path: testInfo.outputPath(shot), style: "nextjs-portal { display: none !important; }" });
+        await page.screenshot({ path: testInfo.outputPath(shot), animations: "disabled", style: "nextjs-portal { display: none !important; }" });
         captured.add(shot);
       }
     }
@@ -222,10 +222,28 @@ test("chat and paper share live theme classes without reload and hand off one ca
   await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Conversation", exact: true }).click();
   await expect(page.locator('[data-workspace-surface="conversation"]')).toBeVisible();
   await expect(activeFrames(page)).toHaveCount(1);
-  await expect(activeFrames(page).contentFrame().locator("#rsi")).toHaveValue("1");
-  await expect(activeFrames(page).contentFrame().locator("#level")).toHaveText("2");
-  await expect(activeFrames(page).contentFrame().locator("#custom-count")).toHaveText("4");
-  await expect(activeFrames(page).contentFrame().locator("#custom-total")).toHaveText("28");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#rsi")).toHaveValue("1");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#level")).toHaveText("2");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-count")).toHaveText("4");
+  await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-total")).toHaveText("28");
+  // Header navigation releases the same execution lease as folding. Do not
+  // await a stored snapshot between this custom edit and leaving the view.
+  await activeFrames(page).contentFrame().frameLocator("[data-native-content]").getByRole("button", { name: "Add saved step", exact: true }).click();
+  await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).evaluate(button => {
+    const panel = button.closest("[data-panel-tier]")!;
+    // Two intents in one task reproduce the queued fold/navigation race.
+    panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    (button as HTMLButtonElement).click();
+  });
+  await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
+  await expect(activeFrames(page)).toHaveCount(0);
+  await page.locator(".workspace-browser-top .workspace-route-nav").getByRole("button", { name: "Conversation", exact: true }).click();
+  await expect(activeFrames(page)).toHaveCount(1);
+  const restored = activeFrames(page).contentFrame().frameLocator("[data-native-content]");
+  await expect(restored.locator("#custom-count")).toHaveText("5");
+  await expect(restored.locator("#custom-total")).toHaveText("35");
+  await expect(restored.locator("#rsi")).toHaveValue("1");
+  await expect(restored.locator("#level")).toHaveText("2");
   expect(await page.evaluate(() => (window as unknown as { __maxNativeExecutors: number }).__maxNativeExecutors)).toBe(1);
   console.log("Native browser style snapshots:", JSON.stringify(styleSnapshots));
   await testInfo.attach("native-browser-style-snapshots", { body: JSON.stringify(styleSnapshots, null, 2), contentType: "application/json" });
@@ -243,7 +261,7 @@ test(`${surface} local form computes while CSP blocks submission, parent, storag
   if (surface === "paper") await openRecordFromChat(page);
   await expect(activeFrames(page)).toHaveCount(1);
   const iframe = activeFrames(page);
-  const frame = iframe.contentFrame();
+  const frame = iframe.contentFrame().frameLocator("[data-native-content]");
   await expect(frame.locator("html")).toHaveAttribute("data-fixture-run", /.+/);
   const run = await frame.locator("html").getAttribute("data-fixture-run");
   await frame.getByRole("button", { name: "Submit locally", exact: true }).click();
@@ -251,11 +269,16 @@ test(`${surface} local form computes while CSP blocks submission, parent, storag
   for (const attribute of ["data-parent-access", "data-storage-access", "data-external-fetch", "data-host-fetch"]) {
     await expect(frame.locator("html")).toHaveAttribute(attribute, "denied");
   }
+  await expect(frame.locator("html")).toHaveAttribute("data-fixture-run", run!);
+  await expect(iframe).not.toHaveAttribute("sandbox", /allow-same-origin|allow-top-navigation|allow-popups/);
+  await expect(iframe.contentFrame().locator("[data-native-content]")).not.toHaveAttribute("sandbox", /allow-same-origin|allow-top-navigation|allow-popups/);
   const url = page.url();
   await frame.getByRole("button", { name: "Attempt external submission", exact: true }).click();
   await expect(page).toHaveURL(url);
-  await expect(frame.locator("html")).toHaveAttribute("data-fixture-run", run!);
-  await expect(iframe).not.toHaveAttribute("sandbox", /allow-same-origin|allow-top-navigation|allow-popups/);
+  // The trusted container blocks the destination before a request and retires
+  // the attempted navigation. Local preventDefault forms above keep running.
+  await expect(activeFrames(page)).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "This content tried to navigate away" })).toBeVisible();
   expect(forbiddenRequests).toBe(0);
   await noNativeChrome(page);
 });

@@ -818,6 +818,7 @@ function CompanionPodBody({
   reducedMotion,
   working = false,
   evolution,
+  hideNavigation = false,
 }: {
   target: NarrationTarget | null;
   /** End the narration and put the pod away (shell clears the target; the
@@ -840,6 +841,9 @@ function CompanionPodBody({
    * Absent entirely on the bridge brain (no inline evolution there).
    */
   evolution?: EvolutionPresence;
+  /** Conversation owns its primary control. Explicit HQ/narration panels
+   * still open here, but their navigation tab belongs to other surfaces. */
+  hideNavigation?: boolean;
 }) {
   const t = useTranslations("companion");
   const locale = useLocale();
@@ -1220,6 +1224,8 @@ function CompanionPodBody({
       <button
         type="button"
         data-companion-pod
+        hidden={hideNavigation}
+        style={hideNavigation ? { display: "none" } : undefined}
         data-active={active}
         aria-label={t("podLabel")}
         title={t("podLabel")}

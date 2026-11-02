@@ -15,6 +15,9 @@ import {
 } from "./native-theme";
 export { readNativeStyles, subscribeNativeStyles } from "./native-theme";
 
+// Fetch restrictions apply to both documents. Self-navigation is constrained
+// by the trusted parent's frame-src policy in native-container, not by an
+// unsupported navigate-to directive or a script-level location interceptor.
 export const NATIVE_IFRAME_CSP = [
   "default-src 'none'",
   "connect-src 'none'",
@@ -23,7 +26,6 @@ export const NATIVE_IFRAME_CSP = [
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
-  "navigate-to 'none'",
   "img-src data: blob:",
   "media-src data: blob:",
   "font-src data:",

@@ -2,6 +2,8 @@ import { IMAGE_ATTACHMENT_LIMITS, type ImageAttachmentSnapshot } from "./image-a
 
 export const IMAGE_INPUT_MAX_BYTES = 10 * 1024 * 1024;
 
+export interface PreparedDraftImage { file: File; width?: number; height?: number }
+
 export interface DraftImage {
   readonly localClientId: string;
   readonly ordinal: number;
@@ -9,6 +11,8 @@ export interface DraftImage {
   readonly status: "preparing" | "uploading" | "ready" | "error";
   readonly attachment?: Readonly<ImageAttachmentSnapshot>;
   readonly error?: string;
+  readonly width?: number;
+  readonly height?: number;
 }
 
 interface DraftImageState {
@@ -20,7 +24,7 @@ interface DraftImageState {
 /** Own async image work outside render. A response can update only the exact
  * operation that started it; late successful uploads are cancelled, not shown. */
 export function createImageAttachmentDraft(deps: {
-  prepare: (file: File) => Promise<File>;
+  prepare: (file: File) => Promise<File | PreparedDraftImage>;
   upload: (file: File, signal: AbortSignal) => Promise<ImageAttachmentSnapshot>;
   cancel: (assetId: string) => Promise<void>;
   mintId: () => string;
@@ -42,10 +46,12 @@ export function createImageAttachmentDraft(deps: {
     const current = () => operations.get(image.localClientId) === operation && !operation.signal.aborted;
     try {
       if (image.file.size > IMAGE_INPUT_MAX_BYTES) throw new Error("original-too-large");
-      const file = await deps.prepare(image.file);
+      const prepared = await deps.prepare(image.file);
+      const file = prepared instanceof File ? prepared : prepared.file;
       if (!current()) return;
       if (file.size > IMAGE_ATTACHMENT_LIMITS.maxBytes) throw new Error("too-large");
-      update(image.localClientId, { status: "uploading" });
+      const dimensions = prepared instanceof File ? {} : { width: prepared.width, height: prepared.height };
+      update(image.localClientId, { status: "uploading", ...dimensions });
       const attachment = await deps.upload(file, operation.signal);
       if (!current()) { cancel(attachment.assetId); return; }
       update(image.localClientId, { status: "ready", attachment: Object.freeze({ ...attachment, ordinal: image.ordinal }), error: undefined });
@@ -87,7 +93,7 @@ export function createImageAttachmentDraft(deps: {
     undo() {
       if (!state.removed) return;
       if (state.images.length >= IMAGE_ATTACHMENT_LIMITS.maxPerTurn) { publish({ ...state, limitReached: true }); return; }
-      const image: DraftImage = Object.freeze({ localClientId: state.removed.localClientId, ordinal: state.removed.ordinal, file: state.removed.file, status: "preparing" });
+      const image: DraftImage = Object.freeze({ localClientId: state.removed.localClientId, ordinal: state.removed.ordinal, file: state.removed.file, width: state.removed.width, height: state.removed.height, status: "preparing" });
       publish({ images: [...state.images, image].sort((a, b) => a.ordinal - b.ordinal), removed: null, limitReached: false });
       void start(image);
     },

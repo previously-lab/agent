@@ -39,8 +39,8 @@ beforeAll(async () => {
   ({ ChatInput } = await import("../chat-input"));
 });
 
-function renderInput() {
-  return renderToStaticMarkup(React.createElement(ChatInput, { onSubmit: vi.fn(), isLoading: false, onStop: vi.fn() }));
+function renderInput(isLoading = false) {
+  return renderToStaticMarkup(React.createElement(ChatInput, { onSubmit: vi.fn(), isLoading, onStop: vi.fn() }));
 }
 
 describe("the single manuscript input contract", () => {
@@ -48,7 +48,10 @@ describe("the single manuscript input contract", () => {
     panelMode = "fullscreen";
     const html = renderInput();
     expect(html.match(/data-manuscript-input/g)).toHaveLength(1);
-    expect(html.match(/<textarea/g)).toHaveLength(1);
+    expect(html.match(/contentEditable="true"/g)).toHaveLength(1);
+    expect(html).not.toContain("<textarea");
+    expect(html).toContain('data-controls-form="viewport"');
+    expect(html.match(/data-conversation-primary/g)).toHaveLength(1);
     expect(html).toContain('data-composer-mini-toolbar');
     expect(html).toContain('data-composer-tools-trigger');
     expect(html).toContain('aria-keyshortcuts="Enter Control+Enter Meta+Enter"');
@@ -60,14 +63,25 @@ describe("the single manuscript input contract", () => {
     expect(html).not.toContain("data-pill-expand");
   });
 
-  it("uses the same textarea contract in the pill without a second input", () => {
+  it("uses the same atomic editor contract in the pill without a second input", () => {
     panelMode = "pill";
     const html = renderInput();
     expect(html.match(/data-manuscript-input/g)).toHaveLength(1);
-    expect(html.match(/<textarea/g)).toHaveLength(1);
+    expect(html.match(/contentEditable="true"/g)).toHaveLength(1);
+    expect(html).toContain('data-controls-form="inline"');
     expect(html).toContain('data-panel-form="pill"');
     expect(html).toContain("data-pill-expand");
     expect(html).toContain('data-composer-mini-toolbar');
     expect(html).toContain("Rest discussion");
+  });
+
+  it("replaces the primary action with stop while keeping a separate send entry", () => {
+    panelMode = "fullscreen";
+    const html = renderInput(true);
+    expect(html.match(/data-conversation-primary/g)).toHaveLength(1);
+    expect(html).toContain('data-primary-action="stop"');
+    expect(html).toContain('data-composer-secondary-send');
+    expect(html).toContain('chat.input.stopTooltip');
+    expect(html.match(/contentEditable="true"/g)).toHaveLength(1);
   });
 });

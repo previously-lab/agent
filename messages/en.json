@@ -79,6 +79,9 @@
         "system": "System text"
       },
       "images": {
+        "previewLoading": "Loading image…",
+        "previewFailed": "Image preview unavailable",
+        "previewRetry": "Retry preview",
         "open": "Open image: {name}",
         "attached": "Attached images",
         "unreferenced": "Unreferenced attachments",
@@ -262,7 +265,7 @@
       "controls": "Interactive figure controls",
       "generating": "Preparing interactive content…",
       "incomplete": "This block ended before its closing fence. Nothing was executed.",
-      "tooLarge": "This interactive block is too large to render safely. Its source is still available.",
+      "tooLarge": "This interactive block is too large to display.",
       "source": "Source",
       "expand": "Expand",
       "collapse": "Collapse",
@@ -274,10 +277,10 @@
       "dialogTitle": "Interactive response figure {index}",
       "frameTitle": "Interactive response figure {index}",
       "staticFrameTitle": "Static preview of response figure {index}",
-      "loadError": "The interactive content stopped or could not finish loading. Reset to try again.",
-      "navigationError": "This content tried to navigate away, so it was removed. Reset to load the original block again.",
-      "scriptError": "The interactive content reported a script problem. Its readable fallback and source are still available.",
-      "empty": "This block has no readable content yet. Use Source to inspect it or Reset to try again.",
+      "loadError": "The interactive content stopped or could not finish loading.",
+      "navigationError": "This content tried to navigate away, so it was removed.",
+      "scriptError": "The interactive content reported a script problem.",
+      "empty": "This block has no readable content yet.",
       "acceptSuggestion": "Add to draft"
     },
     "evolution": {

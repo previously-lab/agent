@@ -68,8 +68,10 @@ import { NativeReadingCopyProvider } from "./native-reading-context";
  */
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -89,6 +91,9 @@ import {
 } from "@/lib/workspace/navigation";
 import "./writing.css";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
+import { flushNativeReading } from "./native-reading-flush";
+import { useNativeSourceScope } from "./native-source-scope";
+import { workspaceNativeNavigationIntent } from "@/lib/chat/native-navigation";
 
 export type { ConversationPanelMode } from "@/lib/workspace/navigation";
 
@@ -185,9 +190,32 @@ export function ConversationPanel({
   const t = useTranslations("conversationPanel");
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const sourceScope = useNativeSourceScope();
+  const locationScope = `${pathname}?${searchParams.toString()}`;
   const surface = workspaceSurface(pathname, searchParams.toString());
   const panelRef = useRef<HTMLDivElement>(null);
   const open = mode === "fullscreen";
+  const modeRequest = useRef(workspaceNativeNavigationIntent);
+  const requestedMode = useRef(mode);
+  useLayoutEffect(() => {
+    requestedMode.current = mode;
+    const pending = modeRequest.current;
+    pending.generation++;
+    return () => { pending.generation++; };
+  }, [mode, sourceScope, locationScope]);
+  const requestModeChange = useCallback((next: ConversationPanelMode) => {
+    const request = ++modeRequest.current.generation;
+    requestedMode.current = next;
+    if (next === mode) return;
+    if (mode === "fullscreen" && next === "pill") {
+      const origin = window.location.href;
+      // Keep the execution lease until the exact flush acknowledgement has
+      // crossed the opaque frame relay. Existing flushers bound this wait.
+      void flushNativeReading(panelRef.current).then(() => {
+        if (request === modeRequest.current.generation && window.location.href === origin) onModeChange(next);
+      });
+    } else onModeChange(next);
+  }, [mode, onModeChange]);
 
   // `Cmd/Ctrl+J` — one registration per surface (the panel is mounted once
   // per page). Deps re-register on mode change rather than holding a ref:
@@ -196,11 +224,11 @@ export function ConversationPanel({
     const onKey = (event: KeyboardEvent) => {
       if (!isPanelHotkey(event)) return;
       event.preventDefault();
-      onModeChange(reducePanelMode(mode, "toggle"));
+      requestModeChange(reducePanelMode(requestedMode.current, "toggle"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, onModeChange]);
+  }, [requestModeChange]);
 
   // Focus follows the tier: opening moves it INTO the panel (so Escape and
   // Tab belong to the conversation from the first keystroke), collapsing
@@ -220,18 +248,18 @@ export function ConversationPanel({
     // Keep the game's (or any window-level) Escape from ALSO firing on this
     // keystroke — collapsing the panel is the whole answer.
     event.stopPropagation();
-    onModeChange(reducePanelMode(mode, "collapse"));
+    requestModeChange(reducePanelMode(mode, "collapse"));
   };
 
   const tier = useMemo<PanelTier>(
     () => ({
       mode,
-      setMode: onModeChange,
+      setMode: requestModeChange,
       requestMode: (requested, intent) => {
-        onModeChange(requestedPanelMode(surface, mode, requested, intent));
+        requestModeChange(requestedPanelMode(surface, mode, requested, intent));
       },
     }),
-    [mode, onModeChange, surface],
+    [mode, requestModeChange, surface],
   );
 
   // The caption block's translated label — one discrete activity, never the
@@ -371,7 +399,7 @@ export function ConversationPanel({
             variant="ghost"
             size="icon-sm"
             aria-label={t("exitFullscreen")}
-            onClick={() => onModeChange(reducePanelMode(mode, "collapse"))}
+            onClick={() => requestModeChange(reducePanelMode(mode, "collapse"))}
             className="rounded-full text-muted-foreground"
           >
             <X aria-hidden />

@@ -31,18 +31,42 @@
   transform: rotate(var(--photo-tilt, 0deg));
   scroll-margin-block: calc(var(--spacing) * 8);
 }
+.conversation-photo-media {
+  position: relative;
+  aspect-ratio: var(--photo-aspect, 4 / 3);
+  max-block-size: min(40svh, 22rem);
+  overflow: hidden;
+  background: var(--paper-plate, var(--muted));
+}
+.conversation-photo-media > a { display: block; width: 100%; height: 100%; }
 .conversation-polaroid img {
   display: block;
   width: 100%;
-  aspect-ratio: 1;
+  height: 100%;
   object-fit: contain;
-  background: var(--paper-plate, var(--muted));
 }
+.conversation-polaroid[data-preview-state="loading"] img,
+.conversation-polaroid[data-preview-state="error"] img { opacity: 0; }
+.conversation-photo-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing);
+  padding: calc(var(--spacing) * 2);
+  font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans);
+  color: var(--muted-foreground);
+  text-align: center;
+}
+.conversation-photo-status button { min-block-size: calc(var(--spacing) * 11); padding-inline: calc(var(--spacing) * 2); border-radius: var(--radius); color: var(--primary); }
 .conversation-polaroid figcaption {
   display: flex;
   align-items: center;
   gap: var(--spacing);
   min-width: 0;
+  min-block-size: calc(var(--spacing) * 11);
   padding-top: calc(var(--spacing) * 2);
   font: var(--text-xs)/var(--text-xs--line-height) var(--font-mono, monospace);
 }
@@ -63,7 +87,19 @@
   min-height: calc(var(--spacing) * 8);
   border-radius: var(--radius);
 }
-.conversation-image-reference { color: var(--primary); text-decoration: underline; text-underline-offset: .2em; }
+.conversation-image-reference {
+  display: inline-flex;
+  align-items: baseline;
+  padding-inline: calc(var(--spacing) * 1.5);
+  margin-inline: calc(var(--spacing) * .5);
+  border: 1px solid color-mix(in oklab, var(--primary) 24%, transparent);
+  border-radius: var(--radius-sm, var(--radius));
+  background: color-mix(in oklab, var(--primary) 8%, var(--background));
+  color: var(--primary);
+  font: var(--text-sm)/var(--text-sm--line-height) var(--font-sans);
+  text-decoration: none;
+  vertical-align: baseline;
+}
 .conversation-polaroid:focus,
 .conversation-polaroid[data-image-selected],
 .conversation-polaroid :focus-visible,
