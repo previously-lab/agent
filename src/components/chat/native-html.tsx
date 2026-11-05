@@ -48,6 +48,8 @@ interface NativeHtmlBlockProps {
   mode: NativeRenderMode;
   identity: NativeTurnIdentity;
   onRetry?: () => void;
+  /** Actual or estimated browser geometry from a host-resolved artifact. */
+  estimatedHeight?: number;
 }
 
 const MAX_NATIVE_SOURCE_CHARS = 262_144;
@@ -75,6 +77,7 @@ function NativeFrame({
   locale,
   onSuggestion,
   measuredHeight,
+  estimatedHeight,
   onMeasure,
   ownsExecution,
 }: {
@@ -89,6 +92,7 @@ function NativeFrame({
   locale: string;
   onSuggestion: (prompt: string) => void;
   measuredHeight?: number;
+  estimatedHeight?: number;
   onMeasure: (height: number) => void;
   ownsExecution: () => boolean;
 }): React.JSX.Element {
@@ -117,7 +121,7 @@ function NativeFrame({
   const [token, setToken] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [height, setHeight] = useState(measuredHeight ?? (surface === "paper" ? 288 : 192));
+  const [height, setHeight] = useState(measuredHeight ?? estimatedHeight ?? (surface === "paper" ? 288 : 192));
   const [initialStateJson, setInitialStateJson] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -324,6 +328,7 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
     mode,
     identity,
     onRetry,
+    estimatedHeight,
   } = props;
   const t = useTranslations("chat.native");
   const [suggestion, setSuggestion] = useState<{ scope: string; text: string } | null>(null);
@@ -410,6 +415,7 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         locale={identity.locale}
         onSuggestion={receiveSuggestion}
         measuredHeight={measuredHeight}
+        estimatedHeight={estimatedHeight}
         onMeasure={onMeasure}
         ownsExecution={lease.owns}
       />

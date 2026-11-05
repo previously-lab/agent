@@ -58,6 +58,9 @@ import {
   type ReactNode,
 } from "react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useTranslations } from "next-intl";
+import { DialogueUtterance } from "./dialogue-utterance";
+import type { DialogueUtteranceSeat } from "./dialogue-stream-rows";
 import { ChatMessage } from "./chat-message";
 import { NestedBubble } from "./nested-bubble";
 import { ParallelLaneView } from "./parallel-lane";
@@ -152,6 +155,9 @@ export interface DomChatListProps {
   /** At the pill tier the composer positions against the panel, so no nearer
    *  ancestor may become its containing block. */
   floatingComposer?: boolean;
+  dialogueUtterances?: ReadonlyMap<string, DialogueUtteranceSeat>;
+  dialogueRegenerate?: (inputId: string) => void;
+  newPublications?: number;
 }
 
 export function DomChatList({
@@ -168,9 +174,18 @@ export function DomChatList({
   emptyState,
   contentInert = false,
   floatingComposer = false,
+  dialogueUtterances,
+  dialogueRegenerate,
+  newPublications = 0,
 }: DomChatListProps) {
   const isMobile = useIsMobile();
+  const tDialogue = useTranslations("chat.dialogue");
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const [seenPublications, setSeenPublications] = useState(0);
+  const publicationCount = useRef(newPublications);
+  publicationCount.current = newPublications;
+  const unread = Math.max(0, newPublications - seenPublications);
+  const latestPublicationKey = useMemo(() => [...(dialogueUtterances?.keys() ?? [])].at(-1), [dialogueUtterances]);
 
   // ── The offset table ────────────────────────────────────────────────────
   // Measured height per item KEY (not index — a prepend renumbers indices,
@@ -244,6 +259,7 @@ export function DomChatList({
       const atBottom = st >= el.scrollHeight - el.clientHeight - BOTTOM_SLOP_PX;
       if (!atBottom) arrivingRef.current = false;
       followingRef.current = atBottom;
+      if (atBottom) setSeenPublications(publicationCount.current);
       reportTop(st);
       setIndicatorVisible(true);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -454,6 +470,7 @@ export function DomChatList({
         // tail keeps growing.
         arrivingRef.current = true;
         followingRef.current = true;
+        setSeenPublications(publicationCount.current);
         const el = scrollerRef.current;
         if (el) el.scrollTop = el.scrollHeight;
       },
@@ -596,20 +613,26 @@ export function DomChatList({
               documentContext={item.turn.documentContext}
               attachments={item.turn.attachments}
               sourceRole={item.turn.sourceRole}
+              dialogue={item.turn.dialogue}
             />
           </div>
         );
-      case "live":
+      case "live": {
+        const publication = dialogueUtterances?.get(item.key);
+        const inputId = item.key.startsWith("dialogue-input:") ? item.key.slice("dialogue-input:".length) : undefined;
         return (
-          <div className="conversation-stream-row">
-            <ChatMessage
+          <div className="conversation-stream-row" data-dialogue-input={inputId}>
+            {publication ? <DialogueUtterance {...publication}
+              onRegenerate={item.key === latestPublicationKey && publication.utterance.inputIds.length === 1 && dialogueRegenerate
+                ? () => dialogueRegenerate(publication.utterance.inputIds[0]) : undefined} /> : <ChatMessage
               message={item.message}
               isStreaming={item.isStreaming}
               startedAt={item.startedAt}
               onRegenerate={item.onRegenerate}
-            />
+            />}
           </div>
         );
+      }
       case "nested-bubble":
         // An inner episode instance's answer (v0.30 §4.3) — seated by the
         // merge view after the user message it replied to.
@@ -646,6 +669,7 @@ export function DomChatList({
         // (arrows, Page Up/Down, Home/End) — the browser owns all of it now.
         tabIndex={0}
         role="log"
+        aria-live={dialogueUtterances ? "off" : undefined}
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]"
         style={{
@@ -691,6 +715,20 @@ export function DomChatList({
           </div>
         )}
       </div>
+
+      {dialogueUtterances && !contentInert && <>
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-dialogue-announcement>
+          {newPublications > 0 && <span key={newPublications}>{tDialogue("replyArrived")}</span>}
+        </div>
+        {unread > 0 && !followingRef.current && <button type="button" className="dialogue-new-replies" data-dialogue-new-replies
+          onClick={() => {
+            const el = scrollerRef.current;
+            if (!el) return;
+            arrivingRef.current = true; followingRef.current = true;
+            el.scrollTop = el.scrollHeight;
+            setSeenPublications(newPublications);
+          }}>{tDialogue("newReplies", { count: unread })}</button>}
+      </>}
 
       {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
           retired — the 3D axis carries time. */}

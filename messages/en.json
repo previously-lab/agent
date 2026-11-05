@@ -261,6 +261,24 @@
       "expandAll": "Show all {count} lines",
       "collapse": "Collapse"
     },
+    "dialogue": {
+      "artifactLoading": "Loading content…",
+      "artifactUnavailable": "This content is unavailable.",
+      "retry": "Try again",
+      "inReplyTo": "In reply to: {text}",
+      "thinking": "Thinking · {count, plural, one {# item} other {# items}}",
+      "expressing": "Preparing a reply…",
+      "expressionStopped": "Reply stopped",
+      "stopExpression": "Stop replying",
+      "cancelWork": "Cancel this work",
+      "workProducts": "Thinking results",
+      "workFailed": "This work could not finish",
+      "workCancelled": "Work cancelled",
+      "stopFailed": "Could not stop. Try again.",
+      "regenerateFailed": "Could not start a new reply. Try again.",
+      "replyArrived": "New reply",
+      "newReplies": "{count, plural, one {# new reply} other {# new replies}}"
+    },
     "native": {
       "controls": "Interactive figure controls",
       "generating": "Preparing interactive content…",

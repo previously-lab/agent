@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, cloneElement, createContext, isValidElement, memo, useContext, useMemo } from "react";
+import { Children, cloneElement, createContext, isValidElement, memo, useContext, useId, useMemo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -35,6 +35,8 @@ import {
   type NativeTurnIdentity,
 } from "./native-html";
 import { useNativeTurnIdentity } from "./native-identity";
+import { remarkDialogueSlots, remarkDialogueImageSlots } from "./dialogue-markdown";
+import type { ImageMarkerMatch } from "@/lib/chat/image-markers";
 
 export interface DocRefContextValue {
   status: ReadonlyMap<string, boolean>;
@@ -64,6 +66,12 @@ interface NativeRenderContextValue {
 }
 
 const NativeRenderContext = createContext<NativeRenderContextValue | null>(null);
+
+const DialogueSlotContext = createContext<ReadonlyMap<string, ReactNode> | null>(null);
+
+function DialogueSlot({ "data-content-block": id }: { "data-content-block"?: string }) {
+  return useContext(DialogueSlotContext)?.get(id ?? "") ?? null;
+}
 
 interface DocRefElementProps {
   children?: React.ReactNode;
@@ -276,11 +284,32 @@ const MARKDOWN_COMPONENTS: Components = {
   },
   "doc-ref": DocRef,
   "native-html": NativeMarkdownIsland,
+  "dialogue-slot": DialogueSlot,
 } as Components;
 
 type RemarkPluginList = NonNullable<React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]>;
 
 const REMARK_PLUGINS: RemarkPluginList = [remarkGfm, remarkMath, remarkCodeFilename, remarkDocRefs];
+
+/** Type-owned slots can render trusted artifact refs. Markdown itself keeps
+ * raw HTML inert and cannot create an executable slot from authored text. */
+export function DialogueMarkdown({ content, slots, imageMarkers, children }: {
+  content: string;
+  slots: ReadonlyMap<number, string>;
+  imageMarkers: readonly ImageMarkerMatch[];
+  children: ReadonlyMap<string, ReactNode>;
+}) {
+  const id = useId();
+  const plugins = useMemo<RemarkPluginList>(() => [...REMARK_PLUGINS, [remarkDialogueSlots, slots], [remarkDialogueImageSlots, imageMarkers]], [slots, imageMarkers]);
+  return <div className="typeset typeset-chat dialogue-manuscript-blocks max-w-none break-words">
+    <DialogueSlotContext.Provider value={children}>
+      <ReactMarkdown remarkPlugins={plugins} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}
+        remarkRehypeOptions={{ clobberPrefix: `dialogue-${id}-` }} urlTransform={documentUrlTransform}>
+        {content}
+      </ReactMarkdown>
+    </DialogueSlotContext.Provider>
+  </div>;
+}
 const REHYPE_PLUGINS = [rehypeHighlight, rehypeKatex, rehypeSlug];
 
 function unfinishedLinkOffset(source: string, repaired: string): number | null {

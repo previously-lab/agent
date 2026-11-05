@@ -38,6 +38,7 @@ interface ChatInputProps {
   onSubmit: (message: string, images: File[], attachments?: readonly ImageAttachmentSnapshot[], messageId?: string) => void | Promise<void>;
   isLoading: boolean;
   onStop?: () => void;
+  stopLabel?: string;
   enterBehavior?: ComposerEnterBehavior;
 }
 
@@ -73,6 +74,7 @@ export function ChatInput({
   onSubmit,
   isLoading,
   onStop,
+  stopLabel,
   enterBehavior = DEFAULT_COMPOSER_ENTER_BEHAVIOR,
 }: ChatInputProps) {
   const t = useTranslations("chat.input");
@@ -491,10 +493,10 @@ export function ChatInput({
             data-composer-stop={isLoading && onStop ? "" : undefined}
             onClick={() => { if (isLoading && onStop) onStop(); else void handleSubmit(); }}
             disabled={isLoading && onStop ? false : !hasContent || submitting || images.some(image => image.status !== "ready")}
-            aria-label={t(isLoading && onStop ? "stopTooltip" : "sendTooltip")}
+            aria-label={isLoading && onStop ? stopLabel ?? t("stopTooltip") : t("sendTooltip")}
             aria-describedby={`${toolsId}-hint`}
             className="conversation-primary-action"
-            title={t(isLoading && onStop ? "stopTooltip" : "sendTooltip")}
+            title={isLoading && onStop ? stopLabel ?? t("stopTooltip") : t("sendTooltip")}
           >
             {isLoading && onStop ? <Square aria-hidden className="size-4 fill-current" /> : <ArrowUp aria-hidden className="size-5" />}
           </button>

@@ -5,6 +5,7 @@ import { MarkdownRenderer } from "@/components/chat/markdown";
 import { ConversationTurn } from "@/components/chat/conversation-turn";
 import { ConversationImageBody } from "@/components/chat/conversation-images";
 import { SubmittedDocumentReferences } from "./submitted-document-references";
+import { DialogueContent } from "@/components/chat/dialogue-utterance";
 
 export function RecordTurnView({
   docRef,
@@ -29,7 +30,11 @@ export function RecordTurnView({
         <div data-no-selection>
           <SubmittedDocumentReferences references={turn.documentContext ?? []} />
         </div>
-        {turn.role !== "assistant" ? <ConversationImageBody content={turn.content} images={turn.attachments ?? []} /> : <div className="conversation-prose">
+        {turn.role === "assistant" && turn.dialogue?.kind === "public_utterance" ? (
+          <div data-public-utterance={turn.dialogue.publicationId} data-public-seq={turn.dialogue.publicSeq}>
+            <DialogueContent blocks={turn.dialogue.blocks} mode="reader" />
+          </div>
+        ) : turn.role !== "assistant" ? <ConversationImageBody content={turn.content} images={turn.attachments ?? []} /> : <div className="conversation-prose">
           <MarkdownRenderer
             content={turn.content}
             nativeMode={turn.role === "assistant" ? "reader" : undefined}

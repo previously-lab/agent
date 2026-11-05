@@ -9,6 +9,8 @@ import { SubmittedDocumentReferences } from "@/components/documents/submitted-do
 import type { DocumentContextSnapshot } from "@/lib/chat/document-context";
 import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { ConversationImageBody } from "./conversation-images";
+import type { DialogueRecordTurn } from "@/lib/episodic/dialogue-record";
+import { DialogueContent } from "./dialogue-utterance";
 
 /** Saved turns share the live manuscript's voice and reading measure. Their
  * timestamps remain visible on touch; the original cognition is still openable. */
@@ -21,6 +23,7 @@ export function HistoryTurn({
   documentContext,
   attachments = [],
   sourceRole,
+  dialogue,
 }: {
   role: string;
   content: string;
@@ -30,6 +33,7 @@ export function HistoryTurn({
   documentContext?: DocumentContextSnapshot;
   attachments?: readonly ImageAttachmentSnapshot[];
   sourceRole?: string;
+  dialogue?: DialogueRecordTurn;
   /** @deprecated Retired with the strand layer; accepted for old callers. */
   strands?: string[];
 }) {
@@ -57,6 +61,10 @@ export function HistoryTurn({
           <SubmittedDocumentReferences references={documentContext ?? []} />
           <ConversationImageBody content={content} images={attachments} />
         </>
+      ) : dialogue?.kind === "public_utterance" ? (
+        <div data-public-utterance={dialogue.publicationId} data-public-seq={dialogue.publicSeq}>
+          <DialogueContent blocks={dialogue.blocks} mode="interactive" />
+        </div>
       ) : (
         <div className="conversation-prose">
           <MarkdownRenderer

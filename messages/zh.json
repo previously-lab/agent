@@ -261,6 +261,24 @@
       "expandAll": "展开全部 {count} 行",
       "collapse": "收起"
     },
+    "dialogue": {
+      "artifactLoading": "正在载入内容…",
+      "artifactUnavailable": "暂时无法查看这项内容。",
+      "retry": "重试",
+      "inReplyTo": "回应：{text}",
+      "thinking": "思考流 · 正在处理 {count} 项",
+      "expressing": "表达流正在准备回复…",
+      "expressionStopped": "已停止表达",
+      "stopExpression": "停止表达",
+      "cancelWork": "取消这项工作",
+      "workProducts": "查看思考成果",
+      "workFailed": "这项工作未能完成",
+      "workCancelled": "这项工作已取消",
+      "stopFailed": "暂时无法停止，请重试。",
+      "regenerateFailed": "暂时无法重新回答，请重试。",
+      "replyArrived": "有新回复",
+      "newReplies": "{count} 条新回复"
+    },
     "native": {
       "controls": "交互内容控制",
       "generating": "正在准备交互内容…",

@@ -97,6 +97,12 @@ import {
   type ScreenContext,
 } from "@/lib/chat/screen-context";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
+import { buildDialogueRegenerationRequest } from "@/lib/chat/dialogue-regenerate";
+import { DialogueDisabled, useDialogueManuscript } from "./use-dialogue-manuscript";
+import { dialogueStreamRows } from "./dialogue-stream-rows";
+import { DialogueWorkStatus } from "./dialogue-work-status";
+
+const DIALOGUE_ARRIVAL: ArrivalState = { mode: "briefing" };
 
 interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
@@ -158,6 +164,8 @@ export function ChatPage(props: ChatPageProps) {
 }
 
 function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: string }) {
+  const dialogue = useDialogueManuscript(persona);
+  const legacyGate = dialogue.mode === "legacy" && !dialogue.opened;
   const arrivalTier = usePanelTier();
   const t = useTranslations("chat");
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
@@ -166,6 +174,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
   const onTurnSettledRef = useRef(props.onTurnSettled);
   onTurnSettledRef.current = props.onTurnSettled;
   useEffect(() => {
+    if (dialogue.mode !== "legacy") return;
     let cancelled = false;
     resolveArrival(persona).then((result) => {
       if (cancelled) return;
@@ -195,8 +204,8 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
       setVerdict(next);
     });
     return () => { cancelled = true; };
-  }, [arrivalAttempt, persona]);
-  if (arrivalFailure) {
+  }, [arrivalAttempt, persona, dialogue.mode]);
+  if (arrivalFailure && legacyGate) {
     return (
       <><ComposerHost composer={
         <div data-chat-arrival-error data-arrival-failure={arrivalFailure} className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
@@ -211,13 +220,13 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
       } /><ConversationPrimaryPlaceholder inline={arrivalTier?.mode === "pill"} /></>
     );
   }
-  if (!verdict) return <ChatPageSkeleton />;
+  if (dialogue.mode === "probing" || (legacyGate && !verdict)) return <ChatPageSkeleton />;
   return (
     <NativePersonaProvider value={persona}>
       <DocumentContextPersonaSync persona={persona} />
-      {persona === "user" && <PersistenceObserver onCommitted={props.onTurnSettled} />}
-      <Inner {...props} persona={persona} shouldResume={verdict.shouldResume}
-        initialMessages={verdict.initialMessages} arrival={verdict.arrival} />
+      {persona === "user" && dialogue.mode === "legacy" && verdict && <PersistenceObserver onCommitted={props.onTurnSettled} />}
+      <Inner {...props} persona={persona} dialogue={dialogue} shouldResume={verdict?.shouldResume ?? false}
+        initialMessages={verdict?.initialMessages ?? []} arrival={verdict?.arrival ?? DIALOGUE_ARRIVAL} />
     </NativePersonaProvider>
   );
 }
@@ -417,6 +426,7 @@ function Inner({
   shouldResume,
   initialMessages,
   arrival,
+  dialogue,
 }: {
   initialConfig?: UserConfig;
   /** A turn settled — see ChatPageProps. */
@@ -442,8 +452,10 @@ function Inner({
   initialMessages: UIMessage[];
   /** The §2 arrival gate — resume restores the alive slice's turns. */
   arrival: ArrivalState;
+  dialogue: ReturnType<typeof useDialogueManuscript>;
 }) {
   const locale = useLocale();
+  const tDialogue = useTranslations("chat.dialogue");
   const { getSnapshot, clearReferences } = useDocumentContext();
   const parallelDocumentContextsRef = useRef<Map<string, DocumentContextSnapshot>>(new Map());
 
@@ -480,7 +492,7 @@ function Inner({
   // re-attaching to an in-flight run whose stash already carries those turns),
   // its turns re-enter the PANEL from the slice itself — the restored current
   // conversation, in memory.
-  const [resumeBlock] = useState<ResumeBlock | null>(() =>
+  const resumeBlock = useMemo<ResumeBlock | null>(() =>
     arrival.mode === "resume" && !shouldResume
       ? {
           sliceId: arrival.sliceId,
@@ -489,7 +501,7 @@ function Inner({
           strands: arrival.strands,
           turns: arrival.turns,
         }
-      : null,
+      : null, [arrival, shouldResume],
   );
 
   // The DOM list owns the position, so the jump paths drive it through this
@@ -677,6 +689,20 @@ function Inner({
 
   const isStreaming = status === "streaming";
   const isLoading = status === "submitted" || isStreaming;
+  const dialogueEnabled = dialogue.mode === "dialogue";
+  const dialogueWorks = useMemo(() => [...dialogue.projection.works.values()], [dialogue.projection.works]);
+  const thinking = dialogueWorks.some(work => work.status === "queued" || work.status === "running");
+  const dialogueActive = dialogue.expression !== "paused" && (thinking || dialogue.expression === "running");
+  const composerBusy = dialogueEnabled ? dialogueActive : isLoading;
+  const dialogueRows = useMemo(() => dialogueStreamRows(dialogue.projection.entries, dialogue.projection.inputs),
+    [dialogue.projection.entries, dialogue.projection.inputs]);
+  const receiptCount = dialogue.projection.receiptCount;
+  const observedReceipt = useRef(0);
+  useEffect(() => {
+    if (receiptCount <= observedReceipt.current) return;
+    observedReceipt.current = receiptCount;
+    onTurnSettled?.();
+  }, [receiptCount, onTurnSettled]);
 
   // ── The post-burst fold (v0.33 §6) ───────────────────────────────────────
   // Once every lane has settled AND the main stream is idle, the burst's
@@ -762,9 +788,9 @@ function Inner({
   // Publish the in-flight state so the header can disable the settings entry
   // mid-turn (engine/model changes must not land while a call is running).
   useEffect(() => {
-    setTurnBusy(isLoading);
+    setTurnBusy(composerBusy);
     return () => setTurnBusy(false);
-  }, [isLoading]);
+  }, [composerBusy]);
 
   // ── Background-completion toast ──────────────────────────────────────────
   // A turn that finishes while the tab is backgrounded is exactly the
@@ -962,7 +988,7 @@ function Inner({
     episodicReady &&
     timelineSlices.length === 0 &&
     !episodicHasMore &&
-    messages.length === 0;
+    messages.length === 0 && dialogueRows.items.length === 0;
   const showBriefingCard = arrival.mode === "briefing" && !emptyMemory;
 
   // ── Arrival skeleton cover ─────────────────────────────────────────────
@@ -978,7 +1004,7 @@ function Inner({
     const id = setTimeout(() => setSkeletonBackstop(true), 12_000);
     return () => clearTimeout(id);
   }, [arrivalReady]);
-  const showArrivalSkeleton = !arrivalReady && !skeletonBackstop;
+  const showArrivalSkeleton = !dialogueEnabled && !arrivalReady && !skeletonBackstop;
 
   // ── Briefing history: the expanded tier's content ────────────────────────
   // A briefing arrival restores NOTHING into the panel (the resume block is
@@ -1018,10 +1044,15 @@ function Inner({
   // resume block, and the live `useDurableChat` messages.
   const [briefingTimeIso] = useState(() => new Date().toISOString());
   const items = useMemo<ChatStreamItem[]>(() => {
-    const restored = recoveredTurnIds(messages);
+    const restored = new Set(recoveredTurnIds(messages));
     const restoredUsers = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
+    for (const entry of dialogue.projection.entries) {
+      if (entry.kind === "input") restoredUsers.add(entry.input.clientMessageId);
+      else restored.add(entry.utterance.utteranceId);
+    }
     const history = buildHistoryItems(briefingSlices ?? [], resumeBlock).filter(
       (item) => item.kind !== "history-turn" || (
+        (!dialogueEnabled || !item.turn.dialogue) &&
         (!item.turn.turnId || !restored.has(item.turn.turnId)) &&
         (item.turn.role !== "user" || !item.turn.clientMessageId || !restoredUsers.has(item.turn.clientMessageId))
       ),
@@ -1033,8 +1064,9 @@ function Inner({
       ...history,
       ...card,
       ...liveItems,
+      ...dialogueRows.items,
     ];
-  }, [briefingSlices, resumeBlock, liveItems, messages, showBriefingCard, briefingTimeIso]);
+  }, [briefingSlices, resumeBlock, liveItems, messages, showBriefingCard, briefingTimeIso, dialogueRows.items, dialogue.projection.entries, dialogueEnabled]);
 
   /**
    * Run `fn` against the list's handle as soon as it exists.
@@ -1075,6 +1107,30 @@ function Inner({
     setSelectedSliceId("now");
     setTransition(null);
     setLastUserMessageAt(new Date().toISOString());
+
+    if (dialogueEnabled) {
+      const view = getView?.();
+      const parts: UIMessage["parts"] = await Promise.all(images.map(async file => ({
+        type: "file" as const, mediaType: file.type, filename: file.name, url: await fileToDataUrl(file),
+      })));
+      if (message) parts.push({ type: "text", text: message });
+      try {
+        await dialogue.submit({
+          messages: [{ id: messageId ?? mintTurnId(), role: "user", parts, metadata }], locale,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          ...(view ? { view } : {}), ...screenContextRequestField(() => screen),
+          ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
+          ...(stagedAttachments.length ? { stagedAttachments } : {}),
+        });
+        clearReferences(documentContext);
+        requestAnimationFrame(scrollToBottom);
+        return;
+      } catch (failure) {
+        if (!(failure instanceof DialogueDisabled)) throw failure;
+        // Only the explicit, unaccepted compatibility response allows the
+        // old transport. An outage cannot create a second worker.
+      }
+    }
 
     // ── The burst identity (v0.42 §3 [7283]): EVERY send carries one — the
     // first message mints it, a send landing while an answer is still in
@@ -1197,6 +1253,31 @@ function Inner({
     // v0.9: buildStream folds those chunks into the housekeeping card, so the
     // CHAT UI needs no evolution-specific state; the companion pod reads the
     // same frames off the evolution-activity bus (see the effect below).
+  };
+
+  const regeneration = useRef<{ inputId: string; requestId: string; pending: boolean } | undefined>(undefined);
+  const regenerateDialogue = async (inputId: string) => {
+    const input = dialogue.projection.inputs.get(inputId);
+    if (!input) {
+      toast.error(tDialogue("regenerateFailed"));
+      return;
+    }
+    if (regeneration.current?.inputId !== inputId) regeneration.current = { inputId, requestId: crypto.randomUUID(), pending: false };
+    const request = regeneration.current;
+    if (request.pending) return;
+    request.pending = true;
+    try {
+      await dialogue.submit(buildDialogueRegenerationRequest(input, request.requestId, {
+        locale,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }));
+      if (regeneration.current === request) regeneration.current = undefined;
+      requestAnimationFrame(scrollToBottom);
+    } catch {
+      toast.error(tDialogue("regenerateFailed"));
+    } finally {
+      request.pending = false;
+    }
   };
 
   // ── Stop means STOP: abort the local stream, cancel the durable run
@@ -1378,9 +1459,10 @@ function Inner({
   // where the last activity would otherwise linger one commit).
   useEffect(() => {
     onSubtitleLineChange?.(
-      isLoading ? foldSubtitleLineLatest(subtitleSourcesOf(items)) : null,
+      dialogueEnabled ? (dialogueActive ? { activity: dialogue.expression === "running" ? "replying" : "thinking", count: 0 } : null)
+        : isLoading ? foldSubtitleLineLatest(subtitleSourcesOf(items)) : null,
     );
-  }, [items, isLoading, onSubtitleLineChange]);
+  }, [items, isLoading, dialogueEnabled, dialogueActive, dialogue.expression, onSubtitleLineChange]);
 
   // The panel tier this page is hosted at (null only outside a panel): at
   // the pill tier the conversation body is folded away and the stream goes
@@ -1429,6 +1511,9 @@ function Inner({
           insetBottom={insetBottom}
           contentInert={panelPill}
           floatingComposer={panelPill}
+          dialogueUtterances={dialogueEnabled ? dialogueRows.utterances : undefined}
+          dialogueRegenerate={dialogueEnabled && !composerBusy ? regenerateDialogue : undefined}
+          newPublications={dialogue.newPublications}
           emptyState={emptyMemory ? (
             <EmptyBriefing
               persona={persona}
@@ -1441,7 +1526,13 @@ function Inner({
           composer={
             <ComposerHost
               onClearanceChange={onComposerClearanceChange}
-              composer={<ChatInput onSubmit={submitAndRise} isLoading={isLoading} onStop={handleStop} />}
+              composer={<>
+                {dialogueEnabled && !panelPill && <DialogueWorkStatus works={dialogueWorks} inputs={dialogue.projection.inputs}
+                  expression={dialogue.expression} onCancel={workId => dialogue.stop(workId)} />}
+                <ChatInput onSubmit={submitAndRise} isLoading={composerBusy}
+                  stopLabel={dialogueEnabled ? tDialogue("stopExpression") : undefined}
+                  onStop={dialogueEnabled ? () => { void dialogue.stop().catch(() => toast.error(tDialogue("stopFailed"))); } : handleStop} />
+              </>}
             />
           }
           briefing={

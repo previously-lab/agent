@@ -293,6 +293,7 @@ export interface RecordTurnContent {
   timestamp: string;
   content: string;
   documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
+  dialogue?: import("@/lib/episodic/dialogue-record").DialogueRecordTurn;
 }
 
 export interface RecordDocContent extends CaseDocContent {
@@ -332,6 +333,7 @@ export async function getRecordDoc(
     timestamp: turn.timestamp,
     content: turn.content,
     ...(turn.documentContext?.length ? { documentContext: turn.documentContext } : {}),
+    ...(turn.dialogue ? { dialogue: turn.dialogue } : {}),
   }));
   const markdown = slice.turns
     .map(
