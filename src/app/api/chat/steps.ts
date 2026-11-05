@@ -736,9 +736,14 @@ export async function housekeeping(
   // closing slice: no page "ends" at the entry anymore, so the derivation
   // is always zero-归纳. The summary stream re-runs the same analyzer over
   // the ended page when it seals one (same deterministic fallback).
+  // The derivation still runs every non-demo LEGACY turn — its memoryUpdate
+  // reading feeds the post-reply explicit-instruction channel (序 6). A
+  // dialogue work skips it: the work's product carries its own evidence-gated
+  // memoryDelta, and the entry beat must not bill a second classification
+  // model call per accepted input.
   let analysis: TurnAnalysis | null = null;
 
-  if (!input.useDemo) {
+  if (!input.useDemo && !input.dialogue) {
     await emitStep("analyze", true);
 
       analysis = await analyzeTurn({

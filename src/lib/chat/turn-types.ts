@@ -31,6 +31,8 @@ import type { TaskAckIntent } from "@/lib/chat/task-followups";
  * stay JSON-serializable end to end.
  */
 export interface TurnInput {
+  /** Server-owned scope for a thinking run; legacy checkpoints omit it. */
+  dialogue?: import("@/lib/dialogue/types").DialogueLaunch;
   verifiedImages?: import("./image-attachments").ImageAttachmentEvidence[];
   /**
    * Converted chat history from the client (capped at a broad payload limit

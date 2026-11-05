@@ -12,6 +12,7 @@
 import { createUIMessageStreamResponse } from "@/lib/chat/server-stream";
 import { type UIMessage } from "@/lib/chat/protocol";
 import { startTurn } from "./start-turn";
+import { acceptDialogueTurn } from "./dialogue/accept";
 import { createMixedStreamTransform } from "./mixed-stream-transform";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { guardRequest } from "@/lib/security/origin-guard";
@@ -38,6 +39,8 @@ export async function POST(request: Request): Promise<Response> {
       burstId?: unknown;
       stagedAttachments?: unknown;
       persona?: unknown;
+      dialogueVersion?: unknown;
+      dialogueInputId?: unknown;
     };
 
     const { messages } = body;
@@ -65,6 +68,36 @@ export async function POST(request: Request): Promise<Response> {
     const legacyImages = body.stagedAttachments === undefined ? legacyMessageImages(typedMessages) : [];
     reservation = await reserveStagedImages(body.stagedAttachments, latestUser.id, body.persona);
     const verifiedImages = [...reservation.attachments, ...legacyImages];
+
+    // Dialogue mode (v1): persist into the scoped control store and answer
+    // with the accepted identity; the durable outbox, not this response,
+    // starts the work. Legacy clients keep the streamed turn below.
+    if (body.dialogueVersion === 1) {
+      return acceptDialogueTurn({
+        messages: typedMessages,
+        originalUserText: latestUser.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n"),
+        verifiedImages,
+        reservation,
+        persona: body.persona,
+        regenerate: body.regenerate === true,
+        dialogueInputId: body.dialogueInputId,
+        model: typeof body.model === "string" ? body.model : undefined,
+        timezone: typeof body.timezone === "string" ? body.timezone : undefined,
+        locale:
+          typeof body.locale === "string" &&
+          ["en", "zh"].includes(body.locale)
+            ? body.locale
+            : undefined,
+        machineContext:
+          typeof body.machineContext === "string"
+            ? body.machineContext
+            : undefined,
+        view: body.view,
+        screen: body.screen,
+        documentContext: body.documentContext,
+        burstId: typeof body.burstId === "string" ? body.burstId : undefined,
+      });
+    }
 
     const run = await startTurn({
       messages: withVerifiedImages(typedMessages, verifiedImages),

@@ -13,6 +13,7 @@ import matter from "gray-matter";
 import { escapeTurnBody, parseTurns as parseRecordTurns } from "./turn-parser";
 import { decodeDocumentContext, encodeDocumentContext } from "@/lib/chat/document-context-codec";
 import { encodeImageAttachments, legacyRecordImageAttachments } from "@/lib/chat/image-attachments";
+import { decodeDialogueRecordTurn, encodeDialogueRecordTurn } from "./dialogue-record";
 import type {
   TimeSlice,
   Turn,
@@ -301,6 +302,7 @@ export function serializeSlice(slice: TimeSlice): string {
         `${turn.documentContext?.length ? ` [documents ${encodeDocumentContext(turn.documentContext)}]` : ""}` +
         `${turn.attachments?.length ? ` [attachments ${encodeImageAttachments(turn.attachments)}]` : ""}` +
         `${turn.sourceRole ? ` [source-role ${encodeURIComponent(turn.sourceRole)}]` : ""}` +
+        `${turn.dialogue ? ` [dialogue ${encodeDialogueRecordTurn(turn.dialogue)}]` : ""}` +
         ` [body-escaped v1]\n\n${escapeTurnBody(turn.content)}`
     )
     .join("\n\n");
@@ -413,6 +415,8 @@ function parseTurns(body: string, sliceId?: string): Turn[] {
     const role: Turn["role"] = turn.role === "assistant" ? "agent"
       : turn.role === "user" || turn.role === "agent" || turn.role === "tool" || turn.role === "system" ? turn.role : "unknown";
     const sourceRole = turn.sourceRole ?? (role !== turn.role ? turn.role : undefined);
+    const dialogue = turn.boundary === "escaped_v1"
+      ? decodeDialogueRecordTurn(/ \[dialogue ([^\]]*)\]/.exec(turn.header)?.[1], role) : undefined;
     // Only the old record format used a trailing server-added attachment list.
     // New escaped records MUST use header metadata; body lookalikes are prose.
     // Legacy refs are display hints, never proof of upload or user endorsement.
@@ -432,6 +436,7 @@ function parseTurns(body: string, sliceId?: string): Turn[] {
       ...(message ? { clientMessageId: decodeMessageId(message) } : {}),
       ...(documentContext.length ? { documentContext } : {}),
       ...(attachments.length ? { attachments } : {}),
+      ...(dialogue ? { dialogue } : {}),
     };
   });
 }

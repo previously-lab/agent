@@ -69,6 +69,10 @@ import {
   createCaseReadEnvelope,
 } from "@/lib/chat/case-read-receipt";
 import { reconstructCaseReadScope } from "@/lib/agents/case-read-proof";
+import { createThinkingReadReceipt, wrapThinkingRead, type ThinkingRead } from "@/lib/agents/thinking-read-receipt";
+import { caseStorageRevision, parseCaseCurrent } from "@/lib/docs/case-doc";
+import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
+import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { replaceMainCraftBlock } from "@/lib/chat/craft-prompt";
 import {
   readSkillLedger,
@@ -106,6 +110,7 @@ import {
   type RecallCategory,
   type RecallResult,
   type RecallReadRange,
+  type RecallReadResult,
 } from "@/lib/memory/facade";
 import {
   DOC_MARKER_PREFIX,
@@ -169,6 +174,7 @@ export interface ToolContext {
   turnId: string;
   /** Run-local evidence scope; continuations retain the original value. */
   readScopeId: string;
+  thinkingFlow?: boolean;
   /** Exact current user text, never a continuation nudge or generated UI state. */
   currentUserText: string;
   /** The validated room/card the reader is looking at; visual context only. */
@@ -446,6 +452,47 @@ export async function recallSearchExecute(
  * records the document + referenced slice ids for the doc_rework probe;
  * partial ranges and outlines never receive a full-index read receipt.
  */
+function renderThinkingRead(result: RecallReadResult, ref: string, ctx: ToolContext, toolCallId: string,
+  input: { range?: RecallReadRange; includeHistory?: boolean }): string {
+  const text = renderRecallReadResult(result, ref);
+  if (!ctx.thinkingFlow) return text;
+  const asOf = new Date().toISOString();
+  const source = { sourceKind: "semantic_document" as const, asOf };
+  const reads: Omit<ThinkingRead, "evidenceId">[] = [];
+  if (result.kind === "content" && result.path.startsWith("memory/")) {
+    const actualRef = parseCanonicalDocumentRef(result.path.replace(/^memory\//, "").replace(/(?:\/index)?\.md$/, ""));
+    if (actualRef && result.storageRevision) {
+      const coverage = text.startsWith("ERROR:") ? "failed" as const : input.range ? "range" as const : "full" as const;
+      const edition = isHistoryArchiveFileName(result.path) ? "history" as const
+        : result.currentUnderstanding ? "original" as const : "current" as const;
+      const range = input.range?.type === "lines" && input.range.start && input.range.end
+        ? { start: input.range.start, end: input.range.end } : undefined;
+      reads.push({ ...source, ref: actualRef, coverage, edition, revision: result.storageRevision,
+        ...(range ? { range } : {}) });
+      if (result.currentUnderstanding && !input.range) {
+        const currentRaw = result.currentUnderstanding.content;
+        const revision = caseStorageRevision(currentRaw);
+        // Missing basis is just as incomplete as a basis that names older
+        // bytes. Neither may be promoted to a verified current read.
+        const stale = Boolean(result.freshnessWarnings?.length);
+        reads.push({ ...source, ref: actualRef, revision, edition: "current", coverage: stale ? "stale" : "full" });
+        if (input.includeHistory && parseCaseCurrent(currentRaw).history) {
+          reads.push({ ...source, ref: actualRef, revision, edition: "history", coverage: "full" });
+        }
+      }
+    }
+    if (actualRef && result.pieceCatalog) {
+      reads.push({ sourceKind: "navigation", asOf, ref: actualRef, edition: "current",
+        coverage: "outline", revision: result.pieceCatalog.revision });
+    }
+  } else {
+    const canonical = parseCanonicalDocumentRef(ref);
+    if (canonical) reads.push({ ...source, ref: canonical, revision: null,
+      coverage: result.kind === "outline" ? "outline" : "failed" });
+  }
+  return wrapThinkingRead(createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads), text);
+}
+
 export async function recallReadExecute(
   input: {
     ref: string;
@@ -475,6 +522,7 @@ export async function recallReadExecute(
     ...(input.range ? { range: input.range } : {}),
     ...(input.outline ? { outline: true } : {}),
     ...(input.includeHistory ? { includeHistory: true } : {}),
+    ...(ctx.thinkingFlow ? { includePieceCatalog: true } : {}),
     ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
   });
 
@@ -494,7 +542,7 @@ export async function recallReadExecute(
           category: caseMatch[1],
           caseName: caseMatch[2]!,
           revision: result.caseRevision,
-          rendered: renderRecallReadResult(result, ref),
+          rendered: renderThinkingRead(result, ref, ctx, toolCallId, input),
         });
       } catch (error) {
         return renderRecallReadResult({
@@ -504,7 +552,7 @@ export async function recallReadExecute(
       }
     }
   }
-  return renderRecallReadResult(result, ref);
+  return renderThinkingRead(result, ref, ctx, toolCallId, input);
 }
 
 // ─── recallSince — the differential view (v0.11) ──────────────────────────
@@ -513,7 +561,7 @@ export async function recallReadExecute(
 export async function recallScenarioExecute(
   input: ScenarioRecallRequest,
   { context: ctx, toolCallId, abortSignal }: ExecuteOpts<ToolContext>,
-): Promise<ScenarioRecallResult> {
+): Promise<ScenarioRecallResult & { thinkingReceipt?: ReturnType<typeof createThinkingReadReceipt> }> {
   "use step";
   const request = scenarioRecallRequestSchema.parse(input);
   await emitToolProgress(toolCallId, "recallScenario", "Recollecting the conversation…", "running");
@@ -523,6 +571,7 @@ export async function recallScenarioExecute(
     model: FIXED_MODEL,
     timezone: ctx.timezone,
     signal: abortSignal,
+    trackRevision: ctx.thinkingFlow,
   });
   if (result.evidence.length > 0) {
     const seen = new Set<string>();
@@ -553,7 +602,17 @@ export async function recallScenarioExecute(
   await emitToolProgress(toolCallId, "recallScenario", result.evidence.length > 0
     ? `Recovered ${result.evidence.length} verified excerpt(s).`
     : "Recollection finished with no verified excerpt.", "done");
-  return result;
+  if (!ctx.thinkingFlow) return result;
+  const asOf = new Date().toISOString();
+  const reads: Omit<ThinkingRead, "evidenceId">[] = result.evidence.flatMap((evidence) => evidence.sourceRevision ? [{
+    ref: evidence.ref, revision: evidence.sourceRevision, asOf, sourceKind: "original_turn" as const,
+    coverage: "excerpt" as const, edition: "original" as const, turnId: evidence.turnId, turnIndex: evidence.turnIndex,
+    role: evidence.role, excerpt: evidence.quote,
+  }] : []);
+  for (const ref of request.refs ?? []) if (!reads.some((read) => read.ref === ref)) {
+    reads.push({ ref, revision: null, asOf, sourceKind: "original_turn", coverage: "failed", edition: "original" });
+  }
+  return { ...result, thinkingReceipt: createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads) };
 }
 //
 // "自某天以来变了什么" — the commit history IS the diff: the read comes from

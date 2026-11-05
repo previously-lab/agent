@@ -11,6 +11,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { parseCaseReadEnvelope, unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
 import type { ScenarioRecallEvidence, ScenarioRecallResult } from "@/lib/agents/scenario-recall";
+import { collectThinkingReads } from "@/lib/agents/thinking-read-receipt";
+import { buildThinkingProduct, permitsThinkingClaim } from "@/lib/agents/thinking-product";
+import type { ModelMessage } from "@/lib/deepseek/types";
+import { caseStorageRevision } from "@/lib/docs/case-doc";
 
 const recall = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("@/lib/agents/scenario-recall", () => ({ runScenarioRecall: recall.run }));
@@ -267,6 +271,74 @@ describe("recallSearchExecute", () => {
 });
 
 describe("recallReadExecute", () => {
+  it("thinking receipts keep the piece catalog and stale current basis out of full-read evidence", async () => {
+    const ref = "research/手机调研";
+    const pieceRef = `${ref}/2026-09-08-报价篇`;
+    io.dirs.set("memory/research/手机调研", ["index.md", "_current.md", "2026-09-08-报价篇.md"]);
+    io.files.set("memory/research/手机调研/_current.md", "---\nas_of: 2026-09-09\n---\n\n当前结论尚未记录核验基线。\n");
+    io.files.set("memory/research/手机调研/2026-09-08-报价篇.md", "报价篇正文");
+    const context = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
+    const out = await recallReadExecute({ ref }, { context, toolCallId: "thinking-read" });
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected");
+    expect(out).toContain(`${pieceRef} — 报价篇`);
+    expect(out).toContain("UNREAD in this run");
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "thinking-read", toolName: "recallRead", input: { ref } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "thinking-read", toolName: "recallRead",
+        output: { type: "text", value: out } }] },
+    ];
+    const reads = collectThinkingReads(messages, context.readScopeId);
+    expect(reads).toMatchObject([
+      { ref, edition: "original", coverage: "full" },
+      { ref, edition: "current", coverage: "stale" },
+      { ref, sourceKind: "navigation", coverage: "outline", revision: expect.any(String) },
+    ]);
+    expect(reads.some((read) => read.ref === pieceRef)).toBe(false);
+    const product = buildThinkingProduct({ text: "", messages, asOf: "2026-09-10T02:00:00.000Z",
+      inputScope: { scopeKey: "fixture", workId: "work", inputIds: ["u1"], inputText: "继续调研",
+        readScopeId: context.readScopeId, entityRefs: [ref] },
+      report: { findings: [{ text: "当前报价已经核实。", kind: "project_fact",
+        evidenceIds: reads.map((read) => read.evidenceId) }] } });
+    expect(permitsThinkingClaim(product, "claim-1", "finding")).toBe(false);
+  });
+
+  it("marks a null piece basis revision as unverified even when index and inventory match", async () => {
+    const ref = "research/手机调研";
+    const piecePath = "memory/research/手机调研/2026-09-08-报价篇.md";
+    io.dirs.set("memory/research/手机调研", ["index.md", "_current.md", "2026-09-08-报价篇.md"]);
+    io.files.set(piecePath, "报价篇正文");
+    io.files.set("memory/research/手机调研/_current.md", `---\nbasis:\n  index: ${caseStorageRevision(INDEX_RAW)}\n  pieces:\n    - path: ${piecePath}\n---\n\n当前结论。\n`);
+    const context = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
+    const out = await recallReadExecute({ ref }, { context, toolCallId: "null-piece-basis" });
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected");
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "null-piece-basis", toolName: "recallRead", input: { ref } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "null-piece-basis", toolName: "recallRead",
+        output: { type: "text", value: out } }] },
+    ];
+    expect(collectThinkingReads(messages, context.readScopeId)).toMatchObject([
+      { ref, edition: "original", coverage: "full" },
+      { ref, edition: "current", coverage: "stale" },
+      { ref, sourceKind: "navigation", coverage: "outline", revision: expect.any(String) },
+    ]);
+  });
+
+  it("keeps a thinking range receipt bound to its actual lines", async () => {
+    const ref = "research/手机调研";
+    const context = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
+    const out = await recallReadExecute({ ref, range: { type: "lines", start: 2, end: 3 } },
+      { context, toolCallId: "ranged-thinking-read" });
+    if (typeof out !== "string") throw new Error("Semantic read unexpectedly redirected");
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "ranged-thinking-read", toolName: "recallRead", input: { ref } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: "ranged-thinking-read", toolName: "recallRead",
+        output: { type: "text", value: out } }] },
+    ];
+    expect(collectThinkingReads(messages, context.readScopeId)).toMatchObject([
+      { ref, coverage: "range", range: { start: 2, end: 3 } },
+    ]);
+  });
+
   it("分类/case名 → the case's index.md, whole file", async () => {
     const out = await recallReadExecute(
       { ref: "research/手机调研" },

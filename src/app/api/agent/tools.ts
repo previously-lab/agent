@@ -122,6 +122,8 @@ export const toolContextSchema = z.object({
   timezone: z.string().optional(),
   /** The turn's start instant (UTC ISO) — anchors local-time rendering. */
   startedAtIso: z.string().optional(),
+  /** Only the host enables read receipts for a 思考流 work. */
+  thinkingFlow: z.boolean().optional(),
   /** UI locale ("zh" | "en") — relative-time annotations follow it. */
   locale: z.string().optional(),
   /** Image attachments (data URLs) extracted when the main model lacks vision. */

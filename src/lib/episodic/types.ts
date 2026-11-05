@@ -39,6 +39,8 @@ export interface Turn {
   attribution?: "escaped_v1" | "legacy_header" | "ambiguous";
   /** The message content (plain text or markdown) */
   content: string;
+  /** Versioned public dialogue metadata; absent on legacy records. */
+  dialogue?: import("./dialogue-record").DialogueRecordTurn;
   /**
    * Shared by the user and agent turn in the same round.
    * 6-char base64url, e.g. "a3fk2w". Absent on legacy slices parsed from disk.

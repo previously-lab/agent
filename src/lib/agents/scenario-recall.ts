@@ -14,6 +14,7 @@ import {
 import type { ModelConfig } from "@/lib/models/registry";
 import type { RecallBackend } from "@/lib/memory/facade";
 import type { ScenarioRecallRequest } from "@/lib/chat/scenario-recall-contract";
+import { caseStorageRevision } from "@/lib/docs/case-doc";
 
 const RECORD_REF_RE = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -49,6 +50,8 @@ export interface ScenarioRecallEvidence {
   role: ScenarioRecallRole;
   timestamp?: string;
   quote: string;
+  /** Exact record bytes observed by the thinking work; never a latest-state promise. */
+  sourceRevision?: string;
   /** Adjacent visible original text, never model-authored or hidden source. */
   context: { before: string; after: string };
   /** Model interpretation; only quote bytes and source attribution are verified. */
@@ -80,6 +83,7 @@ export interface ScenarioRecallInput extends ScenarioRecallRequest {
   timezone?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  trackRevision?: boolean;
 }
 
 type RecordTurn = ParsedTurn & {
@@ -93,6 +97,7 @@ type LoadedRecord = {
   turns: RecordTurn[];
   summary: string;
   sourceTruncated: boolean;
+  revision?: string;
 };
 
 type VisibleOriginal = {
@@ -112,6 +117,7 @@ type ReadState = {
   notes: string[];
   truncated: boolean;
   listed: boolean;
+  trackRevision: boolean;
 };
 
 const reportSchema = z.object({
@@ -294,7 +300,8 @@ async function loadRecord(
         const role = roleOf(turn);
         return role ? [{ ...turn, role, semanticContent: projectNativeReplySemantics(turn.content, role) }] : [];
       });
-      const record: LoadedRecord = { ref, raw, turns, summary: summaryOf(raw), sourceTruncated };
+      const record: LoadedRecord = { ref, raw, turns, summary: summaryOf(raw), sourceTruncated,
+        ...(state.trackRevision ? { revision: caseStorageRevision(source) } : {}) };
       state.records.set(ref, record);
       if (sourceTruncated) {
         state.truncated = true;
@@ -455,6 +462,7 @@ function verifyEvidence(report: RecallReport, state: ReadState): {
     const fragment = matches[0]!.fragment;
     const quoteStart = fragment.indexOf(quote);
     const quoteEnd = quoteStart + quote.length;
+    const sourceRevision = state.records.get(candidate.ref)?.revision;
     evidence.push({
       ref: candidate.ref,
       source: "original_turn",
@@ -464,6 +472,7 @@ function verifyEvidence(report: RecallReport, state: ReadState): {
       role: turn.role,
       ...(turn.timestamp ? { timestamp: turn.timestamp } : {}),
       quote,
+      ...(sourceRevision ? { sourceRevision } : {}),
       context: {
         before: fragment.slice(Math.max(0, quoteStart - MAX_QUOTE_CONTEXT_CHARS), quoteStart),
         after: fragment.slice(quoteEnd, quoteEnd + MAX_QUOTE_CONTEXT_CHARS),
@@ -496,6 +505,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
   const deadlineSignal = AbortSignal.timeout(timeoutMs);
   const signal = input.signal ? AbortSignal.any([input.signal, deadlineSignal]) : deadlineSignal;
   const state: ReadState = {
+    trackRevision: input.trackRevision === true,
     attempts: 0,
     discovered: new Set(knownRefs.filter((ref) => inWindow(ref, input.after, input.before))),
     searched: [],

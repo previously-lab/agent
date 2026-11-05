@@ -19,13 +19,19 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount } from "@/lib/deepseek/tools";
-import { type ModelMessage } from "@/lib/deepseek/types";
+import { type ModelMessage, type StepResult } from "@/lib/deepseek/types";
 import { createHook, getWritable, sleep } from "workflow";
 import { start } from "workflow/api";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
-import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
+import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
+import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
+import {
+  beginDialogueWorkStep,
+  completeDialogueWorkStep,
+  type DialogueWorkAdmission,
+} from "./dialogue-steps";
 import type {
   InnerTurnInput,
   NestedTurnTail,
@@ -936,6 +942,37 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     contextPrefix,
   } = hk;
 
+  // ── Dialogue work admission (思考流) ────────────────────────────────────
+  // Every accepted input has exactly one admitted attempt run; duplicate or
+  // stale runners exit quietly without answering. The admitted window is the
+  // server-authoritative input view — the cleared browser lane never feeds
+  // the worker.
+  const dialogue = input.dialogue ?? null;
+  let workWindow: DialogueWorkAdmission | null = null;
+  if (dialogue) {
+    const admitted = await beginDialogueWorkStep(dialogue, await ownRunId());
+    if (!admitted) {
+      try {
+        await closeTurnStream(
+          { text: "", finishReason: "stop", cognition: "" },
+          input.turnId,
+        );
+      } catch {
+        /* the quiet-exit tail is best-effort; the work owner answers */
+      }
+      return {
+        turnId: input.turnId,
+        sliceId: hk.slice.slice_id,
+        at: input.startedAtIso,
+        userText: input.lastUserMessage,
+        replyText: "",
+        cognition: "",
+        finishReason: "stop",
+      };
+    }
+    workWindow = admitted;
+  }
+
   // ── Assemble system prompt ──────────────────────────────────────────────
 
   // v0.9 slice-level freeze: EVERY input is anchored to the slice's start —
@@ -1074,16 +1111,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const producedMessages: ModelMessage[] = [];
   let allCognition = "";
 
-  const agent = createChatAgent({
-    model: input.modelConfig,
-    thinking: input.thinking,
-    reasoningEffort: input.reasoningEffort,
-    toolsContext: buildChatToolsContext(
-      buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
-    ),
-    // Snapshot exact native messages, including checkpointed partial HTTP
-    // output, for recovery and bounded platform-timeout continuation.
-    onStepEnd: (step) => {
+  const onStepEnd = (step: StepResult<ChatToolSet>) => {
       producedMessages.push(...step.response.messages);
       allCognition += extractCognition(step.response.messages, [step]);
       // Provider warnings (unsupported settings, silent downgrades such as
@@ -1120,8 +1148,30 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           };
         }),
       });
-    },
-  });
+    };
+
+  // Dialogue works answer through the thinking agent (private work output,
+  // evidence-gated finishThinking report, read receipts). Legacy turns keep
+  // the chat agent. Same native tool protocol and checkpoints either way.
+  const agent = dialogue
+    ? createThinkingAgent({
+        model: input.modelConfig,
+        thinking: input.thinking,
+        reasoningEffort: input.reasoningEffort,
+        toolsContext: buildChatToolsContext(
+          buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
+        ),
+        onStepEnd,
+      })
+    : createChatAgent({
+        model: input.modelConfig,
+        thinking: input.thinking,
+        reasoningEffort: input.reasoningEffort,
+        toolsContext: buildChatToolsContext(
+          buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
+        ),
+        onStepEnd,
+      });
 
   /** Shared stream options (continuation-safe, see below). No maxOutputTokens. */
   const streamOpts = {
@@ -1137,6 +1187,26 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let nestedTail: NestedTurnTail | undefined;
   try {
     let currentMessages = historyWindow;
+    // 思考流 dialogue work: the browser lane was cleared at acceptance, so the
+    // model window starts from the worker's OWN input only, with the
+    // server-authoritative accepted state as a fenced context section (never
+    // persisted, never user speech — the same outbound-copy discipline as the
+    // machine-context block).
+    if (dialogue && workWindow) {
+      currentMessages = [{ role: "user" as const, content: input.lastUserMessage }];
+      currentMessages = appendContextSuffix(
+        currentMessages,
+        buildWorkContextSection({
+          scopeKey: dialogue.scopeKey,
+          workId: dialogue.workId,
+          ownInputId: input.turnId,
+          inputs: workWindow.inputs,
+          pending: workWindow.pending,
+          publications: workWindow.publications,
+          firstRecentUserSeq: workWindow.firstRecentUserSeq,
+        }),
+      );
+    }
     // v0.11 §13 machine context (the game client's engine-built scene log):
     // its own marked section on the OUTBOUND tail of the last user message —
     // the system prompt stays slice-frozen and the persisted user turn keeps
@@ -1772,6 +1842,38 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     streamError ??= err;
     outcome.error ??= errorMessage(err, "The turn's final write failed.");
   }
+  // 思考流 dialogue work: the durable handoff is the WORK PRODUCT (claims,
+  // artifacts, evidence) — never the public reply text. No burst merge line,
+  // no task acknowledgments from research success, and no summary-stream
+  // persistence: the record plane projects from the control store's events.
+  if (dialogue) {
+    try {
+      // The thinking agent's terminal act is the report-only finishThinking
+      // tool, which ends the runner with finishReason "tool-calls" — with a
+      // filed report that IS a clean completion, not an interruption.
+      const report = extractThinkingReport(producedMessages);
+      const cleanFinish =
+        outcome.finishReason === "stop" ||
+        (outcome.finishReason === "tool-calls" && report !== undefined);
+      await completeDialogueWorkStep({
+        launch: dialogue,
+        inputIds: [input.turnId],
+        runId: await ownRunId(),
+        sliceId: hk.slice.slice_id,
+        messages: producedMessages,
+        text: outcome.text,
+        locale: input.locale,
+        ...(input.documentContext?.length ? { documentContext: input.documentContext } : {}),
+        report,
+        interrupted: !cleanFinish || !!outcome.error,
+      });
+    } catch (err) {
+      // The watch outbox fails the work honestly when no result is durable;
+      // a partial product must not be reported as a clean answer.
+      streamError ??= err;
+      outcome.error ??= errorMessage(err, "The work result could not be handed off.");
+    }
+  }
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
   // run retired with its collector): the last survivor judges lastness
   // (burst-exact when the client sent a burstId, else the legacy overlap
@@ -1780,7 +1882,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // v0.42 §2 — the generated line rides THIS turn's record into the summary
   // run's batch (落盘归总结流).
   let mergeLine: string | undefined;
-  if (parallelEnabled && outcome.text.trim()) {
+  if (!dialogue && parallelEnabled && outcome.text.trim()) {
     mergeLine = await decideBurstMergeLine({
       sliceId: hk.slice.slice_id,
       turnId: input.turnId,
@@ -1796,10 +1898,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       repo: input.repo,
     });
   }
-  // The incremental summary owns passive persistence. Carry this turn's
-  // complete produced record before closing the stream. Completed sibling
-  // results can enhance the batch, but never replace this durable payload.
-  const taskAckIntents = collectTaskAckIntents(producedMessages);
+  // The incremental summary owns passive persistence for legacy turns.
+  // Dialogue works already handed their product to the control store above.
+  const taskAckIntents = dialogue ? [] : collectTaskAckIntents(producedMessages);
   const sourceRunId = taskAckIntents.length > 0 ? await ownRunId() : undefined;
   const turnResult: TurnRunResult = {
     ...(producedMessages.length ? {nativeMessages: producedMessages} : {}),
@@ -1832,7 +1933,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // pass this gate via outcome.text; `|| outcome.error` is the empty-reply
   // failure.
   let summaryRunId: string | null = null;
-  if (outcome.text.trim() || mergeLine || outcome.error || input.lastUserMessage.trim()) {
+  if (!dialogue && (outcome.text.trim() || mergeLine || outcome.error || input.lastUserMessage.trim())) {
     const last =
       streamError !== null
         ? true

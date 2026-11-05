@@ -54,6 +54,7 @@ import {
   normalizeCaseRefText,
 } from "@/lib/docs/case-refs";
 import { parsePieceFileName } from "@/lib/docs/case-naming";
+import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { parseSliceId, parseTurns, applyRange, reassembleSlice } from "@/lib/episodic/turn-parser";
 import { slicePartPathCandidates } from "@/lib/episodic/paths";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
@@ -147,6 +148,11 @@ export type RecallReadResult =
       matchedRef?: string;
       /** Case indexes only: the separate current view, also labeled in content. */
       currentUnderstanding?: { content: string; path: string };
+      freshnessWarnings?: string[];
+      /** Exact source bytes before any range/prose projection. */
+      storageRevision?: string;
+      /** Full observed piece inventory; navigation evidence, never a piece read. */
+      pieceCatalog?: { revision: string; refs: string[] };
       /** Hash of the exact full index bytes rendered by this read. */
       caseRevision?: string;
     }
@@ -1358,6 +1364,8 @@ export interface RecallReadInput {
   outline?: boolean;
   /** Case indexes only: include archived current-understanding prose when requested. */
   includeHistory?: boolean;
+  /** Host-only thinking view. Titles remain navigation, never receipts. */
+  includePieceCatalog?: boolean;
 }
 
 /** Apply the five range filters to a slice core — the readSlice protocol. */
@@ -1565,6 +1573,7 @@ async function withCaseCurrent(
   backend: RecallBackend,
   result: Extract<RecallReadResult, { kind: "content" }>,
   includeHistory = false,
+  includePieceCatalog = false,
 ): Promise<RecallReadResult> {
   const index = CASE_INDEX_RE.exec(result.path);
   if (!index) return result;
@@ -1578,27 +1587,42 @@ async function withCaseCurrent(
   } catch (error) {
     return { kind: "unavailable", note: error instanceof Error ? error.message : String(error) };
   }
-  if (!files.includes(currentPath)) return result;
+  const catalogEntries = includePieceCatalog ? casePieceCatalog({ category, caseName, paths: files }) : null;
+  const catalog = includePieceCatalog ? `${renderCasePieceCatalog(catalogEntries)}\n\n` : "";
+  const pieceCatalog = catalogEntries
+    ? { revision: caseStorageRevision(JSON.stringify(catalogEntries)), refs: catalogEntries.map((entry) => entry.ref) }
+    : undefined;
+  const withoutCurrent = () => ({
+    ...(catalog ? { ...result, content: catalog + result.content } : result),
+    ...(pieceCatalog ? { pieceCatalog } : {}),
+  });
+  if (!files.includes(currentPath)) return withoutCurrent();
   let current: string;
   try {
     current = await backend.readFile(currentPath);
   } catch (error) {
     return isAbsentError(error)
-      ? result
+      ? withoutCurrent()
       : { kind: "unavailable", note: error instanceof Error ? error.message : String(error) };
   }
-  return {
-    ...result,
-    content: renderCaseWithCurrent(result.content, current, {
-      includeHistory,
-      freshnessWarnings: caseCurrentFreshnessWarnings(parseCaseCurrent(current), {
+  const parsedCurrent = parseCaseCurrent(current);
+  const freshnessWarnings = caseCurrentFreshnessWarnings(parsedCurrent, {
         indexRevision: caseStorageRevision(result.content),
         pieces: files.filter((path) => path.startsWith(`memory/${category}/${caseName}/`) &&
           /^\d{4}-\d{2}-\d{2}-.+\.md$/.test(path.slice(`memory/${category}/${caseName}/`.length)))
           .map((path) => ({ path, revision: null })),
-      }),
-    }),
+  });
+  for (const piece of parsedCurrent.basis?.pieces ?? []) {
+    if (!piece.revision && !isHistoryArchiveFileName(piece.path)) {
+      freshnessWarnings.push(`${piece.path} has no recorded read revision; its content freshness is unverified`);
+    }
+  }
+  return {
+    ...result,
+    content: catalog + renderCaseWithCurrent(result.content, current, { includeHistory, freshnessWarnings }),
     currentUnderstanding: { content: current, path: currentPath },
+    ...(pieceCatalog ? { pieceCatalog } : {}),
+    ...(includePieceCatalog && freshnessWarnings.length ? { freshnessWarnings } : {}),
   };
 }
 
@@ -1606,7 +1630,10 @@ export async function recallRead(
   backend: RecallBackend,
   input: RecallReadInput,
 ): Promise<RecallReadResult> {
-  const result = await recallReadBody(createReadCache(backend), input);
+  let result = await recallReadBody(createReadCache(backend), input);
+  if (input.includePieceCatalog && result.kind === "content") {
+    result = { ...result, storageRevision: result.caseRevision ?? caseStorageRevision(result.content) };
+  }
   if (input.outline && result.kind === "content") {
     const { totalLines, headings } = parseDocumentOutline(result.content);
     return { kind: "outline", ref: input.ref, totalLines, headings };
@@ -1665,7 +1692,7 @@ async function recallReadBody(
   if (!candidates) return { kind: "not_found" };
   const direct = await readFirstCandidate(backend, candidates);
   if (direct.kind === "content") {
-    return withCaseCurrent(backend, direct, input.includeHistory === true);
+    return withCaseCurrent(backend, direct, input.includeHistory === true, input.includePieceCatalog === true && !input.range && !input.outline);
   }
   if (direct.kind === "unavailable") return direct;
 
@@ -1683,7 +1710,7 @@ async function recallReadBody(
         content: retry.content,
         path: retry.path,
         matchedRef: fuzzy.matched.ref,
-      }, input.includeHistory === true);
+      }, input.includeHistory === true, input.includePieceCatalog === true && !input.range && !input.outline);
     }
     if (retry.kind === "unavailable") return retry;
     // the adopted candidate vanished mid-flight — fall through to near misses

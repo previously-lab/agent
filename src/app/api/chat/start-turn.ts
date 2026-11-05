@@ -208,9 +208,7 @@ export function summarizeModelContent(
     .join("\n");
 }
 
-export async function startTurn(
-  args: StartTurnArgs
-): Promise<Awaited<ReturnType<typeof start>>> {
+export async function prepareTurnInput(args: StartTurnArgs): Promise<TurnInput> {
   // Bounded by the shared GitHub read budget: a degraded API fails the POST
   // fast instead of hanging it to the platform's wall-clock limit.
   const config = await withGitHubReadBudget(() => loadUserConfig());
@@ -314,6 +312,14 @@ export async function startTurn(
     ...(args.burstId ? { burstId: args.burstId } : {}),
   };
 
+  return input;
+}
+
+export async function startTurn(args: StartTurnArgs) {
+  return startPreparedTurn(await prepareTurnInput(args));
+}
+
+export async function startPreparedTurn(input: TurnInput) {
   // Pin the run to Hong Kong. The run's state, queue dispatch and streams live
   // in this region for the run's whole lifetime — Workflow locks a run's region
   // at creation and never migrates it. This is the workflow half of the region
@@ -335,7 +341,8 @@ export async function startTurn(
     // too late to be seen (observed: a 15s turn was already finishing when
     // its role first appeared).
     attributes: {
-      role: "turn",
+      role: input.dialogue ? "thinking" : "turn",
+      ...(input.dialogue ? { dialogue: "1", work: input.dialogue.workId } : {}),
       turn: input.turnId,
       ...(input.burstId ? { burst: input.burstId } : {}),
     },

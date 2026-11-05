@@ -50,9 +50,12 @@ async function coreEntries(repo: string, owner: string, headSha: string): Promis
  * SHA; a warm turn only fetches new/changed core objects. No state file or
  * process-global mutable identity map is introduced.
  */
-export async function locateSummaryRecords(payload: SummaryRunPayload, members: TurnRunResult[]): Promise<SummaryRecordLookup> {
+export async function locateSummaryRecords(
+  payload: Pick<SummaryRunPayload, "useGithub" | "owner" | "repo" | "sliceId">,
+  members: Array<Pick<TurnRunResult, "turnId" | "clientMessageId" | "userText" | "regenerate">>,
+): Promise<SummaryRecordLookup> {
   const saved = new Map<string, TimeSlice>();
-  const matches = (member: TurnRunResult, slice: TimeSlice): boolean => {
+  const matches = (member: (typeof members)[number], slice: TimeSlice): boolean => {
     if (slice.turns.some((t) => t.turnId === member.turnId)) return true;
     if (member.clientMessageId && slice.turns.some((t) => t.role === "user" && t.clientMessageId === member.clientMessageId)) return true;
     const lastUser = slice.turns.filter((t) => t.role === "user").at(-1);
