@@ -90,7 +90,8 @@ export interface ReflectionWakePayload {
 
 /**
  * The range a summary stream hands the reflection unit (v0.42 §4 — 触发携带
- * 范围): the slice + the turn ids the summary just persisted. A HINT, not
+ * 范围): the slice + the user-turn or exact research-material ids the summary
+ * just persisted. A HINT, not
  * the only truth — a unit woken WITHOUT one (a lost bell, a zombie
  * takeover's fresh run) derives its scope from the commit log itself
  * (§3.5). Pure type — lives here so both reflection-wake.ts and

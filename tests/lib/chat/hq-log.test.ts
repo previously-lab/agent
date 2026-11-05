@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   source: "local" as string,
   logCommits: vi.fn(),
+  localFileCommits: vi.fn((): Array<{ oid: string; message: string; committedAtMs: number; parents?: string[] }> => []),
   isGitRepo: vi.fn(() => true),
   /** The GitHub leg's network boundary — real return shapes, never called. */
   gh: {
@@ -29,6 +30,10 @@ vi.mock("@/lib/data-source/resolve", () => ({
 vi.mock("@/lib/episodic/local-git", () => ({
   isGitRepo: h.isGitRepo,
   logCommits: h.logCommits,
+}));
+
+vi.mock("@/lib/episodic/local-file-log", () => ({
+  readLocalFileCommits: h.localFileCommits,
 }));
 
 vi.mock("@/lib/whitelist", () => ({
@@ -158,14 +163,16 @@ describe("readReflectionCursor — the water level (v0.39 §2.4)", () => {
     }
   });
 
-  it("本地非 git 后端 (#20 — fail-safe): available=false with the git init advice, cursor null", async () => {
+  it("本地非 git 后端从普通文件账本读取 cursor", async () => {
     h.isGitRepo.mockReturnValue(false);
+    h.localFileCommits.mockReturnValue([
+      ROUND({ message: "Reflection round — 2026-10-20\n\n—\nseen: 2026-10-20-0900#t3" }),
+    ]);
     const log = await readReflectionLog();
-    expect(log.available).toBe(false);
-    expect(log.reason).toContain("git init");
+    expect(log.available).toBe(true);
     const cursor = await readReflectionCursor();
-    expect(cursor.sliceId).toBeNull();
-    expect(cursor.degraded).toBe(true);
+    expect(cursor.sliceId).toBe("2026-10-20-0900");
+    expect(cursor.degraded).toBe(false);
   });
 });
 
@@ -292,6 +299,7 @@ describe("readReflectionCoverage — the TURN-level water level (v0.42 §4)", ()
 
   it("the log plane down → degraded", async () => {
     h.isGitRepo.mockReturnValue(false);
+    h.localFileCommits.mockImplementation(() => { throw new Error("disk failed"); });
     const coverage = await readReflectionCoverage();
     expect(coverage.degraded).toBe(true);
   });
@@ -418,10 +426,11 @@ describe("readRecentSummaries — the panel's summary read face (v0.43 §5)", ()
 
   it("the log plane down degrades the whole read (no fabricated entries)", async () => {
     h.isGitRepo.mockReturnValue(false);
+    h.localFileCommits.mockImplementation(() => { throw new Error("disk failed"); });
     const read = await readRecentSummaries();
     expect(read.available).toBe(false);
     expect(read.entries).toEqual([]);
-    expect(read.reason).toContain("git init");
+    expect(read.reason).toContain("disk failed");
   });
 
   it("caps at five entries (a glance, not an archive)", async () => {
@@ -481,11 +490,12 @@ describe("readHQLogBundle — ONE scan, three derivations (v0.11 streams)", () =
     ]);
   });
 
-  it("degrades exactly like the sibling readers (non-git root → available false + advice)", async () => {
+  it("degrades exactly like the sibling readers when the file ledger cannot be read", async () => {
     h.isGitRepo.mockReturnValue(false);
+    h.localFileCommits.mockImplementation(() => { throw new Error("disk failed"); });
     const bundle = await readHQLogBundle();
     expect(bundle.available).toBe(false);
-    expect(bundle.reason).toContain("git init");
+    expect(bundle.reason).toContain("disk failed");
     expect(h.logCommits).not.toHaveBeenCalled();
   });
 });

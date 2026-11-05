@@ -49,6 +49,7 @@ import { assertDocumentWrite, assertTailBudget, documentSize, exceededSize, TAIL
 import { isHistoryArchiveFileName, planHistoryArchive } from "@/lib/docs/history-archive";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { confirmedDocumentProducts, stageDocumentProduct } from "../document-products";
+import type { DialogueResearchRecord } from "../dialogue-record";
 import type { ModelConfig } from "@/lib/models/registry";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
@@ -1292,6 +1293,7 @@ export interface CaseWriterManifest {
 
 export interface LibrarianPassInput {
   sourceTurnIds?: string[];
+  researchProducts?: readonly DialogueResearchRecord[];
   model: ModelConfig;
   closedSliceId: string;
   excerpt: SliceExcerpt;
@@ -1348,6 +1350,8 @@ summary: ${excerpt.summary || "(none)"}
 ${sliceExcerptNotice(excerpt)}
 
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
+
+${input.researchProducts?.length ? `## 思考流 final result references\nThese are bounded candidate deltas from the exact result versions shared with 表达流. They are not user words, published speech, or your own read receipts. Read the original sources and target cases before reusing anything; preserve the proposal, uncertainty, and entity scope. No new document is owed just because a work produced a result.\n${JSON.stringify(input.researchProducts)}` : ""}
 
 ## Case manifest (paths are discovery only, never read receipts; readCase every existing target)
 

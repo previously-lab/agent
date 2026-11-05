@@ -1,4 +1,5 @@
 import { stageDocumentProduct } from "@/lib/episodic/document-products";
+import { dialogueSourceTurnId, readDialogueResearchRecords, selectDialogueResearchProducts } from "@/lib/episodic/dialogue-record";
 import { reorganizeUserModel } from "@/lib/evolution/user-model-maintenance";
 import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 /**
@@ -582,13 +583,19 @@ function buildHqTools(
           slice = null;
         }
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
-        const sourceTurnIds = sourceScope.find((source) => source.sliceId === sliceId)?.turnIds ?? [];
-        if (!sourceTurnIds.length) return "No owed source turns in this round; read the slice explicitly for context instead of deriving its documents again.";
+        const materialIds = sourceScope.find((source) => source.sliceId === sliceId)?.turnIds ?? [];
+        if (!materialIds.length) return "No owed source turns in this round; read the slice explicitly for context instead of deriving its documents again.";
+        const sourceTurnIds = [...new Set(materialIds.map(dialogueSourceTurnId))];
         const excerpt = buildSliceExcerpt(slice, sourceTurnIds);
+        const researchProducts = selectDialogueResearchProducts(
+          readDialogueResearchRecords(await readSlicePart(sliceId, "agent", batch).catch(() => "")),
+          materialIds,
+        );
         const result = await runLibrarianPass({
           model,
           closedSliceId: sliceId,
           sourceTurnIds,
+          ...(researchProducts.length ? { researchProducts } : {}),
           excerpt,
           manifest: await currentManifest(),
           date,

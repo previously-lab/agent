@@ -211,6 +211,7 @@ vi.mock("@/lib/evolution/store", async (importOriginal) => ({
 }));
 
 import { handleBrief } from "@/app/api/evolution/hq-agent";
+import { dialogueResearchMaterialId, encodeDialogueResearchRecord, type DialogueResearchRecord } from "@/lib/episodic/dialogue-record";
 import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
@@ -984,6 +985,39 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(writerInput.excerpt.focus).toBe("手机话题");
     expect(scribeInput.excerpt.focus).toBe("手机话题");
     expect(scribeInput.date).toBe(DATE);
+  });
+
+  it("archiveRound reflects the exact owed result version over the real source turn", async () => {
+    const research = (resultId: string, productRevision: number): DialogueResearchRecord => ({
+      kind: "research_result", resultId, productRevision, workId: `work-${resultId}`,
+      inputIds: ["input-1"], sourceTurnId: "a1b2c3", asOf: "2026-08-09T13:00:00.000Z",
+      sourceRevision: null, status: "complete", artifacts: [],
+      delta: { readerQuestion: "What changed?", newInformation: `Revision ${productRevision}`,
+        targetRefs: [], claims: [{ claimId: "claim-1", text: "Bounded finding", kind: "observation", sources: [] }] },
+    });
+    const v1 = research("result-a", 1);
+    const records = [research("result-a", 2), v1, research("result-b", 1)];
+    episodic.loadSlice.mockResolvedValue({ slice_id: SLICE_ID, focus: "手机话题", summary: "聊了换手机",
+      status: "closed", tags: [], turns: [
+        { timestamp: "t0", role: "user", content: "想换手机", turnId: "a1b2c3" },
+        { timestamp: "t1", role: "agent", content: "预算多少" },
+      ] });
+    episodic.readSlicePart.mockResolvedValueOnce(records.map(encodeDialogueResearchRecord).join("\n"));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
+      return { ok: true, report: { actions: [], note: "" }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET,
+      scope: [{ ...DOCKET.scope[0]!, turnIds: [dialogueResearchMaterialId(v1)] }] });
+    expect(outcome.error).toBeUndefined();
+    const writerInput = passes.runLibrarianPass.mock.calls[0][0] as {
+      sourceTurnIds: string[];
+      researchProducts: DialogueResearchRecord[];
+      excerpt: { turnsExcerpt: string };
+    };
+    expect(writerInput.sourceTurnIds).toEqual(["a1b2c3"]);
+    expect(writerInput.researchProducts.map((record) => [record.resultId, record.productRevision])).toEqual([["result-a", 1]]);
+    expect(writerInput.excerpt.turnsExcerpt).toContain("想换手机");
   });
 
   it("markOrphan seals an orphaned ACTIVE slice (closed_by: context_lost), idempotently", async () => {

@@ -161,7 +161,11 @@ async function publishBatch(batch: WriteBatch, message: string): Promise<string 
 
   // Local filesystem — apply individually, then record one git commit for
   // the whole batch (mirrors the GitHub backend's N-files-1-commit batch).
-  const committedPaths = await commitLocalBatch(entries, { bases: batch.documentBases, maintenance: batch.maintenance });
+  const committedPaths = await commitLocalBatch(
+    entries,
+    { bases: batch.documentBases, maintenance: batch.maintenance },
+    isGitRepo(getMemoryRoot()) ? undefined : { message },
+  );
   finishBatch(batch, entries);
   return await commitLocalWrites(
     committedPaths,
@@ -457,12 +461,8 @@ export async function commitReflectionRound(
   }
   const root = getMemoryRoot();
   if (!isGitRepo(root)) {
-    // v0.39 待裁决 2 — fail-safe, not fail-busy: without a git ledger
-    // there is no log plane to carry the level. The caller degrades to
-    // an empty docket + warn (and the deployment should git init).
-    throw new Error(
-      "memory root is not a git repository — the reflection cursor has no log plane (run `git init` in the memory root)",
-    );
+    await commitLocalBatch([], {}, { message });
+    return;
   }
   await commitEmpty(root, message);
 }

@@ -27,6 +27,7 @@ import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { validateDocumentEntries, withHistoryAttributes, type GuardedEntry, type DocumentWriteChecks } from "@/lib/docs/write-validation";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
+import { withLocalFileCommit } from "@/lib/episodic/local-file-log";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
@@ -150,8 +151,13 @@ export async function writeFileLocal(
 }
 
 /** Final fresh comparison and all validation happen before the first disk mutation. */
-export async function commitLocalBatch(entries: readonly GuardedEntry[], checks: DocumentWriteChecks = {}): Promise<string[]> {
+export async function commitLocalBatch(
+  entries: readonly GuardedEntry[],
+  checks: DocumentWriteChecks = {},
+  ledger: { message: string } | undefined = undefined,
+): Promise<string[]> {
   return withSliceLock("storage:local-commit", async () => {
+    if (ledger) entries = withLocalFileCommit(entries, ledger.message);
     entries = await withHistoryAttributes(entries, async (path) => {
       const full = resolveLocalDataPath(path);
       return existsSync(full) ? readFileSync(full, "utf8") : null;

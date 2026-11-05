@@ -6,6 +6,7 @@ import { cachedFetch, CACHE_TTLS } from "@/lib/cache/data-cache";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getMemoryRoot } from "@/lib/whitelist";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
+import { readLocalFileCommits } from "@/lib/episodic/local-file-log";
 import { parseReflectionRoundMessage, type ReflectionHistoryCheckpoint } from "./commit-contract";
 import { projectReflectionHistory, type HistoryCommit } from "./reflection-history";
 
@@ -65,9 +66,14 @@ export async function readReflectionHistoryChunk(continuation?: HistoryScanState
     const source = resolveDataSource();
     if (source === "local") {
       const root = getMemoryRoot();
-      if (!isGitRepo(root)) return { available: false, complete: false, reason: "the memory root is not a git repository; run `git init` to enable history" };
-      const entries = await logCommits(root, Number.MAX_SAFE_INTEGER);
-      if (!entries.length) return { available: false, complete: false, reason: "the memory repository has no commits yet" };
+      const gitRepo = isGitRepo(root);
+      const entries = gitRepo
+        ? await logCommits(root, Number.MAX_SAFE_INTEGER)
+        : readLocalFileCommits(root);
+      if (!entries.length) {
+        if (gitRepo) return { available: false, complete: false, reason: "the memory repository has no commits yet" };
+        return { available: true, complete: true, history: projectReflectionHistory([], "0".repeat(64)) };
+      }
       const commits = entries.map(c => ({ sha: c.oid, message: c.message, parents: c.parents, committedAt: c.committedAtMs === null ? null : new Date(c.committedAtMs).toISOString() }));
       // Local history has no API quota and stays a single consistent git.log.
       return { available: true, complete: true, history: projectReflectionHistory(commits, entries[0].oid) };

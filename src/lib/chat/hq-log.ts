@@ -8,7 +8,7 @@
  * Scheduling uses a complete prefix checkpoint plus exact summary versions
  * (hq-history.ts), with three pages per durable read step. Display readers
  * may stop early; their eight-row glance never becomes a progress ledger.
- * A missing local git repository or an API failure is explicitly unavailable.
+ * Local roots use Git history when present and the plain-file ledger otherwise.
  *
  * Plain Node module — the route, the turn pipeline (暂存) and
  * reflection-steps (the world read's cursor leg) all read through here.
@@ -18,6 +18,7 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getMemoryRoot } from "@/lib/whitelist";
 import { getGitHubReadHead, memoizeGitHubRead } from "@/lib/github/read-view";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
+import { readLocalFileCommits } from "@/lib/episodic/local-file-log";
 import { readGitHubHistoryPage, readReflectionHistoryChunk, type HistoryScanState } from "./hq-history";
 import type { ReflectionHistoryCheckpoint } from "./commit-contract";
 import {
@@ -40,9 +41,9 @@ export interface ReflectionRoundLogEntry {
 export interface ReflectionLogRead {
   /** Complete newest-first reflection round history. */
   entries: ReflectionRoundLogEntry[];
-  /** False when the log plane is unavailable (non-git local root, API down). */
+  /** False when the log plane is unavailable (local read failure, API down). */
   available: boolean;
-  /** The degradation reason (the `git init` advice rides here). */
+  /** The degradation reason. */
   reason?: string;
 }
 
@@ -92,15 +93,9 @@ async function readGitHubLog(): Promise<ReflectionLogRead> {
 
 async function readLocalLog(): Promise<ReflectionLogRead> {
   const root = getMemoryRoot();
-  if (!isGitRepo(root)) {
-    return {
-      entries: [],
-      available: false,
-      reason:
-        "the memory root is not a git repository — there is no commit history to read the cursor from; run `git init` in the memory root to enable it",
-    };
-  }
-  const commits = await logCommits(root, LOCAL_SCAN_CAP);
+  const commits = isGitRepo(root)
+    ? await logCommits(root, LOCAL_SCAN_CAP)
+    : readLocalFileCommits(root);
   return shapeEntries(
     commits.map((c) => ({
       sha: c.oid,
@@ -177,7 +172,7 @@ export interface SummaryLogEntry {
 export interface SummaryLogRead {
   /** Complete newest-first summary commits. */
   entries: SummaryLogEntry[];
-  /** False when the log plane is unavailable (non-git local root, API down). */
+  /** False when the log plane is unavailable (local read failure, API down). */
   available: boolean;
   /** The degradation reason — the caller turns it into an honest docket. */
   reason?: string;
@@ -240,7 +235,7 @@ export function parseSummaryBody(message: string): Omit<RecentSummaryEntry, "sli
 
 export interface RecentSummariesRead {
   entries: RecentSummaryEntry[];
-  /** False when the log plane is unavailable (non-git local root, API down). */
+  /** False when the log plane is unavailable (local read failure, API down). */
   available: boolean;
   /** The degradation reason — the caller turns it into an honest docket. */
   reason?: string;
@@ -281,7 +276,7 @@ function parseSummaryCommit(
     message.slice(SUMMARY_COMMIT_PREFIX.length).split("\n", 1)[0]?.trim() ?? "";
   const turnIds: string[] = [];
   for (const line of message.split("\n")) {
-    const m = /^- (?:user turn|reply|cognition|merge) (\S+)$/.exec(line.trim());
+    const m = /^- (?:user turn|reply|cognition|merge|reflection source) (\S+)$/.exec(line.trim());
     if (m && !turnIds.includes(m[1])) turnIds.push(m[1]);
   }
   const locations = new Map<string, string>();
@@ -318,15 +313,9 @@ export async function readSummaryLog(): Promise<SummaryLogRead> {
     }
     if (source === "local") {
       const root = getMemoryRoot();
-      if (!isGitRepo(root)) {
-        return {
-          entries: [],
-          available: false,
-          reason:
-            "the memory root is not a git repository — there is no commit history to read the summary log from; run `git init` in the memory root to enable it",
-        };
-      }
-      const commits = await logCommits(root, LOCAL_SCAN_CAP);
+      const commits = isGitRepo(root)
+        ? await logCommits(root, LOCAL_SCAN_CAP)
+        : readLocalFileCommits(root);
       return {
         entries: commits
           .filter((c) => c.message.startsWith(SUMMARY_COMMIT_PREFIX))
@@ -503,9 +492,9 @@ export interface HQLogScanCommit {
 export interface HQLogScan {
   /** Newest-first commits; only display callers may request a limited scan. */
   commits: HQLogScanCommit[];
-  /** False when the log plane is unavailable (non-git local root, API down). */
+  /** False when the log plane is unavailable (local read failure, API down). */
   available: boolean;
-  /** The degradation reason (the `git init` advice rides here). */
+  /** The degradation reason. */
   reason?: string;
 }
 
@@ -520,15 +509,9 @@ export async function readHQLogScan(purpose: "complete" | "panel" | "note" = "co
     }
     if (source === "local") {
       const root = getMemoryRoot();
-      if (!isGitRepo(root)) {
-        return {
-          commits: [],
-          available: false,
-          reason:
-            "the memory root is not a git repository — there is no commit history to read; run `git init` in the memory root to enable it",
-        };
-      }
-      const commits = await logCommits(root, LOCAL_SCAN_CAP);
+      const commits = isGitRepo(root)
+        ? await logCommits(root, LOCAL_SCAN_CAP)
+        : readLocalFileCommits(root);
       return {
         commits: commits.map((c) => ({
           sha: c.oid,

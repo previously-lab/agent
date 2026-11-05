@@ -146,6 +146,17 @@ describe("scopeFromSummaries — §3.5/§4's scope assembly (range ∪ log, cove
     ]);
   });
 
+  it("a covered result version does not cover another result from the same user turn", () => {
+    const sliceId = "2026-10-19-1800";
+    const v1 = "u1@research:result-a:1";
+    const v2 = "u1@research:result-a:2";
+    const independent = "u1@research:result-b:1";
+    const cov = coverage([[sliceId, [v1]]]);
+    expect(scopeFromSummaries(cov, [summary(sliceId, [v1, v2, independent])])).toEqual([
+      { sliceId, turnIds: [v2, independent] },
+    ]);
+  });
+
   it("OLD-format backward compatibility: a bare `seen: <sliceId>` covers the WHOLE slice, and lifts the level for unmarked slices at or below it", () => {
     const cov = coverage([], "2026-10-19-1800"); // old water level
     const scope = scopeFromSummaries(cov, [
