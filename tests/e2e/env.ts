@@ -23,3 +23,5 @@ export const E2E_MEMORY_ROOT = path.join(os.tmpdir(), "previously-e2e", "memory"
 export const E2E_TASKS_ROOT = path.join(os.tmpdir(), "previously-e2e", "tasks");
 export const E2E_SESSIONS_ROOT = path.join(os.tmpdir(), "previously-e2e", "sessions");
 export const E2E_WORKFLOW_ROOT = path.join(os.tmpdir(), "previously-e2e", "workflow");
+export const E2E_DIALOGUE_RUNTIME_ROOT = path.join(E2E_HOME, "runtime", "dialogue-v1");
+export const E2E_DIALOGUE_PROVIDER_ROOT = path.join(E2E_HOME, "dialogue-provider");

@@ -8,5 +8,11 @@
       "supportsCancellation": true
     }
   },
-  "ignoreCommand": "node scripts/vercel-ignore.mjs"
+  "ignoreCommand": "node scripts/vercel-ignore.mjs",
+  "crons": [
+    {
+      "path": "/api/chat/dialogue/dispatch",
+      "schedule": "13 3 * * *"
+    }
+  ]
 }

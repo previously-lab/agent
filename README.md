@@ -229,6 +229,7 @@ See [previously-lab/client](https://github.com/previously-lab/client) and the [d
    | `GITHUB_REPO_OWNER` | Your GitHub username or org |
    | `GITHUB_REPO_NAME` | Your private repo's name |
    | `DEEPSEEK_API_KEY` | A DeepSeek API key for the fixed `deepseek-flash` model |
+   | `CRON_SECRET` | Optional bearer secret for the daily dialogue recovery cron; normal chat and local use do not require it |
 
 3. **Or run locally** — `git clone` your repo, `pnpm install`, `pnpm dev`. With `PREVIOUSLY_MODE=client` the app runs as a fully local kernel (filesystem storage, no GitHub repo needed) — this is the mode `@previously-lab/client` packages.
 
@@ -239,6 +240,12 @@ Storage has three modes, controlled by `STORAGE`:
 | `local` | local dev | Reads/writes the local filesystem |
 | `github` | production | Reads/writes your repo via the GitHub API |
 | `demo` | preview | Read-only, pre-seeded personas |
+
+Dialogue outbox work is triggered immediately after input acceptance and after durable thinking results, using the existing Git/local store leases without a database or resident service. On Vercel, `GET /api/chat/dialogue/dispatch` runs daily at 03:13 UTC only to recover lost wake-ups. Set `CRON_SECRET` to enable that endpoint; without it, the recovery endpoint returns 503 while immediate hooks and the local interval remain available. The daily schedule is compatible with Hobby; increase it only when your Vercel plan permits.
+
+Git-backed dialogue state uses the existing `GITHUB_TOKEN`, `GITHUB_REPO_OWNER` and `GITHUB_REPO_NAME`; no additional credential or service is introduced. Its independent `refs/heads/previously-dialogue-runtime-v1` ref is initialized lazily by the first real accepted dialogue write, using a non-force CAS update. Deploying this configuration and scanning an uninitialized ref do not create the ref or write production data.
+
+Verification note (2026-11-06): the cron expression is `13 3 * * *` (every day at 03:13 UTC). Scheduler tests used mocks and temporary local directories only; no real Git remote, Vercel deployment or cron was contacted.
 
 ---
 

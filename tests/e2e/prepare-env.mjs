@@ -42,7 +42,7 @@ await writeFile(
 // A git root, so the agent-flow spec can assert on the commit log the same way
 // production does (Summary / Reflection round prefixes, the `seen:` trailer).
 // Best-effort: a host without git keeps the filesystem-only assertions.
-try {
+if (process.env.PREVIOUSLY_E2E_PLAIN_DIR !== "1") try {
   execFileSync("git", ["init", "-q"], { cwd: memoryRoot, stdio: "ignore" });
   execFileSync("git", ["config", "user.email", "e2e@previously.local"], {
     cwd: memoryRoot,

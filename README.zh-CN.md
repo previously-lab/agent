@@ -233,6 +233,7 @@ previously     # 首次运行进入引导式初始化
    | `GITHUB_REPO_OWNER` | 你的 GitHub 用户名或组织 |
    | `GITHUB_REPO_NAME` | 你的私有仓库名 |
    | `DEEPSEEK_API_KEY` | DeepSeek API key（任何 AI SDK 支持的供应商均可） |
+   | `CRON_SECRET` | 可选，用于每日对话 outbox 补偿 cron 的 Bearer 密钥；正常对话和本地使用无需配置 |
 
 3. **或者本地运行** — `git clone` 你的仓库，`pnpm install`，`pnpm dev`。加 `PREVIOUSLY_MODE=client` 即为完全本地内核（文件系统存储，无需 GitHub 仓库）——`@previously-lab/client` 打包的正是这个模式。
 
@@ -243,6 +244,12 @@ previously     # 首次运行进入引导式初始化
 | `local` | 本地开发 | 读写本地文件系统 |
 | `github` | 生产环境 | 通过 GitHub API 读写你的仓库 |
 | `demo` | 预览 | 只读，内置人格 |
+
+对话 outbox 在输入接受后、思考结果持久化后都会立即触发，沿用现有 Git／本地 store 租约，不需要数据库或常驻服务。Vercel 上的 `GET /api/chat/dialogue/dispatch` 每日 03:13 UTC 仅用于补偿丢失的唤醒。配置 `CRON_SECRET` 后该端点才可用；未配置时补偿端点返回 503，不影响即时 Hook 和本地 interval。每日频率兼容 Hobby；只有套餐允许时才应提高频率。
+
+Git 部署的对话运行状态沿用现有 `GITHUB_TOKEN`、`GITHUB_REPO_OWNER` 和 `GITHUB_REPO_NAME`，不新增凭证或服务。独立的 `refs/heads/previously-dialogue-runtime-v1` ref 由第一笔真实接受的对话写入以非强制 CAS 方式惰性初始化；部署本配置、扫描尚未初始化的 ref 都不会创建 ref 或写入生产数据。
+
+验证说明（2026-11-06）：cron 表达式为 `13 3 * * *`（每日 03:13 UTC）。调度测试仅使用 mock 和本地临时目录，未连接真实 Git 远端、Vercel 部署或真实 cron。
 
 ---
 

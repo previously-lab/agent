@@ -73,6 +73,23 @@ test("full HTML runs head, module, inline click, slider and local submit handler
   await testInfo.attach("script-diagnostics", { body: diagnostics.join("\n"), contentType: "text/plain" });
 });
 
+test("real dialogue mode still renders legacy native records", async ({ page }) => {
+  await page.route("**/api/chat/dialogue?*", route => route.continue());
+  await seedSlices([interactiveRecord(calculatorDocument())]);
+  await page.goto("/en/app");
+  const probe = await page.request.get("/api/chat/dialogue?persona=user&after=0");
+  expect(probe.ok()).toBe(true);
+  expect(await probe.json()).toMatchObject({ version: 1 });
+  await expect(page.locator("[data-manuscript-input]")).toBeEditable();
+  const iframe = page.locator("[data-native-frame]").first();
+  await expect(iframe).toBeVisible();
+  const frame = iframe.contentFrame().frameLocator("[data-native-content]");
+  await frame.getByLabel("Left", { exact: true }).fill("9");
+  await frame.getByLabel("Right", { exact: true }).fill("3");
+  await frame.getByRole("button", { name: "Add with head script", exact: true }).click();
+  await expect(frame.locator("#result")).toHaveText("add:12");
+});
+
 test("DOMContentLoaded-bound calculator restores its derived output after reload", async ({ page }) => {
   await seedSlices([interactiveRecord(calculatorDocument())]);
   await page.goto("/en/app");

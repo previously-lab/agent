@@ -10,6 +10,12 @@ export const test = base.extend({
         await route.abort("blockedbyclient");
         return;
       }
+      if (route.request().method() === "GET" && url.pathname === "/api/chat/dialogue") {
+        // Legacy SSE/history fixtures predate the dialogue probe. Keep them on
+        // their intended path; a spec's own later dialogue route mock wins.
+        await route.fulfill({ status: 409, json: { code: "dialogue_disabled" } });
+        return;
+      }
       if (route.request().method() === "POST" && /^\/api\/(chat|companion|evolution)(\/|$)/.test(url.pathname)) {
         await route.fulfill({ status: 503, json: { error: "Offline E2E requires an explicit response fixture" } });
         return;
