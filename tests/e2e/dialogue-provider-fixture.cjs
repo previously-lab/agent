@@ -26,9 +26,9 @@ async function claimRule(id) {
   }
 }
 
-async function waitForRelease(gate, signal) {
+async function waitForRelease(gate, signal, timeoutMs = 20_000) {
   if (!/^[a-z0-9-]+$/i.test(gate)) throw new Error("Invalid dialogue fixture gate");
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
     try { await access(join(root, `release-${gate}`)); return; }
@@ -74,6 +74,6 @@ globalThis.fetch = async (input, init) => {
   // provider credentials. A mismatch must fail instead of making a live call.
   await writeFile(join(root, "requests", `${requestId}.json`), JSON.stringify({ ruleId: match?.id ?? null, request }), "utf8");
   if (!match) throw new Error("Unexpected dialogue model request (see isolated fixture requests)");
-  if (match.gate) await waitForRelease(match.gate, init.signal);
+  if (match.gate) await waitForRelease(match.gate, init.signal, match.gateTimeoutMs);
   return sseResponse(match.frames, match.finishReason);
 };

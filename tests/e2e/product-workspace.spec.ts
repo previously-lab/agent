@@ -1,5 +1,5 @@
 import { test, expect } from "./test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   clearCases,
   clearEpisodic,
@@ -42,6 +42,15 @@ function dailySlices(count: number, tagPrefix: string): FixtureSlice[] {
   );
 }
 
+async function expectNoOverlap(manuscript: Locator, chrome: Locator): Promise<void> {
+  const reading = await manuscript.boundingBox();
+  const control = await chrome.boundingBox();
+  expect(reading).not.toBeNull();
+  expect(control).not.toBeNull();
+  const overlap = reading!.x < control!.x + control!.width && reading!.x + reading!.width > control!.x
+    && reading!.y < control!.y + control!.height && reading!.y + reading!.height > control!.y;
+  expect(overlap).toBe(false);
+}
 async function expectReader(page: Page, ref: string): Promise<void> {
   await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => new URL(page.url()).searchParams.get("doc")).toBe(ref);
@@ -86,7 +95,8 @@ test.describe("Product workspace routes", () => {
     await clearEpisodic();
   });
 
-  test("cold /app opens bounded full chat with no WebGL and an explicit earlier-history entrance", async ({ page }) => {
+  test("cold /app opens bounded full chat with wayfinding clear of the manuscript", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
     const slices = dailySlices(12, "C");
     await seedSlices(slices);
     await page.goto("/en/app");
@@ -106,6 +116,10 @@ test.describe("Product workspace routes", () => {
     await expect(panel.getByText(slices[0].turns[0].content)).toHaveCount(0);
     const entrance = page.locator(".workspace-history-entrance button");
     await expect(entrance).toBeVisible();
+    const reading = panel.getByText(slices[2].turns[0].content);
+    await expectNoOverlap(reading, page.locator(".conversation-panel-title"));
+    await expectNoOverlap(reading, page.locator(".workspace-history-entrance button"));
+    await page.screenshot({ path: testInfo.outputPath("wayfinding-desktop.png"), animations: "disabled" });
     await entrance.click();
     await expect(page).toHaveURL(/\/en\/app\?view=field&history=1$/);
     const browser = page.locator(".workspace-history-browser");
@@ -115,6 +129,29 @@ test.describe("Product workspace routes", () => {
     await expect(page.locator("canvas")).toHaveCount(0);
   });
 
+  test.describe("narrow conversation wayfinding", () => {
+    test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+    test("title and earlier history leave the manuscript readable and open real records", async ({ page }, testInfo) => {
+      const slices = dailySlices(12, "M");
+      await seedSlices(slices);
+      await page.goto("/en/app");
+      const panel = page.locator("#conversation-panel");
+      const reading = panel.getByText(slices[11].turns[0].content);
+      await expect(reading).toBeVisible();
+      const heading = page.locator(".conversation-panel-title");
+      const history = page.locator(".workspace-history-entrance button");
+      await expect(heading).toBeVisible();
+      await expect(history).toBeVisible();
+      await expectNoOverlap(reading, heading);
+      await expectNoOverlap(reading, history);
+      await page.screenshot({ path: testInfo.outputPath("wayfinding-mobile.png"), animations: "disabled" });
+      await history.click();
+      await expect(page).toHaveURL(/\/en\/app\?view=field&history=1$/);
+      await expect(page.locator(".workspace-history-browser")).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
+      await expect(page.locator(".workspace-record-list li")).toHaveCount(12);
+    });
+  });
   test("semantic records open exact turns, restore Back coordinates and refocus without duplicate history", async ({ page }) => {
     const slices = dailySlices(12, "R");
     const oldest = slices[0];

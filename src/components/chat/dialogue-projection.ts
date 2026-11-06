@@ -1,15 +1,19 @@
 import type { DialogueEvent, DialogueInput, DialoguePage, DialogueWork, PublicUtterance } from "@/lib/chat/dialogue-contract";
+import type { UIMessage } from "@/lib/chat/protocol";
+
+export type DialogueWorkView = DialogueWork & { thoughtsUrl?: string };
 
 export type ManuscriptEntry =
   | { kind: "input"; id: string; input: DialogueInput }
-  | { kind: "utterance"; id: string; utterance: PublicUtterance };
+  | { kind: "utterance"; id: string; utterance: PublicUtterance; artifactBodies?: ReadonlyMap<string, string> }
+  | { kind: "message"; id: string; message: UIMessage; timeIso: string; isStreaming: boolean };
 
 export interface DialogueProjection {
   cursor: number;
   entries: readonly ManuscriptEntry[];
   inputs: ReadonlyMap<string, DialogueInput>;
   utterances: ReadonlySet<string>;
-  works: ReadonlyMap<string, DialogueWork>;
+  works: ReadonlyMap<string, DialogueWorkView>;
   receiptCount: number;
 }
 
@@ -60,4 +64,31 @@ export function projectAcceptedInput(previous: DialogueProjection, input: Dialog
   if (input.eventSeq !== previous.cursor + 1) return previous;
   const event: DialogueEvent = { eventSeq: input.eventSeq, type: "input.accepted", input };
   return projectDialoguePage(previous, { version: 1, events: [event], cursor: event.eventSeq });
+}
+
+/** Optional Git-backed history may catch up while v2 live runs are visible.
+ * Server-owned IDs remove duplicates without comparing or rewriting content. */
+export function mergeDialogueProjections(history: DialogueProjection, live: DialogueProjection): DialogueProjection {
+  const liveInputs = new Set<string>();
+  for (const input of live.inputs.values()) {
+    liveInputs.add(input.inputId);
+    liveInputs.add(input.clientMessageId);
+  }
+  const entries = history.entries.filter(entry => {
+    if (entry.kind === "input") return !liveInputs.has(entry.input.inputId) && !liveInputs.has(entry.input.clientMessageId);
+    if (entry.kind === "utterance") return !live.utterances.has(entry.id) && !live.utterances.has(entry.utterance.utteranceId);
+    return !live.utterances.has(entry.id) && !live.utterances.has(entry.message.id);
+  }).concat(live.entries);
+  const inputs = new Map(history.inputs);
+  for (const [id, input] of live.inputs) inputs.set(id, input);
+  const works = new Map(history.works);
+  for (const [id, work] of live.works) works.set(id, work);
+  return {
+    cursor: history.cursor,
+    entries,
+    inputs,
+    utterances: new Set([...history.utterances, ...live.utterances]),
+    works,
+    receiptCount: history.receiptCount,
+  };
 }

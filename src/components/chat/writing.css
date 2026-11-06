@@ -5,18 +5,47 @@
 }
 
 .conversation-panel-heading {
-  min-height: 3.75rem;
-  padding-inline: clamp(calc(var(--spacing) * 4), 3vw, 2.5rem);
-  border-bottom: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
+  position: relative;
+  z-index: 30;
+  min-height: calc(var(--spacing) * 12);
+  padding-inline: clamp(calc(var(--spacing) * 3), 3vw, 2.5rem);
+  border: 0;
+  background: transparent;
+  pointer-events: none;
 }
 
 .conversation-panel-heading > span {
+  flex: none;
+  margin-inline-end: auto;
   font-family: var(--font-serif, serif);
   font-size: var(--text-base);
   font-weight: 400;
   letter-spacing: 0.025em;
   text-transform: none;
 }
+
+.conversation-panel-heading > * { pointer-events: auto; }
+
+.conversation-history-seat { position: relative; z-index: 25; flex-shrink: 0; }
+.conversation-history-seat .workspace-history-entrance {
+  justify-content: flex-start;
+  padding: 0 clamp(1.25rem, 4vw, 3rem);
+  background: transparent;
+}
+.conversation-history-seat .workspace-history-entrance button {
+  min-block-size: calc(var(--spacing) * 11);
+  padding-inline: calc(var(--spacing) * 2);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.conversation-history-seat .workspace-history-entrance button:hover,
+.conversation-history-seat .workspace-history-entrance button:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--brand);
+}
+.conversation-history-seat .workspace-history-hint { display: none; }
 
 .conversation-stream-shell {
   width: 100%;
@@ -67,9 +96,56 @@
   overflow-wrap: anywhere;
 }
 
+/* Rich material stays in the speaker's reading column, but has its own
+   contained surface. Text remains unboxed; these seats already exist for
+   tables, attachments, code, images and sandboxed native replies. */
+.conversation-turn-content .typeset-scroll,
+.conversation-turn-content .dialogue-artifact,
+.conversation-turn-content .native-html {
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, var(--radius));
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-xs, none);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.conversation-turn-content .typeset-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.conversation-turn-content .dialogue-artifact > .native-html,
+.conversation-turn-content .dialogue-artifact > .conversation-prose {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.conversation-turn-content .native-html .native-frame-region,
+.conversation-turn-content .native-html .native-frame-shell {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.conversation-turn-content img.conversation-rich-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-block: calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, var(--radius));
+  background: var(--card);
+  object-fit: contain;
+}
+
 .conversation-prose,
 .conversation-prose > .typeset {
-  --typeset-size: var(--text-base);
+  --typeset-size: var(--text-sm);
   --typeset-leading: 1.95;
   --typeset-flow: 0.9em;
   font-family: var(--font-serif, serif);
@@ -429,4 +505,26 @@
   height: 0;
   color: var(--muted-foreground);
   pointer-events: none;
+}
+
+/* Wide screens keep conversation wayfinding in the outer margins. The title,
+   route controls and history entrance never reserve or paint over the reading
+   column. Narrow screens use compact in-flow controls with the same clear,
+   transparent treatment and full touch targets. */
+@media (min-width: 90rem) {
+  .conversation-panel-heading {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: 0;
+    min-height: 0;
+    padding-block-start: calc(var(--spacing) * 4);
+  }
+  .conversation-history-seat {
+    position: absolute;
+    inset-block-start: calc(var(--spacing) * 16);
+    inset-inline-start: -12rem;
+    inline-size: 11rem;
+  }
+  .conversation-history-seat .workspace-history-entrance { padding: 0; }
+  .conversation-history-seat .workspace-history-entrance button { max-inline-size: 100%; }
 }

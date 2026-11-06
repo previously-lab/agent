@@ -236,7 +236,7 @@ const MARKDOWN_COMPONENTS: Components = {
   code: MarkdownCode,
   pre: MarkdownPre,
   table({ node: _node, children }) {
-    return <div className="typeset-scroll" tabIndex={0}><Table>{children}</Table></div>;
+    return <div className="typeset-scroll" data-rich-block="table" tabIndex={0}><Table>{children}</Table></div>;
   },
   thead({ node: _node, children }) {
     return <TableHeader>{children}</TableHeader>;
@@ -274,7 +274,7 @@ const MARKDOWN_COMPONENTS: Components = {
   ul: MarkdownUl,
   ol: MarkdownOl,
   img({ node: _node, alt, ...props }) {
-    return <img alt={alt ?? ""} loading="lazy" decoding="async" {...props} />;
+    return <img alt={alt ?? ""} className="conversation-rich-image" data-rich-block="image" loading="lazy" decoding="async" {...props} />;
   },
   blockquote({ node: _node, children, ...props }) {
     return <MarkdownBlockquote {...props}>{children}</MarkdownBlockquote>;

@@ -237,11 +237,13 @@ export const ChatMessage = memo(function ChatMessage({
                   src={p.url}
                   alt={p.filename ?? tChat("attachment")}
                   className="conversation-image"
+                  data-rich-block="image"
                 />
               ) : (
                 <span
                   key={i}
                   className="conversation-file"
+                  data-rich-block="attachment"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                   {p.filename ?? tChat("attachment")}

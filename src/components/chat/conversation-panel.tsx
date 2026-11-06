@@ -382,7 +382,7 @@ export function ConversationPanel({
             open ? "flex opacity-100" : "pointer-events-none flex opacity-0"
           }`}
         >
-          <span className="flex-1 truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
+          <span className="conversation-panel-title truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
           {surface !== "utility" && <WorkspaceRouteNav current={surface} />}

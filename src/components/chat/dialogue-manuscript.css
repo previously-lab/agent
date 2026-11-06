@@ -19,7 +19,12 @@
   break-inside: avoid;
 }
 .dialogue-artifact-seat button { min-block-size: calc(var(--spacing) * 11); color: var(--primary); }
-.dialogue-photo { inline-size: min(100%, 20rem); margin-inline-start: auto; }
+.dialogue-photo {
+  inline-size: min(100%, 22rem);
+  max-inline-size: 100%;
+  margin-inline: 0;
+  overflow: hidden;
+}
 .dialogue-publication .conversation-message-actions { flex-wrap: nowrap; }
 @media (hover: hover) {
   .dialogue-publication:not(:hover):not(:focus-within) .conversation-message-actions { opacity: 0; }
@@ -30,9 +35,43 @@
   color: var(--muted-foreground);
   font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans, sans-serif);
 }
-.dialogue-work-disclosure { min-block-size: calc(var(--spacing) * 11); cursor: pointer; }
-.dialogue-work-status li { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--spacing) * 2); }
+.dialogue-work-disclosure {
+  min-block-size: calc(var(--spacing) * 11);
+  padding-inline: 0;
+  cursor: pointer;
+  text-align: start;
+}
 .dialogue-work-status button { min-block-size: calc(var(--spacing) * 11); color: var(--primary); }
+.dialogue-work-status button:focus-visible,
+.dialogue-work-output:focus-visible { outline: 2px solid var(--ring); outline-offset: calc(var(--spacing)); }
+.dialogue-work-active,
+.dialogue-work-tools { margin: 0; padding: 0; list-style: none; }
+.dialogue-work-active > li + li { margin-block-start: calc(var(--spacing) * 4); }
+.dialogue-work-heading { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--spacing) * 2); }
+.dialogue-work-excerpt { min-inline-size: 0; flex: 1; overflow-wrap: anywhere; }
+.dialogue-work-phase { flex: none; color: var(--muted-foreground); }
+.dialogue-work-output {
+  max-block-size: 12rem;
+  margin-block-start: calc(var(--spacing) * 2);
+  padding-block: calc(var(--spacing) * 2);
+  padding-inline-start: calc(var(--spacing) * 3);
+  border-inline-start: 1px solid var(--border);
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--foreground);
+  scrollbar-gutter: stable;
+}
+.dialogue-work-output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.dialogue-work-empty { margin: 0; color: var(--muted-foreground); }
+.dialogue-work-tools { margin-block-start: calc(var(--spacing) * 2); border-block-start: 1px solid var(--border); }
+.dialogue-work-tools li { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--spacing) * 3); padding-block-start: calc(var(--spacing) * 2); }
+.dialogue-work-tool-name { min-inline-size: 0; overflow-wrap: anywhere; color: var(--foreground); }
+.dialogue-work-stream-error { margin-block-start: calc(var(--spacing) * 2); color: var(--destructive); }
 .dialogue-work-product { margin-block: calc(var(--spacing) * 3); border-block-start: 1px solid var(--border); padding-block-start: calc(var(--spacing) * 2); }
 .dialogue-new-replies {
   position: absolute;

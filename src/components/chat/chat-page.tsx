@@ -220,7 +220,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
       } /><ConversationPrimaryPlaceholder inline={arrivalTier?.mode === "pill"} /></>
     );
   }
-  if (dialogue.mode === "probing" || (legacyGate && !verdict)) return <ChatPageSkeleton />;
+  if (legacyGate && !verdict) return <ChatPageSkeleton />;
   return (
     <NativePersonaProvider value={persona}>
       <DocumentContextPersonaSync persona={persona} />
@@ -1048,7 +1048,15 @@ function Inner({
     const restoredUsers = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
     for (const entry of dialogue.projection.entries) {
       if (entry.kind === "input") restoredUsers.add(entry.input.clientMessageId);
-      else restored.add(entry.utterance.utteranceId);
+      else if (entry.kind === "utterance") restored.add(entry.utterance.utteranceId);
+      else {
+        restored.add(entry.message.id);
+        if (entry.message.metadata && typeof entry.message.metadata === "object") {
+          const metadata = entry.message.metadata as Record<string, unknown>;
+          if (typeof metadata.utteranceId === "string") restored.add(metadata.utteranceId);
+          if (typeof metadata.publicationId === "string") restored.add(metadata.publicationId);
+        }
+      }
     }
     const history = buildHistoryItems(briefingSlices ?? [], resumeBlock).filter(
       (item) => item.kind !== "history-turn" || (
@@ -1527,8 +1535,8 @@ function Inner({
             <ComposerHost
               onClearanceChange={onComposerClearanceChange}
               composer={<>
-                {dialogueEnabled && !panelPill && <DialogueWorkStatus works={dialogueWorks} inputs={dialogue.projection.inputs}
-                  expression={dialogue.expression} onCancel={workId => dialogue.stop(workId)} />}
+                {dialogueEnabled && !panelPill && <DialogueWorkStatus works={dialogueWorks} inputs={dialogue.projection.inputs} persona={persona}
+                  expression={dialogue.expression} submission={dialogue.submission} onCancel={workId => dialogue.stop(workId)} />}
                 <ChatInput onSubmit={submitAndRise} isLoading={composerBusy}
                   stopLabel={dialogueEnabled ? tDialogue("stopExpression") : undefined}
                   onStop={dialogueEnabled ? () => { void dialogue.stop().catch(() => toast.error(tDialogue("stopFailed"))); } : handleStop} />

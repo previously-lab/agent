@@ -14,9 +14,11 @@ import { formatDocumentLink, parseDocumentLink } from "@/lib/documents/document-
 import { MessageActions } from "./message-actions";
 import { findImageMarkers } from "@/lib/chat/image-markers";
 
-export const DialogueContent = memo(function DialogueContent({ blocks, mode }: {
+export const DialogueContent = memo(function DialogueContent({ blocks, mode, artifactBodies }: {
   blocks: readonly ContentBlockV1[];
   mode: NativeRenderMode;
+  /** Exact bytes admitted on the same authenticated public child stream. */
+  artifactBodies?: ReadonlyMap<string, string>;
 }) {
   const prefix = useId();
   const figures = useRef(new Map<string, HTMLElement>());
@@ -41,11 +43,11 @@ export const DialogueContent = memo(function DialogueContent({ blocks, mode }: {
       </a>);
     }
     for (const block of blocks) {
-      if (block.kind === "artifact_ref") nodes.set(block.blockId, <DialogueArtifact artifact={block.artifact} mode={mode} />);
+      if (block.kind === "artifact_ref") nodes.set(block.blockId, <DialogueArtifact artifact={block.artifact} mode={mode} source={artifactBodies?.get(block.artifact.artifactId)} />);
       if (block.kind === "image_ref" && !photos.has(block.image.assetId)) {
         photos.add(block.image.assetId);
         const id = block.image.assetId;
-        nodes.set(block.blockId, <div className="dialogue-photo" id={`${prefix}-${id}`} tabIndex={-1}
+        nodes.set(block.blockId, <div className="dialogue-photo" data-rich-block="image" id={`${prefix}-${id}`} tabIndex={-1}
           ref={node => { if (node) figures.current.set(id, node); else figures.current.delete(id); }}>
           <ImagePolaroid image={block.image} selected={selected === id} onSelect={() => focus(id)} />
         </div>);
@@ -54,12 +56,13 @@ export const DialogueContent = memo(function DialogueContent({ blocks, mode }: {
         <p className="dialogue-citation"><DocumentLink href={formatDocumentLink(parseDocumentLink(block.ref) ?? { ref: block.ref }) ?? ""}>{block.label ?? block.ref}</DocumentLink></p>);
     }
     return nodes;
-  }, [blocks, mode, imageMarkers, content, prefix, focus, selected]);
+  }, [blocks, mode, artifactBodies, imageMarkers, content, prefix, focus, selected]);
   return <div className="conversation-prose"><DialogueMarkdown content={content} slots={slots} imageMarkers={imageMarkers}>{children}</DialogueMarkdown></div>;
 });
 
-export const DialogueUtterance = memo(function DialogueUtterance({ utterance, inReplyTo, onRegenerate }: {
+export const DialogueUtterance = memo(function DialogueUtterance({ utterance, artifactBodies, inReplyTo, onRegenerate }: {
   utterance: PublicUtterance;
+  artifactBodies?: ReadonlyMap<string, string>;
   inReplyTo?: string;
   onRegenerate?: () => void;
 }) {
@@ -67,7 +70,7 @@ export const DialogueUtterance = memo(function DialogueUtterance({ utterance, in
   const text = utterance.blocks.flatMap(block => block.kind === "markdown" ? [block.text] : []).join("\n\n");
   return <div className="dialogue-publication" data-public-utterance={utterance.utteranceId} data-public-seq={utterance.publicSeq}>
     <ConversationTurn role="assistant" metadata={inReplyTo ? t("inReplyTo", { text: inReplyTo }) : undefined}>
-      <DialogueContent blocks={utterance.blocks} mode="interactive" />
+      <DialogueContent blocks={utterance.blocks} mode="interactive" artifactBodies={artifactBodies} />
       {text && <MessageActions content={text} onRegenerate={onRegenerate} />}
     </ConversationTurn>
   </div>;

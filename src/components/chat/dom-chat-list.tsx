@@ -655,7 +655,7 @@ export function DomChatList({
   return (
     <div className={`conversation-stream-shell mx-auto flex h-full flex-col ${floatingComposer ? "" : "relative"}`}>
       {hasHistoryEntrance(items) && (
-        <div inert={contentInert || undefined}><HistoryEntrance /></div>
+        <div className="conversation-history-seat" inert={contentInert || undefined}><HistoryEntrance /></div>
       )}
       {/* The scroller's top/bottom padding — the MEASURED chrome and
           composer heights (px) plus the static tail pad; see

@@ -396,6 +396,7 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
   return (
     <div
       className={`native-html${surface === "paper" ? " native-html--paper" : ""}`}
+      data-rich-block="html"
       data-native-block={blockId}
       data-native-turn={identity.turnId}
       data-native-scope={scope}

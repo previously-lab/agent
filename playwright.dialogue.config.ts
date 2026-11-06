@@ -43,6 +43,8 @@ export default defineConfig({
       STORAGE: "local",
       PREVIOUSLY_E2E_PLAIN_DIR: "1",
       AFTRBREZ_DIALOGUE_PROVIDER_ROOT: E2E_DIALOGUE_PROVIDER_ROOT,
+      DIALOGUE_WORK_PREVIEW_DIAGNOSTICS: "1",
+      NEXT_PUBLIC_DIALOGUE_WORK_PREVIEW_DIAGNOSTICS: "1",
       DEEPSEEK_API_KEY: "previously-dialogue-offline-fixture",
       OPENAI_API_KEY: "",
       ANTHROPIC_API_KEY: "",

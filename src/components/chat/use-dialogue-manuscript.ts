@@ -1,10 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DialogueAccepted, DialoguePage, DialogueWork } from "@/lib/chat/dialogue-contract";
-import { emptyDialogueProjection, projectAcceptedInput, projectDialoguePage, type DialogueProjection } from "./dialogue-projection";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DialoguePage } from "@/lib/chat/dialogue-contract";
+import {
+  DialogueParentController,
+  parseDialogueAcceptedV2,
+  parseSubmittedUserMessage,
+  type DialogueAcceptedV2,
+} from "./dialogue-parent-stream";
+import { emptyDialogueProjection, mergeDialogueProjections, projectDialoguePage, type DialogueProjection } from "./dialogue-projection";
 
-type DialogueMode = "probing" | "legacy" | "dialogue";
+type DialogueMode = "legacy" | "dialogue";
+
+export type DialogueSubmission =
+  | { phase: "idle" | "submitting" | "failed" }
+  | { phase: "accepted"; workId: string };
 
 function codeOf(value: unknown) {
   return value && typeof value === "object" && "code" in value ? value.code : undefined;
@@ -12,131 +22,116 @@ function codeOf(value: unknown) {
 
 export class DialogueDisabled extends Error {}
 
-/** One scoped reader independent of work attempts. A rejected read leaves the
- * prefix and editor usable, and never changes an active session to legacy. */
+/** v2 sends and recovery use parent/child streams only. The old Git-backed
+ * projection is an optional, one-pass history read and never gates startup. */
 export function useDialogueManuscript(persona: string) {
-  const [mode, setMode] = useState<DialogueMode>("probing");
-  const enabled = useRef(false);
-  const opened = useRef(false);
-  const [expression, setExpression] = useState<DialoguePage["expression"]>("idle");
-  const expressionIntent = useRef(0);
-  const [projection, setProjection] = useState(emptyDialogueProjection);
-  const state = useRef(projection);
+  const [mode, setMode] = useState<DialogueMode>("dialogue");
+  const [expression] = useState<DialoguePage["expression"]>("idle");
+  const opened = useRef(true);
+  const [history, setHistory] = useState<DialogueProjection>(emptyDialogueProjection);
+  const [live, setLive] = useState<DialogueProjection>(emptyDialogueProjection);
+  const liveState = useRef(live);
   const [newPublications, setNewPublications] = useState(0);
-  const refresh = useRef<() => void>(() => {});
+  const [submission, setSubmission] = useState<DialogueSubmission>({ phase: "idle" });
+  const controller = useRef<DialogueParentController | null>(null);
   const lifetime = useRef<AbortController | null>(null);
-  const update = useCallback((next: DialogueProjection) => {
-    if (next === state.current) return;
-    state.current = next;
-    setProjection(next);
+  const updateLive = useCallback((next: DialogueProjection) => {
+    liveState.current = next;
+    setLive(next);
+    setSubmission(current => current.phase === "accepted" && next.works.get(current.workId)?.status !== "queued"
+      ? { phase: "idle" } : current);
   }, []);
 
   useEffect(() => {
     const scope = new AbortController();
     lifetime.current = scope;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let reading = false;
-    let readAgain = false;
-    let caughtUp = false;
-    let disabled = false;
-    let failures = 0;
-    const read = async () => {
-      if (scope.signal.aborted || disabled) return;
-      if (reading) { readAgain = true; return; }
-      clearTimeout(timer);
-      reading = true;
-      let immediate = false;
-      try {
-        const after = state.current.cursor;
-        const intent = expressionIntent.current;
-        const params = new URLSearchParams({ persona, after: String(after) });
-        const response = await fetch(`/api/chat/dialogue?${params}`, {
-          credentials: "same-origin", cache: "no-store", signal: AbortSignal.any([scope.signal, AbortSignal.timeout(5_000)]),
-        });
-        const payload = await response.json() as DialoguePage;
-        if (scope.signal.aborted) return;
-        if (!response.ok) {
-          if (!enabled.current && codeOf(payload) === "dialogue_disabled") {
-            disabled = true;
-            setMode("legacy");
+    const parent = new DialogueParentController({
+      persona,
+      signal: scope.signal,
+      onProjection: updateLive,
+      onPublication: () => setNewPublications(count => count + 1),
+    });
+    controller.current = parent;
+    parent.start();
+    const resume = () => parent.resume();
+    window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", resume);
+
+    const readHistory = async () => {
+      let projection = emptyDialogueProjection();
+      let hasMore = true;
+      while (hasMore && !scope.signal.aborted) {
+        try {
+          const params = new URLSearchParams({ persona, after: String(projection.cursor) });
+          const response = await fetch(`/api/chat/dialogue?${params}`, {
+            credentials: "same-origin", cache: "no-store",
+            signal: AbortSignal.any([scope.signal, AbortSignal.timeout(5_000)]),
+          });
+          const payload = await response.json() as DialoguePage;
+          if (scope.signal.aborted) return;
+          if (!response.ok) {
+            if (codeOf(payload) === "dialogue_disabled" && liveState.current.entries.length === 0) {
+              opened.current = false;
+              setMode("legacy");
+            }
             return;
           }
-          throw new Error("Dialogue unavailable");
+          const next = projectDialoguePage(projection, payload);
+          if (payload.hasMore && payload.cursor <= projection.cursor) return;
+          projection = next;
+          setHistory(next);
+          hasMore = payload.hasMore;
+        } catch {
+          return;
         }
-        const previous = state.current;
-        const next = projectDialoguePage(previous, payload);
-        if (payload.hasMore && payload.cursor <= after) throw new Error("Dialogue cursor did not advance");
-        enabled.current = true;
-        opened.current = true;
-        setMode("dialogue");
-        if (intent === expressionIntent.current) setExpression(payload.expression);
-        if (caughtUp && next.utterances.size > previous.utterances.size) setNewPublications(count => count + next.utterances.size - previous.utterances.size);
-        update(next);
-        caughtUp ||= !payload.hasMore;
-        failures = 0;
-        immediate = payload.hasMore;
-      } catch {
-        // The POST can still succeed while recovery is temporarily unavailable.
-        if (!scope.signal.aborted) { opened.current = true; setMode("dialogue"); }
-        failures++;
-      } finally {
-        reading = false;
-        if (!scope.signal.aborted && !disabled) {
-          const active = [...state.current.works.values()].some(work => work.status === "queued" || work.status === "running");
-          const delay = failures ? Math.min(10_000, 1_000 * 2 ** Math.min(failures, 4))
-            : document.hidden ? 8_000 : active ? 600 : 2_500;
-          timer = setTimeout(read, immediate || readAgain ? 0 : delay);
-        }
-        readAgain = false;
       }
     };
-    refresh.current = () => { void read(); };
-    document.addEventListener("visibilitychange", refresh.current);
-    window.addEventListener("online", refresh.current);
-    void read();
+    void readHistory();
     return () => {
       scope.abort();
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", refresh.current);
-      window.removeEventListener("online", refresh.current);
+      controller.current = null;
+      window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", resume);
     };
-  }, [persona, update]);
+  }, [persona, updateLive]);
 
-  const submit = useCallback(async (body: Record<string, unknown>): Promise<DialogueAccepted> => {
+  const submit = useCallback(async (body: Record<string, unknown>): Promise<DialogueAcceptedV2> => {
     const signal = lifetime.current?.signal;
-    const response = await fetch("/api/chat", {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, persona, dialogueVersion: 1 }), signal,
-    });
-    const payload = await response.json() as DialogueAccepted;
-    if (!response.ok) {
-      if (!enabled.current && codeOf(payload) === "dialogue_disabled") { setMode("legacy"); throw new DialogueDisabled(); }
-      throw new Error("Dialogue submission failed");
+    const userMessage = parseSubmittedUserMessage(body);
+    setSubmission({ phase: "submitting" });
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, persona, dialogueVersion: 2 }), signal,
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok) {
+        if (codeOf(payload) === "dialogue_disabled") {
+          opened.current = false;
+          setMode("legacy");
+          throw new DialogueDisabled();
+        }
+        throw new Error("Dialogue submission failed");
+      }
+      const acceptance = parseDialogueAcceptedV2(payload);
+      if (signal?.aborted) return acceptance;
+      if (!controller.current) throw new Error("Dialogue is unavailable");
+      opened.current = true;
+      setMode("dialogue");
+      controller.current.accept(acceptance, userMessage);
+      setSubmission({ phase: "accepted", workId: acceptance.workId });
+      return acceptance;
+    } catch (error) {
+      if (!signal?.aborted) setSubmission({ phase: error instanceof DialogueDisabled ? "idle" : "failed" });
+      throw error;
     }
-    if (payload.version !== 1 || !payload.input?.inputId || !payload.workId) throw new Error("Invalid dialogue acceptance");
-    if (signal?.aborted) return payload;
-    enabled.current = true;
-    opened.current = true;
-    setMode("dialogue");
-    const next = projectAcceptedInput(state.current, payload.input);
-    if (!next.works.has(payload.workId)) {
-      const work: DialogueWork = { workId: payload.workId, inputId: payload.input.inputId, userSeq: payload.input.userSeq, status: "queued", runId: payload.runId };
-      update({ ...next, works: new Map(next.works).set(work.workId, work) });
-    } else update(next);
-    refresh.current();
-    return payload;
-  }, [persona, update]);
-
-  const stop = useCallback(async (workId?: string) => {
-    const intent = ++expressionIntent.current;
-    const response = await fetch("/api/chat/dialogue/stop", {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona, ...(workId ? { workId } : {}) }), signal: lifetime.current?.signal,
-    });
-    if (!response.ok) throw new Error("Dialogue stop failed");
-    if (!workId && intent === expressionIntent.current) setExpression("paused");
-    refresh.current();
   }, [persona]);
 
-  return { mode, opened: opened.current, expression, projection, submit, stop, newPublications };
+  const stop = useCallback(async (workId?: string) => {
+    if (!controller.current) return;
+    await controller.current.stop(workId);
+  }, []);
+
+  const projection = useMemo(() => mergeDialogueProjections(history, live), [history, live]);
+  return { mode, opened: opened.current, expression, projection, submission, submit, stop, newPublications };
 }

@@ -6,6 +6,14 @@
   width: min(17rem, 46%);
   margin: 0 0 calc(var(--spacing) * 6) calc(var(--spacing) * 6);
 }
+.conversation-image-shelf {
+  float: none;
+  clear: both;
+  width: min(100%, 22rem);
+  max-width: 100%;
+  margin: 0 0 calc(var(--spacing) * 4);
+  overflow: hidden;
+}
 .conversation-image-stack {
   display: grid;
   padding: calc(var(--spacing) * 3);

@@ -2,7 +2,8 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { E2E_DIALOGUE_PROVIDER_ROOT, E2E_MEMORY_ROOT } from "./env";
+import { E2E_BASE_URL, E2E_DIALOGUE_PROVIDER_ROOT, E2E_MEMORY_ROOT } from "./env";
+import { readChatEvents } from "@/lib/chat/client-stream";
 import type { DialogueArtifactRef, DialoguePage, PublicUtterance } from "@/lib/chat/dialogue-contract";
 
 type Frame = Record<string, unknown> | "keepalive";
@@ -12,6 +13,7 @@ type Rule = {
   excludes?: string[];
   repeat?: boolean;
   gate?: string;
+  gateTimeoutMs?: number;
   finishReason?: string;
   frames: Frame[];
 };
@@ -54,7 +56,7 @@ function thinkingRule(token: string, attempt: string, workText: string, gate: st
   return { id: `thinking-${token}-${attempt}`, contains: ["finishThinking", token], gate, frames: [{ content: workText }] };
 }
 
-function expressionRule(token: string, attempt: string, resultId: string, text: string, blockIds: string[] = [], gate?: string): Rule {
+function expressionRule(token: string, attempt: string, resultId: string, text: string, blockIds: string[] = [], gate?: string, omitDecisions = false): Rule {
   if (gate) gates.add(gate);
   return {
     id: `expression-${token}-${attempt}`,
@@ -62,7 +64,7 @@ function expressionRule(token: string, attempt: string, resultId: string, text: 
     ...(gate ? { gate } : {}),
     frames: [{ content: JSON.stringify({
       sends: [{ text, sources: [{ resultId, productRevision: 1, claimId: "claim-1", mode: "finding" }], blockIds }],
-      decisions: [],
+      ...(omitDecisions ? {} : { decisions: [] }),
     }) }],
   };
 }
@@ -183,7 +185,135 @@ test("real accept, thinking, expression, records and regenerate keep one origina
   await page.screenshot({ path: testInfo.outputPath(`real-workflow-regenerate-${testInfo.project.name}.png`), animations: "disabled" });
 });
 
-test("real artifact authorization, exact bytes, expression reference and sandbox recovery", async ({ page }, testInfo) => {
+async function probeWorkStreamIdentity(page: Page, workId: string, persona: string) {
+  const data = await readDialogue(page.request, persona);
+  const runId = data.events.flatMap(event => event.type === "work.status" && event.work.workId === workId
+    ? [event.work.runId] : []).at(-1);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3_000);
+  try {
+    const query = new URLSearchParams({ persona, startIndex: "0", ...(runId ? { runId } : {}) });
+    const response = await fetch(`${E2E_BASE_URL}/api/chat/dialogue/work/${encodeURIComponent(workId)}/stream?${query}`, {
+      headers: { Accept: "text/event-stream", "Accept-Encoding": "identity" }, signal: controller.signal,
+    });
+    const headers = response.headers;
+    console.log(`[WorkPreviewHttp] ${JSON.stringify({ time: Date.now(), type: "node.identity.headers",
+      contentEncoding: headers.get("content-encoding") ?? "none", cacheControl: headers.get("cache-control") ?? "none" })}`);
+    if (!response.ok || !response.body) return;
+    const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, stream) {
+        console.log(`[WorkPreviewHttp] ${JSON.stringify({ time: Date.now(), type: "node.network.chunk", cursor: -1 })}`);
+        stream.enqueue(chunk);
+      },
+    }));
+    for await (const event of readChatEvents(body, controller.signal)) {
+      const cursor = "cursor" in event && typeof event.cursor === "number" ? event.cursor : -1;
+      console.log(`[WorkPreviewHttp] ${JSON.stringify({ time: Date.now(), type: `node.recv.${event.type}`, cursor })}`);
+      if (event.type === "tool") break;
+    }
+  } catch {
+    console.log(`[WorkPreviewHttp] ${JSON.stringify({ time: Date.now(), type: "node.stop", cursor: -1 })}`);
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+test("real acceptance feedback and safe work preview survive close and replay", async ({ page }, testInfo) => {
+  page.on("console", message => {
+    if (message.text().startsWith("[WorkPreviewBrowser]")) console.log(message.text());
+  });
+  page.on("response", response => {
+    if (!new URL(response.url()).pathname.endsWith("/stream")) return;
+    console.log(`[WorkPreviewHttp] ${JSON.stringify({ time: Date.now(), type: "browser.headers",
+      contentEncoding: response.headers()["content-encoding"] ?? "none", cacheControl: response.headers()["cache-control"] ?? "none" })}`);
+  });
+  const token = randomUUID();
+  const persona = `e2e-${token}`;
+  const userText = `Offline preview ${token}`;
+  const firstText = `SAFE_FIRST_${token}`;
+  const secondText = `SAFE_SECOND_${token}`;
+  const privateReasoning = `PRIVATE_REASONING_${token}`;
+  const rawToolPayload = `RAW_TOOL_PAYLOAD_${token}`;
+  const finalGate = `preview-final-${token}`;
+  const stopRequests: string[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === "/api/chat/dialogue/stop") stopRequests.push(request.url());
+  });
+  gates.add(finalGate);
+  const first: Rule[] = [
+    idleReflectionRule(),
+    analyzerRule(token, "preview"),
+    {
+      id: `thinking-${token}-preview-tool`, contains: ["finishThinking", token], finishReason: "tool_calls",
+      frames: [
+        { reasoning_content: privateReasoning },
+        { content: firstText },
+        toolFrame("currentTime", { secret: rawToolPayload }, `preview-time-${token}`),
+      ],
+    },
+    {
+      id: `thinking-${token}-preview-final`, contains: ["finishThinking", token], gate: finalGate, gateTimeoutMs: 90_000,
+      frames: [{ content: secondText }],
+    },
+  ];
+  await writeRules(first);
+  const inputId = await acceptThroughClient(page, userText, persona);
+  const accepted = page.locator(`[data-dialogue-input="${inputId}"]`);
+  await expect(accepted).toContainText(userText);
+  expect((await readDialogue(page.request, persona)).events.filter(event => event.type === "input.accepted")).toHaveLength(1);
+
+  const disclosure = page.locator(".dialogue-work-disclosure");
+  await expect(disclosure).toBeVisible();
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  const output = page.locator(`[data-dialogue-work="${inputId}"] .dialogue-work-output`);
+  await expect(output.locator("pre")).toHaveText(firstText);
+  await probeWorkStreamIdentity(page, inputId, persona);
+  await expect(output.locator(".dialogue-work-tool-name")).toHaveText("currentTime");
+
+  await expect(output).not.toContainText(privateReasoning);
+  await expect(output).not.toContainText(rawToolPayload);
+  await page.screenshot({ path: testInfo.outputPath(`real-work-preview-${testInfo.project.name}.png`), animations: "disabled" });
+
+  await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(output).toHaveCount(0);
+  expect(stopRequests).toEqual([]);
+  const held = await readDialogue(page.request, persona);
+  expect(held.events.some(event => event.type === "work.status" && event.work.workId === inputId && event.work.status === "running")).toBe(true);
+
+  await page.reload();
+  await expect(accepted).toContainText(userText);
+  await expect(page.locator(`[data-dialogue-input="${inputId}"]`)).toHaveCount(1);
+  await expect(disclosure).toBeVisible();
+  await disclosure.click();
+  await expect(output.locator("pre")).toHaveText(firstText);
+  await probeWorkStreamIdentity(page, inputId, persona);
+  await expect(output.locator(".dialogue-work-tool-name")).toHaveText("currentTime");
+  expect(stopRequests).toEqual([]);
+
+  const publicText = `PUBLIC_PREVIEW_${token}`;
+  const expression = expressionRule(token, "preview", `${inputId}:1`, publicText);
+  await writeRules([...first, expression]);
+  await release(finalGate);
+  await expect(page.locator("[data-public-utterance]").last()).toContainText(publicText);
+  const final = await readDialogue(page.request, persona);
+  const work = final.events.flatMap(event => event.type === "work.status" && event.work.workId === inputId ? [event.work] : []).at(-1);
+  expect(work?.runId).toBeTruthy();
+  const replay = await page.request.get(`/api/chat/dialogue/work/${encodeURIComponent(inputId)}/stream?persona=${encodeURIComponent(persona)}&runId=${encodeURIComponent(work!.runId!)}&startIndex=0`);
+  expect(replay.ok()).toBe(true);
+  const safeBody = await replay.text();
+  expect(safeBody).toContain(firstText);
+  expect(safeBody).toContain(secondText);
+  expect(safeBody).toContain("currentTime");
+  expect(safeBody.split(firstText)).toHaveLength(2);
+  expect(safeBody.split(secondText)).toHaveLength(2);
+  expect(safeBody).not.toContain(privateReasoning);
+  expect(safeBody).not.toContain(rawToolPayload);
+  expect(stopRequests).toEqual([]);
+});
+test("real artifact authorization, exact bytes, omitted decisions and sandbox recovery", async ({ page }, testInfo) => {
   const token = randomUUID();
   const persona = `e2e-${token}`;
   const userText = `Offline real artifact ${token}`;
@@ -196,7 +326,7 @@ test("real artifact authorization, exact bytes, expression reference and sandbox
   await writeRules(first);
   const inputId = await acceptThroughClient(page, userText, persona);
   const blockId = `${inputId}:artifact-1`;
-  const expression = expressionRule(token, "artifact", `${inputId}:1`, publicText, [blockId], expressionGate);
+  const expression = expressionRule(token, "artifact", `${inputId}:1`, publicText, [blockId], expressionGate, true);
   await writeRules([...first, expression]);
   await release(thinkingGate);
 
