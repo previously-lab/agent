@@ -68,7 +68,7 @@ for (const view of [
   { name: "reduced-motion", width: 390, height: 844, mobile: true, reduced: true },
 ]) test.describe(view.name, () => {
   test.use({ viewport: { width: view.width, height: view.height }, isMobile: view.mobile, hasTouch: view.mobile });
-  test("one fixed primary survives photo states, handoff, parallel sends and viewport changes", async ({ page }, info: TestInfo) => {
+  test("one editor-anchored primary survives photo states, scrolling, handoff and parallel sends", async ({ page }, info: TestInfo) => {
     await clearEpisodic(); await installViewportFixture(page);
     await page.emulateMedia({ reducedMotion: view.reduced ? "reduce" : "no-preference" });
     const out = process.env.AFTRBREZ_QA_OUTPUT ?? info.outputDir;
@@ -84,7 +84,8 @@ for (const view of [
     });
     await page.goto("/zh/app");
     await expect(page.locator("[data-primary-placeholder]")).toBeVisible();
-    await expect(page.locator("body > [data-conversation-controls]")).toHaveCount(1);
+    await expect(page.locator("body > [data-conversation-controls]")).toHaveCount(0);
+    await expect(page.locator("[data-conversation-controls]")).toHaveCSS("position", "relative");
     const loadingBox = (await primary(page).boundingBox())!;
     if (view.name === "phone-zh") await page.screenshot({ path: path.join(out, "mobile-editor-phone-zh-loading.png"), style: "nextjs-portal { visibility: hidden !important; }" });
     releaseArrival();
@@ -92,15 +93,32 @@ for (const view of [
     await expect(primary(page)).toHaveCount(1); await expect(primary(page)).toBeDisabled();
     const original = await primary(page).elementHandle();
     const baseline = (await primary(page).boundingBox())!;
-    for (const key of ["x", "y", "width", "height"] as const) expect(Math.abs(baseline[key] - loadingBox[key]), `loading: ${key}`).toBeLessThan(1);
     const metrics: { phase: string; primary: Box; photos: Box[] }[] = [{ phase: "loading", primary: loadingBox, photos: [] }];
-    async function checkpoint(phase: string, shifted = false) {
+    async function checkpoint(phase: string) {
       expect(await primary(page).evaluate((el, before) => el === before, original)).toBe(true);
+      // In-flow controls may begin beyond the fold after photos or prose grow;
+      // ordinary scrolling must reveal them without changing their anchor.
+      await primary(page).scrollIntoViewIfNeeded();
       const box = (await primary(page).boundingBox())!;
-      if (!shifted) for (const key of ["x", "y", "width", "height"] as const) expect(Math.abs(box[key] - baseline[key]), `${phase}: ${key}`).toBeLessThan(1);
-      const viewport = await page.evaluate(() => ({ width: visualViewport!.width, bottom: visualViewport!.offsetTop + visualViewport!.height }));
+      const anchor = await primary(page).evaluate(el => {
+        const controls = el.closest("[data-conversation-controls]")!;
+        const composer = el.closest("[data-manuscript-composer]")!;
+        const input = composer.querySelector("[data-manuscript-input]")!;
+        const inputBox = input.getBoundingClientRect();
+        const composerBox = composer.getBoundingClientRect();
+        const primaryBox = el.getBoundingClientRect();
+        return {
+          position: getComputedStyle(controls).position,
+          bodyPortal: controls.parentElement === document.body,
+          belowInput: primaryBox.y >= inputBox.bottom,
+          rightDelta: Math.abs(primaryBox.right - composerBox.right),
+          insideComposer: primaryBox.bottom <= composerBox.bottom,
+        };
+      });
+      expect(anchor, `${phase}: editor anchor`).toEqual({ position: "relative", bodyPortal: false, belowInput: true, rightDelta: 0, insideComposer: true });
+      const viewport = page.viewportSize()!;
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.width - 8);
-      expect(box.y + box.height).toBeLessThanOrEqual(viewport.bottom - 8);
+      expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
       expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
       await expect(page.locator("[data-companion-pod]:visible")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -194,11 +212,39 @@ for (const view of [
     for (let n = 0; n < 2; n++) expect(Math.abs(uploading[n].height - ready[n].height)).toBeLessThan(3);
     expect(await editor(page).evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     if (view.reduced) await expect(draftPhotos(page).last()).toHaveCSS("animation-name", "none");
+
+    // A long draft reserves a real controls row. Scrolling moves the editor and
+    // primary together; there is no fixed seat trying to hold the viewport.
+    await editor(page).fill(`${prose}\n\n${Array.from({ length: 10 }, (_, n) => `长正文段落 ${n + 1}：输入区继续自然增长，发送控件始终留在正文之后。`).join("\n\n")}`);
+    await checkpoint("long-draft");
+    const field = page.locator("[data-conversation-field]");
+    const beforeScroll = await page.evaluate(() => ({
+      scrollTop: document.querySelector("[data-conversation-field]")!.scrollTop,
+      primaryY: document.querySelector("[data-conversation-primary]")!.getBoundingClientRect().y,
+      editorY: document.querySelector("[data-manuscript-input]")!.getBoundingClientRect().y,
+    }));
+    await field.evaluate(el => { el.scrollTop = Math.max(0, el.scrollTop - Math.min(240, el.clientHeight / 3)); });
+    await expect.poll(() => field.evaluate(el => el.scrollTop)).toBeLessThan(beforeScroll.scrollTop);
+    const afterScroll = await page.evaluate(() => ({
+      primaryY: document.querySelector("[data-conversation-primary]")!.getBoundingClientRect().y,
+      editorY: document.querySelector("[data-manuscript-input]")!.getBoundingClientRect().y,
+    }));
+    expect(afterScroll.primaryY).toBeGreaterThan(beforeScroll.primaryY);
+    expect(Math.abs((afterScroll.primaryY - afterScroll.editorY) - (beforeScroll.primaryY - beforeScroll.editorY))).toBeLessThan(1);
+    const scrolledShot = path.join(out, `mobile-editor-${view.name}-scrolled.png`);
+    await page.screenshot({ path: scrolledShot, style: "nextjs-portal { visibility: hidden !important; }" });
+    await info.attach("scrolled", { path: scrolledShot, contentType: "image/png" });
+    await field.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await expect.poll(async () => (await primary(page).boundingBox())!.y).toBe(beforeScroll.primaryY);
+
+    // Synthetic visualViewport events must not move the in-flow control. Real
+    // mobile keyboards keep using the browser's native visual scrolling.
+    const keyboardBaseline = (await primary(page).boundingBox())!.y;
     await page.evaluate(() => (window as unknown as { setFixtureViewport: (h: number, top: number) => void }).setFixtureViewport(innerHeight * .55, 30));
-    await expect.poll(async () => (await primary(page).boundingBox())!.y).toBeLessThan(baseline.y - 100);
-    await checkpoint("simulated-keyboard", true);
+    await expect.poll(async () => (await primary(page).boundingBox())!.y).toBe(keyboardBaseline);
+    await checkpoint("simulated-keyboard");
     await page.evaluate(() => (window as unknown as { setFixtureViewport: (h: number, top: number) => void }).setFixtureViewport(innerHeight, 0));
-    await expect.poll(async () => (await primary(page).boundingBox())!.y).toBe(baseline.y);
+    await expect.poll(async () => (await primary(page).boundingBox())!.y).toBe(keyboardBaseline);
     await installHeldChat(page);
     await primary(page).click();
     await expect(primary(page)).toHaveAttribute("data-primary-action", "stop");

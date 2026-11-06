@@ -275,9 +275,9 @@ test.describe("manuscript editing integration", () => {
       contentType: "image/png",
     });
 
-    // The new viewport control seat remains reachable while prose grows.
+    // The editor's own control row remains reachable while prose grows.
     await expect(toolbar).toBeVisible();
-    await expect(toolbar).toHaveCSS("position", "fixed");
+    await expect(toolbar).toHaveCSS("position", "relative");
     await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]:visible")).toBeVisible();
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();

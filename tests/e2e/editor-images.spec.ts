@@ -41,7 +41,7 @@ for (const view of [
     expect(await input(page).evaluate((el, before) => el === before, original)).toBe(true);
     await expect(composer(page)).toHaveCSS("box-shadow", "none");
     await expect(composer(page)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(page.locator("[data-conversation-controls]")).toHaveCSS("position", "fixed");
+    await expect(page.locator("[data-conversation-controls]")).toHaveCSS("position", "relative");
     await expect(page.locator("[data-composer-send]")).toBeEnabled();
     await expect(page.locator("[data-composer-keyboard-caption]")).toContainText("Enter to send");
     const toolbarBox = await page.locator("[data-conversation-primary]").boundingBox();

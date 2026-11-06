@@ -159,7 +159,7 @@
 .conversation-composer--manuscript.composer-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "byline" "writing";
+  grid-template-areas: "byline" "writing" "controls";
   gap: 0.7rem;
   padding-block: 1.35rem calc(var(--spacing) * 24 + env(safe-area-inset-bottom, 0px));
 }

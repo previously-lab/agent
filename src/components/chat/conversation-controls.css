@@ -2,13 +2,12 @@
   --conversation-action-size: calc(var(--spacing) * 12);
   --conversation-action-gap: calc(var(--spacing) * 2);
 }
-.conversation-controls-seat[data-controls-form="viewport"] {
-  position: fixed;
-  z-index: 50;
-  inset-inline-end: calc(var(--conversation-viewport-right, 0px) + max(calc(var(--spacing) * 4), env(safe-area-inset-right, 0px)));
-  bottom: calc(var(--conversation-viewport-bottom, 0px) + max(calc(var(--spacing) * 4), env(safe-area-inset-bottom, 0px)));
+.conversation-controls-seat[data-controls-form="editor"] {
+  position: relative;
+  grid-area: controls;
   inline-size: var(--conversation-action-size);
   block-size: var(--conversation-action-size);
+  margin-inline-start: auto;
   pointer-events: none;
 }
 .conversation-primary-action {
@@ -27,10 +26,10 @@
 .conversation-primary-action:disabled { opacity: .55; }
 .conversation-primary-action:focus-visible,
 .conversation-controls-seat button:focus-visible { outline: 2px solid var(--ring); outline-offset: calc(var(--spacing)); }
-.conversation-controls-seat[data-controls-form="viewport"] .conversation-composer-toolbar {
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar {
   display: contents;
 }
-.conversation-controls-seat[data-controls-form="viewport"] .conversation-composer-tools-trigger {
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-tools-trigger {
   position: absolute;
   inset-inline-end: calc(100% + var(--conversation-action-gap));
   bottom: 0;
@@ -44,7 +43,7 @@
 .conversation-controls-seat[data-controls-exposed] .conversation-composer-tools-trigger,
 .conversation-controls-seat:focus-within .conversation-composer-tools-trigger,
 .conversation-composer-tools-trigger:focus-visible { opacity: 1; pointer-events: auto; }
-.conversation-controls-seat[data-controls-form="viewport"] .conversation-composer-toolbar-left {
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar-left {
   display: flex;
   gap: var(--spacing);
   position: absolute;
@@ -52,7 +51,7 @@
   bottom: calc(100% + var(--conversation-action-gap));
   width: max-content;
   max-inline-size: calc(100vw - var(--spacing) * 8);
-  max-block-size: calc(var(--conversation-viewport-height, 100dvh) - var(--conversation-action-size) - var(--spacing) * 10);
+  max-block-size: calc(100dvh - var(--conversation-action-size) - var(--spacing) * 10);
   overflow: auto;
   padding: var(--spacing);
   border: 1px solid var(--border);

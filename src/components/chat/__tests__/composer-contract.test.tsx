@@ -50,7 +50,7 @@ describe("the single manuscript input contract", () => {
     expect(html.match(/data-manuscript-input/g)).toHaveLength(1);
     expect(html.match(/contentEditable="true"/g)).toHaveLength(1);
     expect(html).not.toContain("<textarea");
-    expect(html).toContain('data-controls-form="viewport"');
+    expect(html).toContain('data-controls-form="editor"');
     expect(html.match(/data-conversation-primary/g)).toHaveLength(1);
     expect(html).toContain('data-composer-mini-toolbar');
     expect(html).toContain('data-composer-tools-trigger');
