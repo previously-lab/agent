@@ -1,5 +1,6 @@
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueResult } from "@/lib/dialogue/types";
+import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
 import type { ImageAttachmentEvidence, ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { COMMIT_PREFIX } from "@/lib/chat/commit-contract";
 import { judgeSliceLanding, type SliceLandingConfig } from "@/lib/chat/slice-landing";
@@ -17,12 +18,14 @@ import { deterministicSliceMark } from "./slice-mark";
 import { parseSliceId } from "./turn-parser";
 import type { TimeSlice } from "./types";
 import { dialogueResearchMaterialId, encodeDialogueResearchRecord, makeDialogueResearchRecord, publicRecordText, publicRecordTurn, readDialogueResearchRecords } from "./dialogue-record";
+import { archiveDialogueArtifacts } from "./dialogue-artifact-archive";
 
 export interface DialogueProjectionInput {
   inputs: Array<{ input: DialogueInput; turnId: string; sliceId?: string; images?: ImageAttachmentEvidence[];
     previously?: string; reflectUserOnly?: boolean }>;
   result?: DialogueResult;
   utterance?: PublicUtterance;
+  typedArtifacts?: DialogueTypedArtifact[];
   useGithub: boolean;
   useDemo?: boolean;
   owner: string;
@@ -68,6 +71,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
   if (input.useDemo) return null;
   return withSliceLock("summary:local-storage", () => withGitHubReadView(async () => {
     const batch = createBatch();
+    await archiveDialogueArtifacts(input.utterance, input.typedArtifacts, batch);
     const entries = [...input.inputs].sort((a, b) => a.input.userSeq - b.input.userSeq);
     if (!entries.length) throw new Error("A dialogue projection needs its accepted source input");
     if (entries.some((entry) => !/^[A-Za-z0-9_-]{1,128}$/.test(entry.turnId))) throw new Error("Invalid source turn identity");

@@ -19,6 +19,66 @@ import { getRun } from "workflow/api";
 import { createMixedStreamTransform } from "../../mixed-stream-transform";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
+const NATIVE_DIALOGUE_WORKFLOW = "/dialogue-workflow//dialogueWorkflow";
+const NATIVE_STREAM_IDLE_MS = 1_000;
+
+/** Resume a v2 child whose first GET opened before any chunk existed. */
+function resumeNativeDialogueStream(
+  run: ReturnType<typeof getRun>,
+  initial: ReturnType<ReturnType<typeof getRun>["getReadable"]>,
+  startIndex: number,
+  signal: AbortSignal,
+): ReadableStream<unknown> {
+  return new ReadableStream<unknown>({
+    async start(controller) {
+      let readable = initial;
+      let reader = readable.getReader();
+      let nextIndex = startIndex;
+      let pending: Promise<ReadableStreamReadResult<unknown>> | undefined;
+      let closed = false;
+      const abort = () => { closed = true; void reader.cancel().catch(() => undefined); };
+      if (signal.aborted) closed = true;
+      else signal.addEventListener("abort", abort, { once: true });
+      try {
+        while (!closed) {
+          pending ??= reader.read();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const idle = new Promise<"idle">((resolve) => { timer = setTimeout(() => resolve("idle"), NATIVE_STREAM_IDLE_MS); });
+          const outcome = await Promise.race([pending.then((result) => ({ result }) as const), idle]);
+          clearTimeout(timer);
+          if (outcome === "idle") {
+            const tail = await readable.getTailIndex();
+            if (tail >= nextIndex) {
+              await reader.cancel().catch(() => undefined);
+              try { reader.releaseLock(); } catch { /* Already released. */ }
+              readable = run.getReadable({ startIndex: nextIndex });
+              reader = readable.getReader();
+              pending = undefined;
+              continue;
+            }
+            const status = await run.status;
+            if (status === "completed" || status === "failed" || status === "cancelled") {
+              await reader.cancel().catch(() => undefined);
+              break;
+            }
+            continue;
+          }
+          pending = undefined;
+          if (outcome.result.done) break;
+          nextIndex++;
+          controller.enqueue(outcome.result.value);
+        }
+        if (!closed) controller.close();
+      } catch (error) {
+        if (!closed) controller.error(error);
+      } finally {
+        signal.removeEventListener("abort", abort);
+        try { reader.releaseLock(); } catch { /* Already released. */ }
+      }
+    },
+  });
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ runId: string }> }
@@ -81,9 +141,39 @@ export async function GET(
       });
     }
 
-    const readable = run.getReadable({ startIndex });
-    const tailIndex = await readable.getTailIndex();
+    const initialReadable = run.getReadable({ startIndex });
+    const tailIndex = await initialReadable.getTailIndex();
+    if (status === "completed" && tailIndex < 0) {
+      const result = await run.returnValue as { kind?: unknown; status?: unknown; error?: unknown };
+      if (result.kind === "dialogue-reply"
+        && (result.status === "admission_timeout" || result.status === "not_admitted")) {
+        const terminalStream = new ReadableStream<UIMessageChunk>({
+          start(controller) {
+            controller.enqueue({
+              type: "data-turn-status",
+              id: "turn-status-terminal",
+              data: {
+                status: "error",
+                updatedAt: new Date().toISOString(),
+                error: "The reply could not be admitted by its parent run. Reconnect or send again.",
+              },
+            } as UIMessageChunk);
+            controller.enqueue({ type: "finish-step" } as UIMessageChunk);
+            controller.enqueue({ type: "finish" } as UIMessageChunk);
+            controller.close();
+          },
+        });
+        return createUIMessageStreamResponse({
+          stream: terminalStream.pipeThrough(createMixedStreamTransform()),
+        });
+      }
+    }
 
+    const liveNativeDialogue = (status === "pending" || status === "running")
+      && (await run.workflowName).includes(NATIVE_DIALOGUE_WORKFLOW);
+    const readable = liveNativeDialogue
+      ? resumeNativeDialogueStream(run, initialReadable, startIndex, request.signal)
+      : initialReadable;
     return createUIMessageStreamResponse({
       // Same transform as the POST path: the raw run stream mixes our
       // UIMessageChunks (data-flash / data-reasoning / lifecycle) with the

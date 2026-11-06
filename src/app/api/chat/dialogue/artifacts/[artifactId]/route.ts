@@ -11,6 +11,7 @@ import {
   guardDialogueRead,
   resolveDialogueScope,
 } from "@/lib/dialogue/runtime";
+import { readArchivedDialogueArtifact } from "@/lib/episodic/dialogue-artifact-archive";
 
 export async function GET(
   request: Request,
@@ -26,10 +27,11 @@ export async function GET(
     const persona = new URL(request.url).searchParams.get("persona");
     const store = await getDialogueStore();
     const found = await store.artifact(resolveDialogueScope(persona), artifactId);
-    if (!found) {
+    const archived = found ? null : await readArchivedDialogueArtifact(artifactId);
+    if (!found && !archived) {
       return Response.json({ code: "dialogue_not_found", error: "Artifact unavailable" }, { status: 404 });
     }
-    return Response.json(found);
+    return Response.json(found ?? archived);
   } catch (error) {
     return dialogueResponseError(error);
   }

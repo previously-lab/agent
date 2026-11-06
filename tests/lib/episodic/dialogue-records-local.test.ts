@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueResult } from "@/lib/dialogue/types";
+import { createHash } from "node:crypto";
 import { legacySlicePartPath, slicePartPath } from "@/lib/episodic/paths";
 
 vi.mock("@/lib/tools/staged-images", () => ({ settleStagedImages: vi.fn(async () => undefined) }));
@@ -46,6 +47,33 @@ function payload() {
 }
 
 describe("dialogue records on a plain local directory", () => {
+  it("serves archived native HTML after its child Workflow is gone without inlining it into core", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { readArchivedDialogueArtifact } = await import("@/lib/episodic/dialogue-artifact-archive");
+    const { readSlicePart } = await import("@/lib/episodic/paths");
+    const { GET } = await import("@/app/api/chat/dialogue/artifacts/[artifactId]/route");
+    const body = "<!doctype html>\r\n<p>Archived interactive HTML</p>\r\n";
+    const artifact = {
+      artifactId: "c".repeat(64), sourceOwnerId: "wrun_expired", revision: 1 as const,
+      sha256: createHash("sha256").update(body).digest("hex"), byteSize: Buffer.byteLength(body),
+      kind: "native_html" as const, mediaType: "text/html",
+    };
+    const utterance: PublicUtterance = {
+      utteranceId: "public-native", publicSeq: 2, committedAt: stamp, inputIds: ["u1"], sourceResults: [],
+      blocks: [{ kind: "artifact_ref", blockId: "widget", artifact }],
+    };
+    await projectDialogueRecords({ ...payload(), utterance,
+      typedArtifacts: [{ blockId: "widget", artifact, body }] });
+
+    // No Workflow exists in this test: both reads are exclusively from file memory.
+    await expect(readArchivedDialogueArtifact(artifact.artifactId)).resolves.toEqual({ artifact, body });
+    const response = await GET(new Request(`http://localhost/api/chat/dialogue/artifacts/${artifact.artifactId}?persona=user`),
+      { params: Promise.resolve({ artifactId: artifact.artifactId }) });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ artifact, body });
+    expect(await readSlicePart("2026-11-06-0300", "core")).not.toContain("Archived interactive HTML");
+  });
+
   it("T07/T09/T15: restores accepted input and separates internal results from actual public speech without Git", async () => {
     const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
     const { loadSlice } = await import("@/lib/episodic/manager");

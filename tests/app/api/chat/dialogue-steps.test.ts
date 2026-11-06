@@ -216,6 +216,40 @@ describe("dialogue steps over the real local store", () => {
     expect(result!.product.inputScope.taskRef).toBeUndefined();
   });
 
+  it("publishes without an explicit empty decisions array and unlocks the committed artifact idempotently", async () => {
+    const accepted = await accept("Show the offline calculator.");
+    const launch = { scopeKey: scope, workId: accepted.workId };
+    await beginDialogueWorkStep(launch, "run-a");
+    const html = "<!doctype html>\n<html><body>Offline calculator</body></html>\n";
+    const report = { findings: [{ text: "Use the calculator.", kind: "conversation", evidenceIds: [] }] };
+    const result = await completeDialogueWorkStep({
+      launch, inputIds: [accepted.workId], runId: "run-a", sliceId,
+      messages: workMessages(report), text: `Before.\n\n\`\`\`html live\n${html}\`\`\`\n\nAfter.`, report,
+      interrupted: false,
+    });
+    const block = result!.blocks.find((entry) => entry.kind === "artifact_ref");
+    if (!block || block.kind !== "artifact_ref") throw new Error("Expected a stored artifact reference");
+    expect(await store.artifact(scope, block.artifact.artifactId)).toBeNull();
+
+    vi.mocked(requestDeepSeek).mockResolvedValue({
+      message: { role: "assistant", content: JSON.stringify({
+        sends: [{ text: "Here is the calculator.", sources: [{ resultId: result!.resultId, productRevision: 1,
+          claimId: "claim-1", mode: "finding" }], blockIds: [block.blockId] }],
+      }) },
+      toolCalls: [], finishReason: "stop", usage,
+    });
+    const fence = await acquireExpressionStep(scope, "artifact-owner");
+    const round = await expressionRoundStep(scope, fence!, "artifact-owner");
+    expect(round!.saved.plan.decisions).toEqual([]);
+    const published = await publishExpressionSegmentStep(scope, fence!, round!.saved, 0, round!.saved.basis.publicHighWater);
+    expect(published.status).toBe("committed");
+    expect((await store.artifact(scope, block.artifact.artifactId))?.body).toBe(html);
+
+    const replay = await publishExpressionSegmentStep(scope, fence!, round!.saved, 0, round!.saved.basis.publicHighWater);
+    expect(replay.utterances).toEqual(published.utterances);
+    await settleExpressionPlanStep(scope, fence!, round!.saved.id, false);
+    await releaseExpressionStep(scope, fence!, round!.observedWake);
+  });
   it("drains a two-segment plan with per-segment publication and a clean release", async () => {
     const accepted = await accept("Two things, please.");
     const launch = { scopeKey: scope, workId: accepted.workId };

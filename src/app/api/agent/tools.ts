@@ -15,6 +15,7 @@ import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
+import type { DialogueOfferContext } from "@/lib/dialogue/transport";
 
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { currentViewSchema } from "@/lib/chat/current-view";
@@ -42,6 +43,7 @@ import {
   viewImageExecute,
   writeCaseExecute,
   startLongTaskExecute,
+  offerReplyExecute,
   noteForSedimentExecute,
   queryTasksExecute,
   createTaskExecute,
@@ -97,6 +99,8 @@ export const toolContextSchema = z.object({
   turnId: z.string().min(1),
   readScopeId: z.string().min(1),
   currentUserText: z.string(),
+  // Server-owned Workflow offer context. Opaque here to preserve the complete nested payload.
+  dialogueOffer: z.custom<DialogueOfferContext>((value) => !!value && typeof value === "object", "Invalid dialogue offer context").optional(),
   // Sanitized visual context only. Its nested schemas are strict, so a malformed
   // snapshot is rejected rather than stripped into an apparently valid view.
   view: currentViewSchema.optional(),
@@ -936,6 +940,15 @@ export const chatTools = {
   }),
 };
 
+export const offerReplyTool = tool({
+  description:
+    "Offer a useful partial or final result to the user-facing dialogue. Call as soon as the result is useful; you may continue working and offer another distinct result later. This starts delivery and returns immediately without waiting for the reply to finish. Pass the result itself, not a status acknowledgment. Complete html live fences are carried unchanged as typed artifacts.",
+  inputSchema: z.object({
+    text: z.string().max(200_000).refine((text) => text.trim().length > 0, "text must not be blank"),
+  }).strict(),
+  contextSchema: toolContextSchema,
+  execute: offerReplyExecute,
+});
 /** Cloud and local BYOK share the same tool surface. */
 export function getChatTools(): typeof chatTools { return chatTools; }
 

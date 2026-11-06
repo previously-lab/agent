@@ -10,7 +10,8 @@ const schema = z.object({
     sources: z.array(z.object({ resultId: id, productRevision: z.number().int().positive(), claimId: id, mode: z.enum(["finding", "status"]) }).strict()).min(1).max(8),
     blockIds: z.array(id).max(12),
   }).strict()).max(4),
-  decisions: z.array(z.object({ resultId: id, productRevision: z.number().int().positive(), kind: z.literal("deferred") }).strict()).max(8),
+  // An empty defer set is semantically optional; do not discard valid sends when the model omits it.
+  decisions: z.array(z.object({ resultId: id, productRevision: z.number().int().positive(), kind: z.literal("deferred") }).strict()).max(8).default([]),
 }).strict();
 
 export function expressionText(text: string, max: number): string {

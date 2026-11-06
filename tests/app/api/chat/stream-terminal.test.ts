@@ -72,6 +72,31 @@ describe("GET /api/chat/[runId]/stream — terminal runs", () => {
     );
   });
 
+  it("resumes a native dialogue GET that opened before its first chunk", async () => {
+    vi.useFakeTimers();
+    try {
+      let attachments = 0;
+      const pendingReadable = new ReadableStream<unknown>();
+      Object.assign(pendingReadable, { getTailIndex: async () => 0 });
+      const readyReadable = new ReadableStream<unknown>({
+        start(controller) {
+          controller.enqueue({ type: "text-delta", id: "text", delta: "first" });
+          controller.enqueue({ type: "finish" });
+          controller.close();
+        },
+      });
+      Object.assign(readyReadable, { getTailIndex: async () => 1 });
+      workflowApi.getRun.mockReturnValue({
+        status: Promise.resolve("running"),
+        workflowName: Promise.resolve("workflow//./src/app/api/chat/dialogue-workflow//dialogueWorkflow"),
+        getReadable: () => ++attachments === 1 ? pendingReadable : readyReadable,
+      });
+      const res = await call("native-child");
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(await res.text()).toContain("first");
+      expect(attachments).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
   it("a completed run still returns its durable stream (no terminal frame)", async () => {
     const chunks: unknown[] = [
       { type: "text-delta", id: "t1", delta: "hello" },

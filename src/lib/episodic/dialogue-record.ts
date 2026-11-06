@@ -11,6 +11,10 @@ const at = z.string().datetime({ offset: true });
 const artifact = z.object({ artifactId: id, sourceOwnerId: id, revision: z.literal(1), sha256: hash,
   kind: z.enum(["native_html", "document"]), mediaType: z.string().max(120), byteSize: seq,
   summary: z.string().max(4000).optional(), width: seq.optional(), height: seq.optional() }).strict();
+export function parseDialogueArtifactRef(value: unknown): DialogueArtifactRef | null {
+  const parsed = artifact.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 const contentBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("markdown"), blockId: id, text: z.string().max(64_000)
     .refine((text) => !parseNativeSections(text).some((section) => section.kind === "native"), "Native HTML belongs in an artifact reference") }).strict(),

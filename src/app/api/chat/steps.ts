@@ -704,7 +704,7 @@ export async function housekeeping(
   // (D10). The registry is an ENHANCER, never a blocker: a world without
   // native attributes or a transient list failure just means no note.
   let parallelSiblings: number | undefined;
-  if (!input.useDemo) {
+  if (!input.useDemo && input.dialogue?.transport !== "workflow-v2") {
     try {
       const ownId = getWorkflowMetadata().workflowRunId;
       await setAttributes({

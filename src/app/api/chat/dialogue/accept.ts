@@ -1,14 +1,11 @@
 /**
- * Dialogue acceptance — the POST /api/chat branch taken when the client
- * stamps dialogueVersion: 1. The input is persisted into the scoped control
- * store BEFORE anything answers (the browser lane is not authoritative), the
- * work-start intent rides the durable outbox, and only then does the API
- * return the accepted identity. Double submits and lost acknowledgements
- * converge on the same inputId/workId instead of minting new business events.
+ * Native dialogue acceptance. Request preparation is the only work before the
+ * thinking Workflow starts; Workflow owns every runtime ID and recovery path.
  */
 import { after } from "next/server";
 import type { UIMessage } from "@/lib/chat/protocol";
 import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
+import type { DialogueInput } from "@/lib/chat/dialogue-contract";
 import type { ImageReservation } from "@/lib/tools/staged-images";
 import { withVerifiedImages } from "@/lib/tools/chat-image-input";
 import {
@@ -16,9 +13,15 @@ import {
   getDialogueStore,
   resolveDialogueScope,
 } from "@/lib/dialogue/runtime";
+import { digest } from "@/lib/dialogue/artifacts";
 import { DialogueConflict } from "@/lib/dialogue/store";
-import { prepareTurnInput, type StartTurnArgs } from "../start-turn";
-import { dispatchDialogueDueScopes } from "./dispatch-host";
+import { dispatchDialogueDueScopes, ensureDialogueDispatch } from "./dispatch-host";
+import {
+  DIALOGUE_THOUGHTS_NAMESPACE,
+  DIALOGUE_TRANSPORT,
+  type DialogueAcceptedV2,
+} from "@/lib/dialogue/transport";
+import { prepareTurnInput, startPreparedTurn, type StartTurnArgs } from "../start-turn";
 
 export interface AcceptDialogueArgs extends StartTurnArgs {
   persona: unknown;
@@ -29,9 +32,74 @@ export interface AcceptDialogueArgs extends StartTurnArgs {
   reservation: ImageReservation;
 }
 
+export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Response> {
+  let scope: string;
+  try {
+    scope = resolveDialogueScope(args.persona);
+  } catch (error) {
+    await args.reservation.release().catch((cleanup) => console.error("[Images] reservation rollback needs recovery", cleanup));
+    return dialogueResponseError(error);
+  }
+
+  const prepared = await prepareTurnInput({
+    ...args,
+    messages: args.messages,
+    ...(args.verifiedImages.length ? { verifiedImages: args.verifiedImages } : {}),
+  });
+  if (!prepared.clientMessageId) {
+    await args.reservation.release().catch((cleanup) => console.error("[Images] reservation rollback needs recovery", cleanup));
+    return Response.json({ error: "A client message id is required for dialogue acceptance" }, { status: 400 });
+  }
+
+  const regenerating = args.regenerate && typeof args.dialogueInputId === "string" && !!args.dialogueInputId;
+  const sourceInputId = regenerating
+    ? args.dialogueInputId as string
+    : digest(JSON.stringify([scope, prepared.clientMessageId])).slice(0, 24);
+  const workId = regenerating
+    ? digest(JSON.stringify([scope, "regenerate", prepared.clientMessageId])).slice(0, 24)
+    : sourceInputId;
+  const input: DialogueInput = {
+    inputId: sourceInputId,
+    clientMessageId: prepared.clientMessageId,
+    userSeq: 1,
+    eventSeq: 1,
+    acceptedAt: prepared.startedAtIso,
+    text: prepared.lastUserMessage,
+    ...(args.verifiedImages.length
+      ? { attachments: args.verifiedImages.map((image) => image.snapshot) }
+      : {}),
+    ...(prepared.documentContext?.length ? { documentContext: prepared.documentContext } : {}),
+  };
+  const launch = {
+    ...prepared,
+    turnId: sourceInputId,
+    dialogue: {
+      scopeKey: scope,
+      workId,
+      transport: DIALOGUE_TRANSPORT,
+      sourceInputId,
+    },
+  };
+
+  const run = await startPreparedTurn(launch);
+  // The accepted Workflow owns the verified bytes and the native source input.
+  await args.reservation.confirm().catch((error) =>
+    console.error("[Images] accepted turn confirmation needs recovery", { runId: run.runId, error }));
+  const parentRunId = run.runId;
+  const response: DialogueAcceptedV2 = {
+    version: 2,
+    parentRunId,
+    runId: parentRunId,
+    sourceInputId,
+    workId,
+    input,
+    offersUrl: `/api/chat/${encodeURIComponent(parentRunId)}/offers`,
+    thoughtsUrl: `/api/chat/${encodeURIComponent(parentRunId)}/thoughts?workId=${encodeURIComponent(workId)}&namespace=${DIALOGUE_THOUGHTS_NAMESPACE}`,
+  };
+  return Response.json(response);
+}
+/** Legacy v1 acceptance remains byte-for-byte store/outbox based. */
 export async function acceptDialogueTurn(args: AcceptDialogueArgs): Promise<Response> {
-  // Store creation and scope resolution decide availability/demo — surface
-  // that before any reservation commit.
   let store: Awaited<ReturnType<typeof getDialogueStore>>;
   let scope: string;
   try {
@@ -42,8 +110,6 @@ export async function acceptDialogueTurn(args: AcceptDialogueArgs): Promise<Resp
     return dialogueResponseError(error);
   }
 
-  // Build the serializable launch exactly like a legacy turn; the store
-  // re-binds turnId/dialogue and clears the browser-authored history lane.
   const launch = await prepareTurnInput({
     ...args,
     messages: withVerifiedImages(args.messages, args.verifiedImages),
@@ -64,9 +130,9 @@ export async function acceptDialogueTurn(args: AcceptDialogueArgs): Promise<Resp
           ? { attachments: args.verifiedImages.map((image) => image.snapshot) }
           : {}),
       });
-    // The store owns the bytes' lifecycle now. Never roll back after accept.
     await args.reservation.confirm().catch((error) =>
       console.error("[Images] accepted turn confirmation needs recovery", { workId: accepted.workId, error }));
+    ensureDialogueDispatch();
     after(() => dispatchDialogueDueScopes().catch((error: unknown) => {
       console.warn(
         "[Dialogue] immediate dispatch failed (persisted outbox remains):",
@@ -75,8 +141,6 @@ export async function acceptDialogueTurn(args: AcceptDialogueArgs): Promise<Resp
     }));
     return Response.json(accepted);
   } catch (error) {
-    // Handled rejections release here; unexpected throws propagate so the
-    // route's own catch releases exactly once.
     if (error instanceof DialogueConflict) {
       await args.reservation.release().catch((cleanup) => console.error("[Images] reservation rollback needs recovery", cleanup));
       return dialogueResponseError(error);

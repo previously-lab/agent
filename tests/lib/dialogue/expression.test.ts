@@ -65,6 +65,21 @@ describe("expression artifact projection", () => {
     expect(buildExpressionContext(input)).not.toContain(rawHtml);
   });
 
+  it("keeps valid sends when the model omits the empty decisions array", async () => {
+    const input = snapshot();
+    vi.mocked(requestDeepSeek).mockResolvedValue({
+      message: { role: "assistant", content: JSON.stringify({
+        sends: [{ text: "Here is the calculator.", sources: [{ resultId: "work-one:1", productRevision: 1,
+          claimId: "supported", mode: "finding" }], blockIds: ["calculator"] }],
+      }) },
+      toolCalls: [], finishReason: "stop", usage,
+    });
+
+    const plan = await composeExpression(input, "mock-omitted-decisions");
+    expect(plan.decisions).toEqual([]);
+    expect(plan.sends[0]?.blockIds).toEqual(["calculator"]);
+  });
+
   it("completes with silence without a model round when no claim is publishable", async () => {
     const input = snapshot();
     input.results[0]!.claims = [];

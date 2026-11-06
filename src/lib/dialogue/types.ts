@@ -5,6 +5,9 @@ import type { ThinkingProduct } from "@/lib/agents/thinking-product";
 export interface DialogueLaunch {
   scopeKey: string;
   workId: string;
+  /** Native offer transport; omitted on legacy store-backed runs. */
+  transport?: "workflow-v2";
+  sourceInputId?: string;
 }
 
 export interface DialogueWorkRecord extends DialogueWork {

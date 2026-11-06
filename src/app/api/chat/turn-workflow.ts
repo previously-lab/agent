@@ -25,8 +25,23 @@ import { start } from "workflow/api";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
-import type { ToolContext } from "@/app/api/agent/tool-executors";
+import { offerReplyExecute, type ToolContext } from "@/app/api/agent/tool-executors";
 import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
+import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
+import {
+  DIALOGUE_FALLBACK_TOOL_CALL_ID,
+  DIALOGUE_THOUGHTS_NAMESPACE,
+  DIALOGUE_TRANSPORT,
+  type DialogueOfferContext,
+  type DialogueRecordRequest,
+} from "@/lib/dialogue/transport";
+import {
+  closeDialogueOffersStep,
+  closeDialogueThoughtsStep,
+  publishDialogueOfferControlsStep,
+  reconcileDialogueOffersStep,
+  startDialogueRecordRunStep,
+} from "./dialogue-transport-steps";
 import {
   beginDialogueWorkStep,
   completeDialogueWorkStep,
@@ -80,6 +95,40 @@ import { collectTaskAckIntents, parseTaskAckMetadata, type TaskAckIntent } from 
 import { renderScreenContext } from "@/lib/chat/screen-context";
 import { renderDocumentContext } from "@/lib/chat/document-context-prompt";
 
+// ─── Native dialogue source/context (serializable, no runtime store) ──────
+
+function nativeDialogueSource(input: TurnInput) {
+  const sourceInputId = input.dialogue?.sourceInputId ?? input.turnId;
+  return {
+    inputId: sourceInputId,
+    clientMessageId: input.clientMessageId ?? sourceInputId,
+    userSeq: 1,
+    eventSeq: 1,
+    acceptedAt: input.startedAtIso,
+    text: input.lastUserMessage,
+    ...(input.verifiedImages?.length
+      ? { attachments: input.verifiedImages.map((image) => image.snapshot) }
+      : {}),
+    ...(input.documentContext?.length ? { documentContext: input.documentContext } : {}),
+  };
+}
+
+function nativeDialogueRecordRequest(input: TurnInput, sliceId?: string): DialogueRecordRequest {
+  return {
+    source: nativeDialogueSource(input),
+    sourceTurnId: input.turnId,
+    environment: {
+      useGithub: input.useGithub,
+      useDemo: input.useDemo,
+      owner: input.owner,
+      repo: input.repo,
+      timezone: input.clientTimezone,
+      slicing: input.config.slicing,
+      ...(sliceId ? { sliceId } : {}),
+      ...(input.verifiedImages?.length ? { images: input.verifiedImages } : {}),
+    },
+  };
+}
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
 
 /** The one context shape shared by the outer answerer and every nested answerer. */
@@ -911,6 +960,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   try {
     hk = await housekeeping(input);
   } catch (hkErr) {
+    if (input.dialogue?.transport === DIALOGUE_TRANSPORT) {
+      try {
+        await startDialogueRecordRunStep(nativeDialogueRecordRequest(input));
+      } catch (recordError) {
+        console.warn("[Dialogue] user-only record handoff after context failure needs retry", recordError);
+      }
+    }
     const detail = hkErr instanceof Error ? hkErr.message : String(hkErr);
     console.warn(
       "[Turn] housekeeping failed — ending the turn with an error frame:",
@@ -930,6 +986,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // The stream is gone too — nothing left to degrade into; the rethrow
       // below still marks the run failed.
     }
+    if (input.dialogue?.transport === DIALOGUE_TRANSPORT) {
+      try { await closeDialogueOffersStep(); } catch { /* terminal status remains authoritative */ }
+      try { await closeDialogueThoughtsStep(); } catch { /* terminal status remains authoritative */ }
+    }
     throw hkErr;
   }
   const {
@@ -948,8 +1008,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // server-authoritative input view — the cleared browser lane never feeds
   // the worker.
   const dialogue = input.dialogue ?? null;
+  const nativeDialogue = dialogue?.transport === DIALOGUE_TRANSPORT;
+  const parentRunId = nativeDialogue ? await ownRunId() : "";
   let workWindow: DialogueWorkAdmission | null = null;
-  if (dialogue) {
+  if (dialogue && !nativeDialogue) {
     const admitted = await beginDialogueWorkStep(dialogue, await ownRunId());
     if (!admitted) {
       try {
@@ -1110,8 +1172,12 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let interruptedSteps: ContinuationStepSnapshot[] = [];
   const producedMessages: ModelMessage[] = [];
   let allCognition = "";
+  let latestThinkingText = "";
+  let successfulDialogueOffers = 0;
 
-  const onStepEnd = (step: StepResult<ChatToolSet>) => {
+  const onStepEnd = async (step: StepResult<ChatToolSet>) => {
+      if (nativeDialogue && step.text.trim()) latestThinkingText = step.text;
+
       producedMessages.push(...step.response.messages);
       allCognition += extractCognition(step.response.messages, [step]);
       // Provider warnings (unsupported settings, silent downgrades such as
@@ -1148,34 +1214,48 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           };
         }),
       });
+      if (nativeDialogue) {
+        const offers = step.toolResults.filter((result) => result.toolName === "offerReply").map((result) => result.output);
+        if (offers.length) successfulDialogueOffers += await publishDialogueOfferControlsStep(offers);
+      }
     };
 
   // Dialogue works answer through the thinking agent (private work output,
   // evidence-gated finishThinking report, read receipts). Legacy turns keep
   // the chat agent. Same native tool protocol and checkpoints either way.
+  const turnToolsContext = buildTurnToolContext(input, slice.slice_id, systemPrompt, true);
+  if (nativeDialogue) {
+    const offerContext: DialogueOfferContext = {
+      parentRunId,
+      workId: dialogue!.workId,
+      sourceInputId: dialogue!.sourceInputId ?? input.turnId,
+      sourceTurnId: input.turnId,
+      source: nativeDialogueSource(input),
+      priorContext: dialoguePriorContext(historyWindow, input.lastUserMessage),
+      locale: input.locale,
+      record: nativeDialogueRecordRequest(input, slice.slice_id).environment,
+    };
+    turnToolsContext.dialogueOffer = offerContext;
+  }
   const agent = dialogue
     ? createThinkingAgent({
         model: input.modelConfig,
         thinking: input.thinking,
         reasoningEffort: input.reasoningEffort,
-        toolsContext: buildChatToolsContext(
-          buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
-        ),
+        toolsContext: buildChatToolsContext(turnToolsContext),
         onStepEnd,
       })
     : createChatAgent({
         model: input.modelConfig,
         thinking: input.thinking,
         reasoningEffort: input.reasoningEffort,
-        toolsContext: buildChatToolsContext(
-          buildTurnToolContext(input, slice.slice_id, systemPrompt, true),
-        ),
+        toolsContext: buildChatToolsContext(turnToolsContext),
         onStepEnd,
       });
 
   /** Shared stream options (continuation-safe, see below). No maxOutputTokens. */
   const streamOpts = {
-    writable: getWritable<ModelCallStreamPart>(),
+    writable: getWritable<ModelCallStreamPart>(nativeDialogue ? { namespace: DIALOGUE_THOUGHTS_NAMESPACE } : undefined),
     stopWhen: isStepCount(20),
     sendFinish: false,
     preventClose: true,
@@ -1835,7 +1915,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // stream owns it. Then the stream tail. A reply-stream error does not
   // silence the tail, and the tail never throws.
   try {
-    await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
+    if (!nativeDialogue) await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
   } catch (err) {
     // Active-write failure must not discard the already-produced passive
     // record. Continue to its durable handoff, then report the failure.
@@ -1846,7 +1926,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // artifacts, evidence) — never the public reply text. No burst merge line,
   // no task acknowledgments from research success, and no summary-stream
   // persistence: the record plane projects from the control store's events.
-  if (dialogue) {
+  if (dialogue && !nativeDialogue) {
     try {
       // The thinking agent's terminal act is the report-only finishThinking
       // tool, which ends the runner with finishReason "tool-calls" — with a
@@ -1872,6 +1952,42 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // a partial product must not be reported as a clean answer.
       streamError ??= err;
       outcome.error ??= errorMessage(err, "The work result could not be handed off.");
+    }
+  }
+  if (nativeDialogue) {
+    let offerControlKnown = true;
+    try {
+      const durableOffers = await reconcileDialogueOffersStep(parentRunId);
+      successfulDialogueOffers = Math.max(successfulDialogueOffers, durableOffers.length);
+    } catch (controlError) {
+      offerControlKnown = false;
+      outcome.error ??= errorMessage(controlError, "The offer control stream could not be recovered.");
+    }
+    if (offerControlKnown && successfulDialogueOffers === 0 && latestThinkingText.trim()) {
+      const fallback = await offerReplyExecute(
+        { text: latestThinkingText },
+        {
+          context: turnToolsContext,
+          toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID,
+          messages: producedMessages,
+        },
+      );
+      if (fallback.ok) {
+        try {
+          successfulDialogueOffers += await publishDialogueOfferControlsStep([fallback]);
+        } catch (controlError) {
+          outcome.error ??= errorMessage(controlError, "The reply offer could not be announced.");
+        }
+      } else outcome.error ??= fallback.reason;
+    }
+    if (successfulDialogueOffers === 0) {
+      outcome.error ??= "The thinking run ended without a reply to deliver.";
+      outcome.finishReason = "error";
+      try {
+        await startDialogueRecordRunStep(nativeDialogueRecordRequest(input, hk.slice.slice_id));
+      } catch (recordError) {
+        console.warn("[Dialogue] user-only record handoff after thinking failure needs retry", recordError);
+      }
     }
   }
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
@@ -1903,7 +2019,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const taskAckIntents = dialogue ? [] : collectTaskAckIntents(producedMessages);
   const sourceRunId = taskAckIntents.length > 0 ? await ownRunId() : undefined;
   const turnResult: TurnRunResult = {
-    ...(producedMessages.length ? {nativeMessages: producedMessages} : {}),
+    ...(!nativeDialogue && producedMessages.length ? {nativeMessages: producedMessages} : {}),
     turnId: input.turnId,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.regenerate ? { regenerate: true } : {}),
@@ -1916,8 +2032,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     at: input.startedAtIso,
     userText: input.lastUserMessage,
     ...(input.documentContext?.length ? { documentContext: input.documentContext } : {}),
-    replyText: outcome.text,
-    cognition: outcome.cognition,
+    replyText: nativeDialogue ? "" : outcome.text,
+    cognition: nativeDialogue ? "" : outcome.cognition,
     ...(mergeLine ? { mergeLine } : {}),
     ...(input.burstId ? { burstId: input.burstId } : {}),
     ...(hk.evidenceAttachments ? { attachments: hk.evidenceAttachments } : {}),
@@ -1971,6 +2087,12 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(input.burstId ? { burstId: input.burstId } : {}),
   } : undefined);
 
+  if (nativeDialogue) {
+    try { await closeDialogueOffersStep(); }
+    catch (offersError) { console.warn("[Dialogue] offer control close failed", offersError); }
+    try { await closeDialogueThoughtsStep(); }
+    catch (thoughtsError) { console.warn("[Dialogue] thought preview close failed", thoughtsError); }
+  }
   if (streamError !== null) {
     throw streamError;
   }

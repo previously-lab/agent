@@ -5,7 +5,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const workflowApi = vi.hoisted(() => ({
   getRun: vi.fn(),
 }));
+const dialogueOffers = vi.hoisted(() => ({
+  list: vi.fn(),
+}));
 vi.mock("workflow/api", () => ({ getRun: workflowApi.getRun }));
+vi.mock("@/lib/dialogue/workflow-offers", () => ({ listDialogueOffers: dialogueOffers.list }));
 
 // The origin guard is exercised in its own tests; here it always passes.
 vi.mock("@/lib/security/origin-guard", () => ({ guardRequest: () => null }));
@@ -63,7 +67,10 @@ function bubbleChunk(
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  dialogueOffers.list.mockResolvedValue([]);
+});
 
 describe("POST /api/chat/[runId]/cancel", () => {
   it("cancels a running run", async () => {
@@ -88,6 +95,29 @@ describe("POST /api/chat/[runId]/cancel", () => {
     workflowApi.getRun.mockReturnValue(run);
     const res = await call("run_3");
     expect(run.cancel).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({ ok: true, cancelled: false, status: "completed" });
+  });
+
+  it("cancels an active offered reply after its parent completes, but not a settled reply", async () => {
+    const outer = mockRun("completed");
+    const activeReply = mockRun("running");
+    const settledReply = mockRun("completed");
+    dialogueOffers.list.mockResolvedValue([
+      { type: "offer", offerId: "offer-a", runId: "reply_active", sourceInputId: "input-1" },
+      { type: "offer", offerId: "offer-b", runId: "reply_settled", sourceInputId: "input-1" },
+    ]);
+    workflowApi.getRun.mockImplementation((id: string) => {
+      if (id === "outer") return outer;
+      if (id === "reply_active") return activeReply;
+      if (id === "reply_settled") return settledReply;
+      throw new Error(`unexpected run ${id}`);
+    });
+
+    const res = await call("outer");
+
+    expect(outer.cancel).not.toHaveBeenCalled();
+    expect(activeReply.cancel).toHaveBeenCalledOnce();
+    expect(settledReply.cancel).not.toHaveBeenCalled();
     expect(await res.json()).toEqual({ ok: true, cancelled: false, status: "completed" });
   });
 

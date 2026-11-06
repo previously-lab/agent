@@ -8,7 +8,6 @@
  * recovery surface.
  */
 import { getDialogueStore, guardDialogueRead, dialogueResponseError, resolveDialogueScope } from "@/lib/dialogue/runtime";
-import { ensureDialogueDispatch } from "./dispatch-host";
 
 export async function GET(request: Request): Promise<Response> {
   const blocked = guardDialogueRead(request);
@@ -25,6 +24,3 @@ export async function GET(request: Request): Promise<Response> {
     return dialogueResponseError(error);
   }
 }
-
-// Lazy single-host scheduler bootstrap (no-op on serverless/demo).
-ensureDialogueDispatch();

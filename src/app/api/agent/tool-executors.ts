@@ -16,6 +16,8 @@ import type { ModelMessage } from "@/lib/deepseek/types";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
+import type { DialogueOfferContext, OfferReplyResult } from "@/lib/dialogue/transport";
+import { dialogueOfferId, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS } from "@/lib/dialogue/transport";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
@@ -209,6 +211,8 @@ export interface ToolContext {
    * images and client-compressed to 1568px to keep the payload bounded.
    */
   imageAttachments?: string[];
+  /** Server-owned native dialogue offer context; never supplied by the browser. */
+  dialogueOffer?: import("@/lib/dialogue/transport").DialogueOfferContext;
 }
 
 /**
@@ -1258,6 +1262,70 @@ async function registerLongTaskCommitment(
   }
 }
 
+// ─── offerReply — start public dialogue, never wait for its completion ────
+
+function offerPublicSeq(messages: ModelMessage[] | undefined, toolCallId: string): number {
+  let prior = 0;
+  for (const message of messages ?? []) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.toolName !== "offerReply") continue;
+      const value = part.output.value;
+      if (value && typeof value === "object" && (value as { kind?: unknown }).kind === DIALOGUE_OFFER_RESULT
+        && (value as { ok?: unknown }).ok === true) prior++;
+    }
+  }
+  // Parallel offer calls in one model response receive distinct public slots.
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index--) {
+    const message = messages![index]!;
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const calls = message.content.filter((part) => part.type === "tool-call" && part.toolName === "offerReply");
+    const current = calls.findIndex((part) => part.type === "tool-call" && part.toolCallId === toolCallId);
+    if (current >= 0) return prior + current + 1;
+  }
+  return prior + 1;
+}
+
+
+export async function offerReplyExecute(
+  input: { text: string },
+  { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
+): Promise<OfferReplyResult> {
+  "use step";
+  const context = ctx.dialogueOffer as DialogueOfferContext | undefined;
+  const offerId = dialogueOfferId(context?.workId ?? ctx.turnId, toolCallId);
+  if (!context) return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: "This run has no dialogue offer context." };
+  if (!input.text.trim() || input.text.length > OFFER_TEXT_MAX_CHARS) {
+    return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: `text must be nonblank and at most ${OFFER_TEXT_MAX_CHARS} characters.` };
+  }
+  try {
+    const { dialogueWorkflow } = await import("../chat/dialogue-workflow");
+    const run = await start(dialogueWorkflow, [{
+      offerId,
+      publicSeq: offerPublicSeq(messages, toolCallId),
+      text: input.text,
+      context,
+    }], {
+      region: "hkg1",
+      attributes: {
+        role: "dialogue",
+        parent: context.parentRunId,
+        work: context.workId,
+        offer: offerId,
+      },
+    });
+    // The follow-on parent step publishes this SDK value to native control.
+    // The child and /offers use that stream as admission; no completion wait.
+    return { ok: true, kind: DIALOGUE_OFFER_RESULT, offerId, runId: run.runId, sourceInputId: context.sourceInputId };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: DIALOGUE_OFFER_RESULT,
+      offerId,
+      reason: `The dialogue could not be started: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
 // ─── startLongTask — the conversation's sub-stream, dispatched on the spot ──
 
 export type StartLongTaskResult =

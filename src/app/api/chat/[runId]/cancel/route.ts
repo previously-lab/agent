@@ -21,7 +21,8 @@
  * outer's death is the accepted orphan window: it finishes, its bubble report
  * hits HookNotFoundError (swallowed — steps.ts), and nothing persists it.
  *
- * Terminal runs (completed/failed/cancelled) and unknown run ids are no-ops —
+ * Terminal parents and unknown run ids are not cancelled again, but a terminal
+ * dialogue parent's admitted replies are still checked and stopped if active —
  * the client fires this alongside the local abort and must never be punished
  * for a race with the run's own completion.
  *
@@ -37,6 +38,7 @@ import {
   normalizeNestedBubble,
   type NestedBubbleFrame,
 } from "@/lib/chat/nested-bubble";
+import { listDialogueOffers } from "@/lib/dialogue/workflow-offers";
 
 /**
  * The child run ids whose LATEST lifecycle frame is still in flight
@@ -86,10 +88,10 @@ export async function POST(
   try {
     const run = getRun(runId);
     const status = await run.status;
-    if (status === "pending" || status === "running") {
-      // The roster degrades to empty on any scan failure — the outer cancel
-      // below still lands (the pre-cascade behavior is the floor, never less).
-      const childRunIds = await collectInflightChildRuns(run).catch((err) => {
+    const parentActive = status === "pending" || status === "running";
+    let nestedChildren: string[] = [];
+    if (parentActive) {
+      nestedChildren = await collectInflightChildRuns(run).catch((err) => {
         console.warn(
           `[chat/cancel] child roster scan failed for ${runId} (cascading skipped):`,
           err instanceof Error ? err.message : err,
@@ -97,23 +99,41 @@ export async function POST(
         return [] as string[];
       });
       await run.cancel();
-      // Children AFTER the outer: the drain dies first, so no new spawn can
-      // slip past the roster. Per-child failures are quiet no-ops — a child
-      // that finished meanwhile is already terminal.
-      const cascades = await Promise.allSettled(
-        childRunIds.map((childRunId) => getRun(childRunId).cancel()),
-      );
-      cascades.forEach((r, i) => {
-        if (r.status === "rejected") {
-          console.warn(
-            `[chat/cancel] child run ${childRunIds[i]} cancel failed (ignored):`,
-            r.reason instanceof Error ? r.reason.message : r.reason,
-          );
-        }
-      });
-      return Response.json({ ok: true, cancelled: true });
     }
-    return Response.json({ ok: true, cancelled: false, status });
+
+    // Read offers after stopping an active parent so admission cannot race the
+    // roster. A terminal parent can still have an independently running reply.
+    const offeredChildren = await listDialogueOffers(runId).catch((error) => {
+      console.warn(`[chat/cancel] offer roster unavailable for ${runId}:`, error instanceof Error ? error.message : error);
+      return [];
+    });
+    const inflightOffers = await Promise.all(offeredChildren.map(async (offer) => {
+      try {
+        const childStatus = await getRun(offer.runId).status;
+        return childStatus === "pending" || childStatus === "running" ? offer.runId : null;
+      } catch (error) {
+        console.warn(`[chat/cancel] offered child ${offer.runId} status unavailable (cancel skipped):`,
+          error instanceof Error ? error.message : error);
+        return null;
+      }
+    }));
+    const childRunIds = [...new Set([...nestedChildren, ...inflightOffers.filter((id): id is string => id !== null)])];
+    // Per-child failures are quiet no-ops — a child that finished meanwhile is
+    // already terminal.
+    const cascades = await Promise.allSettled(
+      childRunIds.map((childRunId) => getRun(childRunId).cancel()),
+    );
+    cascades.forEach((r, i) => {
+      if (r.status === "rejected") {
+        console.warn(
+          `[chat/cancel] child run ${childRunIds[i]} cancel failed (ignored):`,
+          r.reason instanceof Error ? r.reason.message : r.reason,
+        );
+      }
+    });
+    return Response.json(parentActive
+      ? { ok: true, cancelled: true }
+      : { ok: true, cancelled: false, status });
   } catch (error) {
     // A gone run is as good as a cancelled one for the caller's purpose.
     console.warn(

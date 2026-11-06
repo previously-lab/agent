@@ -10,7 +10,7 @@ const regenerate = vi.hoisted(() => vi.fn());
 const prepare = vi.hoisted(() => vi.fn());
 
 vi.mock("next/server", () => ({ after: afterMock }));
-vi.mock("@/app/api/chat/dialogue/dispatch-host", () => ({ dispatchDialogueDueScopes: dispatch }));
+vi.mock("@/app/api/chat/dialogue/dispatch-host", () => ({ dispatchDialogueDueScopes: dispatch, ensureDialogueDispatch: vi.fn() }));
 vi.mock("@/lib/dialogue/runtime", () => ({
   getDialogueStore: () => ({ accept, regenerate }),
   resolveDialogueScope: () => "scope-1",
