@@ -193,7 +193,8 @@ export async function closeDialogueStreamStep(args: {
       },
     });
     await writer.write({ type: "finish-step" });
-    await writer.write({ type: "finish", finishReason: args.error ? "error" : "stop" });
+    const finish = { type: "finish", protocol: "deepseek-v1", finishReason: args.error ? "error" : "stop" };
+    await writer.write(finish);
   } finally {
     writer.releaseLock();
   }

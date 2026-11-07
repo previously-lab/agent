@@ -171,6 +171,36 @@
   margin-top: 0.8rem;
 }
 
+.conversation-work-process {
+  margin-block: calc(var(--spacing) * 2);
+  color: var(--muted-foreground);
+  font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans, sans-serif);
+}
+.conversation-work-process > summary {
+  min-block-size: calc(var(--spacing) * 11);
+  padding-block: calc(var(--spacing) * 2);
+  cursor: pointer;
+}
+.conversation-work-process > summary:focus-visible,
+.conversation-terminal-retry:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: calc(var(--spacing));
+}
+.conversation-work-process-items {
+  padding-block: calc(var(--spacing) * 2);
+  padding-inline-start: calc(var(--spacing) * 3);
+  border-inline-start: 1px solid var(--border);
+}
+.conversation-work-process-items > * + * { margin-block-start: calc(var(--spacing) * 3); }
+.conversation-terminal-retry {
+  min-block-size: calc(var(--spacing) * 11);
+  margin-block-start: calc(var(--spacing) * 2);
+  padding-inline: 0;
+  color: var(--destructive);
+  cursor: pointer;
+  font: var(--text-sm)/var(--text-sm--line-height) var(--font-sans, sans-serif);
+}
+
 .conversation-stage,
 .conversation-heartbeat {
   display: flex;
@@ -497,6 +527,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-control { transition: none; }
+  .conversation-stage > span,
+  .conversation-heartbeat > span { animation: none; }
 }
 
 .conversation-manuscript-editor[data-empty="true"]::before {

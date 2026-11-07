@@ -140,6 +140,11 @@ function itemKey(item: StreamItem, index: number): string {
   }
 }
 
+function isWorkProcessItem(item: StreamItem): boolean {
+  return item.kind === "reasoning" || item.kind === "tool" || item.kind === "housekeeping" ||
+    (item.kind === "phase" && item.mode !== "terminal");
+}
+
 export const ChatMessage = memo(function ChatMessage({
   message,
   onRegenerate,
@@ -176,6 +181,12 @@ export const ChatMessage = memo(function ChatMessage({
       return offset;
     });
   }, [streamItems]);
+  const workProcessItems = streamItems
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => isWorkProcessItem(item));
+  const publicItems = streamItems
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => !isWorkProcessItem(item));
 
   // ── Live agent-stage pill ─────────────────────────────────────────────
   // Derives what the agent is doing right now (recalling / reasoning /
@@ -258,152 +269,73 @@ export const ChatMessage = memo(function ChatMessage({
     );
   }
 
-  // Keep every stream part in its original order within the shared column.
+  const renderStreamItem = (item: StreamItem, i: number) => {
+    const key = itemKey(item, i);
+    if (item.kind === "reasoning") {
+      return <ThinkingSteps key={key} text={item.text}
+        isStreaming={isStreaming && i === streamItems.length - 1} />;
+    }
+    if (item.kind === "tool") {
+      return <ToolRenderer key={key} toolName={item.toolName} state={item.state}
+        input={item.input} output={item.output} streamingText={item.streamingText}
+        streamingStage={item.streamingStage} isStreaming={isStreaming ?? false} />;
+    }
+    if (item.kind === "housekeeping") return <HousekeepingCard key={key} steps={item.steps} />;
+    if (item.kind === "phase") {
+      if (item.mode === "terminal") {
+        const isInterrupted = item.phase.includes("interrupted");
+        const detail = (item.summaries ?? []).join("\n");
+        return <PhaseIndicator key={key} mode="static"
+          icon={isInterrupted ? TERMINAL_INTERRUPTED_ICON : TERMINAL_ERROR_ICON}
+          label={isInterrupted ? t("turnInterrupted") : t("turnError")}
+          state={isInterrupted ? TERMINAL_INTERRUPTED_STATE : TERMINAL_ERROR_STATE}
+          summary={detail ? detail.split("\n")[0] : undefined}
+          expandedContent={detail ? <p className="whitespace-pre-wrap">{detail}</p> : undefined} />;
+      }
+      const doneKey = PHASE_DONE_KEYS[item.phase];
+      const label = item.running ? t(item.phase) : doneKey ? t(doneKey) : t(item.phase);
+      const hasSummaries = item.summaries && item.summaries.length > 0;
+      return <PhaseIndicator key={key} mode="static" icon={PHASE_ICON} label={label}
+        state={item.running ? PHASE_RUNNING_STATE : PHASE_DONE_STATE}
+        expandedContent={hasSummaries ? <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+          {item.summaries!.map((summary, index) => <div key={index}>{summary}</div>)}
+        </div> : undefined} />;
+    }
+    if (item.kind === "recall-references") {
+      return <RecallReferencesBar key={key} references={item.references} />;
+    }
+    return <motion.div key={key} initial={reducedMotion ? false : { opacity: 0 }}
+      animate={{ opacity: 1 }} transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
+      className="conversation-prose">
+      <MarkdownRenderer content={item.content}
+        isStreaming={isStreaming && i === streamItems.length - 1 && !lastTextDone}
+        nativeMode="interactive" nativeTurnId={nativeTurn.turnId} nativeSlotId={message.id}
+        nativeProvisionalTurnId={nativeTurn.provisionalTurnId} nativeOrdinalOffset={nativeOffsets[i]}
+        onNativeRetry={onRegenerate} />
+    </motion.div>;
+  };
+
+  // Internal work is available on demand without interrupting the public reply.
   return (
     <ConversationTurn role={message.role} metadata={timestamp}>
       {/* Live agent-stage pill — a small brand marker of what the agent is doing */}
       {isStreaming && stage && (
         <div className="conversation-stage">
           <span className="size-1.5 animate-pulse rounded-full bg-brand-500" />
-          {t(STAGE_KEYS[stage])}
+          {silent ? t("stillWorking") : t(STAGE_KEYS[stage])}
         </div>
       )}
 
       {hasContent && (
         <div className="conversation-stream-parts">
           <AnimatePresence>
-            {streamItems.map((item, i) => {
-              const key = itemKey(item, i);
-
-              if (item.kind === "reasoning") {
-                return (
-                  <ThinkingSteps
-                    key={key}
-                    text={item.text}
-                    isStreaming={isStreaming && i === streamItems.length - 1}
-                  />
-                );
-              }
-              if (item.kind === "tool") {
-                return (
-                  <ToolRenderer
-                    key={key}
-                    toolName={item.toolName}
-                    state={item.state}
-                    input={item.input}
-                    output={item.output}
-                    streamingText={item.streamingText}
-                    streamingStage={item.streamingStage}
-                    isStreaming={isStreaming ?? false}
-                  />
-                );
-              }
-              if (item.kind === "housekeeping") {
-                return <HousekeepingCard key={key} steps={item.steps} />;
-              }
-              if (item.kind === "phase") {
-                // Terminal interrupted/error — persistent status annotation.
-                if (item.mode === "terminal") {
-                  const isInterrupted = item.phase.includes("interrupted");
-                  // The client-visible explanation for a terminal/model failure
-                  // (buildStream puts it in `summaries` from data-turn-status).
-                  // Show the first line in the header and the full text
-                  // expandable, so a failed turn says WHY it failed.
-                  const detail = (item.summaries ?? []).join("\n");
-                  return (
-                    <PhaseIndicator
-                      key={key}
-                      mode="static"
-                      icon={
-                        isInterrupted
-                          ? TERMINAL_INTERRUPTED_ICON
-                          : TERMINAL_ERROR_ICON
-                      }
-                      label={
-                        isInterrupted
-                          ? t("turnInterrupted")
-                          : t("turnError")
-                      }
-                      state={
-                        isInterrupted
-                          ? TERMINAL_INTERRUPTED_STATE
-                          : TERMINAL_ERROR_STATE
-                      }
-                      summary={detail ? detail.split("\n")[0] : undefined}
-                      expandedContent={
-                        detail ? (
-                          <p className="whitespace-pre-wrap">{detail}</p>
-                        ) : undefined
-                      }
-                    />
-                  );
-                }
-
-                // Regular (non-compact) phase — PhaseIndicator static.
-                const doneKey = PHASE_DONE_KEYS[item.phase];
-                const label = item.running
-                  ? t(item.phase)
-                  : doneKey
-                    ? t(doneKey)
-                    : t(item.phase);
-                const hasSummaries =
-                  item.summaries && item.summaries.length > 0;
-                return (
-                  <PhaseIndicator
-                    key={key}
-                    mode="static"
-                    icon={PHASE_ICON}
-                    label={label}
-                    state={
-                      item.running ? PHASE_RUNNING_STATE : PHASE_DONE_STATE
-                    }
-                    expandedContent={
-                      hasSummaries ? (
-                        <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
-                          {item.summaries!.map((s, j) => (
-                            <div key={j}>{s}</div>
-                          ))}
-                        </div>
-                      ) : undefined
-                    }
-                  />
-                );
-              }
-
-              if (item.kind === "recall-references") {
-                // The "referenced N time slices" bar — trails the reply.
-                return (
-                  <RecallReferencesBar
-                    key={key}
-                    references={item.references}
-                  />
-                );
-              }
-
-              if (item.kind === "text") {
-                return (
-                  <motion.div
-                    key={key}
-                    initial={reducedMotion ? false : { opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
-                    className="conversation-prose"
-                  >
-                    <MarkdownRenderer
-                      content={item.content}
-                      isStreaming={isStreaming && i === streamItems.length - 1 && !lastTextDone}
-                      nativeMode="interactive"
-                      nativeTurnId={nativeTurn.turnId}
-                      nativeSlotId={message.id}
-                      nativeProvisionalTurnId={nativeTurn.provisionalTurnId}
-                      nativeOrdinalOffset={nativeOffsets[i]}
-                      onNativeRetry={onRegenerate}
-                    />
-                  </motion.div>
-                );
-              }
-              return null;
-            })}
+            {workProcessItems.length > 0 && <details className="conversation-work-process">
+              <summary>{t("workProcess")}</summary>
+              <div className="conversation-work-process-items">
+                {workProcessItems.map(({ item, index }) => renderStreamItem(item, index))}
+              </div>
+            </details>}
+            {publicItems.map(({ item, index }) => renderStreamItem(item, index))}
           </AnimatePresence>
         </div>
       )}
@@ -412,12 +344,16 @@ export const ChatMessage = memo(function ChatMessage({
           stream caret and each native block's preparing/fallback state. */}
 
       {/* Silence heartbeat — only when the stream has gone quiet mid-turn */}
-      {isStreaming && silent && (
+      {isStreaming && silent && !stage && (
         <div className="conversation-heartbeat">
           <span className="size-1.5 animate-pulse rounded-full bg-brand-500/70" />
           {t("stillWorking")}
         </div>
       )}
+
+      {publicItems.some(({ item }) => item.kind === "phase" && item.mode === "terminal") &&
+        !textContent && !isStreaming && onRegenerate && <button type="button"
+          className="conversation-terminal-retry" onClick={onRegenerate}>{tChat("dialogue.retry")}</button>}
 
       {/* Footer — actions only */}
       {isAssistant && textContent && !isStreaming && onRegenerate && (

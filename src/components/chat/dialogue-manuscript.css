@@ -31,19 +31,37 @@
 }
 .dialogue-citation { font: var(--text-sm)/var(--text-sm--line-height) var(--font-sans, sans-serif); }
 .dialogue-work-status {
-  padding-block-start: calc(var(--spacing) * 3);
+  display: grid;
+  gap: calc(var(--spacing) * 1);
+  padding-block-start: calc(var(--spacing) * 2);
   color: var(--muted-foreground);
   font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans, sans-serif);
 }
 .dialogue-work-disclosure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
   min-block-size: calc(var(--spacing) * 11);
   padding-inline: 0;
   cursor: pointer;
   text-align: start;
 }
-.dialogue-work-status button { min-block-size: calc(var(--spacing) * 11); color: var(--primary); }
+.dialogue-work-details-toggle { margin-inline-start: auto; text-decoration: underline; text-underline-offset: 0.2em; }
+.dialogue-work-status button { min-block-size: calc(var(--spacing) * 11); color: inherit; }
+.dialogue-work-status[data-tone="warning"] { color: var(--foreground); }
+.dialogue-work-status[data-tone="error"] { color: var(--destructive); }
 .dialogue-work-status button:focus-visible,
 .dialogue-work-output:focus-visible { outline: 2px solid var(--ring); outline-offset: calc(var(--spacing)); }
+.dialogue-work-help { margin: 0; overflow-wrap: anywhere; }
+.dialogue-work-recovery { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--spacing) * 2); }
+.dialogue-work-recovery > p { flex: 1 1 16rem; }
+.dialogue-work-recovery button { padding-inline: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
+.dialogue-work-recovery button:disabled { cursor: default; opacity: 0.55; }
+.dialogue-work-details { padding-block-start: calc(var(--spacing) * 2); }
+.dialogue-work-details-heading { margin-block-end: calc(var(--spacing) * 3); }
+.dialogue-work-details-heading h2 { margin: 0; color: var(--foreground); font: inherit; font-weight: 500; }
+.dialogue-work-details-heading p { margin: calc(var(--spacing) * 1) 0 0; color: var(--muted-foreground); }
 .dialogue-work-active,
 .dialogue-work-tools { margin: 0; padding: 0; list-style: none; }
 .dialogue-work-active > li + li { margin-block-start: calc(var(--spacing) * 4); }

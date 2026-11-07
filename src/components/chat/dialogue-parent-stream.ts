@@ -35,6 +35,8 @@ export type DialogueParentEvent = ({ type: "offer" } & DialogueOffer) | Dialogue
 interface DialogueChildRecord extends DialogueOffer {
   messageId?: string;
   messageAt?: string;
+  /** Terminal child error/interruption, never a transport disconnect. */
+  failed?: boolean;
 }
 
 interface DialoguePublicationView {
@@ -48,6 +50,8 @@ export interface DialogueParentRecord extends DialogueAcceptedV2 {
   offers: DialogueChildRecord[];
   done: boolean;
   cancelled?: boolean;
+  /** Terminal server failure, distinct from a recoverable transport disconnect. */
+  failed?: boolean;
 }
 
 type ParentStorage = Pick<Storage, "getItem" | "setItem">;
@@ -129,6 +133,7 @@ function parseStoredRecord(value: unknown): DialogueParentRecord | null {
         ...parsed,
         ...(nonEmpty(child.messageId) ? { messageId: child.messageId } : {}),
         ...(nonEmpty(child.messageAt) ? { messageAt: child.messageAt } : {}),
+        ...(child.failed === true ? { failed: true } : {}),
       });
     }
     let userMessage: UIMessage | undefined;
@@ -138,7 +143,8 @@ function parseStoredRecord(value: unknown): DialogueParentRecord | null {
       userMessage = { id: message.id, role: "user", parts: message.parts as UIMessage["parts"], metadata: message.metadata };
     }
     return { ...acceptance, acceptedAt: record.acceptedAt, offers, done: record.done,
-      ...(record.cancelled === true ? { cancelled: true } : {}), ...(userMessage ? { userMessage } : {}) };
+      ...(record.cancelled === true ? { cancelled: true } : {}), ...(record.failed === true ? { failed: true } : {}),
+      ...(userMessage ? { userMessage } : {}) };
   } catch {
     return null;
   }
@@ -210,6 +216,14 @@ function publicMessageIds(message: UIMessage): string[] {
 function hasVisibleContent(message: UIMessage): boolean {
   return message.parts.some(part => part.type === "text" ? part.text.length > 0
     : part.type === "file" || part.type === "data-dialogue-publication");
+}
+
+/** readDurableChat uses terminal for both explicit stream failures and local
+ * request/setup failures. Only the former proves that the child turn failed. */
+function isTerminalDialogueStreamError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || (error as { terminal?: unknown }).terminal !== true) return false;
+  const message = error instanceof Error ? error.message : "";
+  return message !== "Run not available" && !/^Chat stream HTTP \d{3}$/.test(message);
 }
 
 function provisionalPublicMessage(message: UIMessage): UIMessage {
@@ -310,8 +324,9 @@ export class DialogueParentController {
   private readonly messages = new Map<string, UIMessage>();
   private readonly publications = new Map<string, DialoguePublicationView>();
   private readonly settledChildren = new Set<string>();
-  private readonly failedChildren = new Set<string>();
-  private readonly failedParents = new Set<string>();
+  private readonly disconnectedChildren = new Set<string>();
+  private readonly disconnectedParents = new Set<string>();
+  private readonly reconnectingParents = new Set<string>();
   private readonly parentCursors = new Map<string, number>();
   private readonly parentTasks = new Map<string, Promise<void>>();
   private readonly childTasks = new Map<string, Promise<void>>();
@@ -336,14 +351,30 @@ export class DialogueParentController {
   start() {
     this.records = readDialogueParentRecords(this.options.persona, this.storage);
     this.emit();
-    this.resume();
+    this.resumeRecords(true);
   }
 
   resume() {
+    this.resumeRecords(false);
+  }
+
+  private resumeRecords(replayFailedChildren: boolean) {
     for (const record of this.records) {
+      this.disconnectedParents.delete(record.parentRunId);
       if (!record.done && !record.cancelled) this.startParent(record);
-      for (const offer of record.offers) this.startChild(record, offer);
+      for (const offer of record.offers) {
+        if (offer.failed) {
+          // A fresh controller may replay the durable output once to restore
+          // partial text. The terminal failure itself remains sticky.
+          if (replayFailedChildren) this.startChild(record, offer);
+          else this.settledChildren.add(offer.runId);
+          continue;
+        }
+        this.disconnectedChildren.delete(offer.runId);
+        this.startChild(record, offer);
+      }
     }
+    this.emit();
   }
 
   accept(acceptance: DialogueAcceptedV2, userMessage?: UIMessage) {
@@ -391,12 +422,16 @@ export class DialogueParentController {
         inputs.set(input.inputId, input);
         entries.push({ kind: "input", id: input.inputId, input });
       }
-      const failed = this.failedParents.has(record.parentRunId) || record.offers.some(offer => this.failedChildren.has(offer.runId));
+      const disconnected = this.disconnectedParents.has(record.parentRunId) ||
+        record.offers.some(offer => this.disconnectedChildren.has(offer.runId));
+      const connection = disconnected ? "disconnected" : this.reconnectingParents.has(record.parentRunId) ? "reconnecting" : "connected";
       const settled = record.offers.every(offer => this.settledChildren.has(offer.runId));
+      const failed = record.failed || record.offers.some(offer => offer.failed);
       const status = record.cancelled ? "cancelled" : failed ? "failed"
-        : record.done && settled ? "completed" : this.parentTasks.has(record.parentRunId) || record.offers.length ? "running" : "queued";
+        : record.done && settled ? "completed"
+          : this.parentTasks.has(record.parentRunId) || record.offers.length || disconnected ? "running" : "queued";
       works.set(record.workId, { workId: record.workId, inputId: record.sourceInputId, userSeq: index + 1,
-        status, runId: record.parentRunId, thoughtsUrl: record.thoughtsUrl });
+        status, connection, runId: record.parentRunId, thoughtsUrl: record.thoughtsUrl });
       const seenChildren = new Set<string>();
       for (const offer of record.offers) {
         if (seenChildren.has(offer.runId)) continue;
@@ -410,7 +445,7 @@ export class DialogueParentController {
           utterances.add(publication.utterance.utteranceId);
         } else {
           entries.push({ kind: "message", id: message.id, message: provisionalPublicMessage(message), timeIso: offer.messageAt ?? record.acceptedAt,
-            isStreaming: !this.settledChildren.has(offer.runId) });
+            isStreaming: !this.settledChildren.has(offer.runId) && !this.disconnectedChildren.has(offer.runId) });
         }
         for (const id of publicMessageIds(message)) utterances.add(id);
       }
@@ -448,13 +483,23 @@ export class DialogueParentController {
           }
           record.done = true;
           if (done.status === "cancelled") record.cancelled = true;
-          if (done.status === "failed") this.failedParents.add(record.parentRunId);
+          if (done.status === "failed") record.failed = true;
           this.persist();
           this.emit();
           return;
         } catch (error) {
           if (this.options.signal.aborted || record.cancelled) return;
+          if (failures === 3) {
+            this.reconnectingParents.delete(record.parentRunId);
+            this.disconnectedParents.add(record.parentRunId);
+            this.emit();
+            return;
+          }
+          this.reconnectingParents.add(record.parentRunId);
+          this.emit();
           await waitForReconnect(Math.min(8_000, this.retryDelayMs * 2 ** failures++), this.options.signal);
+          this.reconnectingParents.delete(record.parentRunId);
+          this.emit();
         }
       }
     })().catch(() => {}).finally(() => {
@@ -467,13 +512,24 @@ export class DialogueParentController {
 
   private startChild(record: DialogueParentRecord, offer: DialogueChildRecord) {
     if (this.options.signal.aborted || record.cancelled || this.settledChildren.has(offer.runId) || this.childTasks.has(offer.runId)) return;
-    this.failedChildren.delete(offer.runId);
+    this.disconnectedChildren.delete(offer.runId);
     const task = readDurableChat({
       runId: offer.runId,
       assistantId: `dialogue-child-${offer.runId}`,
       signal: this.options.signal,
       fetch: this.request,
       retryDelayMs: this.retryDelayMs,
+      onData: chunk => {
+        if (chunk.type !== "data-turn-status" || !chunk.data || typeof chunk.data !== "object") return;
+        const status = (chunk.data as Record<string, unknown>).status;
+        if (status !== "error" && status !== "interrupted") return;
+        offer.failed = true;
+        this.settledChildren.add(offer.runId);
+        this.disconnectedChildren.delete(offer.runId);
+        this.persist();
+        this.emit();
+        throw Object.assign(new Error(`Dialogue child ${status}`), { terminal: true });
+      },
       onMessage: message => {
         if (record.cancelled) return;
         const visible = hasVisibleContent(message);
@@ -490,9 +546,17 @@ export class DialogueParentController {
       },
     }).then(() => {
       this.settledChildren.add(offer.runId);
-      this.failedChildren.delete(offer.runId);
-    }).catch(() => {
-      if (!this.options.signal.aborted && !record.cancelled) this.failedChildren.add(offer.runId);
+      this.disconnectedChildren.delete(offer.runId);
+    }).catch(error => {
+      if (this.options.signal.aborted || record.cancelled || offer.failed) return;
+      if (isTerminalDialogueStreamError(error)) {
+        offer.failed = true;
+        this.settledChildren.add(offer.runId);
+        this.disconnectedChildren.delete(offer.runId);
+        this.persist();
+      } else {
+        this.disconnectedChildren.add(offer.runId);
+      }
     }).finally(() => {
       this.childTasks.delete(offer.runId);
       this.emit();

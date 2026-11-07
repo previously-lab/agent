@@ -73,25 +73,44 @@ describe("the shared conversation manuscript", () => {
     expect(html).not.toContain("data-prose");
   });
 
-  it("preserves reasoning, tools and answer order within the assistant's prose", () => {
+  it("keeps reasoning and tools in one closed work disclosure without folding the public reply or sources", () => {
     const html = render([
       { type: "reasoning", text: "Reading the earlier page." },
       { type: "tool-readFile", toolCallId: "read", state: "output-available", input: { path: "fixture.md" }, output: "fixture" },
       { type: "text", text: "Here is what changed." },
+      { type: "data-recall-references", data: { references: [{ slice_id: "source", note: "Earlier page" }] } },
     ]);
     expect(html).toContain('aria-label="Previously"');
+    expect(html).toContain("<details class=\"conversation-work-process\"");
+    expect(html).not.toContain("<details class=\"conversation-work-process\" open");
+    expect(html).toContain("workProcess");
     expect(html.indexOf("Reading the earlier page.")).toBeLessThan(html.indexOf('data-tool="readFile"'));
-    expect(html.indexOf('data-tool="readFile"')).toBeLessThan(html.indexOf("Here is what changed."));
+    expect(html.indexOf('data-tool="readFile"')).toBeLessThan(html.indexOf("</details>"));
+    expect(html.indexOf("</details>")).toBeLessThan(html.indexOf("Here is what changed."));
+    expect(html.indexOf("Here is what changed.")).toBeLessThan(html.indexOf("Open recalled document"));
   });
 
   it("keeps a partial answer and its failure explanation in the same turn", () => {
     const html = render([
+      { type: "reasoning", text: "Working on the partial answer." },
       { type: "text", text: "The part we have so far." },
       { type: "data-turn-status", data: { status: "error", error: "The connection was interrupted." } },
     ]);
     expect(html).toContain("The part we have so far.");
     expect(html).toContain("turnError");
     expect(html).toContain("The connection was interrupted.");
+    expect(html.indexOf("</details>")).toBeLessThan(html.indexOf("The part we have so far."));
+    expect(html.indexOf("The part we have so far.")).toBeLessThan(html.indexOf("turnError"));
+  });
+
+  it("offers recovery when a failed turn has no assistant text", () => {
+    const html = render([
+      { type: "data-turn-status", data: { status: "error", error: "No reply was produced." } },
+    ], { actions: true });
+    expect(html).toContain("turnError");
+    expect(html).toContain("No reply was produced.");
+    expect(html).toContain("dialogue.retry");
+    expect(html).not.toContain("copyTooltip");
   });
 
   it("keeps live status visible and only offers settled answer actions", () => {

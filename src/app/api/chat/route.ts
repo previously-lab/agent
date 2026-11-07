@@ -70,7 +70,7 @@ export async function POST(request: Request): Promise<Response> {
     const verifiedImages = [...reservation.attachments, ...legacyImages];
 
     if (body.dialogueVersion === 2) {
-      return acceptDialogueTurnV2({
+      return await acceptDialogueTurnV2({
         messages: typedMessages,
         originalUserText: latestUser.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n"),
         verifiedImages,
@@ -92,7 +92,7 @@ export async function POST(request: Request): Promise<Response> {
     // with the accepted identity; the durable outbox, not this response,
     // starts the work. Legacy clients keep the streamed turn below.
     if (body.dialogueVersion === 1) {
-      return acceptDialogueTurn({
+      return await acceptDialogueTurn({
         messages: typedMessages,
         originalUserText: latestUser.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n"),
         verifiedImages,

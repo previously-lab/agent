@@ -1,7 +1,8 @@
 import type { DialogueEvent, DialogueInput, DialoguePage, DialogueWork, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { UIMessage } from "@/lib/chat/protocol";
 
-export type DialogueWorkView = DialogueWork & { thoughtsUrl?: string };
+export type DialogueConnection = "connected" | "reconnecting" | "disconnected";
+export type DialogueWorkView = DialogueWork & { thoughtsUrl?: string; connection?: DialogueConnection };
 
 export type ManuscriptEntry =
   | { kind: "input"; id: string; input: DialogueInput }

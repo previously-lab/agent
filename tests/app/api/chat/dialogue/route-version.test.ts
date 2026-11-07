@@ -50,4 +50,20 @@ describe("dialogue transport version dispatch", () => {
     expect(h.legacy).toHaveBeenCalledOnce();
     expect(h.legacyStart).not.toHaveBeenCalled();
   });
+
+  it.each([1, 2])("releases the reservation when v%i acceptance rejects", async (version) => {
+    const acceptance = version === 1 ? h.legacy : h.native;
+    const failure = new Error(`v${version} acceptance failed`);
+    acceptance.mockRejectedValueOnce(failure);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await expect(POST(request(version))).rejects.toBe(failure);
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(h.release).toHaveBeenCalledOnce();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
 });

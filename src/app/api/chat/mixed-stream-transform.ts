@@ -2,18 +2,25 @@ import type { UIMessageChunk } from "@/lib/chat/protocol";
 
 const LIFECYCLE = new Set(["start", "start-step", "finish-step", "reset-step", "text-start", "text-end", "reasoning-start", "reasoning-end"]);
 const OLD_ENVELOPES = new Set(["model-call-start", "model-call-end", "model-call-response-metadata", "raw", "tool-input-end"]);
+const TERMINAL_STATUSES = new Set(["done", "error", "interrupted"]);
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value ?? "Unknown error");
 
 /** Native runs already use the app protocol. Keep old durable runs readable
  * while they drain: their per-model finish is not a terminal conversation. */
 export function createMixedStreamTransform(): TransformStream<unknown, UIMessageChunk> {
+  let terminalStatusSeen = false;
   return new TransformStream({ transform(value, controller) {
     if (!value || typeof value !== "object" || !("type" in value) || typeof value.type !== "string") return;
     const chunk = value as UIMessageChunk & Record<string, unknown>;
     const send = (next: UIMessageChunk) => controller.enqueue(next);
     if (OLD_ENVELOPES.has(chunk.type)) return;
+    if (chunk.type === "data-turn-status" && chunk.data && typeof chunk.data === "object" && "status" in chunk.data
+      && typeof chunk.data.status === "string" && TERMINAL_STATUSES.has(chunk.data.status)) terminalStatusSeen = true;
     if (chunk.type === "finish") {
-      if (!("finishReason" in chunk) || chunk.protocol === "deepseek-v1") send(chunk);
+      // Legacy native dialogue runs wrote their terminal finish without a
+      // protocol. Their step-owned terminal status distinguishes it from an
+      // earlier per-model finish, which must remain non-terminal on replay.
+      if (!("finishReason" in chunk) || chunk.protocol === "deepseek-v1" || terminalStatusSeen) send(chunk);
       return;
     }
     if ((chunk.type === "text-delta" || chunk.type === "reasoning-delta") && chunk.delta === undefined) {

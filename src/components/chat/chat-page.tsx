@@ -46,7 +46,6 @@ import {
   shouldDiscardRecoveredSession,
   type ArrivalGateResult,
   recoveryMessages,
-  recoveredTurnIds,
   mergeRecoveredMessages,
   mergeSavedTurns,
   type ArrivalDecision,
@@ -100,6 +99,7 @@ import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { buildDialogueRegenerationRequest } from "@/lib/chat/dialogue-regenerate";
 import { DialogueDisabled, useDialogueManuscript } from "./use-dialogue-manuscript";
 import { dialogueStreamRows } from "./dialogue-stream-rows";
+import { orderDialogueItems, unrepresentedHistory } from "./dialogue-history";
 import { DialogueWorkStatus } from "./dialogue-work-status";
 
 const DIALOGUE_ARRIVAL: ArrivalState = { mode: "briefing" };
@@ -989,7 +989,7 @@ function Inner({
     timelineSlices.length === 0 &&
     !episodicHasMore &&
     messages.length === 0 && dialogueRows.items.length === 0;
-  const showBriefingCard = arrival.mode === "briefing" && !emptyMemory;
+  const showBriefingCard = !dialogueEnabled && arrival.mode === "briefing" && !emptyMemory;
 
   // ── Arrival skeleton cover ─────────────────────────────────────────────
   // Until the mount fetches settle (the episodic state), an isomorphic
@@ -1044,36 +1044,17 @@ function Inner({
   // resume block, and the live `useDurableChat` messages.
   const [briefingTimeIso] = useState(() => new Date().toISOString());
   const items = useMemo<ChatStreamItem[]>(() => {
-    const restored = new Set(recoveredTurnIds(messages));
-    const restoredUsers = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
-    for (const entry of dialogue.projection.entries) {
-      if (entry.kind === "input") restoredUsers.add(entry.input.clientMessageId);
-      else if (entry.kind === "utterance") restored.add(entry.utterance.utteranceId);
-      else {
-        restored.add(entry.message.id);
-        if (entry.message.metadata && typeof entry.message.metadata === "object") {
-          const metadata = entry.message.metadata as Record<string, unknown>;
-          if (typeof metadata.utteranceId === "string") restored.add(metadata.utteranceId);
-          if (typeof metadata.publicationId === "string") restored.add(metadata.publicationId);
-        }
-      }
-    }
-    const history = buildHistoryItems(briefingSlices ?? [], resumeBlock).filter(
-      (item) => item.kind !== "history-turn" || (
-        (!dialogueEnabled || !item.turn.dialogue) &&
-        (!item.turn.turnId || !restored.has(item.turn.turnId)) &&
-        (item.turn.role !== "user" || !item.turn.clientMessageId || !restoredUsers.has(item.turn.clientMessageId))
-      ),
-    );
+    const history = unrepresentedHistory(buildHistoryItems(briefingSlices ?? [], resumeBlock), messages, dialogue.projection.entries);
     const card: ChatStreamItem[] = showBriefingCard
       ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
       : [];
-    return [
+    const combined = [
       ...history,
       ...card,
       ...liveItems,
       ...dialogueRows.items,
     ];
+    return dialogueEnabled ? orderDialogueItems(combined) : combined;
   }, [briefingSlices, resumeBlock, liveItems, messages, showBriefingCard, briefingTimeIso, dialogueRows.items, dialogue.projection.entries, dialogueEnabled]);
 
   /**
@@ -1536,7 +1517,8 @@ function Inner({
               onClearanceChange={onComposerClearanceChange}
               composer={<>
                 {dialogueEnabled && !panelPill && <DialogueWorkStatus works={dialogueWorks} inputs={dialogue.projection.inputs} persona={persona}
-                  expression={dialogue.expression} submission={dialogue.submission} onCancel={workId => dialogue.stop(workId)} />}
+                  expression={dialogue.expression} submission={dialogue.submission} onCancel={workId => dialogue.stop(workId)}
+                  onRetry={regenerateDialogue} onResume={dialogue.resume} />}
                 <ChatInput onSubmit={submitAndRise} isLoading={composerBusy}
                   stopLabel={dialogueEnabled ? tDialogue("stopExpression") : undefined}
                   onStop={dialogueEnabled ? () => { void dialogue.stop().catch(() => toast.error(tDialogue("stopFailed"))); } : handleStop} />

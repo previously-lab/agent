@@ -12,6 +12,7 @@ import { emptyDialogueProjection, mergeDialogueProjections, projectDialoguePage,
 
 type DialogueMode = "legacy" | "dialogue";
 
+
 export type DialogueSubmission =
   | { phase: "idle" | "submitting" | "failed" }
   | { phase: "accepted"; workId: string };
@@ -132,6 +133,8 @@ export function useDialogueManuscript(persona: string) {
     await controller.current.stop(workId);
   }, []);
 
+  const resume = useCallback(() => controller.current?.resume(), []);
+
   const projection = useMemo(() => mergeDialogueProjections(history, live), [history, live]);
-  return { mode, opened: opened.current, expression, projection, submission, submit, stop, newPublications };
+  return { mode, opened: opened.current, expression, projection, submission, submit, stop, resume, newPublications };
 }
