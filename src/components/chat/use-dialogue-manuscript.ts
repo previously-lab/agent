@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DialoguePage } from "@/lib/chat/dialogue-contract";
 import {
   DialogueParentController,
@@ -8,7 +8,8 @@ import {
   parseSubmittedUserMessage,
   type DialogueAcceptedV2,
 } from "./dialogue-parent-stream";
-import { emptyDialogueProjection, mergeDialogueProjections, projectDialoguePage, type DialogueProjection } from "./dialogue-projection";
+import { emptyDialogueProjection, type DialogueProjection } from "./dialogue-projection";
+import { getConversationWindow, type ConversationWindow } from "@/lib/episodic/conversation-window";
 
 type DialogueMode = "legacy" | "dialogue";
 
@@ -23,21 +24,21 @@ function codeOf(value: unknown) {
 
 export class DialogueDisabled extends Error {}
 
-/** v2 sends and recovery use parent/child streams only. The old Git-backed
- * projection is an optional, one-pass history read and never gates startup. */
+/** Saved records supply one preceding slice and the current conversation.
+ * Parent/child streams supply only the live work in that bounded window. */
 export function useDialogueManuscript(persona: string) {
   const [mode, setMode] = useState<DialogueMode>("dialogue");
   const [expression] = useState<DialoguePage["expression"]>("idle");
   const opened = useRef(true);
-  const [history, setHistory] = useState<DialogueProjection>(emptyDialogueProjection);
+  const [historyWindow, setHistoryWindow] = useState<ConversationWindow | null>(null);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [live, setLive] = useState<DialogueProjection>(emptyDialogueProjection);
-  const liveState = useRef(live);
   const [newPublications, setNewPublications] = useState(0);
   const [submission, setSubmission] = useState<DialogueSubmission>({ phase: "idle" });
   const controller = useRef<DialogueParentController | null>(null);
   const lifetime = useRef<AbortController | null>(null);
   const updateLive = useCallback((next: DialogueProjection) => {
-    liveState.current = next;
     setLive(next);
     setSubmission(current => current.phase === "accepted" && next.works.get(current.workId)?.status !== "queued"
       ? { phase: "idle" } : current);
@@ -53,41 +54,38 @@ export function useDialogueManuscript(persona: string) {
       onPublication: () => setNewPublications(count => count + 1),
     });
     controller.current = parent;
-    parent.start();
     const resume = () => parent.resume();
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
 
-    const readHistory = async () => {
-      let projection = emptyDialogueProjection();
-      let hasMore = true;
-      while (hasMore && !scope.signal.aborted) {
-        try {
-          const params = new URLSearchParams({ persona, after: String(projection.cursor) });
-          const response = await fetch(`/api/chat/dialogue?${params}`, {
-            credentials: "same-origin", cache: "no-store",
-            signal: AbortSignal.any([scope.signal, AbortSignal.timeout(5_000)]),
-          });
-          const payload = await response.json() as DialoguePage;
-          if (scope.signal.aborted) return;
-          if (!response.ok) {
-            if (codeOf(payload) === "dialogue_disabled" && liveState.current.entries.length === 0) {
-              opened.current = false;
-              setMode("legacy");
-            }
-            return;
-          }
-          const next = projectDialoguePage(projection, payload);
-          if (payload.hasMore && payload.cursor <= projection.cursor) return;
-          projection = next;
-          setHistory(next);
-          hasMore = payload.hasMore;
-        } catch {
-          return;
+    const loadWindow = async () => {
+      // Keep demo/legacy mode detection separate from saved history. This is
+      // one lightweight request, never an event-log page or a polling loop.
+      try {
+        const response = await fetch(`/api/chat/dialogue?capabilities=1&persona=${encodeURIComponent(persona)}`, {
+          credentials: "same-origin", signal: AbortSignal.any([scope.signal, AbortSignal.timeout(5_000)]),
+        });
+        if (response.status === 409 && codeOf(await response.json()) === "dialogue_disabled") {
+          if (!scope.signal.aborted) { opened.current = false; setMode("legacy"); }
+          return null;
         }
-      }
+      } catch { /* A failed probe must not hide the saved conversation. */ }
+      return scope.signal.aborted ? null : getConversationWindow(persona);
     };
-    void readHistory();
+    void loadWindow().then(window => {
+      if (scope.signal.aborted || !window) return;
+      setHistoryWindow(window);
+      // With no saved slice yet, restore the current local run even if its
+      // acceptance predates this reload. A real slice boundary is exclusive.
+      const since = window.previous[0]?.start ?? (window.arrival.mode === "resume" ? window.arrival.start : undefined);
+      const savedTurns = [...window.previous.flatMap(slice => slice.turns), ...(window.arrival.mode === "resume" ? window.arrival.turns : [])];
+      const savedPublications = new Set(savedTurns.flatMap(turn => turn.dialogue?.kind === "public_utterance" ? [turn.dialogue.publicationId] : []));
+      parent.start(since, savedPublications);
+    }).catch(() => {
+      if (scope.signal.aborted) return;
+      setHistoryFailed(true);
+      parent.start();
+    }).finally(() => { if (!scope.signal.aborted) setHistoryReady(true); });
     return () => {
       scope.abort();
       controller.current = null;
@@ -135,6 +133,6 @@ export function useDialogueManuscript(persona: string) {
 
   const resume = useCallback(() => controller.current?.resume(), []);
 
-  const projection = useMemo(() => mergeDialogueProjections(history, live), [history, live]);
-  return { mode, opened: opened.current, expression, projection, submission, submit, stop, resume, newPublications };
+  return { mode, opened: opened.current, expression, projection: live, submission, submit, stop, resume, newPublications,
+    historyWindow, historyReady, historyFailed };
 }

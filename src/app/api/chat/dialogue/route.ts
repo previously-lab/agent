@@ -17,6 +17,12 @@ export async function GET(request: Request): Promise<Response> {
   const rawAfter = Number(url.searchParams.get("after") ?? "0");
   const after = Number.isSafeInteger(rawAfter) && rawAfter > 0 ? rawAfter : 0;
   try {
+    // Mode detection must not read the unbounded legacy event log. The chat
+    // obtains its saved history through the one-slice conversation window.
+    if (url.searchParams.get("capabilities") === "1") {
+      resolveDialogueScope(persona);
+      return Response.json({ version: 2, enabled: true });
+    }
     const store = await getDialogueStore();
     const page = await store.page(resolveDialogueScope(persona), after, 100);
     return Response.json(page);

@@ -1,7 +1,8 @@
 /**
  * Safe, resumable projection of a thinking work's durable model stream.
- * Raw reasoning, tool payloads, provider details and native source never cross
- * the route boundary. Replaying the prefix through this filter also makes a
+ * Tool payloads, provider details and native source never cross the route
+ * boundary. The per-turn thoughts endpoint can explicitly include model
+ * reasoning in a separate channel. Replaying the prefix also makes a
  * reconnect inside a native fence safe.
  */
 import { parseNativeSections } from "@/lib/markdown/native-sections";
@@ -19,11 +20,13 @@ interface WorkPreviewEnvelope {
 export type WorkPreviewEvent = WorkPreviewEnvelope & (
   | { type: "status"; status: WorkPreviewStatus; retryAfterMs?: number }
   | { type: "text"; partId?: string; delta: string }
+  | { type: "reasoning"; partId?: string; delta: string }
   | { type: "tool"; toolCallId: string; toolName: string; state: "running" | "completed" | "failed" }
 );
 
 export type WorkPreviewSignal =
   | { type: "text"; partId?: string; delta: string }
+  | { type: "reasoning"; partId?: string; delta: string }
   | { type: "tool"; toolCallId: string; toolName: string; state: "running" | "completed" | "failed" };
 
 interface TextState {
@@ -76,7 +79,7 @@ function displayablePrefix(source: string): string {
 /** One filter instance per HTTP attachment. Raw chunks are replayed from zero
  * on resume, so this state always represents the complete prefix even when
  * the client's cursor points into the middle of a structure. */
-export function createWorkPreviewFilter() {
+export function createWorkPreviewFilter({ includeReasoning = false }: { includeReasoning?: boolean } = {}) {
   const text = new Map<string, TextState>();
   const tools = new Map<string, { toolName: string; state: "running" | "completed" | "failed" }>();
 
@@ -118,8 +121,11 @@ export function createWorkPreviewFilter() {
       const type = chunk?.type;
       if (!chunk || typeof type !== "string") return null;
 
-      // reasoning_content is carried by reasoning-delta/data-reasoning in
-      // different run generations. Neither is user-displayable preview text.
+      if (includeReasoning && type === "reasoning-delta") {
+        const delta = typeof chunk.delta === "string" ? chunk.delta
+          : typeof chunk.text === "string" ? chunk.text : "";
+        return delta ? { type: "reasoning", ...(typeof chunk.id === "string" ? { partId: chunk.id } : {}), delta } : null;
+      }
       if (type === "text-delta") {
         const delta = typeof chunk.delta === "string" ? chunk.delta
           : typeof chunk.text === "string" ? chunk.text : "";

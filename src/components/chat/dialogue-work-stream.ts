@@ -8,6 +8,7 @@ export type DialogueWorkStreamStatus = "waiting" | "live" | "completed" | "faile
 
 export type DialogueWorkStreamEvent =
   | { type: "text"; cursor: number; delta: string }
+  | { type: "reasoning"; cursor: number; delta: string }
   | { type: "tool"; cursor: number; toolCallId: string; toolName: string; state: DialogueWorkToolStatus }
   | { type: "status"; cursor: number; status: DialogueWorkStreamStatus; retryAfterMs?: number };
 
@@ -17,26 +18,36 @@ export interface DialogueWorkToolView {
   status: DialogueWorkToolStatus;
 }
 
+export type DialogueWorkActivity =
+  | { type: "text" }
+  | { type: "reasoning" }
+  | { type: "tool"; toolCallId: string };
+
 export interface DialogueWorkStreamView {
   cursor: number;
   text: string;
+  reasoning: string;
   tools: readonly DialogueWorkToolView[];
+  activity?: DialogueWorkActivity;
   status?: DialogueWorkStreamStatus;
   unavailable: boolean;
 }
 
-export const emptyDialogueWorkStream: DialogueWorkStreamView = { cursor: 0, text: "", tools: [], unavailable: false };
+export const emptyDialogueWorkStream: DialogueWorkStreamView = {
+  cursor: 0, text: "", reasoning: "", tools: [], unavailable: false,
+};
 
-/** The work stream is a deliberately narrow, safe projection. Unknown events,
- * reasoning fields and tool arguments never enter the client view model. */
+/** The work stream is a deliberately narrow, safe projection. Reasoning is
+ * accepted only through its explicit safe event; tool arguments, provider
+ * fields and error details never enter the client view model. */
 export function parseDialogueWorkStreamEvent(value: unknown): DialogueWorkStreamEvent {
   if (!value || typeof value !== "object") throw new Error("Invalid work stream event");
   const event = value as Record<string, unknown>;
   if (typeof event.workId !== "string" || !event.workId ||
     (event.runId !== undefined && typeof event.runId !== "string")) throw new Error("Invalid work stream identity");
   if (!Number.isSafeInteger(event.cursor) || (event.cursor as number) < 0) throw new Error("Invalid work stream cursor");
-  if (event.type === "text" && typeof event.delta === "string") {
-    return { type: "text", cursor: event.cursor as number, delta: event.delta };
+  if ((event.type === "text" || event.type === "reasoning") && typeof event.delta === "string") {
+    return { type: event.type, cursor: event.cursor as number, delta: event.delta };
   }
   if (event.type === "tool" && typeof event.toolCallId === "string" && event.toolCallId &&
     typeof event.toolName === "string" && event.toolName &&
@@ -57,13 +68,14 @@ export function applyDialogueWorkStreamEvent(state: DialogueWorkStreamView, even
   // is a replay duplicate. A stale status can never move the cursor backward.
   if (event.cursor < state.cursor || (event.type !== "status" && event.cursor === state.cursor)) return state;
   const next = { ...state, cursor: Math.max(state.cursor, event.cursor), unavailable: false };
-  if (event.type === "text") return { ...next, text: state.text + event.delta };
+  if (event.type === "text") return { ...next, text: state.text + event.delta, activity: { type: "text" } };
+  if (event.type === "reasoning") return { ...next, reasoning: state.reasoning + event.delta, activity: { type: "reasoning" } };
   if (event.type === "status") return { ...next, status: event.status };
   const tools = [...state.tools];
   const index = tools.findIndex(tool => tool.id === event.toolCallId);
   const tool = { id: event.toolCallId, name: event.toolName, status: event.state };
   if (index < 0) tools.push(tool); else tools[index] = tool;
-  return { ...next, tools };
+  return { ...next, tools, activity: { type: "tool", toolCallId: event.toolCallId } };
 }
 
 type Fetch = typeof fetch;
@@ -154,27 +166,57 @@ export async function streamDialogueWork({ request = fetch, wait = waitForRetry,
   }
 }
 
-/** Opening a disclosure starts a replay from the safe stream's beginning.
- * Closing or unmounting only aborts this read; work cancellation stays an
- * explicit, separate action. Reopening rebuilds instead of duplicating text. */
-export function useDialogueWorkStream(work: { workId: string; runId?: string; thoughtsUrl?: string }, persona: string, active: boolean) {
-  const [state, setState] = useState<DialogueWorkStreamView>(emptyDialogueWorkStream);
+interface DialogueWorkStreamSnapshot {
+  identity: string;
+  view: DialogueWorkStreamView;
+}
+
+/** Identity is part of the read, not just effect cleanup: a render for a new
+ * work/run can never expose the previous work's content, even before effects
+ * flush. The retry generation also gives preview reconnects a fresh replay. */
+export function dialogueWorkStreamIdentity(work: { workId: string; runId?: string; thoughtsUrl?: string }, persona: string, retry = 0) {
+  return JSON.stringify([work.workId, work.runId ?? null, work.thoughtsUrl ?? null, persona, retry]);
+}
+
+export function selectDialogueWorkStream(snapshot: DialogueWorkStreamSnapshot, identity: string): DialogueWorkStreamView {
+  return snapshot.identity === identity ? snapshot.view : emptyDialogueWorkStream;
+}
+
+/** The caller keeps this subscribed for the caption's entire mounted life.
+ * Folding is presentation-only. Unmounting aborts the read; cancelling work
+ * remains an explicit, separate action. */
+export function useDialogueWorkStream(
+  work: { workId: string; runId?: string; thoughtsUrl?: string },
+  persona: string,
+  active: boolean,
+  retry = 0,
+) {
   const workId = work.workId;
   const runId = work.runId;
   const thoughtsUrl = work.thoughtsUrl;
+  const identity = dialogueWorkStreamIdentity({ workId, runId, thoughtsUrl }, persona, retry);
+  const [snapshot, setSnapshot] = useState<DialogueWorkStreamSnapshot>({ identity, view: emptyDialogueWorkStream });
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    setState(emptyDialogueWorkStream);
+    setSnapshot({ identity, view: emptyDialogueWorkStream });
     void streamDialogueWork({
       workId, runId, thoughtsUrl, persona, signal: controller.signal,
       onEvent: event => {
-        if (!controller.signal.aborted) setState(current => applyDialogueWorkStreamEvent(current, event));
+        if (!controller.signal.aborted) {
+          setSnapshot(current => current.identity === identity
+            ? { identity, view: applyDialogueWorkStreamEvent(current.view, event) }
+            : current);
+        }
       },
     }).catch(() => {
-      if (!controller.signal.aborted) setState(current => ({ ...current, unavailable: true }));
+      if (!controller.signal.aborted) {
+        setSnapshot(current => current.identity === identity
+          ? { identity, view: { ...current.view, unavailable: true } }
+          : current);
+      }
     });
     return () => controller.abort();
-  }, [active, persona, workId, runId, thoughtsUrl]);
-  return state;
+  }, [active, identity, persona, workId, runId, thoughtsUrl]);
+  return selectDialogueWorkStream(snapshot, identity);
 }

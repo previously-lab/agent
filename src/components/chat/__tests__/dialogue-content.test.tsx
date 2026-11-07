@@ -11,13 +11,11 @@ vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams()
 let readDialogueArtifact: typeof import("../native-artifact").readDialogueArtifact;
 let DialogueContent: typeof import("../dialogue-utterance").DialogueContent;
 let RecordTurnView: typeof import("../../documents/record-turn").RecordTurnView;
-let DialogueWorkStatus: typeof import("../dialogue-work-status").DialogueWorkStatus;
 beforeAll(async () => {
   vi.stubGlobal("React", React);
   ({ readDialogueArtifact } = await import("../native-artifact"));
   ({ DialogueContent } = await import("../dialogue-utterance"));
   ({ RecordTurnView } = await import("../../documents/record-turn"));
-  ({ DialogueWorkStatus } = await import("../dialogue-work-status"));
 });
 
 const htmlSource = "<!doctype html>\r\n<p>原始 HTML</p>  \r\n";
@@ -116,35 +114,4 @@ describe("direct artifact reuse", () => {
     expect(html.indexOf("Original source")).toBeLessThan(html.indexOf("After the source."));
   });
 
-  it("offers a collapsed thought-product disclosure for a text-only result", () => {
-    const html = renderToStaticMarkup(React.createElement(DialogueWorkStatus, {
-      works: [{ workId: "work", inputId: "input", userSeq: 1, status: "completed", summary: "A concise internal finding" }],
-      inputs: new Map(), expression: "idle", persona: "user", onCancel: async () => {},
-    }));
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain("chat.dialogue.workProducts");
-    expect(html).not.toContain("A concise internal finding");
-  });
-
-  it("uses real submission and work phases without manufacturing an assistant reply", () => {
-    const queued = [{ workId: "work", inputId: "input", userSeq: 1, status: "queued" as const }];
-    for (const [submission, label] of [
-      [{ phase: "submitting" } as const, "chat.dialogue.submitting"],
-      [{ phase: "accepted", workId: "work" } as const, "chat.dialogue.received"],
-      [{ phase: "failed" } as const, "chat.dialogue.submitFailed"],
-    ] as const) {
-      const html = renderToStaticMarkup(React.createElement(DialogueWorkStatus, {
-        works: queued, inputs: new Map(), expression: "idle", persona: "user", submission, onCancel: async () => {},
-      }));
-      expect(html).toContain(label);
-      expect(html).toContain('aria-expanded="false"');
-      expect(html).not.toContain("data-public-utterance");
-    }
-    const running = renderToStaticMarkup(React.createElement(DialogueWorkStatus, {
-      works: [{ ...queued[0], status: "running" }], inputs: new Map(), expression: "idle", persona: "user",
-      submission: { phase: "accepted", workId: "work" }, onCancel: async () => {},
-    }));
-    expect(running).toContain("chat.dialogue.thinking");
-    expect(running).not.toContain("chat.dialogue.received");
-  });
 });

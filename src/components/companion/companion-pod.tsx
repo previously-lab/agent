@@ -27,12 +27,8 @@
  * Previously last said — click to read it again. That is the whole "Previously
  * is here" idea: the pod is a presence, not a notification.
  *
- * States (v0.29 §4.5 — the name tab): idle (calm, ink) / working (narration
- * or evolution in flight — the word wears the live accent and types its own
- * ellipsis; the scale-breathing orb is retired) / unread (a narration or an
- * evolution completion arrived while the panel was shut — a folded corner,
- * the dog-ear) / error (the dog-ear carries an engraved exclamation — still
- * ink, never red). The activity state is PROP-DRIVEN (`working`), not
+ * The fixed task/workflow trigger shows idle, active, unread and error states
+ * with standard shadcn/ui styling. The activity state is PROP-DRIVEN (`working`), not
  * hard-wired to narration: the evolution stream is the second source — the
  * shell subscribes to the evolution-activity bus (`lib/chat/evolution-activity.ts`)
  * and passes the run's presence down, so the same tab works while Previously
@@ -63,11 +59,29 @@
  * rung switches and view changes — the same ownership rule the dock had.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { CircleAlert, RefreshCw, X } from "lucide-react";
-import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import styles from "./companion-pod.module.css";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
 import { createRunWatchers } from "@/lib/chat/run-watchers";
@@ -164,7 +178,7 @@ function DebugRow({
   return (
     <div className="flex gap-2">
       <span className="shrink-0 text-muted-foreground/70">{label}</span>
-      <span className={`min-w-0 break-words ${mono ? "font-mono text-[10px]" : ""}`}>
+      <span className={`min-w-0 break-words ${mono ? "font-mono text-xs" : ""}`}>
         {value}
       </span>
     </div>
@@ -186,7 +200,7 @@ function DebugSection({
   return (
     <section data-companion-pod-debug={id} className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
+        <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
           {title}
         </h3>
         {action}
@@ -259,7 +273,7 @@ function HQActivityLine({
         frame.paths.length > 0 && (
         <ul className="space-y-0.5">
           {frame.paths.slice(0, 4).map((path) => (
-            <li key={path} className="break-all font-mono text-[10px]">
+            <li key={path} className="break-all font-mono text-xs">
               {path}
             </li>
           ))}
@@ -307,41 +321,99 @@ function StopMenu({
   onTier: (tier: StopTier) => void;
   t: CompanionT;
 }) {
-  const [open, setOpen] = useState(false);
+  const [confirmationTier, setConfirmationTier] = useState<StopTier | null>(null);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const pendingTierRef = useRef<StopTier | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  const closeConfirmation = () => {
+    pendingTierRef.current = null;
+    setConfirmationOpen(false);
+  };
+
   if (tiers.length === 0) return null;
   return (
-    <span className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="shrink-0 text-muted-foreground/80 underline underline-offset-2"
-      >
-        {t("hqStop")}
-      </button>
-      {open && (
-        <span className="absolute right-0 z-10 mt-1 block w-64 space-y-1 border border-paper-line bg-background p-2 shadow-sm">
+    <Dialog
+      open={confirmationOpen}
+      onOpenChange={(open) => {
+        if (!open) closeConfirmation();
+      }}
+    >
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          ref={triggerRef}
+          render={
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              className="h-auto shrink-0 px-0 text-xs font-normal text-muted-foreground"
+            />
+          }
+        >
+          {t("hqStop")}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          side="top"
+          className="w-64"
+          finalFocus={() => pendingTierRef.current ? false : triggerRef.current}
+        >
           {tiers.map((tier) => (
-            <span key={tier.tier} className="block">
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
+            <DropdownMenuItem
+              key={tier.tier}
+              onClick={() => {
+                if (!tier.confirm) {
                   onTier(tier);
-                }}
-                title={t(tier.consequenceKey)}
-                className="block w-full text-left text-foreground/90 underline-offset-2 hover:underline"
-              >
-                {t(tier.labelKey)}
-              </button>
-              <span className="block text-[10px] leading-snug text-muted-foreground/70">
+                  return;
+                }
+                pendingTierRef.current = tier;
+                setConfirmationTier(tier);
+                setConfirmationOpen(true);
+              }}
+              title={t(tier.consequenceKey)}
+              className="flex-col items-start gap-0.5 whitespace-normal"
+            >
+              <span>{t(tier.labelKey)}</span>
+              <span className="text-xs leading-snug text-muted-foreground">
                 {t(tier.consequenceKey)}
               </span>
-            </span>
+            </DropdownMenuItem>
           ))}
-        </span>
-      )}
-    </span>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DialogContent
+        showCloseButton={false}
+        initialFocus={cancelRef}
+        finalFocus={triggerRef}
+      >
+        <DialogHeader>
+          <DialogTitle>{confirmationTier && t(confirmationTier.labelKey)}</DialogTitle>
+          <DialogDescription>
+            {confirmationTier && t(confirmationTier.consequenceKey)}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose render={<Button ref={cancelRef} type="button" variant="outline" />}>
+            {t("hqStopCancel")}
+          </DialogClose>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => {
+              // Consume before dispatch so repeated activation cannot send twice.
+              const tier = pendingTierRef.current;
+              if (!tier) return;
+              closeConfirmation();
+              onTier(tier);
+            }}
+          >
+            {confirmationTier && t(confirmationTier.labelKey)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -385,7 +457,7 @@ function roleLabel(role: string | null, t: CompanionT): string {
 }
 
 /**
- * One live run as a control-panel row: the breathing live dot, the role +
+ * One live run as a control-panel row: the live status dot, the role +
  * slice/turn identity, a per-second age, and the 停 tier menu (absent for
  * rows that offer no tier — the menu renders nothing then).
  */
@@ -403,29 +475,29 @@ function RunRow({
 }) {
   const ageMs = row.ageMs === null ? null : row.ageMs + tickMs;
   return (
-    <li className="pod-slide-in flex items-center gap-2 bg-paper-plate px-2.5 py-2">
+    <li className="flex items-center gap-2 bg-muted/50 px-2.5 py-2">
       <span
         aria-hidden
-        className="chrome-live-dot size-2 shrink-0 animate-pulse rounded-sm"
+        className="size-2 shrink-0 rounded-sm bg-brand"
       />
       <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex items-baseline gap-1.5">
-          <span className="shrink-0 text-[11px] font-medium text-foreground/90">
+          <span className="shrink-0 text-xs font-medium text-foreground/90">
             {roleLabel(row.role, t)}
           </span>
-          <span className="truncate font-mono text-[10px] text-muted-foreground">
+          <span className="truncate font-mono text-xs text-muted-foreground">
             {row.slice ?? "—"}
             {row.turn ? ` · ${row.turn}` : ""}
           </span>
         </div>
         {(row.status !== "running" || row.burst) && (
-          <div className="font-mono text-[10px] text-muted-foreground/70">
+          <div className="font-mono text-xs text-muted-foreground/70">
             {row.status}
             {row.burst ? ` · ${t("hqRunRowBurst", { suffix: burstDisplaySuffix(row.burst) })}` : ""}
           </div>
         )}
       </div>
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
         {fmtDuration(ageMs)}
       </span>
       <StopMenu
@@ -445,7 +517,7 @@ function DegradedLine({ text, noteKey, detail, t }: { text: string; noteKey: str
     <p className="break-words text-muted-foreground/80" title={detail ?? undefined}>
       {text}
       {noteKey && (
-        <span className="block text-[10px] text-muted-foreground/60">{t(noteKey)}</span>
+        <span className="block text-xs text-muted-foreground/60">{t(noteKey)}</span>
       )}
     </p>
   );
@@ -463,7 +535,6 @@ function WorklogTabs({
   t,
   locale,
   activity,
-  live,
   open,
   requestCancel,
 }: {
@@ -476,12 +547,10 @@ function WorklogTabs({
   t: CompanionT;
   locale: string;
   activity: HQActivityFrame[];
-  live: boolean;
   open: boolean;
   /** Executes a tier's cancels through the existing endpoint, then re-reads. */
   requestCancel: (targets: string[]) => void;
 }) {
-  const [tab, setTab] = useState<"status" | "workflows">("status");
   const nowMs = useNowTick(open);
 
   const timeFmt = new Intl.DateTimeFormat(locale, {
@@ -526,15 +595,8 @@ function WorklogTabs({
   const allRows = runs.state === "live" ? runs.live : [];
   const reflectionRunId = reflection.state === "live" ? reflection.runId : null;
 
-  /** §2.3 — only interrupting an ANSWER confirms; the cost rides the tooltip. */
+  /** StopMenu confirms disruptive tiers before reaching the existing cancel path. */
   const handleTier = (tier: StopTier, row: PanelRunRow) => {
-    if (
-      tier.confirm &&
-      typeof window !== "undefined" &&
-      !window.confirm(t(tier.consequenceKey))
-    ) {
-      return;
-    }
     requestCancel(resolveStopTargets(tier.tier, row, allRows, reflectionRunId));
   };
 
@@ -553,36 +615,19 @@ function WorklogTabs({
   const newestRound = log?.state === "live" ? log.recentRounds[0] : undefined;
 
   return (
-    <div className="space-y-3">
-      {/* The segmented control — square, ink block on the active segment,
-          a 150ms colour settle (no layout shift). Sticky: it never scrolls
-          away, whatever the zone below grows into. */}
-      <div
-        role="tablist"
+    <Tabs defaultValue="status" className="gap-3">
+      <TabsList
         aria-label={t("wfTabsLabel")}
-        className="sticky top-0 z-10 flex gap-0.5 border border-paper-line bg-paper p-0.5"
+        className="sticky top-0 z-10 grid w-full grid-cols-2"
       >
-        {(["status", "workflows"] as const).map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            onClick={() => setTab(id)}
-            className={`flex-1 px-2 py-1 text-[11px] transition-colors duration-150 ${
-              tab === id
-                ? "bg-foreground text-background"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {t(id === "status" ? "wfTabStatus" : "wfTabWorkflows")}
-          </button>
-        ))}
-      </div>
-
-      <div key={tab} className="pod-fade space-y-4">
-        {tab === "status" ? (
-          <>
+        <TabsTrigger value="status" className="text-xs">
+          {t("wfTabStatus")}
+        </TabsTrigger>
+        <TabsTrigger value="workflows" className="text-xs">
+          {t("wfTabWorkflows")}
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="status" className="space-y-4">
             {/* ── 正在对话 ── */}
             <DebugSection id="talking" title={t("wfTalking")}>
               {runs.state === "live" ? (
@@ -608,7 +653,7 @@ function WorklogTabs({
                 <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
               )}
               {log?.state === "live" && log.recentSummaries[0] && (
-                <p className="font-mono text-[10px] text-muted-foreground/70">
+                <p className="font-mono text-xs text-muted-foreground/70">
                   {t("wfLastArchive", {
                     page: log.recentSummaries[0].slice,
                     time: fmtTime(log.recentSummaries[0].at),
@@ -628,12 +673,12 @@ function WorklogTabs({
                   {/* The live beat rides the subtitle seat — the newest frame
                       crossfades in (keyed), the run's own words over the poll. */}
                   {latestBeat && (
-                    <p key={`${latestBeat.kind}-${latestBeat.at}`} className="pod-fade text-[11px] text-foreground/80">
+                    <p key={`${latestBeat.kind}-${latestBeat.at}`} className="text-xs text-foreground/80">
                       {hqActivityLabel(latestBeat, t)}
                     </p>
                   )}
                   {reflection.attributes.rounds !== undefined && (
-                    <p className="text-[11px] text-foreground/80">
+                    <p className="text-xs text-foreground/80">
                       {t("wfRoundsDone", { count: reflection.attributes.rounds })}
                     </p>
                   )}
@@ -708,15 +753,15 @@ function WorklogTabs({
                         {log.recentSummaries.slice(0, 3).map((s) => (
                           <li
                             key={`${s.slice}-${s.at ?? ""}`}
-                            className="pod-slide-in space-y-0.5 bg-paper-plate px-2.5 py-2"
+                            className="space-y-0.5 bg-muted/50 px-2.5 py-2"
                           >
                             <div className="flex items-baseline justify-between gap-2">
-                              <span className="truncate font-mono text-[10px]">{s.slice}</span>
-                              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                              <span className="truncate font-mono text-xs">{s.slice}</span>
+                              <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
                                 {fmtTime(s.at)}
                               </span>
                             </div>
-                            <p className="text-[11px] text-foreground/80">
+                            <p className="text-xs text-foreground/80">
                               {t("wfSummaryLanded", {
                                 turns: s.userTurns,
                                 replies: s.replies,
@@ -726,7 +771,7 @@ function WorklogTabs({
                             {s.failed.length > 0 && (
                               <div className="space-y-0.5">
                                 {s.failed.map((f) => (
-                                  <p key={f.turn} className="text-[10px] text-muted-foreground/80">
+                                  <p key={f.turn} className="text-xs text-muted-foreground/80">
                                     {t("wfFailedNote", { turn: f.turn, status: f.status })}
                                   </p>
                                 ))}
@@ -747,14 +792,14 @@ function WorklogTabs({
                 />
               )}
             </DebugSection>
-          </>
-        ) : (
-          /* ── 工作流: the control panel — EVERY live run in one table ── */
-          <DebugSection id="workflows" title={t("wfTabWorkflows")}>
+      </TabsContent>
+      <TabsContent value="workflows">
+        {/* The control panel: every live run in one table. */}
+        <DebugSection id="workflows" title={t("wfTabWorkflows")}>
             {runs.state === "live" ? (
               allRows.length > 0 ? (
                 <>
-                  <p className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                  <p className="font-mono text-xs tabular-nums text-muted-foreground/70">
                     {t("wfRunCount", { count: allRows.length })}
                   </p>
                   {runList(allRows)}
@@ -765,10 +810,9 @@ function WorklogTabs({
             ) : (
               <DegradedLine text={t("hqRunsUnavailable")} noteKey={runsNoteKey} t={t} />
             )}
-          </DebugSection>
-        )}
-      </div>
-    </div>
+        </DebugSection>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -815,10 +859,8 @@ function CompanionPodBody({
   target,
   onDismiss,
   onRetry,
-  reducedMotion,
   working = false,
   evolution,
-  hideNavigation = false,
 }: {
   target: NarrationTarget | null;
   /** End the narration and put the pod away (shell clears the target; the
@@ -826,24 +868,20 @@ function CompanionPodBody({
   onDismiss: () => void;
   /** Re-request a slice — a fresh gen, so it cancels whatever came before. */
   onRetry: NarrateRequest;
-  reducedMotion: boolean;
   /**
    * A second event source (the evolution stream, published by the chat page
    * onto the evolution-activity bus) drives the button's working state
-   * without a narration. `speaking || working` is what the button breathes
+   * without a narration. `speaking || working` marks the button active
    * for.
    */
   working?: boolean;
   /**
    * The evolution stream's presence, same source as `working` — while a run
-   * is in flight the button breathes, and when the panel opens with no
+   * is in flight the button is active, and when the panel opens with no
    * narration to show, the latest evolution event takes the prose seat.
    * Absent entirely on the bridge brain (no inline evolution there).
    */
   evolution?: EvolutionPresence;
-  /** Conversation owns its primary control. Explicit HQ/narration panels
-   * still open here, but their navigation tab belongs to other surfaces. */
-  hideNavigation?: boolean;
 }) {
   const t = useTranslations("companion");
   const locale = useLocale();
@@ -921,7 +959,7 @@ function CompanionPodBody({
   // ── Debug: the HQ activity face ───────────────────────────────────────────
   // v0.11 streams — EVENT-DRIVEN, no GitHub polling:
   //   status (reflection + runs, ZERO GitHub calls): first open + every 3s —
-  //     the breathing point's clock; also what closed-panel discovery reads.
+  //     the live status clock; also what closed-panel discovery reads.
   //   log (水位 / rounds / archives, the GitHub read): first open + a watched
   //     run's stream terminal (debounced 1s across simultaneous finishes) +
   //     the manual refresh — never on the 3s clock.
@@ -982,7 +1020,7 @@ function CompanionPodBody({
   // The pointer names the running run (runId, written by the claiming run
   // itself); the run's durable stream REPLAYS, so "reconnect" is just
   // re-attaching — a reload's mount-time discovery below lands here. While
-  // attached, frames drive everything (the beat log, the breathing button)
+  // attached, frames drive everything (the beat log and the active button)
   // and no polling runs; the stream's own end (EOF after the run packs up,
   // or a 404 when the world forgot the run) is the detach signal.
   const [hqActivity, setHqActivity] = useState<HQActivityFrame[]>([]);
@@ -1162,7 +1200,7 @@ function CompanionPodBody({
   const speaking =
     target !== null && (status === "connecting" || status === "streaming");
   // v0.39 §1 — roundActive retired with hq.json: round liveness is a
-  // STREAM-side signal, so breathing follows the live attachment itself.
+  // STREAM-side signal, so the active state follows the live attachment itself.
   const hqBreathing = hqLive;
   const active = speaking || working || hqBreathing;
   const hasLiveTarget = target !== null;
@@ -1170,8 +1208,7 @@ function CompanionPodBody({
       (still ink, never red). */
   const narrationError = hasLiveTarget && status === "error";
   /** An unread completion: a narration or an evolution event landed while
-      the panel was shut. Opening the panel clears it — the dog-ear is a
-      "there is something to read" mark, not a notification badge. */
+      the panel was shut. Opening the panel clears its unread marker. */
   const [unread, setUnread] = useState(false);
   useEffect(() => {
     if (status === "done" && !open) setUnread(true);
@@ -1189,14 +1226,6 @@ function CompanionPodBody({
     evolution && (evolution.working || evolution.latest),
   );
 
-  const toggle = () => {
-    // Debug phase: the button always opens the panel. Even with nothing in
-    // the prose seat the two debug blocks below (HQ activity + memory map)
-    // are worth reaching — the old "quiet pet does not perform an empty
-    // trick" guard went when they arrived.
-    setOpen((o) => !o);
-  };
-
   const closePanel = () => {
     if (hasLiveTarget) {
       // The dock's contract, kept: ✕ on a live (or finished) narration ends
@@ -1212,140 +1241,107 @@ function CompanionPodBody({
   return (
     <div
       data-companion-pod-root
-      // z-[51]: the fullscreen conversation takes z-50 and is mounted AFTER
-      // this subtree, so an equal z loses the tie and the pod disappears
-      // behind the chat. One step above keeps the pod reachable at every
-      // tier; the panel itself never goes this high, so a portaled dialog
-      // still paints over the conversation (the fault that note records).
-      // No z-token exists between 50 and the next step, hence the arbitrary
-      // value; it is the single justified exception here.
-      className="pointer-events-none fixed right-2 z-[51] flex flex-col items-end md:right-4 companion-pod-root"
+      className={`${styles.root} pointer-events-none fixed right-2 z-50 flex flex-col items-end md:right-4 companion-pod-root`}
     >
-      <button
-        type="button"
-        data-companion-pod
-        hidden={hideNavigation}
-        style={hideNavigation ? { display: "none" } : undefined}
-        data-active={active}
-        aria-label={t("podLabel")}
-        title={t("podLabel")}
-        aria-expanded={open}
-        onClick={toggle}
-        // The name tab (v0.29 §4.5): a matte square label engraved with
-        // the companion's name — the desk plaque for "Previously is here",
-        // not a breathing orb. working wears the live accent and types its
-        // own ellipsis; unread folds the corner (the dog-ear); error keeps
-        // the flap and engraves an exclamation. The scale-breathing pulse
-        // is retired — presence is print, not performance.
-        className={`${ISLAND} chrome-podtab pointer-events-auto ${
-          active
-            ? "is-working"
-            : narrationError
-              ? "is-error"
-              : unread
-                ? "is-unread"
-                : ""
-        }`}
-      >
-        {t("nameTab")}
-        {active && (
-          <span className="chrome-dots" aria-hidden="true">
-            <span>·</span>
-            <span>·</span>
-            <span>·</span>
-          </span>
-        )}
-        {narrationError && (
-          <span className="chrome-podtab-mark" aria-hidden="true">
-            !
-          </span>
-        )}
-      </button>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              data-companion-pod
+              data-active={active}
+              aria-label={t("wfTabWorkflows")}
+              title={t("wfTabWorkflows")}
+              className="pointer-events-auto gap-1.5 font-mono text-xs data-[active=true]:border-brand/50 data-[active=true]:bg-brand/10 data-[active=true]:text-brand"
+            />
+          }
+        >
+          {t("nameTab")}
+          {active && (
+            <span aria-hidden className="size-1.5 rounded-full bg-current" />
+          )}
+          {narrationError ? (
+            <CircleAlert aria-hidden className="size-3.5" />
+          ) : unread ? (
+            <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+          ) : null}
+        </PopoverTrigger>
 
-      <AnimatePresence>
-        {open && (
-          <motion.aside
-            key="companion-pod-panel"
-            data-companion-pod-panel
-            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
-            transition={
-              reducedMotion
-                ? { duration: 0 }
-                : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }
-            }
-            aria-label={t("dockLabel")}
-            // The panel is PAPER — it keeps the grain (the no-texture ruling
-            // covers chrome; the sheet's own texture stays) — and square
-            // (v0.29 §4.5), one contact shadow.
-            className="chrome-panel-paper pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(34rem,calc(100dvh-16rem))] w-[min(26rem,calc(100vw-2rem))] flex-col text-card-foreground"
-          >
-            {/* Chrome — sans, and it never scrolls away: the flex column caps
-                the panel's height and the prose below takes the overflow. The
-                dot is the state: the paper accent while the mouth speaks (the
-                live state is the accent's meaning), still ink on a replay, an
-                alert mark when it could not. */}
+        <PopoverContent
+          data-companion-pod-panel
+          side="top"
+          align="end"
+          sideOffset={8}
+          aria-label={t("wfTabWorkflows")}
+          className={`${styles.panel} pointer-events-auto gap-0 overflow-hidden p-0`}
+        >
+            {/* The header stays fixed while the body uses the remaining height. */}
             <div className="flex shrink-0 items-center gap-2 px-4 pt-3">
+              <span className="text-sm font-medium">{t("wfTabWorkflows")}</span>
               {narrationError ? (
                 <CircleAlert aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
               ) : (
                 <span
                   aria-hidden
-                  className={`size-1.5 shrink-0 rounded-[1px] ${
-                    active ? "chrome-live-dot" : "bg-muted-foreground/50"
-                  } ${speaking && !reducedMotion ? "animate-pulse" : ""}`}
+                  className={`size-1.5 shrink-0 rounded-sm ${
+                    active ? "bg-brand" : "bg-muted-foreground/50"
+                  }`}
                 />
               )}
               {headerTimeLabel && (
-                <span className="font-sans font-mono text-[10px] tabular-nums tracking-[0.08em] text-muted-foreground/70">
+                <span className="font-mono text-xs tabular-nums tracking-wide text-muted-foreground/70">
                   {headerTimeLabel}
                 </span>
               )}
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 onClick={closePanel}
                 aria-label={t("close")}
                 title={t("close")}
-                className={`${ISLAND_CONTROL} ml-auto size-6`}
+                className="ml-auto"
               >
                 <X className="size-3.5" />
-              </button>
+              </Button>
             </div>
 
             {/* Prose — serif. Plain text, line breaks preserved; no markdown. */}
-            <div className="min-h-0 overflow-y-auto">
+            <ScrollArea className={styles.scroll}>
               {target && status === "error" ? (
                 <div className="px-4 pb-4 pt-2">
                   {/* A cut narration keeps the part that WAS told above the
                       error note — the stream's failure marker is stripped by
                       the helper, so `text` here is real prose only. */}
                   {text && (
-                    <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                    <p className="whitespace-pre-wrap font-serif text-sm font-light leading-relaxed text-foreground/90">
                       {text}
                     </p>
                   )}
                   <p
-                    className={`font-serif text-[13px] font-light leading-relaxed text-muted-foreground ${
+                    className={`font-serif text-sm font-light leading-relaxed text-muted-foreground ${
                       text ? "mt-2" : ""
                     }`}
                   >
                     {error ? errorMessage(error, t) : t("errorGeneric")}
                   </p>
-                  <button
+                  <Button
                     type="button"
+                    variant="link"
+                    size="sm"
                     onClick={() => onRetry(target.sliceId, target.timeLabel)}
-                    className="mt-2 font-sans text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                    className="mt-2 h-auto px-0 font-sans text-xs font-normal text-muted-foreground"
                   >
                     {t("retry")}
-                  </button>
+                  </Button>
                 </div>
               ) : target && text ? (
                 <div aria-live="polite" className="px-4 pb-4 pt-2">
-                  <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                  <p className="whitespace-pre-wrap font-serif text-sm font-light leading-relaxed text-foreground/90">
                     {text}
                     {speaking && (
-                      <span aria-hidden className="chrome-live animate-pulse">
+                      <span aria-hidden className="text-brand">
                         ▍
                       </span>
                     )}
@@ -1355,7 +1351,7 @@ function CompanionPodBody({
                 /* No chunk yet — the thinking line reserves the body so the
                     card does not jump when the first words land. */
                 <div className="px-4 pb-4 pt-2">
-                  <p className="font-serif text-[13px] font-light italic leading-relaxed text-muted-foreground/80">
+                  <p className="font-serif text-sm font-light italic leading-relaxed text-muted-foreground/80">
                     {t("thinking")}
                   </p>
                 </div>
@@ -1363,7 +1359,7 @@ function CompanionPodBody({
                 /* The replay — what Previously last said, kept after the
                     stream was dismissed. Read-only: no caret, no retry. */
                 <div aria-live="polite" className="px-4 pb-4 pt-2">
-                  <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                  <p className="whitespace-pre-wrap font-serif text-sm font-light leading-relaxed text-foreground/90">
                     {latest.text}
                   </p>
                 </div>
@@ -1375,15 +1371,15 @@ function CompanionPodBody({
                     the event is presence, not a notification to dismiss. */
                 <div aria-live="polite" className="px-4 pb-4 pt-2">
                   {evolution?.working ? (
-                    <p className="font-serif text-[13px] font-light italic leading-relaxed text-muted-foreground/80">
+                    <p className="font-serif text-sm font-light italic leading-relaxed text-muted-foreground/80">
                       {t("evolutionWorking")}
                     </p>
                   ) : evolution?.latest?.failed ? (
-                    <p className="font-serif text-[13px] font-light leading-relaxed text-muted-foreground">
+                    <p className="font-serif text-sm font-light leading-relaxed text-muted-foreground">
                       {t("evolutionFailed")}
                     </p>
                   ) : (
-                    <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                    <p className="whitespace-pre-wrap font-serif text-sm font-light leading-relaxed text-foreground/90">
                       {evolution?.latest?.summary?.trim()
                         ? evolution.latest.summary
                         : t("evolvedFallback")}
@@ -1395,26 +1391,27 @@ function CompanionPodBody({
               {/* v0.43 — the workflow panel IS the panel's face: two tabs
                   (状态 / 工作流) over the four status zones; nothing folds,
                   the data attributes stay for the probes. */}
-              <div className="chrome-worklog">
+              <div className="border-t border-border">
                 <div
                   data-companion-pod-debug
-                  className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
+                  className="space-y-3 px-4 pb-3 font-sans text-xs leading-relaxed text-foreground/80"
                 >
                   <div className="flex items-center justify-end">
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => {
-                        // v0.11 streams — the manual refresh: status AND log
-                        // (the log read is event-triggered otherwise).
+                        // The manual refresh reads status AND log; the log is
+                        // event-triggered otherwise.
                         void loadStatus();
                         void loadLog();
                       }}
                       aria-label={t("debugRefresh")}
                       title={t("debugRefresh")}
-                      className={`${ISLAND_CONTROL} size-5`}
                     >
                       <RefreshCw className="size-3" />
-                    </button>
+                    </Button>
                   </div>
                   <WorklogTabs
                     data={hq}
@@ -1424,7 +1421,6 @@ function CompanionPodBody({
                     t={t}
                     locale={locale}
                     activity={hqActivity}
-                    live={hqLive}
                     open={open}
                     requestCancel={(targets) => {
                       // §4.3/§2.3 — the panel's ONLY write, through the
@@ -1441,21 +1437,22 @@ function CompanionPodBody({
                 </div>
                 <div
                   data-companion-pod-debug
-                  className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
+                  className="space-y-3 px-4 pb-3 font-sans text-xs leading-relaxed text-foreground/80"
                 >
                   <DebugSection
                     id="memory"
                     title={t("debugMemoryTitle")}
                     action={
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => void loadMemoryMap()}
                         aria-label={t("debugRefresh")}
                         title={t("debugRefresh")}
-                        className={`${ISLAND_CONTROL} size-5`}
                       >
                         <RefreshCw className="size-3" />
-                      </button>
+                      </Button>
                     }
                   >
                     <MemoryDebugSection
@@ -1466,10 +1463,9 @@ function CompanionPodBody({
                   </DebugSection>
                 </div>
               </div>
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
+            </ScrollArea>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

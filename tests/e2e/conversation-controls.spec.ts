@@ -60,7 +60,11 @@ async function installHeldChat(page: Page) {
   });
 }
 
-test.afterEach(async () => { await clearCases(); await clearEpisodic(); });
+test.afterEach(async ({ page }) => {
+  // The arrival gate may still have a background action in flight at teardown.
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  await clearCases(); await clearEpisodic();
+});
 
 for (const view of [
   { name: "desktop", width: 1440, height: 1000, mobile: false, reduced: false },
@@ -120,7 +124,7 @@ for (const view of [
       expect(box.x + box.width).toBeLessThanOrEqual(viewport.width - 8);
       expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
       expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
-      await expect(page.locator("[data-companion-pod]:visible")).toHaveCount(0);
+      await expect(page.locator("[data-companion-pod]:visible")).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const photos = await draftPhotos(page).locator("[data-photo-media]").evaluateAll(nodes => nodes.map(node => {
         const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };

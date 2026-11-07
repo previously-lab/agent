@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
-import { useReducedMotion } from "motion/react";
 import { useTranslations } from "next-intl";
 import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +21,6 @@ import { TaskPanel } from "@/components/tasks/task-panel";
 import type { TaskPanelEvent } from "@/components/tasks/events";
 import { useNativeSourceScope } from "@/components/chat/native-source-scope";
 import { useShell } from "@/components/shell/shell-provider";
-import { workspaceSurface } from "@/lib/workspace/navigation";
 
 export function WorkspaceFeatures() {
   const pathname = usePathname();
@@ -30,8 +28,7 @@ export function WorkspaceFeatures() {
   const sourceScope = useNativeSourceScope();
   const persona = searchParams.get("persona") ?? "user";
   const lane = JSON.stringify([sourceScope, persona]);
-  const { screen, panelMode } = useShell();
-  const reducedMotion = useReducedMotion() ?? false;
+  const { screen } = useShell();
   const tCompanion = useTranslations("companion");
   const [narrateTarget, setNarrateTarget] = useState<NarrationTarget | null>(null);
   const narrateGenRef = useRef(0);
@@ -68,11 +65,9 @@ export function WorkspaceFeatures() {
     <div data-workspace-features className="workspace-features">
       <TaskPanel key={lane} onEvent={onTaskPanelEvent} />
       <CompanionPod
-        hideNavigation={workspaceSurface(pathname, searchParams.toString()) === "conversation" || panelMode === "fullscreen"}
         target={narrateTarget}
         onDismiss={() => setNarrateTarget(null)}
         onRetry={startNarration}
-        reducedMotion={reducedMotion}
         working={evolution.working}
         evolution={evolution}
       />

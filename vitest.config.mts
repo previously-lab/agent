@@ -17,6 +17,7 @@ export default defineConfig({
     // above does not catch.
     exclude: [
       "tests/e2e/**",
+      "tests/qa/**",
       "node_modules/**",
       ".next*/**",
       "dist-kernel/**",

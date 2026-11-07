@@ -1,0 +1,29 @@
+.root.root {
+  bottom: calc(13.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.panel.panel {
+  animation: none;
+  width: min(24rem, calc(100vw - 2rem));
+  height: min(34rem, var(--available-height, calc(100dvh - 1rem)));
+}
+
+.scroll {
+  flex: 1 1 0%;
+  min-height: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* PopoverContent portals next to the body-level pod. Keep the positioner at
+   the conversation's level so DOM order puts the task centre above it, while
+   dialogs opened later still paint above both. */
+:global(.isolate:has(> [data-companion-pod-panel])) {
+  z-index: 50;
+}
+
+@media (max-width: 767px) {
+  .panel {
+    width: calc(100vw - 2rem);
+  }
+}

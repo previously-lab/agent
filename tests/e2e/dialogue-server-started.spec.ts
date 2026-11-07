@@ -2,7 +2,12 @@ import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { E2E_BASE_URL, E2E_DIALOGUE_PROVIDER_ROOT, E2E_MEMORY_ROOT, E2E_WORKFLOW_ROOT } from "./env";
+import { E2E_BASE_URL as DEFAULT_BASE_URL, E2E_DIALOGUE_PROVIDER_ROOT as DEFAULT_PROVIDER_ROOT, E2E_MEMORY_ROOT as DEFAULT_MEMORY_ROOT, E2E_WORKFLOW_ROOT as DEFAULT_WORKFLOW_ROOT } from "./env";
+const isolatedRoot = process.env.SCROLL_QA_FIXTURE_ROOT;
+const E2E_BASE_URL = process.env.SCROLL_QA_BASE_URL ?? DEFAULT_BASE_URL;
+const E2E_DIALOGUE_PROVIDER_ROOT = process.env.SCROLL_QA_PROVIDER_ROOT ?? (isolatedRoot ? path.join(isolatedRoot, "home", "dialogue-provider") : DEFAULT_PROVIDER_ROOT);
+const E2E_MEMORY_ROOT = isolatedRoot ? path.join(isolatedRoot, "memory") : DEFAULT_MEMORY_ROOT;
+const E2E_WORKFLOW_ROOT = isolatedRoot ? path.join(isolatedRoot, "workflow") : DEFAULT_WORKFLOW_ROOT;
 import { readChatEvents } from "@/lib/chat/client-stream";
 
 type Frame = Record<string, unknown> | "keepalive";
@@ -182,7 +187,7 @@ async function backgroundRecordRun(offerId: string): Promise<{ status: string } 
 }
 
 function assistantReply(page: Page, firstText: string) {
-  return page.locator('[data-conversation-turn][data-role="assistant"]').filter({ hasText: firstText });
+  return page.getByRole("article", { name: "Previously" }).filter({ hasText: firstText });
 }
 
 test.describe.configure({ mode: "serial" });
@@ -253,7 +258,7 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
 
   const accepted = await sendThroughComposer(page, userText, persona);
   const historyReadsAtAcceptance = gitHotPathRequests.length;
-  const disclosure = page.locator(".dialogue-work-disclosure");
+  const disclosure = page.locator(`[data-dialogue-work="${accepted.workId}"] [data-dialogue-work-caption]`);
   await expect(disclosure).toBeVisible();
   await expect(page.locator("[data-conversation-primary]")).toHaveAttribute("data-primary-action", "stop");
   await expect.poll(async () => (await capturedRequests(parentFinalId)).length).toBe(1);
@@ -263,16 +268,15 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
   try {
     await disclosure.click();
     await expect(disclosure).toHaveAttribute("aria-expanded", "true");
-    const output = page.locator(`[data-dialogue-work="${accepted.workId}"] .dialogue-work-output`);
-    await expect(output.locator("pre")).toContainText(safeThinking);
-    await expect(output.locator(".dialogue-work-tool-name").first()).toHaveText("currentTime");
+    const output = page.locator(`[data-dialogue-work="${accepted.workId}"] [data-dialogue-thought-content]`);
+    await expect(output).toContainText(safeThinking);
     await expect(output).toContainText(safeOffer);
     await expect(output).not.toContainText("offerReply");
-    await expect(output).not.toContainText(privateReasoning);
+    await expect(output).toContainText(privateReasoning);
     await expect(output).not.toContainText(rawToolPayload);
     await disclosure.click();
     await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    await expect(output).toHaveCount(0);
+    await expect(output).not.toBeVisible();
     expect(stopRequests).toEqual([]);
 
     // offerReply, not the gated parent fallback, starts the public child.
@@ -300,7 +304,7 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
     await expect(reply).toHaveCount(1);
     await expect(reply).toContainText(firstPublic);
     await expect(reply).not.toContainText(secondPublic);
-    await expect(reply).not.toContainText(privateReasoning);
+    await expect(reply.locator(".conversation-prose")).not.toContainText(privateReasoning);
     await expect(reply).not.toContainText(rawToolPayload);
     await expect(reply).not.toContainText("```html");
     await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -383,8 +387,8 @@ test("v2 provider failure is distinct from background summary state", async ({ p
   ]);
   const accepted = await sendThroughComposer(page, userText, persona);
   expect(accepted.version).toBe(2);
-  const disclosure = page.locator(".dialogue-work-disclosure");
-  await expect(disclosure).toContainText("Something went wrong");
+  const disclosure = page.locator(`[data-dialogue-work="${accepted.workId}"] [data-dialogue-work-caption]`);
+  await expect(disclosure).toContainText("Reply incomplete");
   await expect(page.locator("[data-conversation-primary]")).toHaveAttribute("data-primary-action", "send");
   await expect(assistantReply(page, token)).toHaveCount(0);
   expect(fs.existsSync(path.join(E2E_MEMORY_ROOT, ".git"))).toBe(false);

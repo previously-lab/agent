@@ -49,6 +49,55 @@ function memoryStorage() {
 }
 
 describe("v2 parent and public child transport", () => {
+  it("keeps the native fetch receiver when stopping accepted work", async () => {
+    const scope = new AbortController();
+    const request = vi.spyOn(globalThis, "fetch").mockImplementation(async function (this: unknown, url) {
+      expect(this).toBe(globalThis);
+      return String(url).endsWith("/cancel") ? Response.json({ ok: true })
+        : sse([{ type: "done", status: "running", retryAfterMs: 60_000 }]);
+    });
+    try {
+      const controller = new DialogueParentController({ persona: "fixture", signal: scope.signal,
+        storage: memoryStorage(), onProjection: () => {}, onPublication: () => {} });
+      controller.accept(acceptance);
+      await controller.stop(acceptance.workId);
+      expect(request).toHaveBeenCalledWith("/api/chat/parent-1/cancel", expect.objectContaining({ method: "POST" }));
+    } finally {
+      scope.abort();
+      request.mockRestore();
+    }
+  });
+
+  it.each([true, false])("does not replay local runs outside the loaded slice window (done=%s)", done => {
+    const storage = memoryStorage();
+    storage.setItem("previously:dialogue:parents:v2:fixture", JSON.stringify([{ ...acceptance,
+      acceptedAt: "2026-10-01T00:00:00.000Z", done, offers: [{ offerId: "old-offer", runId: "old-child", sourceInputId: "input-1" }],
+      userMessage: { id: "client-1", role: "user", parts: [{ type: "text", text: "Old question" }] },
+    }]));
+    const request = vi.fn();
+    let latest: DialogueProjection | undefined;
+    const controller = new DialogueParentController({ persona: "fixture", signal: new AbortController().signal,
+      request, storage, onProjection: next => { latest = next; }, onPublication: () => {} });
+    controller.start("2026-11-07T00:00:00.000Z");
+    expect(latest?.entries).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps saved publications in their stable record rows instead of replaying and replacing them", () => {
+    const storage = memoryStorage();
+    storage.setItem("previously:dialogue:parents:v2:fixture", JSON.stringify([{ ...acceptance,
+      acceptedAt: "2026-11-07T01:00:00.000Z", done: true, offers: [{ offerId: "saved-offer", runId: "saved-child", sourceInputId: "input-1" }],
+      userMessage: { id: "client-1", role: "user", parts: [{ type: "text", text: "Already saved" }] },
+    }]));
+    const request = vi.fn();
+    let latest: DialogueProjection | undefined;
+    const controller = new DialogueParentController({ persona: "fixture", signal: new AbortController().signal,
+      request, storage, onProjection: next => { latest = next; }, onPublication: () => {} });
+    controller.start("2026-11-07T00:00:00.000Z", new Set(["saved-offer"]));
+    expect(latest?.entries).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("validates the agreed envelope and admitted offer identities", () => {
     expect(parseDialogueAcceptedV2(acceptance)).toEqual(acceptance);
     expect(() => parseDialogueAcceptedV2({ ...acceptance, version: 1 })).toThrow("Invalid dialogue acceptance");

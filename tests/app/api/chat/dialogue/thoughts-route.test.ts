@@ -7,6 +7,7 @@ import { GET } from "@/app/api/chat/[runId]/thoughts/route";
 
 it("replays safe text and real tool status while hiding the internal offer trigger", async () => {
   const chunks = [
+    { type: "reasoning-delta", id: "thought", delta: "Thinking about this prompt" },
     { type: "text-delta", id: "text", delta: "safe result" },
     { type: "tool-input-available", toolCallId: "time", toolName: "currentTime" },
     { type: "tool-output-available", toolCallId: "time", output: "private payload" },
@@ -26,6 +27,8 @@ it("replays safe text and real tool status while hiding the internal offer trigg
   });
   const text = await response.text();
   expect(text).toContain("safe result");
+  expect(text).toContain('"type":"reasoning"');
+  expect(text).toContain("Thinking about this prompt");
   expect(text).toContain("currentTime");
   expect(text).not.toContain("offerReply");
   expect(text).not.toContain("private payload");

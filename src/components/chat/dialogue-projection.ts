@@ -7,7 +7,7 @@ export type DialogueWorkView = DialogueWork & { thoughtsUrl?: string; connection
 export type ManuscriptEntry =
   | { kind: "input"; id: string; input: DialogueInput }
   | { kind: "utterance"; id: string; utterance: PublicUtterance; artifactBodies?: ReadonlyMap<string, string> }
-  | { kind: "message"; id: string; message: UIMessage; timeIso: string; isStreaming: boolean };
+  | { kind: "message"; id: string; sourceInputId?: string; message: UIMessage; timeIso: string; isStreaming: boolean };
 
 export interface DialogueProjection {
   cursor: number;

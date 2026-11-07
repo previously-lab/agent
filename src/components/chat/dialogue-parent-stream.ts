@@ -343,13 +343,20 @@ export class DialogueParentController {
     storage?: ParentStorage;
     retryDelayMs?: number;
   }) {
-    this.request = options.request ?? fetch;
+    // stop() calls this as a controller method; native Window.fetch requires
+    // its original receiver even though injected transports need no binding.
+    this.request = options.request ?? globalThis.fetch.bind(globalThis);
     this.storage = options.storage ?? defaultStorage();
     this.retryDelayMs = options.retryDelayMs ?? 500;
   }
 
-  start() {
-    this.records = readDialogueParentRecords(this.options.persona, this.storage);
+  start(since?: string, savedPublications: ReadonlySet<string> = new Set()) {
+    const current = new Set(this.records.map(record => record.parentRunId));
+    const restored = readDialogueParentRecords(this.options.persona, this.storage)
+      .filter(record => !current.has(record.parentRunId) && (!since || record.acceptedAt >= since))
+      .filter(record => !(record.done && !record.failed && record.offers.length &&
+        record.offers.every(offer => !offer.failed && savedPublications.has(offer.offerId))));
+    this.records = [...restored, ...this.records];
     this.emit();
     this.resumeRecords(true);
   }
@@ -444,7 +451,7 @@ export class DialogueParentController {
             artifactBodies: publication.artifactBodies });
           utterances.add(publication.utterance.utteranceId);
         } else {
-          entries.push({ kind: "message", id: message.id, message: provisionalPublicMessage(message), timeIso: offer.messageAt ?? record.acceptedAt,
+          entries.push({ kind: "message", id: message.id, sourceInputId: record.sourceInputId, message: provisionalPublicMessage(message), timeIso: offer.messageAt ?? record.acceptedAt,
             isStreaming: !this.settledChildren.has(offer.runId) && !this.disconnectedChildren.has(offer.runId) });
         }
         for (const id of publicMessageIds(message)) utterances.add(id);

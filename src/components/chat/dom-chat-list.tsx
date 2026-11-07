@@ -1,50 +1,9 @@
 "use client";
 
 /**
- * DomChatList — the conversation as a DOM scroll container with windowed
- * mounting. THE conversation surface (two-rungs rewrite): the R3F
- * conversation field retired with the rung ladder, so this list is the ONLY
- * renderer — the panel's body at every tier. Its content is the IN-MEMORY
- * current conversation (the `useChat` messages plus the arrival-restored
- * resume block) and, on a briefing arrival, the cold-open page of repository
- * history with the briefing card seated as an item between the two. The list
- * pages NOTHING older — its explicit upper-edge entrance opens the bounded
- * DOM record selector instead.
- *
- * HISTORY. Until v0.11 the conversation rendered inside an R3F canvas
- * (`conversation-field.tsx`): every block a billboard, the scroll position a
- * camera offset the field owned. This DOM surface was written for the "the
- * conversation in flight is plain DOM" decision (design doc §13/§14.5), and
- * the two-rungs rewrite makes it the only one left.
- *
- * What is KEPT from the field, because none of it was 3D-specific:
- *
- *   - ONLY THE VISIBLE ROWS EXIST. The offset table (`stream-layout.ts`)
- *     gives every item a height — measured once the row has mounted, an
- *     estimate until then — and the mounted window is the viewport plus one
- *     screen of overscan. A long conversation mounts a handful of rows.
- *
- *   - A PREPEND IS COMPENSATED, NOT ANCHORED. The resume block is fixed, but
- *     the mechanism stays honest: if items ever land ABOVE the reader, when
- *     they do `scrollTop` is shifted by exactly the height they add —
- *     MEASURED off the freshly-committed rows in the same frame, never
- *     estimated — so the reader's view of what they were reading is
- *     pixel-identical. `overflow-anchor: none` on the scroller keeps the
- *     browser's own anchoring out of it — two compensations fighting was the
- *     old stack's measured bug.
- *
- *   - THE LIVE EDGE IS A PIN, NOT A TRIGGER. The reader is either at the
- *     bottom (following) or not. Growth pins the scroll to the tail only
- *     while following; scrolling away releases it, scrolling back re-arms
- *     it. Sending a message re-pins (the page calls `scrollToBottom`).
- *
- *   - THE BAND FEED HAS ONE WRITER. While the panel body is on screen this
- *     list publishes progress and block anchors to the shared `FieldFeed`
- *     and consumes its seek requests; folded to the pill it writes nothing.
- *     See `field-feed.ts` for why that rule exists.
- *
- * `ChatStreamItem` and its halves live in `lib/chat/stream-items.ts`, the
- * layout arithmetic in `lib/chat/stream-layout.ts` — both pure, both tested.
+ * DomChatList renders every loaded stream item in normal document flow.
+ * Navigation, time reporting and the band feed use the committed browser
+ * geometry; there is no estimated layout or mounted window.
  */
 
 import {
@@ -70,13 +29,8 @@ import { ResumeBanner } from "./resume-banner";
 import { ErrorBanner } from "./error-banner";
 import { EmptyBriefing } from "./empty-briefing";
 import { StreamTimeIndicator } from "./stream-time-indicator";
+import { Button } from "@/components/ui/button";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
-import {
-  buildStreamOffsets,
-  estimateHeightFor,
-  topStreamIndex,
-  visibleStreamRange,
-} from "@/lib/chat/stream-layout";
 import { sliceIdOf } from "@/lib/chat/field-blocks";
 import {
   clearFeed,
@@ -86,78 +40,37 @@ import {
 } from "@/lib/timeline3d/field-feed";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { HistoryEntrance } from "@/components/workspace/history-entrance";
-import { hasHistoryEntrance } from "@/lib/workspace/navigation";
 
-/** How far past the viewport a row stays MOUNTED. About one screen — the
- *  reader should be able to scroll a little in either direction without a
- *  row appearing from nowhere. */
-const OVERSCAN_PX = 700;
-/** At-bottom slop: inside this the reader counts as following the live edge. */
 const BOTTOM_SLOP_PX = 8;
-/** How long the scroll-transient time pill lingers after the scroll stops. */
 const INDICATOR_HOLD_MS = 1000;
-/** Breathing room below the tail, beyond the composer's own clearance. */
 const TAIL_PAD_PX = 24;
-/** Height reserved for the error banner when one is showing — it renders
- *  BELOW the last row, so the inner extent must make room for it. */
-const ERROR_RESERVE_PX = 400;
 
-/** What a caller outside the stream can ask it to do. Filled into a ref
- *  rather than exposed through a component ref — this codebase has no
- *  `forwardRef`/`useImperativeHandle` anywhere and the ref-object handshake
- *  is its established shape for exactly this. */
 export interface ChatStreamHandle {
-  /** Bring the item with `key` (exact, then a key SUFFIX so a bare slice id
-   *  reaches its seam) to the top of the viewport, just under the chrome.
-   *  Returns false when the key is not loaded — the caller pages more in and
-   *  the stream lands on the key when it appears; the stream never fetches
-   *  on its own. */
   scrollToKey(key: string): boolean;
-  /** Absolute scroll position, px. */
   scrollToOffset(px: number): void;
-  /** Where the reader is now, px. */
   offset(): number;
-  /** Pin to the live edge — what sending a message does. */
   scrollToBottom(): void;
 }
 
 export interface DomChatListProps {
   items: ChatStreamItem[];
-  /** The item at the top of the viewport — the travel clock's "from".
-   *  `sliceId` is null for the live run. Reported only when it CHANGES. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
-  /** A failed turn, shown as a banner under the content. */
   error: Error | undefined;
-  /** Briefing-mode arrival card props (§1.2 Rev 2), rendered for the
-   *  `briefing` stream item. Typed from the component itself so a new
-   *  briefing prop cannot be added without this list carrying it. */
   briefing?: React.ComponentProps<typeof EmptyBriefing> | null;
-  /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
   feed?: FieldFeed;
-  /** The feed's one-writer lease — the list publishes only while the panel
-   *  body is actually on screen (the folded pill tier is not a surface). */
   publishing?: boolean;
-  /** Filled with the stream's imperative handle, for the page's jumps. */
   apiRef?: MutableRefObject<ChatStreamHandle | null>;
-  /** The floating chrome's height at the pane's top edge, px — carried as the
-   *  scroller's top padding, so content comes to rest clear of the chrome and
-   *  passes under it while scrolling. See `use-chrome-inset`. */
   insetTop?: number;
-  /** The floating composer's height at the pane's foot, px. */
   insetBottom?: number;
-  /** The live writer, seated after the last turn in the same reading column. */
   composer?: ReactNode;
-  /** Empty-memory content swaps in this slot; the composer below never moves. */
   emptyState?: ReactNode;
-  /** Keep the folded conversation out of the focus order without making the
-   *  pill composer inert with it. */
   contentInert?: boolean;
-  /** At the pill tier the composer positions against the panel, so no nearer
-   *  ancestor may become its containing block. */
   floatingComposer?: boolean;
   dialogueUtterances?: ReadonlyMap<string, DialogueUtteranceSeat>;
   dialogueRegenerate?: (inputId: string) => void;
   newPublications?: number;
+  /** Complete work/caption content for a dialogue-work placeholder item. */
+  renderDialogueWork?: (item: ChatStreamItem) => ReactNode;
 }
 
 export function DomChatList({
@@ -177,50 +90,29 @@ export function DomChatList({
   dialogueUtterances,
   dialogueRegenerate,
   newPublications = 0,
+  renderDialogueWork,
 }: DomChatListProps) {
   const isMobile = useIsMobile();
   const tDialogue = useTranslations("chat.dialogue");
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const composerTailRef = useRef<HTMLDivElement>(null);
   const [seenPublications, setSeenPublications] = useState(0);
   const publicationCount = useRef(newPublications);
   publicationCount.current = newPublications;
   const unread = Math.max(0, newPublications - seenPublications);
-  const latestPublicationKey = useMemo(() => [...(dialogueUtterances?.keys() ?? [])].at(-1), [dialogueUtterances]);
+  const dialogueNotifications = dialogueUtterances !== undefined || newPublications > 0;
+  const latestPublicationKey = useMemo(
+    () => [...(dialogueUtterances?.keys() ?? [])].at(-1),
+    [dialogueUtterances],
+  );
 
-  // ── The offset table ────────────────────────────────────────────────────
-  // Measured height per item KEY (not index — a prepend renumbers indices,
-  // and the height must travel with the row it belongs to). `measureTick`
-  // re-derives the table when a measurement lands.
-  const heightsRef = useRef(new Map<string, number>());
-  const [measureTick, setMeasureTick] = useState(0);
   const itemsRef = useRef(items);
   itemsRef.current = items;
-  const offsets = useMemo(
-    () => buildStreamOffsets(items, (i) => heightsRef.current.get(i.key)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- measureTick IS the heights version
-    [items, measureTick],
-  );
-  const offsetsRef = useRef(offsets);
-  offsetsRef.current = offsets;
-
-  // No window's head: the panel pages NOTHING (the repository's slices and
-  // their paging belong to the R3F field), so the content starts at row 0.
-  const originH = 0;
-  const contentPx = offsets[items.length] ?? 0;
-  const contentPxRef = useRef(contentPx);
-  contentPxRef.current = contentPx;
-  const originHRef = useRef(originH);
-  originHRef.current = originH;
-  const innerPx = contentPx + (error ? ERROR_RESERVE_PX : 0);
-
-  // ── Scroll state ─────────────────────────────────────────────────────────
-  // `scrollTopState` exists only to re-derive the mounted window; everything
-  // else reads the ref. The reader is FOLLOWING while parked at the live
-  // edge; ARRIVING is the mount-time pin that holds the live edge through
-  // the first measurements, released by the reader's first upward scroll.
-  const [scrollTopState, setScrollTopState] = useState(0);
-  const scrollTopRef = useRef(0);
-  const [viewportH, setViewportH] = useState(0);
+  const insetTopRef = useRef(insetTop);
+  insetTopRef.current = insetTop;
+  const [following, setFollowing] = useState(true);
+  const [anchoring, setAnchoring] = useState(true);
   const followingRef = useRef(true);
   const arrivingRef = useRef(true);
   const pendingKeyRef = useRef<string | null>(null);
@@ -231,36 +123,93 @@ export function DomChatList({
   const [indicatorVisible, setIndicatorVisible] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRafRef = useRef(0);
+  const lastScrollHeightRef = useRef(0);
+  const lastViewportHeightRef = useRef(0);
+  const feedDirtyRef = useRef(true);
+  const programmaticScrollTopRef = useRef<number | null>(null);
+  const disclosureScrollGuardRef = useRef(false);
 
-  const reportTop = useCallback((st: number) => {
-    const its = itemsRef.current;
-    if (its.length === 0) return;
-    const idx = topStreamIndex(
-      offsetsRef.current,
-      its.length,
-      Math.max(0, st - originH),
+  const updateFollowing = useCallback((value: boolean) => {
+    followingRef.current = value;
+    setFollowing(value);
+  }, []);
+
+  const pinToBottom = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    disclosureScrollGuardRef.current = false;
+    setAnchoring(true);
+    el.scrollTop = el.scrollHeight;
+    programmaticScrollTopRef.current = el.scrollTop;
+    lastScrollHeightRef.current = el.scrollHeight;
+    setSeenPublications(publicationCount.current);
+  }, []);
+
+  const releaseFollowForDisclosure = useCallback((target: EventTarget | null) => {
+    const content = contentRef.current;
+    if (!(target instanceof Element) || !content?.contains(target)) return;
+    const disclosure = target.closest(
+      "[data-dialogue-work-caption], summary, [aria-expanded]",
     );
-    const item = its[idx];
+    if (!disclosure || !content.contains(disclosure)) return;
+    arrivingRef.current = false;
+    updateFollowing(false);
+    // Closing a disclosure can clamp scrollTop several frames later. Keep
+    // following suspended until an actual outer-scroll gesture or explicit
+    // jump: a browser layout adjustment is not reader intent.
+    disclosureScrollGuardRef.current = true;
+    setAnchoring(false);
+  }, [updateFollowing]);
+
+  const allowOuterScroll = useCallback((target: EventTarget | null) => {
+    if (target instanceof Element && target.closest('[data-slot="scroll-area-viewport"]')) return;
+    disclosureScrollGuardRef.current = false;
+    setAnchoring(true);
+  }, []);
+
+  const reportTop = useCallback(() => {
+    feedDirtyRef.current = true;
+    const el = scrollerRef.current;
+    const content = contentRef.current;
+    const its = itemsRef.current;
+    if (!el || !content || its.length === 0) return;
+    const rows = Array.from(content.children).filter(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement && Boolean(child.dataset.key),
+    );
+    if (rows.length === 0) return;
+    const topEdge = el.getBoundingClientRect().top + insetTopRef.current;
+    let topRow = rows[0];
+    for (const row of rows) {
+      if (row.getBoundingClientRect().top > topEdge + 1) break;
+      topRow = row;
+    }
+    const item = its.find((candidate) => candidate.key === topRow.dataset.key);
     if (!item || item.key === topKeyRef.current) return;
     topKeyRef.current = item.key;
     setTopTime(item.timeIso);
     onTopItemChangeRef.current?.(item.timeIso, sliceIdOf(item));
-  }, [originH]);
+  }, []);
 
   const handleScroll = useCallback(() => {
-    if (scrollRafRef.current) return; // one read per frame
+    const el = scrollerRef.current;
+    if (!el) return;
+    // Update the lease synchronously. A same-frame content commit must not
+    // override a reader who has just started scrolling back up.
+    const atBottom =
+      el.scrollTop >= el.scrollHeight - el.clientHeight - BOTTOM_SLOP_PX;
+    const wasProgrammatic = programmaticScrollTopRef.current === el.scrollTop;
+    programmaticScrollTopRef.current = null;
+    const wasDisclosure = disclosureScrollGuardRef.current;
+    if (!wasProgrammatic && !wasDisclosure) {
+      if (!atBottom) arrivingRef.current = false;
+      updateFollowing(atBottom);
+      if (atBottom) setSeenPublications(publicationCount.current);
+    }
+    if (scrollRafRef.current) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = 0;
-      const el = scrollerRef.current;
-      if (!el) return;
-      const st = el.scrollTop;
-      scrollTopRef.current = st;
-      setScrollTopState(st);
-      const atBottom = st >= el.scrollHeight - el.clientHeight - BOTTOM_SLOP_PX;
-      if (!atBottom) arrivingRef.current = false;
-      followingRef.current = atBottom;
-      if (atBottom) setSeenPublications(publicationCount.current);
-      reportTop(st);
+      reportTop();
       setIndicatorVisible(true);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
       hideTimerRef.current = setTimeout(
@@ -268,168 +217,81 @@ export function DomChatList({
         INDICATOR_HOLD_MS,
       );
     });
-  }, [reportTop]);
+  }, [reportTop, updateFollowing]);
 
-  // ── Row measurement ──────────────────────────────────────────────────────
-  // One ResizeObserver for every mounted row. A row that re-measures ABOVE
-  // the reader shifts `scrollTop` by the delta — estimate or previous
-  // measurement, both are covered: `oldH` is what the offset table currently
-  // believes the row's height to be.
-  const resizeHandlerRef = useRef<
-    ((entries: ResizeObserverEntry[]) => void) | null
-  >(null);
-  resizeHandlerRef.current = (entries) => {
-    const el = scrollerRef.current;
-    let changed = false;
-    for (const entry of entries) {
-      const row = entry.target as HTMLElement;
-      const key = row.dataset.key;
-      if (!key) continue;
-      const h = row.offsetHeight;
-      if (!h) continue;
-      let oldH = heightsRef.current.get(key);
-      if (oldH === undefined) {
-        const item = itemsRef.current.find((i) => i.key === key);
-        oldH = item ? estimateHeightFor(item) : 0;
-      }
-      if (oldH === h) continue;
-      heightsRef.current.set(key, h);
-      changed = true;
-      if (el) {
-        // The row's top in scroll-content coordinates: the scroller's top
-        // padding, then the row's `top` inside the inner box.
-        const rowTop = insetTop + row.offsetTop;
-        if (rowTop + oldH <= el.scrollTop) el.scrollTop += h - oldH;
-      }
-    }
-    if (changed) setMeasureTick((t) => t + 1);
-  };
-  const roRef = useRef<ResizeObserver | null>(null);
-  const rowRef = useCallback((el: HTMLDivElement | null) => {
-    if (!el) return;
-    roRef.current ??= new ResizeObserver((entries) =>
-      resizeHandlerRef.current?.(entries),
-    );
-    roRef.current.observe(el);
-    return () => roRef.current?.unobserve(el);
-  }, []);
   useEffect(
     () => () => {
-      roRef.current?.disconnect();
-      roRef.current = null;
       if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     },
     [],
   );
 
-  // The scroller's own height, for the mounted window.
+  // New items and streaming growth follow only while the reader remains at
+  // the live edge. A navigation request or upward scroll releases this pin.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    if (arrivingRef.current || followingRef.current) pinToBottom();
+    else lastScrollHeightRef.current = el.scrollHeight;
+    reportTop();
+  }, [items, insetBottom, pinToBottom, reportTop]);
+
+  useLayoutEffect(() => {
+    feedDirtyRef.current = true;
+  }, [insetTop]);
+
+  // Observe content, not estimated rows. Shrinking (for example collapsing
+  // expanded thoughts) never triggers a programmatic move.
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    setViewportH(el.clientHeight);
-    const ro = new ResizeObserver(() => setViewportH(el.clientHeight));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    lastScrollHeightRef.current = el.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      const nextHeight = el.scrollHeight;
+      const nextViewportHeight = el.clientHeight;
+      const changed =
+        nextHeight !== lastScrollHeightRef.current ||
+        nextViewportHeight !== lastViewportHeightRef.current;
+      const grew = nextHeight > lastScrollHeightRef.current;
+      lastScrollHeightRef.current = nextHeight;
+      lastViewportHeightRef.current = nextViewportHeight;
+      if (changed) feedDirtyRef.current = true;
+      if (!grew || (!arrivingRef.current && !followingRef.current)) return;
+      pinToBottom();
+    });
+    observer.observe(el);
+    if (contentRef.current) observer.observe(contentRef.current);
+    if (composerTailRef.current) observer.observe(composerTailRef.current);
+    return () => observer.disconnect();
+  }, [pinToBottom]);
 
-  // ── Prepend detection ────────────────────────────────────────────────────
-  // History pages arrive at the HEAD. The old head's key is found in the new
-  // array during render; the layout effect then shifts `scrollTop` by the
-  // height the new items add, MEASURED off the freshly-committed DOM, which
-  // leaves the reader's view pixel-identical. Written during render and
-  // idempotent, so a double render cannot double-count.
-  const prevHeadKeyRef = useRef<string | null>(null);
-  const prependCountRef = useRef(0);
-  const prevHeadKey = prevHeadKeyRef.current;
-  if (prevHeadKey && items[0] && items[0].key !== prevHeadKey) {
-    const idx = items.findIndex((i) => i.key === prevHeadKey);
-    if (idx > 0) prependCountRef.current = idx;
-  }
-  prevHeadKeyRef.current = items[0]?.key ?? null;
-
-  useLayoutEffect(() => {
-    const count = prependCountRef.current;
-    if (count === 0) return;
-    prependCountRef.current = 0;
-    const el = scrollerRef.current;
-    if (!el) return;
-    // THE COMPENSATION MUST BE EXACT, so it is MEASURED, not estimated. The
-    // new rows are already in the DOM (a reader at the window's head has the
-    // whole page inside the overscan window), and their `offsetHeight` is
-    // readable in this same frame — an estimate here drifts the reader by
-    // however wrong it is (measured: 164 px for a two-slice page), and the
-    // ResizeObserver correction cannot fully repay it, because a row whose
-    // bottom is already inside the viewport is not compensable without
-    // moving the text under the reader twice. Recording the real heights
-    // here also makes the later RO pass a no-op for these rows (oldH === h).
-    const rowsByKey = new Map<string, HTMLElement>();
-    for (const row of el.querySelectorAll<HTMLElement>("[data-key]")) {
-      rowsByKey.set(row.dataset.key ?? "", row);
-    }
-    let shift = 0;
-    for (let i = 0; i < count; i++) {
-      const item = itemsRef.current[i];
-      if (!item) break;
-      const h = rowsByKey.get(item.key)?.offsetHeight;
-      if (h) {
-        heightsRef.current.set(item.key, h);
-        shift += h;
-      } else {
-        // Not mounted (a deep jump paged many slices at once) — the
-        // estimate stands in, and the row-measure rule repays the error
-        // when the row mounts ABOVE the reader.
-        shift += estimateHeightFor(item);
-      }
-    }
-    el.scrollTop += shift;
-    scrollTopRef.current = el.scrollTop;
-    setScrollTopState(el.scrollTop);
-    setMeasureTick((t) => t + 1);
-  }, [items]);
-
-  // ── The live-edge pin ────────────────────────────────────────────────────
-  // Growth pins the scroll to the tail only while the reader is following
-  // (or arriving). Runs AFTER the prepend compensation above: if both fire,
-  // a reader at the live edge ends at the live edge.
-  useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    if (!arrivingRef.current && !followingRef.current) return;
-    el.scrollTop = el.scrollHeight;
-    scrollTopRef.current = el.scrollTop;
-    setScrollTopState(el.scrollTop);
-  }, [contentPx, items, insetBottom]);
-
-  // Report the top item after programmatic moves too (the scroll event is
-  // rAF-throttled and a jump can land between frames).
-  useLayoutEffect(() => {
-    reportTop(scrollTopRef.current);
-  }, [offsets, reportTop]);
-
-  // ── The imperative handle ────────────────────────────────────────────────
   const findIndexFor = useCallback((key: string): number => {
     const its = itemsRef.current;
-    const exact = its.findIndex((i) => i.key === key);
+    const exact = its.findIndex((item) => item.key === key);
     if (exact >= 0) return exact;
-    return its.findIndex((i) => i.key.endsWith(key));
+    return its.findIndex((item) => item.key.endsWith(key));
   }, []);
 
   const scrollToIndex = useCallback((idx: number) => {
     const el = scrollerRef.current;
-    if (!el) return;
-    // The row sits `insetTop` below the scrollport's top here — clear of the
-    // floating chrome, which is what the padding is for.
-    el.scrollTop = (offsetsRef.current[idx] ?? 0) + originH;
-    scrollTopRef.current = el.scrollTop;
-    setScrollTopState(el.scrollTop);
-  }, [originH]);
+    const content = contentRef.current;
+    const key = itemsRef.current[idx]?.key;
+    if (!el || !content || !key) return;
+    const row = Array.from(content.children).find(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement && child.dataset.key === key,
+    );
+    if (!row) return;
+    el.scrollTop =
+      el.scrollTop +
+      row.getBoundingClientRect().top -
+      el.getBoundingClientRect().top -
+      insetTopRef.current;
+    programmaticScrollTopRef.current = el.scrollTop;
+    reportTop();
+  }, [reportTop]);
 
-  // Honour a jump whose target was still paging in when it was asked for —
-  // the caller scrolls on the frame after paging resolves, which is BEFORE
-  // React has committed the new items. Remembering the key makes the jump
-  // reliable without the caller polling. The stream still fetches nothing
-  // itself — the paging policy stays with the caller.
   useEffect(() => {
     const key = pendingKeyRef.current;
     if (!key) return;
@@ -437,19 +299,16 @@ export function DomChatList({
     if (idx < 0) return;
     pendingKeyRef.current = null;
     arrivingRef.current = false;
-    followingRef.current = false;
+    updateFollowing(false);
     scrollToIndex(idx);
-  }, [items, findIndexFor, scrollToIndex]);
+  }, [items, findIndexFor, scrollToIndex, updateFollowing]);
 
   useEffect(() => {
     if (!apiRef) return;
     apiRef.current = {
       scrollToKey(key) {
-        // A programmatic jump ends the arrival pin and the follow — the
-        // reader is going somewhere specific, and growth must not yank them
-        // back to the tail.
         arrivingRef.current = false;
-        followingRef.current = false;
+        updateFollowing(false);
         const idx = findIndexFor(key);
         if (idx >= 0) {
           scrollToIndex(idx);
@@ -460,19 +319,17 @@ export function DomChatList({
       },
       scrollToOffset(px) {
         arrivingRef.current = false;
-        followingRef.current = false;
+        updateFollowing(false);
         const el = scrollerRef.current;
-        if (el) el.scrollTop = px;
+        if (el) {
+          el.scrollTop = px;
+          programmaticScrollTopRef.current = el.scrollTop;
+        }
       },
       scrollToBottom() {
-        // The one programmatic move that KEEPS the pin: it is going where
-        // the pin wants to be, and the pin is what holds it there while the
-        // tail keeps growing.
         arrivingRef.current = true;
-        followingRef.current = true;
-        setSeenPublications(publicationCount.current);
-        const el = scrollerRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        updateFollowing(true);
+        pinToBottom();
       },
       offset() {
         return scrollerRef.current?.scrollTop ?? 0;
@@ -481,85 +338,83 @@ export function DomChatList({
     return () => {
       apiRef.current = null;
     };
-  }, [apiRef, findIndexFor, scrollToIndex]);
+  }, [apiRef, findIndexFor, pinToBottom, scrollToIndex, updateFollowing]);
 
-  // ── The band feed ────────────────────────────────────────────────────────
-  // THE LEASE, BOTH WAYS: publish only while this surface owns the pane, and
-  // relax the feed on both acquire and release — see `field-feed.ts` and the
-  // field's own note on why a frozen feed is a lie the band cannot tell from
-  // a still one.
+  // The band feed reads the same browser geometry as navigation and time.
   const seekGenRef = useRef(-1);
   useEffect(() => {
     if (!feed || !publishing) return;
     clearFeed(feed);
+    feedDirtyRef.current = true;
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const el = scrollerRef.current;
-      if (!el) return;
+      const content = contentRef.current;
+      if (!el || !content) return;
+      const seek = feed.seek;
+      const hasSeek = Boolean(seek && seek.gen !== seekGenRef.current);
+      if (!hasSeek && !feedDirtyRef.current) return;
+      feedDirtyRef.current = false;
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (seek && hasSeek) {
+        seekGenRef.current = seek.gen;
+        arrivingRef.current = false;
+        updateFollowing(false);
+        el.scrollTop = offsetFor(seek.progress, 0, max);
+        programmaticScrollTopRef.current = el.scrollTop;
+      }
       const st = el.scrollTop;
       const vh = el.clientHeight || 1;
-      const total = contentPxRef.current;
-      const max = Math.max(0, total - vh);
-
-      // A SEEK from the band, consumed by generation so a request published
-      // across many frames moves the reader once. Native scrolling IS
-      // immediate, so a dragging scrub needs no special case.
-      const seek = feed.seek;
-      if (seek && seek.gen !== seekGenRef.current) {
-        seekGenRef.current = seek.gen;
-        el.scrollTop = offsetFor(seek.progress, 0, max);
-      }
-
       feed.progress = progressFor(st, 0, max);
-      // The DOM stream has no gates — nothing announces a boundary here.
       feed.crossing.y = null;
 
-      // One anchor per slice BLOCK, as in the field: the seam is the
-      // boundary, the block is the extent between two seams, and the anchor
-      // sits at the block's middle with its span. The live turn is an
-      // anchor too — it is the one place the reader usually is.
+      const rows = new Map<string, HTMLElement>();
+      for (const child of Array.from(content.children)) {
+        if (child instanceof HTMLElement && child.dataset.key) {
+          rows.set(child.dataset.key, child);
+        }
+      }
       const its = itemsRef.current;
-      const offs = offsetsRef.current;
+      const scrollerTop = el.getBoundingClientRect().top + insetTopRef.current;
+      const contentBottom = content.getBoundingClientRect().bottom;
+      const yFor = (row: HTMLElement) =>
+        (row.getBoundingClientRect().top - scrollerTop) / vh;
       const list: FieldAnchor[] = [];
-      const origin = originHRef.current;
       for (let i = 0; i < its.length && list.length < 24; i++) {
         const item = its[i];
         if (item.kind !== "seam") continue;
-        const start = offs[i] ?? 0;
-        let end = offs[its.length] ?? start;
+        const row = rows.get(item.key);
+        if (!row) continue;
+        const startY = yFor(row);
+        let endY = (contentBottom - scrollerTop) / vh;
         for (let j = i + 1; j < its.length; j++) {
-          if (its[j].kind === "seam") {
-            end = offs[j] ?? end;
-            break;
-          }
+          if (its[j].kind !== "seam") continue;
+          const nextRow = rows.get(its[j].key);
+          if (nextRow) endY = yFor(nextRow);
+          break;
         }
-        if (!(end > start)) continue;
-        const y = (origin + (start + end) / 2 - st) / vh;
+        if (!(endY > startY)) continue;
+        const y = (startY + endY) / 2;
         if (y < -1.5 || y > 2.5) continue;
         const sid = item.key.slice("seam-".length);
         list.push({
           y,
           strands: item.strands,
-          span: (end - start) / vh,
+          span: endY - startY,
           date: /^\d{4}-\d{2}-\d{2}/.test(sid) ? sid.slice(0, 10) : undefined,
         });
       }
-      const liveIdx = its.findIndex((i) => i.kind === "live");
-      if (liveIdx >= 0) {
-        const liveStart = (offs[liveIdx] ?? 0) + origin;
-        const liveH = total - liveStart;
-        const live = its[liveIdx];
-        if (
-          live.kind === "live" &&
-          liveH > 0 &&
-          liveStart < st + vh &&
-          liveStart + liveH > st
-        ) {
+      const live = its.find((item) => item.kind === "live");
+      const liveRow = live ? rows.get(live.key) : undefined;
+      if (live?.kind === "live" && liveRow) {
+        const liveStart = yFor(liveRow);
+        const liveH = (contentBottom - liveRow.getBoundingClientRect().top) / vh;
+        if (liveH > 0 && liveStart < 1 && liveStart + liveH > 0) {
           list.push({
-            y: (liveStart + liveH / 2 - st) / vh,
+            y: liveStart + liveH / 2,
             strands: live.strands ?? [],
-            span: liveH / vh,
+            span: liveH,
             date: live.timeIso.slice(0, 10),
           });
         }
@@ -571,16 +426,7 @@ export function DomChatList({
       cancelAnimationFrame(raf);
       clearFeed(feed);
     };
-  }, [feed, publishing]);
-
-  // ── The mounted window ───────────────────────────────────────────────────
-  const { start, end } = visibleStreamRange(
-    offsets,
-    items.length,
-    Math.max(0, scrollTopState - insetTop),
-    viewportH,
-    OVERSCAN_PX,
-  );
+  }, [feed, publishing, updateFollowing]);
 
   const renderItem = (item: ChatStreamItem) => {
     switch (item.kind) {
@@ -597,9 +443,6 @@ export function DomChatList({
       case "resume-banner":
         return <ResumeBanner startIso={item.startIso} />;
       case "briefing":
-        // The arrival briefing card is a stream item between the cold-open
-        // history page and the live edge (§1.2 Rev 2) — the page passes the
-        // live data props in; null when this arrival has no card.
         return briefing ? <EmptyBriefing variant="card" {...briefing} /> : null;
       case "history-turn":
         return (
@@ -618,32 +461,47 @@ export function DomChatList({
           </div>
         );
       case "live": {
+        if (item.key.startsWith("dialogue-work:")) {
+          const work = renderDialogueWork?.(item);
+          if (work !== null && work !== undefined && typeof work !== "boolean") {
+            return work;
+          }
+        }
         const publication = dialogueUtterances?.get(item.key);
-        const inputId = item.key.startsWith("dialogue-input:") ? item.key.slice("dialogue-input:".length) : undefined;
+        const inputId = item.key.startsWith("dialogue-input:")
+          ? item.key.slice("dialogue-input:".length)
+          : undefined;
         return (
           <div className="conversation-stream-row" data-dialogue-input={inputId}>
-            {publication ? <DialogueUtterance {...publication}
-              onRegenerate={item.key === latestPublicationKey && publication.utterance.inputIds.length === 1 && dialogueRegenerate
-                ? () => dialogueRegenerate(publication.utterance.inputIds[0]) : undefined} /> : <ChatMessage
-              message={item.message}
-              isStreaming={item.isStreaming}
-              startedAt={item.startedAt}
-              onRegenerate={item.onRegenerate}
-            />}
+            {publication ? (
+              <DialogueUtterance
+                {...publication}
+                onRegenerate={
+                  item.key === latestPublicationKey &&
+                  publication.utterance.inputIds.length === 1 &&
+                  dialogueRegenerate
+                    ? () => dialogueRegenerate(publication.utterance.inputIds[0])
+                    : undefined
+                }
+              />
+            ) : (
+              <ChatMessage
+                message={item.message}
+                isStreaming={item.isStreaming}
+                startedAt={item.startedAt}
+                onRegenerate={item.onRegenerate}
+              />
+            )}
           </div>
         );
       }
       case "nested-bubble":
-        // An inner episode instance's answer (v0.30 §4.3) — seated by the
-        // merge view after the user message it replied to.
         return (
           <div className="conversation-stream-row">
             <NestedBubble frame={item.frame} excerpt={item.excerpt} />
           </div>
         );
       case "parallel-lane":
-        // A parallel burst lane (v0.33 §6) — bypass run or the collapsed
-        // main lane; the seat carries everything the view renders.
         return (
           <div className="conversation-stream-row">
             <ParallelLaneView lane={item.lane} />
@@ -654,84 +512,96 @@ export function DomChatList({
 
   return (
     <div className={`conversation-stream-shell mx-auto flex h-full flex-col ${floatingComposer ? "" : "relative"}`}>
-      {hasHistoryEntrance(items) && (
-        <div className="conversation-history-seat" inert={contentInert || undefined}><HistoryEntrance /></div>
-      )}
-      {/* The scroller's top/bottom padding — the MEASURED chrome and
-          composer heights (px) plus the static tail pad; see
-          use-chrome-inset and ComposerHost. */}
+      <div className="conversation-history-seat" inert={contentInert || undefined}>
+        <HistoryEntrance />
+      </div>
       <div
         ref={scrollerRef}
-        // The stable hook, kept from the field: e2e specs and probes address
-        // the conversation through it. It now names a REAL scroll container.
         data-conversation-field
-        // Focusable so the keyboard scrolls the conversation natively
-        // (arrows, Page Up/Down, Home/End) — the browser owns all of it now.
         tabIndex={0}
         role="log"
-        aria-live={dialogueUtterances ? "off" : undefined}
+        aria-live={dialogueNotifications ? "off" : undefined}
         onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none [overflow-anchor:none]"
+        onWheelCapture={event => allowOuterScroll(event.target)}
+        onTouchMoveCapture={event => allowOuterScroll(event.target)}
+        onPointerDown={event => {
+          if (event.target === event.currentTarget) allowOuterScroll(event.target);
+        }}
+        onClickCapture={(event) => releaseFollowForDisclosure(event.target)}
+        onKeyDownCapture={(event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          if ((event.key === "Enter" || event.key === " ") && target?.closest("[data-dialogue-work-caption], summary, [aria-expanded]")) {
+            releaseFollowForDisclosure(event.target);
+          } else if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key) &&
+            !target?.closest('input, textarea, [contenteditable="true"]')) {
+            allowOuterScroll(event.target);
+          }
+        }}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain outline-none"
         style={{
+          overflowAnchor: anchoring ? "auto" : "none",
           paddingTop: insetTop,
-          // An in-flow composer contributes its own height. Reserve the old
-          // floating clearance only for skeleton/legacy uses without one.
           paddingBottom: (composer ? 0 : insetBottom) + TAIL_PAD_PX,
         }}
       >
-        {/* The windowed content's total height, px — the measured row
-            offsets (+ the error reserve): the virtualizer's extent. */}
-        {emptyState ? (
-          <div inert={contentInert || undefined}>{emptyState}</div>
-        ) : (
-          <div className="relative" style={{ height: innerPx }} inert={contentInert || undefined}>
-            {/* Each mounted row's absolute top, px — the row's offset in the
-                measured table (virtualizer placement). */}
-            {items.slice(start, end).map((item, k) => (
-              <div
-                key={item.key}
-                ref={rowRef}
-                data-key={item.key}
-                className="absolute inset-x-0"
-                style={{ top: originH + (offsets[start + k] ?? 0) }}
-              >
-                {renderItem(item)}
-              </div>
-            ))}
-            {/* The error banner sits just below the windowed content, px. */}
-            {error && (
-              <div
-                className="absolute inset-x-0"
-                style={{ top: contentPx }}
-              >
-                <ErrorBanner error={error} />
-              </div>
-            )}
-          </div>
-        )}
+        <div ref={contentRef} className="shrink-0 grow" inert={contentInert || undefined}>
+          {emptyState ? (
+            emptyState
+          ) : (
+            <>
+              {items.map((item) => (
+                <div key={item.key} data-key={item.key}>
+                  {renderItem(item)}
+                </div>
+              ))}
+              {error && <ErrorBanner error={error} />}
+            </>
+          )}
+        </div>
         {composer && (
-          <div className="conversation-stream-row conversation-composer-tail" data-composer-tail>
+          <div
+            ref={composerTailRef}
+            className="conversation-stream-row conversation-composer-tail shrink-0 [overflow-anchor:none]"
+            data-composer-tail
+          >
             {composer}
           </div>
         )}
       </div>
 
-      {dialogueUtterances && !contentInert && <>
-        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-dialogue-announcement>
-          {newPublications > 0 && <span key={newPublications}>{tDialogue("replyArrived")}</span>}
-        </div>
-        {unread > 0 && !followingRef.current && <button type="button" className="dialogue-new-replies" data-dialogue-new-replies
-          onClick={() => {
-            const el = scrollerRef.current;
-            if (!el) return;
-            arrivingRef.current = true; followingRef.current = true;
-            el.scrollTop = el.scrollHeight;
-            setSeenPublications(newPublications);
-          }}>{tDialogue("newReplies", { count: unread })}</button>}
-      </>}
+      {dialogueNotifications && !contentInert && (
+        <>
+          <div
+            className="sr-only"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-dialogue-announcement
+          >
+            {newPublications > 0 && (
+              <span key={newPublications}>{tDialogue("replyArrived")}</span>
+            )}
+          </div>
+          {unread > 0 && !following && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="dialogue-new-replies"
+              data-dialogue-new-replies
+              onClick={() => {
+                // Work seats can own the first reply, leaving the utterance
+                // map empty. The button always has a bottom to scroll to.
+                arrivingRef.current = true;
+                updateFollowing(true);
+                pinToBottom();
+              }}
+            >
+              {tDialogue("newReplies", { count: unread })}
+            </Button>
+          )}
+        </>
+      )}
 
-      {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
-          retired — the 3D axis carries time. */}
       {isMobile && (
         <div inert={contentInert || undefined}>
           <StreamTimeIndicator timeIso={topTime} visible={indicatorVisible} />

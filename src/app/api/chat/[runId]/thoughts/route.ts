@@ -98,7 +98,7 @@ export async function GET(
       const live = initialStatus === "pending" || initialStatus === "running";
       try {
         // Replaying through the filter is required when the cursor splits a fence/tool.
-        const filter = createWorkPreviewFilter();
+        const filter = createWorkPreviewFilter({ includeReasoning: true });
         reader = readable.getReader();
         while (!closed) {
           pendingRead ??= reader.read();

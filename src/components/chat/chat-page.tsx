@@ -38,7 +38,6 @@ import {
   type SliceSummary,
   type SliceWithContent,
 } from "@/lib/episodic/actions";
-import { SLICE_PAGE_SIZE } from "@/hooks/use-slice-stream";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
@@ -100,7 +99,7 @@ import { buildDialogueRegenerationRequest } from "@/lib/chat/dialogue-regenerate
 import { DialogueDisabled, useDialogueManuscript } from "./use-dialogue-manuscript";
 import { dialogueStreamRows } from "./dialogue-stream-rows";
 import { orderDialogueItems, unrepresentedHistory } from "./dialogue-history";
-import { DialogueWorkStatus } from "./dialogue-work-status";
+import { DialogueWorkTurn } from "./dialogue-work-turn";
 
 const DIALOGUE_ARRIVAL: ArrivalState = { mode: "briefing" };
 
@@ -226,7 +225,8 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
       <DocumentContextPersonaSync persona={persona} />
       {persona === "user" && dialogue.mode === "legacy" && verdict && <PersistenceObserver onCommitted={props.onTurnSettled} />}
       <Inner {...props} persona={persona} dialogue={dialogue} shouldResume={verdict?.shouldResume ?? false}
-        initialMessages={verdict?.initialMessages ?? []} arrival={verdict?.arrival ?? DIALOGUE_ARRIVAL} />
+        initialMessages={verdict?.initialMessages ?? []}
+        arrival={dialogue.mode === "dialogue" ? dialogue.historyWindow?.arrival ?? DIALOGUE_ARRIVAL : verdict?.arrival ?? DIALOGUE_ARRIVAL} />
     </NativePersonaProvider>
   );
 }
@@ -694,8 +694,8 @@ function Inner({
   const thinking = dialogueWorks.some(work => work.status === "queued" || work.status === "running");
   const dialogueActive = dialogue.expression !== "paused" && (thinking || dialogue.expression === "running");
   const composerBusy = dialogueEnabled ? dialogueActive : isLoading;
-  const dialogueRows = useMemo(() => dialogueStreamRows(dialogue.projection.entries, dialogue.projection.inputs),
-    [dialogue.projection.entries, dialogue.projection.inputs]);
+  const dialogueRows = useMemo(() => dialogueStreamRows(dialogue.projection.entries, dialogue.projection.inputs, dialogueWorks),
+    [dialogue.projection.entries, dialogue.projection.inputs, dialogueWorks]);
   const receiptCount = dialogue.projection.receiptCount;
   const observedReceipt = useRef(0);
   useEffect(() => {
@@ -983,7 +983,8 @@ function Inner({
   // turns under a banner HERE. The standalone full-screen briefing survives
   // ONLY for an empty memory (not one slice), known once the episodic state
   // settles.
-  const emptyMemory =
+  const emptyMemory = dialogueEnabled ? dialogue.historyReady && !dialogue.historyFailed &&
+    arrival.mode === "briefing" && !dialogue.historyWindow?.previous.length && dialogueRows.items.length === 0 :
     arrival.mode === "briefing" &&
     episodicReady &&
     timelineSlices.length === 0 &&
@@ -1006,36 +1007,26 @@ function Inner({
   }, [arrivalReady]);
   const showArrivalSkeleton = !dialogueEnabled && !arrivalReady && !skeletonBackstop;
 
-  // ── Briefing history: the expanded tier's content ────────────────────────
-  // A briefing arrival restores NOTHING into the panel (the resume block is
-  // the still-alive slice's alone), so on a briefing arrival the panel's
-  // item list was empty and the expanded tier rendered a blank body — the
-  // dead surface the v0.25 product pass measured (chrome-only innerText,
-  // zero message rows). The acceptance is that fullscreen renders history
-  // and the in-flight turn, so the panel composes the cold-open page itself
-  // (`getSlicePageWithContent`'s null cursor — the ten newest slices, the
-  // newest included). The gate's briefing contract stays untouched (no turns
-  // in the arrival payload; the paged stream is the surface that shows
-  // them). The list stays read-only — the panel pages nothing older;
-  // happened-time browsing deeper than the cold-open page belongs to the
-  // archive dispatch.
-  const [briefingSlices, setBriefingSlices] = useState<SliceWithContent[] | null>(
+  // One preceding record. V2 receives it atomically with its arrival snapshot;
+  // the legacy client uses the same exclusive one-slice read.
+  const [legacyHistory, setLegacyHistory] = useState<SliceWithContent[] | null>(
     null,
   );
+  const briefingSlices = dialogueEnabled ? dialogue.historyWindow?.previous ?? null : legacyHistory;
   useEffect(() => {
-    if (arrival.mode !== "briefing" || shouldResume || emptyMemory) return;
+    if (dialogueEnabled) return;
     let cancelled = false;
-    getSlicePageWithContent(null, SLICE_PAGE_SIZE, persona)
+    getSlicePageWithContent(arrival.mode === "resume" ? arrival.sliceId : null, 1, persona)
       .then((page) => {
-        if (!cancelled) setBriefingSlices(page.slices);
+        if (!cancelled) setLegacyHistory(page.slices);
       })
       .catch(() => {
-        /* best-effort — a blank tier is the honest failure */
+        if (!cancelled) setLegacyHistory([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [arrival.mode, shouldResume, emptyMemory, persona]);
+  }, [arrival, dialogueEnabled, persona]);
 
   // THE PANEL'S ITEMS (2026-10-04; the briefing card re-seated HERE with the
   // two-rungs rewrite — the field that hosted it is gone): the cold-open page
@@ -1501,9 +1492,18 @@ function Inner({
           contentInert={panelPill}
           floatingComposer={panelPill}
           dialogueUtterances={dialogueEnabled ? dialogueRows.utterances : undefined}
+          renderDialogueWork={item => {
+            const seat = dialogueRows.workSeats.get(item.key);
+            return seat ? <DialogueWorkTurn seat={seat} persona={persona} onCancel={dialogue.stop}
+              onRetry={regenerateDialogue} onResume={dialogue.resume} /> : null;
+          }}
           dialogueRegenerate={dialogueEnabled && !composerBusy ? regenerateDialogue : undefined}
           newPublications={dialogue.newPublications}
-          emptyState={emptyMemory ? (
+          emptyState={dialogueEnabled && !dialogue.historyReady && !items.length ? (
+            <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("loadingHistory")}</p>
+          ) : dialogueEnabled && dialogue.historyFailed && !items.length ? (
+            <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("historyUnavailable")}</p>
+          ) : emptyMemory ? (
             <EmptyBriefing
               persona={persona}
               identity={identity}
@@ -1516,9 +1516,7 @@ function Inner({
             <ComposerHost
               onClearanceChange={onComposerClearanceChange}
               composer={<>
-                {dialogueEnabled && !panelPill && <DialogueWorkStatus works={dialogueWorks} inputs={dialogue.projection.inputs} persona={persona}
-                  expression={dialogue.expression} submission={dialogue.submission} onCancel={workId => dialogue.stop(workId)}
-                  onRetry={regenerateDialogue} onResume={dialogue.resume} />}
+                {dialogueEnabled && dialogue.submission.phase === "failed" && <p role="alert" className="text-sm text-destructive">{tDialogue("submitFailedHelp")}</p>}
                 <ChatInput onSubmit={submitAndRise} isLoading={composerBusy}
                   stopLabel={dialogueEnabled ? tDialogue("stopExpression") : undefined}
                   onStop={dialogueEnabled ? () => { void dialogue.stop().catch(() => toast.error(tDialogue("stopFailed"))); } : handleStop} />
