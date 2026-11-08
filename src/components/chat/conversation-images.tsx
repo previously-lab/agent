@@ -2,11 +2,18 @@
 
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
+import { Maximize2, X } from "lucide-react";
+import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { imageAttachmentUrl, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { findImageMarkers, imageMarkerText } from "@/lib/chat/image-markers";
 import { useNativePersona } from "./native-source-scope";
 import type { DraftImage } from "@/lib/chat/image-attachment-draft";
 import "./conversation-images.css";
+
+function boundedPhotoAspect(width?: number, height?: number) {
+  const intrinsicRatio = width && height ? width / height : 4 / 3;
+  return Math.min(16 / 9, Math.max(3 / 4, intrinsicRatio));
+}
 
 export function ImagePolaroid({ image, selected, animate = false, onSelect, onRemove, figureRef }: {
   image: Readonly<ImageAttachmentSnapshot>;
@@ -17,45 +24,65 @@ export function ImagePolaroid({ image, selected, animate = false, onSelect, onRe
   figureRef?: (node: HTMLElement | null) => void;
 }) {
   const t = useTranslations("chat.input");
+  const previewT = useTranslations("chat.richView");
   const persona = useNativePersona() ?? "user";
   const [attempt, setAttempt] = useState(0);
   const decodeTicket = useRef(0);
-  const src = imageAttachmentUrl(image.ref, persona) + (attempt ? `&previewAttempt=${attempt}` : "");
+  const originalSrc = imageAttachmentUrl(image.ref, persona);
+  const src = originalSrc + (attempt ? `&previewAttempt=${attempt}` : "");
   const [decoded, setDecoded] = useState<{ src: string; status: "loading" | "ready" | "error" }>({ src, status: "loading" });
   // A new protected ref/persona must earn its own decoded status. An old
   // image's late decode can never expose an unready replacement source.
   const preview = decoded.src === src ? decoded.status : "loading";
-  const ratio = image.width && image.height ? image.width / image.height : 4 / 3;
+  // The media seat stays readable for malformed or extreme dimensions; the
+  // image itself is always contained and the dialog exposes the full original.
+  const ratio = boundedPhotoAspect(image.width, image.height);
   return (
-    <figure ref={figureRef} tabIndex={-1} className="conversation-polaroid" data-image-asset={image.assetId}
-      data-image-ordinal={image.ordinal} data-image-selected={selected || undefined} data-image-arrival={animate && preview === "ready" || undefined}
-      data-preview-state={preview}
-      style={{ "--photo-aspect": ratio, "--photo-tilt": `${((image.ordinal ?? 1) % 3 - 1) * 1.2}deg` } as CSSProperties}>
-      <div className="conversation-photo-media" data-photo-media aria-busy={preview === "loading" || undefined}>
-      <a href={imageAttachmentUrl(image.ref, persona)} target="_blank" rel="noreferrer" aria-label={t("images.open", { name: image.name })}>
-        {/* The protected attachment endpoint owns image bytes and MIME checks. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img key={src} src={src} alt={image.name} width={image.width} height={image.height} loading={animate ? "eager" : "lazy"}
-          onLoad={async event => {
-            const element = event.currentTarget;
-            const ticket = ++decodeTicket.current;
-            try { await element.decode(); if (decodeTicket.current === ticket) setDecoded({ src, status: "ready" }); }
-            catch { if (decodeTicket.current === ticket) setDecoded({ src, status: "error" }); }
-          }} onError={() => { decodeTicket.current++; setDecoded({ src, status: "error" }); }} />
-      </a>
-      {preview !== "ready" && <div className="conversation-photo-status" role="status">
-        <span>{t(preview === "error" ? "images.previewFailed" : "images.previewLoading")}</span>
-        {preview === "error" && <button type="button" onClick={() => { decodeTicket.current++; setAttempt(current => current + 1); }}>{t("images.previewRetry")}</button>}
-      </div>}
-      </div>
-      <figcaption>
-        <button type="button" className="conversation-photo-label" onClick={onSelect}>
-          {image.ordinal ? imageMarkerText(image.ordinal) : image.name}
-        </button>
-        {image.ordinal && <span className="truncate" title={image.name}>{image.name}</span>}
-        {onRemove && <button type="button" className="conversation-photo-remove" onClick={onRemove} aria-label={t("removeAttachment", { name: image.name })}>×</button>}
-      </figcaption>
-    </figure>
+    <Dialog>
+      <figure ref={figureRef} tabIndex={-1} className="conversation-polaroid" data-image-asset={image.assetId}
+        data-image-ordinal={image.ordinal} data-image-selected={selected || undefined} data-image-arrival={animate && preview === "ready" || undefined}
+        data-preview-state={preview}
+        style={{ "--photo-aspect": ratio, "--photo-tilt": `${((image.ordinal ?? 1) % 3 - 1) * 1.2}deg` } as CSSProperties}>
+        <div className="conversation-photo-media" data-photo-media aria-busy={preview === "loading" || undefined}>
+          <DialogTrigger className="conversation-photo-open" disabled={preview !== "ready"} aria-label={previewT("openNamedImage", { name: image.name })} title={previewT("openImage")}>
+            {/* The protected attachment endpoint owns image bytes and MIME checks. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img key={src} src={src} alt={image.name} width={image.width} height={image.height} loading={animate ? "eager" : "lazy"}
+              onLoad={async event => {
+                const element = event.currentTarget;
+                const ticket = ++decodeTicket.current;
+                try { await element.decode(); if (decodeTicket.current === ticket) setDecoded({ src, status: "ready" }); }
+                catch { if (decodeTicket.current === ticket) setDecoded({ src, status: "error" }); }
+              }} onError={() => { decodeTicket.current++; setDecoded({ src, status: "error" }); }} />
+            <span className="conversation-photo-open-badge" aria-hidden="true"><Maximize2 /><span>{previewT("openImage")}</span></span>
+          </DialogTrigger>
+          {preview !== "ready" && <div className="conversation-photo-status" role="status">
+            <span>{t(preview === "error" ? "images.previewFailed" : "images.previewLoading")}</span>
+            {preview === "error" && <button type="button" onClick={() => { decodeTicket.current++; setAttempt(current => current + 1); }}>{t("images.previewRetry")}</button>}
+          </div>}
+        </div>
+        <figcaption>
+          <button type="button" className="conversation-photo-label" title={image.name} onClick={onSelect}>
+            {image.ordinal ? imageMarkerText(image.ordinal) : image.name}
+          </button>
+          {image.ordinal && <span className="truncate" title={image.name}>{image.name}</span>}
+          {onRemove && <button type="button" className="conversation-photo-remove" onClick={onRemove} aria-label={t("removeAttachment", { name: image.name })}>×</button>}
+        </figcaption>
+      </figure>
+      <DialogContent className="conversation-photo-preview sm:max-w-5xl" showCloseButton={false}>
+        <div className="conversation-photo-preview-heading">
+          <DialogTitle className="conversation-photo-preview-title" title={image.name}>{image.name}</DialogTitle>
+          <DialogClose className="conversation-photo-preview-close" aria-label={previewT("close")}><X aria-hidden="true" /></DialogClose>
+        </div>
+        <div className="conversation-photo-preview-stage">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={originalSrc} alt={image.name} width={image.width} height={image.height} />
+        </div>
+        <a className="conversation-photo-original" href={originalSrc} target="_blank" rel="noreferrer">
+          {previewT("openOriginalImage")}
+        </a>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -65,7 +92,7 @@ export function DraftImagePlaceholder({ image, onRetry, onRemove }: {
 }) {
   const t = useTranslations("chat.input");
   return <figure className="conversation-polaroid conversation-photo-placeholder" data-upload-id={image.localClientId} data-upload-state={image.status}
-    style={{ "--photo-aspect": image.width && image.height ? image.width / image.height : 4 / 3,
+    style={{ "--photo-aspect": boundedPhotoAspect(image.width, image.height),
       "--photo-tilt": `${(image.ordinal % 3 - 1) * 1.2}deg` } as CSSProperties}>
     <div className="conversation-photo-media" data-photo-media aria-busy={image.status !== "error" || undefined}>
       <div className="conversation-photo-status" role="status">

@@ -28,6 +28,8 @@
  * rungs are the worlds (现场 / 原稿), and the panel rises over either.
  */
 import { useState } from "react";
+import { usePathname } from "@/i18n/navigation";
+import { useChromeInset } from "@/hooks/use-chrome-inset";
 import type { UserConfig } from "@/lib/config/types";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 import { useShell } from "@/components/shell/shell-provider";
@@ -42,6 +44,8 @@ export function ConversationOverlay({
   initialConfig?: UserConfig;
 }) {
   const shell = useShell();
+  const pathname = usePathname();
+  const chromeInset = useChromeInset(pathname);
   // The pill's subtitle line (v0.13 §4): folded from the in-flight turn by
   // ChatPage, lifted HERE, and handed back down into the panel as a prop —
   // the panel renders it, the page produces it, and this state is the wire
@@ -67,7 +71,7 @@ export function ConversationOverlay({
         // other — nobody publishes mid-move. The route computes the lease.
         publishing={shell.publishing}
         onSubtitleLineChange={setSubtitleLine}
-        insetTop={0}
+        insetTop={pathname === "/app" ? chromeInset : 0}
         insetBottom={shell.composerClearance}
         onComposerClearanceChange={shell.setComposerClearance}
       />

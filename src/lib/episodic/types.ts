@@ -41,6 +41,12 @@ export interface Turn {
   content: string;
   /** Versioned public dialogue metadata; absent on legacy records. */
   dialogue?: import("./dialogue-record").DialogueRecordTurn;
+  /** Exact original public body, retained so a later snapshot cannot normalize
+   * embedded artifact source or its trailing-newline encoding. */
+  recordBody?: string;
+  /** Serializable exact native sources admitted by the structured block IDs.
+   * Ordinary model reads use content instead of either source field. */
+  artifactBodies?: Record<string, string>;
   /**
    * Shared by the user and agent turn in the same round.
    * 6-char base64url, e.g. "a3fk2w". Absent on legacy slices parsed from disk.

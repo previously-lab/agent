@@ -69,6 +69,109 @@ export function publicRecordText(blocks: readonly ContentBlockV1[]): string {
   return blocks.flatMap((block) => block.kind === "markdown" ? [block.text] : []).filter(Boolean).join("\n\n");
 }
 
+
+const RECORD_ARTIFACT_PREFIX = "record-artifact=";
+const RECORD_BLOCK_PREFIX = "record-block=";
+const RECORD_NO_FINAL_NEWLINE = "record-final-newline=0";
+const RECORD_TOKEN = /^[a-f0-9]{64}$/;
+const utf8 = new TextEncoder();
+
+type RecordArtifactInfo = { artifactId: string; blockId: string; noFinalNewline: boolean };
+
+function recordInfoTokens(raw: string): string[] | null {
+  if (raw.startsWith(" ") || raw.startsWith("\t")) return null;
+  const firstLine = /^`{3,}([^\r\n]*)/.exec(raw)?.[1];
+  if (!firstLine) return null;
+  const tokens = firstLine.trim().split(/[ \t]+/).filter(Boolean);
+  return tokens[0] === "html" && tokens[1] === "live" ? tokens : null;
+}
+
+function isRecordArtifactCandidate(raw: string): boolean {
+  return recordInfoTokens(raw)?.some((token) => token === "record-artifact" || token.startsWith(RECORD_ARTIFACT_PREFIX)) ?? false;
+}
+
+function readRecordArtifactInfo(raw: string): RecordArtifactInfo | null {
+  const tokens = recordInfoTokens(raw);
+  if (!tokens || (tokens.length !== 4 && tokens.length !== 5)) return null;
+  const artifactId = tokens[2]?.startsWith(RECORD_ARTIFACT_PREFIX) ? tokens[2].slice(RECORD_ARTIFACT_PREFIX.length) : "";
+  const encodedBlock = tokens[3]?.startsWith(RECORD_BLOCK_PREFIX) ? tokens[3].slice(RECORD_BLOCK_PREFIX.length) : "";
+  if (!RECORD_TOKEN.test(artifactId) || !encodedBlock || (tokens.length === 5 && tokens[4] !== RECORD_NO_FINAL_NEWLINE)) return null;
+  try {
+    return { artifactId, blockId: decodeURIComponent(encodedBlock), noFinalNewline: tokens.length === 5 };
+  } catch { return null; }
+}
+
+function artifactFence(artifactId: string, blockId: string, body: string): string {
+  if (!RECORD_TOKEN.test(artifactId)) throw new Error("Dialogue artifact id cannot be written as a record token");
+  let longestRun = 0;
+  for (const match of body.matchAll(/`+/g)) longestRun = Math.max(longestRun, match[0].length);
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  const noFinalNewline = !body.endsWith("\n");
+  const info = `html live record-artifact=${artifactId} record-block=${encodeURIComponent(blockId)}` +
+    (noFinalNewline ? ` ${RECORD_NO_FINAL_NEWLINE}` : "");
+  return `${fence} ${info}\n${body}${noFinalNewline ? "\n" : ""}${fence}`;
+}
+
+/** Store public prose and verified native source together in the original
+ * reply. The marker carries identity, never authority: the structured block
+ * metadata remains the reference used by the existing SHA/size verifier. */
+export function composeDialogueRecordBody(
+  blocks: readonly ContentBlockV1[],
+  verifiedBodies: ReadonlyMap<string, string>,
+): string {
+  return blocks.flatMap((block) => {
+    if (block.kind === "markdown") return block.text ? [block.text] : [];
+    if (block.kind !== "artifact_ref" || block.artifact.kind !== "native_html") return [];
+    const body = verifiedBodies.get(block.artifact.artifactId);
+    if (body === undefined) throw new Error(`Missing verified dialogue artifact ${block.artifact.artifactId}`);
+    if (utf8.encode(body).byteLength !== block.artifact.byteSize) throw new Error(`Dialogue artifact size differs for ${block.artifact.artifactId}`);
+    return [artifactFence(block.artifact.artifactId, block.blockId, body)];
+  }).join("\n\n");
+}
+
+/** Read only the exact representation emitted by composeDialogueRecordBody.
+ * A malformed or mismatched body yields no sources; public prose still comes
+ * from metadata and the legacy artifact archive remains the display fallback. */
+export function readDialogueRecordBody(
+  raw: string,
+  blocks: readonly ContentBlockV1[],
+): { exact: boolean; artifactBodies: Record<string, string> } {
+  const artifactBodies: Record<string, string> = {};
+  const expected = blocks.flatMap((block) => block.kind === "artifact_ref" && block.artifact.kind === "native_html" ? [block] : []);
+  let ordinal = 0;
+  try {
+    for (const section of parseNativeSections(raw)) {
+      if (section.kind !== "native") continue;
+      const info = section.closed ? readRecordArtifactInfo(section.raw) : null;
+      const block = expected[ordinal++];
+      if (!info || !block || info.artifactId !== block.artifact.artifactId || info.blockId !== block.blockId) {
+        return { exact: false, artifactBodies: {} };
+      }
+      let body = section.source;
+      if (info.noFinalNewline) {
+        if (!body.endsWith("\n")) return { exact: false, artifactBodies: {} };
+        body = body.slice(0, -1);
+      }
+      artifactBodies[info.artifactId] = body;
+    }
+    if (ordinal !== expected.length) return { exact: false, artifactBodies: {} };
+    const verified = new Map(Object.entries(artifactBodies));
+    if (composeDialogueRecordBody(blocks, verified).trimEnd() !== raw.trimEnd()) return { exact: false, artifactBodies: {} };
+    return { exact: true, artifactBodies };
+  } catch { return { exact: false, artifactBodies: {} }; }
+}
+
+/** Ordinary record readers get prose plus a short omission marker. Legacy
+ * html-live fences have no host record marker and remain byte-identical. */
+export function projectRecordArtifactSources(raw: string): string {
+  return parseNativeSections(raw).map((section) => {
+    if (section.kind !== "native" || !isRecordArtifactCandidate(section.raw)) return section.raw;
+    const artifactId = readRecordArtifactInfo(section.raw)?.artifactId;
+    const ending = section.raw.endsWith("\r\n") ? "\r\n" : section.raw.endsWith("\n") || section.raw.endsWith("\r") ? section.raw.slice(-1) : "";
+    return `[Interactive artifact${artifactId ? ` ${artifactId}` : ""} omitted]${ending}`;
+  }).join("");
+}
+
 const RESEARCH_PREFIX = "[research-result-v1] ";
 const researchResult = z.object({
   kind: z.literal("research_result"), resultId: id, productRevision: seq, workId: id,

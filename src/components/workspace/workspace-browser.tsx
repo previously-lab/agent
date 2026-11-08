@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import { DocLibrary } from "@/components/shelf/doc-library";
 import { useShell } from "@/components/shell/shell-provider";
 import { HistoryBrowser } from "@/components/workspace/history-browser";
-import { WorkspaceRouteNav } from "@/components/workspace/workspace-route-nav";
 
 export function WorkspaceBrowser({ persona }: { persona?: string }) {
   const t = useTranslations("workspace.browser");
@@ -15,9 +14,6 @@ export function WorkspaceBrowser({ persona }: { persona?: string }) {
 
   return (
     <main className="workspace-browser">
-      <div className="workspace-browser-top">
-        <WorkspaceRouteNav current="library" />
-      </div>
       <div className="workspace-browser-inner">
         <header className="workspace-browser-title">
           <div>

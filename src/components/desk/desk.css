@@ -304,6 +304,16 @@
   background-image: linear-gradient(#eae8da70, #eae8da70), var(--paper-grain-map);
 }
 
+.workspace-reader-host .desk-paper {
+  --foreground: #292723;
+  --color-foreground: #292723;
+  --card-foreground: #292723;
+  --muted-foreground: #63594e;
+  --color-muted-foreground: #63594e;
+  --ink-accent-paper: #705344;
+  --paper-line: #bfb09a;
+}
+
 .desk-face {
   position: absolute;
   inset: 0;
@@ -738,6 +748,22 @@
 .desk-tool-button:disabled { opacity: 0.35; cursor: default; }
 .desk-tool-close { width: 44px; height: 44px; }
 .desk-tool-readout { width: 52px; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
+.desk-tool-preset { width: auto; padding-inline: calc(var(--spacing) * 2); font-size: var(--text-xs); white-space: nowrap; }
+.desk-tool-preset[aria-pressed="true"] { background: var(--accent); box-shadow: inset 0 -2px var(--manuscript-highlight, var(--ring)); }
+.desk-pan-hint {
+  display: flex;
+  flex: 0 0 100%;
+  order: -1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing);
+  text-align: center;
+  pointer-events: none;
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+.desk-pan-hint kbd { font-family: var(--font-mono, monospace); white-space: nowrap; }
+@media (pointer: coarse) { .desk-pan-hint kbd { display: none; } }
 .desk-page-position { min-width: 42px; text-align: center; font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; }
 
 @media (max-width: 600px) {
@@ -755,6 +781,7 @@
   .desk-toolbar-group { gap: 0; padding: 3px; }
   .desk-tool-button { width: 31px; height: 34px; }
   .desk-tool-readout { width: 45px; }
+  .desk-tool-preset { width: auto; }
   .desk-tool-close { width: 40px; height: 40px; }
   .desk-page-position { min-width: 36px; }
 }

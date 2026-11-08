@@ -77,9 +77,9 @@ test("cold load keeps prior slice and current mounted while scrolling", async ({
 
   await info.attach("browser-errors", { body: JSON.stringify(errors), contentType: "application/json" });
   expect(errors).toEqual([]);
-  const entrance = page.locator(".workspace-history-entrance button");
-  await expect(entrance).toBeVisible();
-  await entrance.click();
+  await page.locator("[data-manuscript-header]").getByRole("button", { name: "Manuscripts", exact: true }).click();
+  await page.getByRole("button", { name: "Conversation records" }).click();
+  await page.locator(".workspace-history-browser .manuscript-path-list button").first().click();
   await expect(page.getByText("HISTORY-OLDER", { exact: false }).first()).toBeVisible();
   expect(coldTotal, "Cold-load cumulative layout shift before input").toBeLessThan(0.1);
 });

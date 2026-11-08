@@ -41,4 +41,15 @@ describe("parent native offer control", () => {
     h.getRun.mockReturnValue(parent("completed", []));
     await expect(readDialogueAdmission("wrun_01JTESTPARENT0000000000000", "missing", first.runId)).resolves.toBe("parent_terminal");
   });
+
+  it("cancels a live snapshot reader after the captured tail", async () => {
+    const cancel = vi.fn();
+    const readable = new ReadableStream<unknown>({
+      start(controller) { controller.enqueue(first); },
+      cancel,
+    });
+    h.getRun.mockReturnValue({ getReadable: () => Object.assign(readable, { getTailIndex: async () => 0 }) });
+    await expect(listDialogueOffers("wrun_01JTESTPARENT0000000000000")).resolves.toEqual([first]);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });

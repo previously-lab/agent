@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DialogueRunInput } from "@/lib/dialogue/transport";
+import { DIALOGUE_CHECKPOINT_NAMESPACE, type DialogueRunInput } from "@/lib/dialogue/transport";
 
 const h = vi.hoisted(() => ({
   admission: vi.fn(),
@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   sleep: vi.fn(),
 }));
 
-vi.mock("workflow", () => ({ sleep: h.sleep, getWritable: () => ({}) }));
+vi.mock("workflow", () => ({ sleep: h.sleep, getWritable: (options?: { namespace?: string }) => options ?? {} }));
 vi.mock("@/app/api/agent/agent", () => ({ createDialogueAgent: () => ({ stream: h.stream }) }));
 vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   dialogueOwnRunIdStep: async () => "wrun_01JTESTCHILD00000000000000",
@@ -64,7 +64,7 @@ describe("dialogueWorkflow", () => {
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
     h.stream.mockImplementation(async (options: { onStepEnd?: (step: { text: string }) => void }) => {
       options.onStepEnd?.({ text: "可以。" });
-      return { text: "可以。" };
+      return { text: "可以。", toolCalls: [] };
     });
   });
 
@@ -103,5 +103,26 @@ describe("dialogueWorkflow", () => {
     expect(h.record).toHaveBeenCalledWith(expect.not.objectContaining({ utterance: expect.anything() }));
     expect(h.close).toHaveBeenCalledWith(expect.objectContaining({ error: "The dialogue ended without a public reply." }));
     expect(result.status).toBe("failed");
+  });
+
+  it("keeps a held checkpoint and its candidate prose out of the public transcript and record", async () => {
+    h.stream.mockResolvedValue({ text: "uncommitted draft", toolCalls: [{ toolName: "holdReply" }] });
+    const result = await dialogueWorkflow({ ...input, stage: "checkpoint" });
+    expect(h.stream).toHaveBeenCalledWith(expect.objectContaining({
+      writable: { namespace: DIALOGUE_CHECKPOINT_NAMESPACE },
+    }));
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });
+    expect(result).toMatchObject({ status: "completed", held: true });
+  });
+
+  it("drops a draft superseded during checkpoint inference", async () => {
+    h.publish.mockResolvedValue(undefined);
+    const result = await dialogueWorkflow({ ...input, stage: "checkpoint" });
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });
+    expect(result).toMatchObject({ status: "completed", held: true });
   });
 });

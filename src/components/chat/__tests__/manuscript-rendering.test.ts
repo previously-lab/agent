@@ -14,6 +14,7 @@ vi.mock("next-intl", () => ({
 }));
 vi.mock("../markdown", () => ({
   MarkdownRenderer: ({ content }: { content: string }) => React.createElement("p", { "data-prose": true }, content),
+  DialogueMarkdown: ({ content }: { content: string }) => React.createElement("p", { "data-prose": true }, content),
 }));
 vi.mock("../time-display", () => ({
   TimeDisplay: ({ timestamp }: { timestamp: string }) => React.createElement("time", { dateTime: timestamp }, timestamp),
@@ -121,6 +122,23 @@ describe("the shared conversation manuscript", () => {
     const done = render(parts, { actions: true });
     expect(done).toContain("copyTooltip");
     expect(done).toContain("regenerateTooltip");
+  });
+
+  it("keeps contiguous saved publications under one speaker and one action row", () => {
+    const publication = (publicationId: string, publicSeq: number, text: string) => ({ kind: "public_utterance" as const,
+      publicationId, publicSeq, inputIds: ["input-1"], sourceResults: [],
+      blocks: [{ kind: "markdown" as const, blockId: publicationId, text }] });
+    const html = renderToStaticMarkup(React.createElement(HistoryTurn, {
+      role: "agent", content: "First part.", sliceId: "fixture-slice", turnId: "first", timestamp: "2026-10-20T12:00:00Z",
+      dialogue: publication("first-public", 1, "First part."),
+      continuations: [{ role: "agent", content: "Second part.", timestamp: "2026-10-20T12:01:00Z", turnId: "second",
+        dialogue: publication("second-public", 2, "Second part.") }],
+    }));
+    expect(html.match(/aria-label="Previously"/g)).toHaveLength(1);
+    expect(html.match(/data-public-utterance=/g)).toHaveLength(2);
+    expect(html.match(/conversation-message-actions/g)).toHaveLength(1);
+    expect(html).toContain("First part.");
+    expect(html).toContain("Second part.");
   });
 
   it("keeps history timestamps and cognition attached to the correct speaker", () => {

@@ -24,11 +24,12 @@ export function dialoguePriorContext(messages: readonly ModelMessage[], sourceIn
   }).slice(-PRIOR_CONTEXT_MESSAGES);
 }
 
-/** The model sees descriptors and prose; native source never enters this prompt. */
+/** The model sees descriptors, prose and typed events; native source never enters this prompt. */
 export function buildDialoguePrompt(
   input: DialogueRunInput,
   artifacts: readonly DialogueTypedArtifact[],
   prose: string,
+  alreadySaid: readonly string[] = [],
 ): string {
   return JSON.stringify({
     locale: input.context.locale,
@@ -43,7 +44,13 @@ export function buildDialoguePrompt(
       documentContext: input.context.source.documentContext ?? [],
     },
     priorContext: input.context.priorContext,
+    stage: input.stage ?? "final",
+    priorCheckpoints: (input.priorCheckpoints ?? []).map(({ text }) => text),
+    alreadySaid,
     result: prose.trim(),
+    // Machine-labeled host semantic input; omitted for ordinary result offers.
+    // Event offers carry an empty result. `needs_user` is its own distinct kind.
+    ...(input.event ? { event: input.event } : {}),
     artifacts: artifacts.map(({ artifact }, index) => ({
       ordinal: index + 1,
       artifactId: artifact.artifactId,

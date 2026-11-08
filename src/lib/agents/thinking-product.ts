@@ -3,6 +3,7 @@ import type { ModelMessage } from "@/lib/deepseek/types";
 import type { DocumentContextSnapshot } from "@/lib/chat/document-context";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
+import { dialogueNeedsUserSchema } from "@/lib/dialogue/transport";
 import { collectThinkingReads, type ThinkingRead } from "./thinking-read-receipt";
 
 const boundedId = z.string().min(1).max(512);
@@ -21,7 +22,7 @@ export const thinkingReportSchema = z.object({
     uncertainty: z.string().max(600).optional(),
     decision: decisionKind.optional(),
     adoptionEvidenceIds: z.array(boundedId).max(8).optional(),
-  }).strict()).max(12),
+  }).strict()).max(12).optional(),
   openQuestions: z.array(z.string().min(1).max(400)).max(6).optional(),
   nextAction: z.string().max(600).optional(),
   memoryDelta: z.object({
@@ -30,10 +31,12 @@ export const thinkingReportSchema = z.object({
     findingIndices: z.array(z.number().int().nonnegative().max(11)).min(1).max(8),
     targetRefs: z.array(boundedId).max(4),
   }).strict().optional(),
+  /** Genuine user-input blocker (missing file/info, a decision, permission). Optional. */
+  needsUser: dialogueNeedsUserSchema.optional(),
 }).strict();
 
 export type ThinkingReport = z.infer<typeof thinkingReportSchema>;
-type DraftFinding = ThinkingReport["findings"][number];
+type DraftFinding = NonNullable<ThinkingReport["findings"]>[number];
 export type ThinkingPublicMode = "finding" | "status" | "none";
 export type ThinkingDependency = {
   ref: string;

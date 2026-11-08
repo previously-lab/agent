@@ -6,7 +6,6 @@ import { useReducedMotion } from "motion/react";
 import { useTranslations } from "next-intl";
 import { ReaderHost } from "@/components/workspace/reader-host";
 import { WorkspaceBrowser } from "@/components/workspace/workspace-browser";
-import { WorkspaceRouteNav } from "@/components/workspace/workspace-route-nav";
 import { RecordSwitch } from "@/components/archive/record-switch";
 import type { DeskTexts } from "@/components/desk/desk-field";
 import type {
@@ -14,7 +13,6 @@ import type {
   DeskPageChange,
   DeskViewChange,
 } from "@/components/desk/desk-model";
-import { parseRecordRef } from "@/lib/archive/refs";
 import {
   NativePersonaProvider,
   useNativeSourceScope,
@@ -75,6 +73,10 @@ export function AppShell() {
     zoomOut: tDesk("zoomOut"),
     zoomIn: tDesk("zoomIn"),
     zoomReset: tDesk("zoomReset"),
+    zoomFit: tDesk("zoomFit"),
+    zoomActual: tDesk("zoomActual"),
+    zoomRead: tDesk("zoomRead"),
+    zoomPanHint: tDesk("zoomPanHint"),
     close: tDesk("close"),
     recordUserLabel: tDesk("recordUser"),
     recordAgentLabel: tDesk("recordAgent"),
@@ -125,7 +127,6 @@ export function AppShell() {
   if (surface === "reader" && target) {
     const shellTarget = deskDoc ? { ref: deskDoc, options: deskOpenOptions ?? {} } : null;
     if (!deskTargetEqual(shellTarget, target)) return null;
-    const relatedSlice = parseRecordRef(target.ref)?.sliceId ?? null;
     return (
       <div className="workspace-shell" data-workspace-surface="reader">
         <NativePersonaProvider value={persona ?? "user"}>
@@ -143,9 +144,6 @@ export function AppShell() {
           />
         </NativePersonaProvider>
         <RecordSwitch persona={persona} reducedMotion={reducedMotion} />
-        <div className="workspace-reader-nav">
-          <WorkspaceRouteNav current="reader" relatedSlice={relatedSlice} />
-        </div>
       </div>
     );
   }

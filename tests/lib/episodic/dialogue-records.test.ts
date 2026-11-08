@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
@@ -50,8 +51,9 @@ describe("three record lanes", () => {
     const first = await projectDialogueRecords(payload);
     expect(first?.reflection).toEqual([]);
     const sliceId = first!.sliceId;
-    const artifact = { artifactId: "immutable-1", sourceOwnerId: "work-u1", revision: 1 as const,
-      sha256: "a".repeat(64), kind: "native_html" as const, mediaType: "text/html", byteSize: 48 };
+    const html = "<button>Comparison</button>\n";
+    const artifact = { artifactId: "a".repeat(64), sourceOwnerId: "work-u1", revision: 1 as const,
+      sha256: createHash("sha256").update(html).digest("hex"), kind: "native_html" as const, mediaType: "text/html", byteSize: Buffer.byteLength(html) };
     const blocks = [{ kind: "markdown" as const, blockId: "text-1", text: "Here is the comparison." },
       { kind: "artifact_ref" as const, blockId: "original-visual", artifact }];
     const product = buildThinkingProduct({ text: "Internal private conclusion.", messages: [], asOf: stamp,
@@ -68,7 +70,8 @@ describe("three record lanes", () => {
     const visualOnly = { ...utterance, utteranceId: "public-3", publicSeq: 3,
       blocks: blocks.filter((block) => block.kind === "artifact_ref") };
     for (const item of [utterance, second, visualOnly, utterance, visualOnly]) {
-      expect((await projectDialogueRecords({ ...payload, utterance: item }))?.reflection).toEqual([]);
+      expect((await projectDialogueRecords({ ...payload, utterance: item,
+        typedArtifacts: [{ blockId: "original-visual", artifact, body: html }] }))?.reflection).toEqual([]);
     }
     await projectDialogueRecords({ ...payload, result });
     const slice = await loadSlice(sliceId);

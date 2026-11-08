@@ -1,4 +1,5 @@
 import { test, expect } from "./test";
+import { collapseConversation, openAllManuscripts } from "./manuscript-navigation";
 import type { Locator, Page } from "@playwright/test";
 import { clearCases, clearEpisodic, seedSlices } from "./memory-fixture";
 import { calculatorDocument, interactiveRecord, sandboxCalculator, themedCalculator, THEME_PROBES } from "./native-interaction-fixture";
@@ -11,7 +12,7 @@ async function noNativeChrome(page: Page) {
 }
 
 async function openRecordFromChat(page: Page) {
-  await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+  await openAllManuscripts(page);
   await page.locator("[data-records-row]").first().click();
   await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
   await expect(page.locator('.desk-shell--top [data-native-frame][sandbox~="allow-scripts"]')).toHaveCount(1);
@@ -73,6 +74,47 @@ test("full HTML runs head, module, inline click, slider and local submit handler
   await testInfo.attach("script-diagnostics", { body: diagnostics.join("\n"), contentType: "text/plain" });
 });
 
+test("large views keep the same HTML session, image zoom, and copyable table", async ({ page, context }, info) => {
+  const record = interactiveRecord(calculatorDocument());
+  const reply = record.turns.find(turn => turn.role === "agent")!;
+  reply.content += "\n\n| Window | Clear aisle |\n| --- | --- |\n| North | 95 cm |\n\n![Room diagram](/fixture-room.png)";
+  await seedSlices([record]);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.route("**/fixture-room.png", route => route.fulfill({
+    contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64"),
+  }));
+  await page.goto("/en/app");
+  const iframe = activeFrames(page);
+  const frame = iframe.contentFrame().frameLocator("[data-native-content]");
+  await frame.getByLabel("Left", { exact: true }).fill("9");
+  const sameFrame = await iframe.elementHandle();
+  await page.getByRole("button", { name: "Open large view" }).click();
+  await expect(page.getByRole("dialog", { name: "Interactive content" })).toBeVisible();
+  expect(await iframe.evaluate((node, previous) => node === previous, sameFrame)).toBe(true);
+  await expect(frame.getByLabel("Left", { exact: true })).toHaveValue("9");
+  await frame.getByLabel("Right", { exact: true }).fill("3");
+  await page.screenshot({ path: info.outputPath("large-html.png"), animations: "disabled" });
+  await page.getByRole("button", { name: "Close large view" }).click();
+  await expect(frame.getByLabel("Right", { exact: true })).toHaveValue("3");
+  await expect(page.getByRole("button", { name: "Open large view" })).toBeFocused();
+  await page.getByRole("button", { name: "Expand table" }).click();
+  const table = page.getByRole("dialog", { name: "Table" });
+  await expect(table.getByRole("columnheader", { name: "Clear aisle" })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: "Clear aisle" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await table.getByRole("button", { name: "Copy table" }).click();
+  expect((await page.evaluate(() => navigator.clipboard.readText())).replaceAll("\r\n", "\n")).toBe("Window\tClear aisle\nNorth\t95 cm");
+  await page.screenshot({ path: info.outputPath("large-table.png"), animations: "disabled" });
+  await page.keyboard.press("Escape");
+  await expect(table).toBeHidden();
+  await page.getByRole("button", { name: "View image: Room diagram" }).click();
+  const image = page.getByRole("dialog", { name: "Room diagram" });
+  await image.getByRole("button", { name: "Zoom in" }).click();
+  await expect(image.getByRole("button", { name: "Fit image" })).toHaveText("125%");
+  await page.goBack();
+  await expect(image).toBeHidden();
+  await expect(page.locator('[data-panel-tier="fullscreen"]')).toBeVisible();
+});
+
 test("real dialogue mode still renders legacy native records", async ({ page }) => {
   await page.route("**/api/chat/dialogue?*", route => route.continue());
   await seedSlices([interactiveRecord(calculatorDocument())]);
@@ -132,7 +174,7 @@ test("chat and paper share live theme classes without reload and hand off one ca
   });
   // Do not wait for the old 180ms save debounce before hiding the frame.
   await activeFrames(page).contentFrame().frameLocator("[data-native-content]").getByRole("button", { name: "Add saved step", exact: true }).click();
-  await page.getByRole("button", { name: "Exit full screen", exact: true }).click();
+  await collapseConversation(page);
   await page.getByRole("button", { name: "Expand to full screen", exact: true }).click();
   await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-count")).toHaveText("2");
   await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#custom-total")).toHaveText("14");
@@ -236,7 +278,7 @@ test("chat and paper share live theme classes without reload and hand off one ca
     // debounce race. The next owner must restore custom data AND its output.
     await frame.getByRole("button", { name: "Add saved step", exact: true }).click();
   }
-  await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.locator(".manuscript-nav").getByRole("button", { name: "Conversation", exact: true }).click();
   await expect(page.locator('[data-workspace-surface="conversation"]')).toBeVisible();
   await expect(activeFrames(page)).toHaveCount(1);
   await expect(activeFrames(page).contentFrame().frameLocator("[data-native-content]").locator("#rsi")).toHaveValue("1");
@@ -246,15 +288,16 @@ test("chat and paper share live theme classes without reload and hand off one ca
   // Header navigation releases the same execution lease as folding. Do not
   // await a stored snapshot between this custom edit and leaving the view.
   await activeFrames(page).contentFrame().frameLocator("[data-native-content]").getByRole("button", { name: "Add saved step", exact: true }).click();
-  await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).evaluate(button => {
-    const panel = button.closest("[data-panel-tier]")!;
+  await page.locator("[data-manuscript-header]").getByRole("button", { name: "Manuscripts", exact: true }).click();
+  await page.getByRole("button", { name: "All manuscripts", exact: true }).evaluate(button => {
+    const panel = document.querySelector('[data-panel-tier="fullscreen"]')!;
     // Two intents in one task reproduce the queued fold/navigation race.
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     (button as HTMLButtonElement).click();
   });
   await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
   await expect(activeFrames(page)).toHaveCount(0);
-  await page.locator(".workspace-browser-top .workspace-route-nav").getByRole("button", { name: "Conversation", exact: true }).click();
+  await page.locator(".manuscript-nav").getByRole("button", { name: "Conversation", exact: true }).click();
   await expect(activeFrames(page)).toHaveCount(1);
   const restored = activeFrames(page).contentFrame().frameLocator("[data-native-content]");
   await expect(restored.locator("#custom-count")).toHaveText("5");

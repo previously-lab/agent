@@ -139,14 +139,9 @@ for (const view of [
     await expect(page.locator(".pulse-delay:visible")).toHaveCount(0);
     await checkpoint("empty");
     expect(await editor(page).evaluate(el => JSON.parse(getComputedStyle(el, "::before").content))).toBe(await editor(page).getAttribute("data-placeholder"));
-    await expect(page.locator("[data-composer-tools-trigger]")).toHaveCSS("opacity", "0");
-    // Keyboard can discover the initially concealed tools; no send/expand ambiguity.
-    await page.locator("[data-composer-tools-trigger]").focus();
-    await expect(page.locator("[data-composer-tools-trigger]")).toHaveCSS("opacity", "1");
-    await editor(page).fill(prose);
-    await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]")).toBeVisible();
     await expect(page.locator("[data-document-mention]")).toBeVisible();
+    await editor(page).fill(prose);
     await checkpoint("editing");
     const buffers = [await fixturePng(page, 360, 240), await fixturePng(page, 240, 360)];
     const uploads = new Map<string, (fail?: boolean) => Promise<void>>();
@@ -260,9 +255,8 @@ for (const view of [
     await expect(page.getByText("正在读这两张照片。", { exact: true })).toBeVisible();
     await checkpoint("streaming");
     await editor(page).fill("同时补充一条新的观察。");
-    await page.locator("[data-composer-tools-trigger]").click();
-    await expect(page.locator("[data-composer-secondary-send]")).toBeEnabled();
-    await page.locator("[data-composer-secondary-send]").click();
+    await expect(page.locator("[data-composer-direct-send]")).toBeEnabled();
+    await page.locator("[data-composer-direct-send]").click();
     await expect(editor(page)).toHaveAttribute("data-editor-text", "");
     await expect(primary(page)).toHaveAttribute("data-primary-action", "stop");
     await editor(page).fill("键盘仍可继续发送。"); await editor(page).press("Enter");

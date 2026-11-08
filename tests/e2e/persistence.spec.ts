@@ -7,7 +7,7 @@ import { E2E_MEMORY_ROOT } from "./env";
 async function riseConversation(page: import("@playwright/test").Page) {
   const expand = page.getByRole("button", { name: "Expand to full screen" });
   const retry = page.getByRole("button", { name: "Retry", exact: true });
-  const exit = page.getByRole("button", { name: "Exit full screen" }).first();
+  const exit = page.locator('[data-panel-tier="fullscreen"]');
   await expect(expand.or(retry).or(exit).first()).toBeVisible({ timeout: 30_000 });
   // A cold Turbopack action compile can cross the product's 15s arrival
   // guard. Retry after compilation; production builds do not compile here.

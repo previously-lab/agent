@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock octokit (the type guards stay real — readFile.ts rethrows on them)
 const mockGetContent = vi.fn();
+const mockGetBlob = vi.fn();
 vi.mock("@/lib/github/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/github/client")>()),
   getOctokit: () => ({
     rest: {
       repos: {
         getContent: mockGetContent,
+      },
+      git: {
+        getBlob: mockGetBlob,
       },
     },
   }),
@@ -56,6 +60,27 @@ describe("readFile", () => {
       path: "memory/test.md",
       ref: undefined,
     });
+  });
+
+  it("reads an oversized record core by blob sha when inline content is absent", async () => {
+    const path = "memory/records/2026/11/08/1234/core.md";
+    const content = "x".repeat(1_000_001);
+    mockGetContent.mockResolvedValue({
+      data: {
+        type: "file",
+        path,
+        size: content.length,
+        encoding: "none",
+        content: "",
+        sha: "core-sha",
+      },
+    });
+    mockGetBlob.mockResolvedValue({
+      data: { content: Buffer.from(content).toString("base64") },
+    });
+
+    await expect(readFile(path, repo, owner)).resolves.toBe(content);
+    expect(mockGetBlob).toHaveBeenCalledWith({ owner, repo, file_sha: "core-sha" });
   });
 
   it("throws when target is a directory", async () => {

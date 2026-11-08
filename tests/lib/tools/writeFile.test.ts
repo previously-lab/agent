@@ -106,6 +106,17 @@ describe("writeFile", () => {
     ).rejects.toThrow("too large");
   });
 
+  it("writes a canonical record core above the generic text cap", async () => {
+    const path = "memory/records/2026/11/08/1234/core.md";
+    const content = "x".repeat(1_000_001);
+    mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
+    mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
+
+    await expect(writeFile(path, content, repo, owner)).resolves.toEqual({ path, created: true });
+    const request = mockCreateOrUpdate.mock.calls[0][0];
+    expect(Buffer.from(request.content, "base64").toString("utf8")).toBe(content);
+  });
+
   it("uses custom commit message when provided", async () => {
     mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });

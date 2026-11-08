@@ -27,6 +27,7 @@ import {
 import "./native-html.css";
 import { buildNativeContainer } from "@/lib/markdown/native-container";
 import { readingFlushers } from "./native-reading-flush";
+import { RichContentFrame } from "./rich-content-view";
 export { flushNativeReading } from "./native-reading-flush";
 
 /** Execution is independent of the surface: reader uses paper colors while
@@ -393,17 +394,7 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
     );
   }
 
-  return (
-    <div
-      className={`native-html${surface === "paper" ? " native-html--paper" : ""}`}
-      data-rich-block="html"
-      data-native-block={blockId}
-      data-native-turn={identity.turnId}
-      data-native-scope={scope}
-      data-native-render-mode={mode}
-      style={reading.layout?.pageHeight ? { "--native-page-height": `${reading.layout.pageHeight}px` } as React.CSSProperties : undefined}
-    >
-      <NativeFrame
+  const frame = <NativeFrame
         key={`${frameKey}:${interactive ? "active" : "static"}`}
         source={source}
         version={version}
@@ -419,7 +410,18 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         estimatedHeight={estimatedHeight}
         onMeasure={onMeasure}
         ownsExecution={lease.owns}
-      />
+      />;
+  return (
+    <div
+      className={`native-html${surface === "paper" ? " native-html--paper" : ""}`}
+      data-rich-block="html"
+      data-native-block={blockId}
+      data-native-turn={identity.turnId}
+      data-native-scope={scope}
+      data-native-render-mode={mode}
+      style={reading.layout?.pageHeight ? { "--native-page-height": `${reading.layout.pageHeight}px` } as React.CSSProperties : undefined}
+    >
+      {surface === "chat" ? <RichContentFrame kind="html">{frame}</RichContentFrame> : frame}
       {interactive && pendingSuggestion ? (
         <div className="native-suggestion" data-native-suggestion>
           <span>{pendingSuggestion}</span>

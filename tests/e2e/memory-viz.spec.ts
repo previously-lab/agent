@@ -1,4 +1,5 @@
 import { test, expect } from "./test";
+import { openAllManuscripts } from "./manuscript-navigation";
 import type { Page } from "@playwright/test";
 import {
   clearEpisodic,
@@ -37,7 +38,7 @@ function conversationField(page: Page) {
 async function risePanel(page: Page): Promise<void> {
   await page.locator("[data-pill-expand]").click();
   await expect(
-    page.getByRole("button", { name: "Exit full screen" }).first(),
+    page.locator('[data-panel-tier="fullscreen"]'),
   ).toBeVisible();
 }
 
@@ -89,7 +90,7 @@ test.describe("Memory and scene navigation", () => {
   });
 
   test.describe("arrival gate", () => {
-    test("resumes the still-alive slice with a banner instead of the briefing", async ({
+    test("resumes the still-alive slice as continuous text", async ({
       page,
     }) => {
       const old = makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), {
@@ -100,13 +101,12 @@ test.describe("Memory and scene navigation", () => {
 
       await page.goto("/en/app");
       await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
+        page.locator('[data-panel-tier="fullscreen"]'),
       ).toBeVisible();
-      // chat.resume.banner — the restored turns sit directly under it.
       const panel = page.locator("#conversation-panel");
       await expect(
         panel.getByText(/Continuing the conversation from/),
-      ).toBeVisible();
+      ).toHaveCount(0);
       await expect(
         panel.getByText(sentinel(fresh, "user")),
       ).toBeVisible();
@@ -119,7 +119,7 @@ test.describe("Memory and scene navigation", () => {
       ).toHaveCount(0);
     });
 
-    test("seats the briefing card in the stream with history above (Rev 2)", async ({
+    test("starts with the latest saved record and no briefing card", async ({
       page,
     }) => {
       const slices = [
@@ -134,45 +134,21 @@ test.describe("Memory and scene navigation", () => {
 
       await page.goto("/en/app");
       await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
+        page.locator('[data-panel-tier="fullscreen"]'),
       ).toBeVisible();
-      // The card is a stream item now (`emptyBriefing.eyebrow`, rendered
-      // verbatim) — scoped to the panel's list.
       const panel = page.locator("#conversation-panel");
-      const cardEyebrow = panel.getByText("PREVIOUSLY ON", { exact: true });
-      await expect(cardEyebrow).toBeVisible();
-      await expect(
-        page.getByText(/Continuing the conversation from/),
-      ).toHaveCount(0);
-
-      // "History above" is literal: the card seats BETWEEN the cold-open
-      // history page and the live edge, so it renders below the historical
-      // turns in the same list — not above them and not on a view of its own.
-      const oldestTurn = panel.getByText(sentinel(slices[0], "user"));
-      await expect(oldestTurn).toBeVisible();
-      await expect(panel.getByText(sentinel(slices[0], "agent"))).toBeVisible();
-      const cardBox = await cardEyebrow.boundingBox();
-      const turnBox = await oldestTurn.boundingBox();
-      expect(cardBox).not.toBeNull();
-      expect(turnBox).not.toBeNull();
-      expect(cardBox!.y).toBeGreaterThan(turnBox!.y);
+      await expect(panel.getByText(sentinel(slices[1], "user"))).toBeVisible();
+      await expect(panel.getByText(sentinel(slices[0], "user"))).toHaveCount(0);
+      await expect(panel.getByText("PREVIOUSLY ON", { exact: true })).toHaveCount(0);
     });
 
-    test("an empty memory rises the panel to the full briefing on its own", async ({
+    test("an empty memory opens directly to the editor", async ({
       page,
     }) => {
       await seedSlices([]);
 
       await page.goto("/en/app");
-      // 首装仍落对话: with NOTHING in memory the arrival face is the
-      // standalone full-screen briefing, so the panel rises itself (once) —
-      // no expand click. The fullscreen tier's own control is the proof.
-      await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
-      ).toBeVisible({ timeout: 15_000 });
-      await expect(
-        page.getByText("PREVIOUSLY ON", { exact: true }),
-      ).toBeVisible();
+      await expect(page.locator("[data-manuscript-input]")).toBeEditable();
     });
 
     test("the fullscreen tier renders the cold-open page and pages nothing older (P0)", async ({
@@ -183,7 +159,7 @@ test.describe("Memory and scene navigation", () => {
 
       await page.goto("/en/app");
       await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
+        page.locator('[data-panel-tier="fullscreen"]'),
       ).toBeVisible();
 
       // The fullscreen body's DOM list carries the cold-open page's turns —
@@ -230,7 +206,7 @@ test.describe("Memory and scene navigation", () => {
       // fullscreen conversation is the post-hydration signal.
       await expect(conversationField(page)).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
+        page.locator('[data-panel-tier="fullscreen"]'),
       ).toBeVisible();
       await page.keyboard.press("Control+k");
       const input = page.locator("[cmdk-input]");
@@ -249,7 +225,7 @@ test.describe("Memory and scene navigation", () => {
       // clock is the only wait).
       await expect(page.locator("[cmdk-input]")).toHaveCount(0);
       await expect(
-        page.getByRole("button", { name: "Exit full screen" }).first(),
+        page.locator('[data-panel-tier="fullscreen"]'),
       ).toBeVisible();
       const panel = page.locator("#conversation-panel");
       await expect(
@@ -270,7 +246,7 @@ test.describe("Memory and scene navigation", () => {
       await expect(host).toBeVisible();
       await expect(host).toHaveAttribute("data-game-active", "true");
       await risePanel(page);
-      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await openAllManuscripts(page);
       await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
       await expect(host).toBeHidden();
       await expect(host).toHaveAttribute("inert", "");
@@ -289,13 +265,13 @@ test.describe("Memory and scene navigation", () => {
       await input.pressSequentially("still here");
       await risePanel(page);
       await expect(page.locator("textarea").first()).toHaveValue("still here");
-      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await openAllManuscripts(page);
       await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
       await expect(input).toHaveValue("still here");
       await page.locator("[data-records-row]").first().click();
       await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
       await expect(input).toHaveValue("still here");
-      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
+      await page.locator("[data-manuscript-header]").getByRole("button", { name: "Room", exact: true }).click();
       await expect(page).toHaveURL(/\/en\/game$/);
       await expect(input).toHaveValue("still here");
       await risePanel(page);

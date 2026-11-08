@@ -7,8 +7,7 @@ import { validateDocumentEntries, absentDocumentError } from "@/lib/docs/write-v
 import { WriteRefusal } from "@/lib/docs/write-window";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
-
-const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
+import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 
 /**
  * Create or update a file in the GitHub repository.
@@ -30,9 +29,11 @@ export async function writeFile(
 
   if (isHistoryArchiveFileName(path)) throw new WriteRefusal("commit_failed", "History archives require the batch writer so the archive and its Git byte-preservation rule commit together");
 
-  if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
+  const contentBytes = Buffer.byteLength(content, "utf-8");
+  const maxBytes = maxTextFileBytes(path);
+  if (contentBytes > maxBytes) {
     throw new Error(
-      `Content is too large (${Buffer.byteLength(content, "utf-8")} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`
+      `Content is too large (${contentBytes} bytes). Maximum is ${maxBytes} bytes.`
     );
   }
 

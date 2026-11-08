@@ -141,6 +141,7 @@ export interface ShellValue {
   resetDeskForLane: () => void;
   openLibrary: (history?: boolean) => void;
   openConversation: () => void;
+  collapseConversation: () => void;
   openGame: () => void;
   /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
    *  — the room the reader walks into — moves the SAME cursor the nav action
@@ -376,6 +377,10 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     });
   }, [afterNativeFlush, cleanupDesk, pathname, rememberPanelOnEntry, router, setPanelMode]);
 
+  const collapseConversation = useCallback(() => {
+    afterNativeFlush(() => setPanelMode("pill"));
+  }, [afterNativeFlush, setPanelMode]);
+
   const openGame = useCallback(() => {
     afterNativeFlush(() => {
       if (pathname !== "/game") rememberPanelOnEntry();
@@ -494,6 +499,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       resetDeskForLane,
       openLibrary,
       openConversation,
+      collapseConversation,
       openGame,
       reportCursor,
       getCursor,
@@ -525,6 +531,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       resetDeskForLane,
       openLibrary,
       openConversation,
+      collapseConversation,
       openGame,
       reportCursor,
       getCursor,

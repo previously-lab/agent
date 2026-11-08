@@ -6,6 +6,7 @@ import { messageImageAttachments } from "@/lib/chat/image-attachment-message";
 import { readDurableChat } from "@/lib/chat/client-transport";
 import { readChatEvents } from "@/lib/chat/client-stream";
 import type { UIMessage } from "@/lib/chat/protocol";
+import type { DialogueOfferStage } from "@/lib/dialogue/transport";
 import { emptyDialogueProjection, type DialogueProjection, type ManuscriptEntry } from "./dialogue-projection";
 
 export interface DialogueAcceptedV2 {
@@ -21,6 +22,7 @@ export interface DialogueOffer {
   offerId: string;
   runId: string;
   sourceInputId: string;
+  stage?: DialogueOfferStage;
 }
 
 export interface DialogueParentDone {
@@ -37,6 +39,8 @@ interface DialogueChildRecord extends DialogueOffer {
   messageAt?: string;
   /** Terminal child error/interruption, never a transport disconnect. */
   failed?: boolean;
+  /** This checkpoint settled without creating a reply to recover. */
+  silent?: boolean;
 }
 
 interface DialoguePublicationView {
@@ -102,7 +106,8 @@ export function parseDialogueParentEvent(value: unknown): DialogueParentEvent {
       ...(typeof event.retryAfterMs === "number" ? { retryAfterMs: event.retryAfterMs } : {}) };
   }
   if (event.type === "offer" && nonEmpty(event.offerId) && nonEmpty(event.runId) && nonEmpty(event.sourceInputId)) {
-    return { type: "offer", offerId: event.offerId, runId: event.runId, sourceInputId: event.sourceInputId };
+    return { type: "offer", offerId: event.offerId, runId: event.runId, sourceInputId: event.sourceInputId,
+      ...(event.stage === "checkpoint" || event.stage === "final" ? { stage: event.stage } : {}) };
   }
   throw new Error("Invalid parent stream event");
 }
@@ -134,6 +139,7 @@ function parseStoredRecord(value: unknown): DialogueParentRecord | null {
         ...(nonEmpty(child.messageId) ? { messageId: child.messageId } : {}),
         ...(nonEmpty(child.messageAt) ? { messageAt: child.messageAt } : {}),
         ...(child.failed === true ? { failed: true } : {}),
+        ...(parsed.stage === "checkpoint" && child.silent === true ? { silent: true } : {}),
       });
     }
     let userMessage: UIMessage | undefined;
@@ -355,7 +361,7 @@ export class DialogueParentController {
     const restored = readDialogueParentRecords(this.options.persona, this.storage)
       .filter(record => !current.has(record.parentRunId) && (!since || record.acceptedAt >= since))
       .filter(record => !(record.done && !record.failed && record.offers.length &&
-        record.offers.every(offer => !offer.failed && savedPublications.has(offer.offerId))));
+        record.offers.every(offer => offer.silent || !offer.failed && savedPublications.has(offer.offerId))));
     this.records = [...restored, ...this.records];
     this.emit();
     this.resumeRecords(true);
@@ -370,6 +376,7 @@ export class DialogueParentController {
       this.disconnectedParents.delete(record.parentRunId);
       if (!record.done && !record.cancelled) this.startParent(record);
       for (const offer of record.offers) {
+        if (offer.silent) continue;
         if (offer.failed) {
           // A fresh controller may replay the durable output once to restore
           // partial text. The terminal failure itself remains sticky.
@@ -396,7 +403,7 @@ export class DialogueParentController {
 
   async stop(workId?: string) {
     const targets = this.records.filter(record => (!workId || record.workId === workId) && !record.cancelled &&
-      (!record.done || record.offers.some(offer => !this.settledChildren.has(offer.runId))));
+      (!record.done || record.offers.some(offer => offer.stage !== "checkpoint" && !this.settledChildren.has(offer.runId))));
     await Promise.all(targets.map(async record => {
       const response = await this.request(`/api/chat/${encodeURIComponent(record.parentRunId)}/cancel`, {
         method: "POST", credentials: "same-origin", keepalive: true,
@@ -429,11 +436,12 @@ export class DialogueParentController {
         inputs.set(input.inputId, input);
         entries.push({ kind: "input", id: input.inputId, input });
       }
+      const required = record.offers.filter(offer => offer.stage !== "checkpoint");
       const disconnected = this.disconnectedParents.has(record.parentRunId) ||
-        record.offers.some(offer => this.disconnectedChildren.has(offer.runId));
+        required.some(offer => this.disconnectedChildren.has(offer.runId));
       const connection = disconnected ? "disconnected" : this.reconnectingParents.has(record.parentRunId) ? "reconnecting" : "connected";
-      const settled = record.offers.every(offer => this.settledChildren.has(offer.runId));
-      const failed = record.failed || record.offers.some(offer => offer.failed);
+      const settled = required.every(offer => this.settledChildren.has(offer.runId));
+      const failed = record.failed || required.some(offer => offer.failed);
       const status = record.cancelled ? "cancelled" : failed ? "failed"
         : record.done && settled ? "completed"
           : this.parentTasks.has(record.parentRunId) || record.offers.length || disconnected ? "running" : "queued";
@@ -520,6 +528,11 @@ export class DialogueParentController {
   private startChild(record: DialogueParentRecord, offer: DialogueChildRecord) {
     if (this.options.signal.aborted || record.cancelled || this.settledChildren.has(offer.runId) || this.childTasks.has(offer.runId)) return;
     this.disconnectedChildren.delete(offer.runId);
+    const rememberSilentCheckpoint = () => {
+      if (offer.stage !== "checkpoint" || offer.messageAt) return;
+      offer.silent = true;
+      this.persist();
+    };
     const task = readDurableChat({
       runId: offer.runId,
       assistantId: `dialogue-child-${offer.runId}`,
@@ -531,6 +544,7 @@ export class DialogueParentController {
         const status = (chunk.data as Record<string, unknown>).status;
         if (status !== "error" && status !== "interrupted") return;
         offer.failed = true;
+        rememberSilentCheckpoint();
         this.settledChildren.add(offer.runId);
         this.disconnectedChildren.delete(offer.runId);
         this.persist();
@@ -552,12 +566,14 @@ export class DialogueParentController {
         this.emit();
       },
     }).then(() => {
+      rememberSilentCheckpoint();
       this.settledChildren.add(offer.runId);
       this.disconnectedChildren.delete(offer.runId);
     }).catch(error => {
       if (this.options.signal.aborted || record.cancelled || offer.failed) return;
       if (isTerminalDialogueStreamError(error)) {
         offer.failed = true;
+        rememberSilentCheckpoint();
         this.settledChildren.add(offer.runId);
         this.disconnectedChildren.delete(offer.runId);
         this.persist();

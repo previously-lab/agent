@@ -2,6 +2,7 @@
 import { getRun } from "workflow/api";
 import { guardDialogueRead } from "@/lib/dialogue/runtime";
 import { workPreviewCursor } from "@/lib/dialogue/work-preview";
+import { listDialogueOffers } from "@/lib/dialogue/workflow-offers";
 import {
   DIALOGUE_OFFERS_NAMESPACE,
   parseDialogueOfferEvent,
@@ -31,6 +32,7 @@ export async function GET(
   }
   const url = new URL(request.url);
   let cursor = workPreviewCursor(url.searchParams.get("startIndex") ?? request.headers.get("last-event-id"));
+  const initialCursor = cursor;
   const run = getRun(parentRunId);
   let initialStatus: string;
   try { initialStatus = await run.status; }
@@ -41,6 +43,7 @@ export async function GET(
       let closed = false;
       let reader: ReadableStreamDefaultReader<unknown> | undefined;
       const emitted = new Set<string>();
+      let finalOfferSeen = false;
       const write = (event: DialogueOfferEvent | DialogueOffersDoneEvent) => {
         if (!closed) controller.enqueue(encoder.encode(`id: ${cursor}\ndata: ${JSON.stringify(event)}\n\n`));
       };
@@ -84,6 +87,7 @@ export async function GET(
           const offer = parseDialogueOfferEvent(next.value);
           if (!offer || emitted.has(offer.offerId)) continue;
           emitted.add(offer.offerId);
+          if (offer.stage !== "checkpoint") finalOfferSeen = true;
           write(offer);
         }
         if (!closed) {
@@ -92,9 +96,14 @@ export async function GET(
           if (status === "completed") {
             try {
               const result = await run.returnValue as { error?: unknown } | undefined;
-              if (emitted.size === 0 && typeof result?.error === "string" && result.error) {
-                status = "failed";
-                error = "The thinking run ended without a public reply.";
+              if (!finalOfferSeen && typeof result?.error === "string" && result.error) {
+                // A resumed reader may have passed the final offer already.
+                const priorFinal = initialCursor > 0 &&
+                  (await listDialogueOffers(parentRunId)).some((offer) => offer.stage !== "checkpoint");
+                if (!priorFinal) {
+                  status = "failed";
+                  error = "The thinking run ended without a final reply.";
+                }
               }
             } catch { /* Terminal status remains sufficient. */ }
           } else if (status === "failed" || status === "cancelled") {

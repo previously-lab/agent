@@ -175,12 +175,12 @@ describe("appendContextSuffix (outbound-only tail injection)", () => {
   });
 });
 
-describe("the field/reflection charter (v0.30)", () => {
-  it("frames the agent as ONE agent in two execution units — the field (with the mouth) and the reflection unit (without one)", () => {
-    expect(CHARTER_MD).toContain("ONE agent in two execution units");
-    expect(CHARTER_MD).toContain("**field unit**");
-    expect(CHARTER_MD).toContain("**reflection unit**");
-    expect(CHARTER_MD).toContain("it wakes mechanically when a turn ends — you never send it anything");
+describe("the Previously charter", () => {
+  it("lets the assigned role decide who speaks while preserving direct-answer turns", () => {
+    expect(CHARTER_MD).toContain("private work gathers evidence and hands off results");
+    expect(CHARTER_MD).toContain("public dialogue decides what to say and speaks as Previously");
+    expect(CHARTER_MD).toContain("In a direct-answer turn with no separate dialogue role, answer the user yourself");
+    expect(CHARTER_MD).not.toContain("yours is the only mouth");
   });
 
   it("carries the v0.30 write discipline: the pen is the exception — only a user-named task earns a write, and the revisit bar is gone", () => {
@@ -228,9 +228,9 @@ describe("the field/reflection charter (v0.30)", () => {
     expect(CHARTER_MD).not.toContain("The payload is prose");
   });
 
-  it("narrates ONE person to the user — the two units are never separate people", () => {
-    expect(CHARTER_MD).toContain("To the user there is only ever you");
-    expect(CHARTER_MD).toContain("it is you, working while the user is away");
+  it("speaks as one Previously and can explain its roles when asked", () => {
+    expect(CHARTER_MD).toContain("In ordinary conversation, speak as one person");
+    expect(CHARTER_MD).toContain("When the user explicitly asks how the system works or wants to debug it, explain the relevant roles accurately");
     // The retired colleague metaphors are gone.
     expect(CHARTER_MD).not.toContain("one of your colleagues");
     expect(CHARTER_MD).not.toContain("researcher colleague");

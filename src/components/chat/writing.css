@@ -26,26 +26,9 @@
 
 .conversation-panel-heading > * { pointer-events: auto; }
 
-.conversation-history-seat { position: relative; z-index: 25; flex-shrink: 0; }
-.conversation-history-seat .workspace-history-entrance {
-  justify-content: flex-start;
-  padding: 0 clamp(1.25rem, 4vw, 3rem);
-  background: transparent;
+.conversation-panel-heading[data-manuscript-header-clearance] {
+  display: none;
 }
-.conversation-history-seat .workspace-history-entrance button {
-  min-block-size: calc(var(--spacing) * 11);
-  padding-inline: calc(var(--spacing) * 2);
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--muted-foreground);
-}
-.conversation-history-seat .workspace-history-entrance button:hover,
-.conversation-history-seat .workspace-history-entrance button:focus-visible {
-  background: color-mix(in oklab, var(--foreground) 5%, transparent);
-  color: var(--brand);
-}
-.conversation-history-seat .workspace-history-hint { display: none; }
 
 .conversation-stream-shell {
   width: 100%;
@@ -145,7 +128,7 @@
 
 .conversation-prose,
 .conversation-prose > .typeset {
-  --typeset-size: var(--text-sm);
+  --typeset-size: var(--text-base);
   --typeset-leading: 1.95;
   --typeset-flow: 0.9em;
   font-family: var(--font-serif, serif);
@@ -266,8 +249,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "byline" "writing" "controls";
-  gap: 0.7rem;
-  padding-block: 1.35rem calc(var(--spacing) * 24 + env(safe-area-inset-bottom, 0px));
+  gap: calc(var(--spacing) * 2);
+  padding-block: 1.35rem calc(var(--spacing) * 8 + env(safe-area-inset-bottom, 0px));
 }
 
 /* The manuscript is prose, not a composer card. Reset the shared ledge's
@@ -329,25 +312,17 @@
 
 .conversation-composer--manuscript [data-manuscript-input] {
   display: block;
-  min-height: calc(var(--spacing) * 11);
+  min-height: 1.95em;
   max-height: none;
-  padding-inline-start: calc(var(--spacing) * 4);
-  border-inline-start: 1px solid color-mix(in oklab, var(--foreground) 19%, transparent);
+  padding-inline: 0;
+  border: 0;
   overflow: hidden;
   font-size: var(--text-base);
   line-height: 1.95;
 }
 
-.conversation-composer--manuscript:focus-within [data-manuscript-input] {
-  min-height: calc(var(--spacing) * 11);
-}
-
-.conversation-composer--manuscript[data-composer-state="editing"] [data-manuscript-input],
-.conversation-composer--manuscript [data-manuscript-input]:focus-visible,
-.conversation-composer--manuscript.composer-bar.is-dragover [data-manuscript-input] {
-  border-inline-start-color: var(--ring);
-  outline: 0;
-}
+.conversation-composer--manuscript [data-manuscript-input]:focus-visible { outline: 0; }
+.conversation-composer--manuscript.composer-bar.is-dragover [data-manuscript-input] { box-shadow: inset 0 -1px var(--ring); }
 
 .conversation-composer--pill .conversation-composer-byline {
   display: none;
@@ -361,8 +336,6 @@
 .conversation-composer--pill .conversation-composer-draft {
   padding-inline: 0.35rem;
 }
-
-.conversation-composer--pill [data-composer-keyboard-caption] { display: none; }
 
 .conversation-composer--pill [data-manuscript-input] {
   display: block;
@@ -513,9 +486,9 @@
   }
   .conversation-composer--manuscript.composer-bar {
     grid-template-columns: 6rem minmax(0, 1fr);
-    grid-template-areas: "byline writing";
-    gap: calc(var(--spacing) * 6);
-    padding-block: 1.65rem calc(var(--spacing) * 24 + env(safe-area-inset-bottom, 0px));
+    grid-template-areas: "byline writing" ". controls";
+    gap: calc(var(--spacing) * 2) calc(var(--spacing) * 6);
+    padding-block: 1.65rem calc(var(--spacing) * 8 + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -539,10 +512,8 @@
   pointer-events: none;
 }
 
-/* Wide screens keep conversation wayfinding in the outer margins. The title,
-   route controls and history entrance never reserve or paint over the reading
-   column. Narrow screens use compact in-flow controls with the same clear,
-   transparent treatment and full touch targets. */
+/* The game overlay keeps its original top row. The ordinary workspace uses
+   the shared floating header; the scroll list owns its matching top inset. */
 @media (min-width: 90rem) {
   .conversation-panel-heading {
     position: absolute;
@@ -551,12 +522,4 @@
     min-height: 0;
     padding-block-start: calc(var(--spacing) * 4);
   }
-  .conversation-history-seat {
-    position: absolute;
-    inset-block-start: calc(var(--spacing) * 16);
-    inset-inline-start: -12rem;
-    inline-size: 11rem;
-  }
-  .conversation-history-seat .workspace-history-entrance { padding: 0; }
-  .conversation-history-seat .workspace-history-entrance button { max-inline-size: 100%; }
 }

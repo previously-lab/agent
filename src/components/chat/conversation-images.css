@@ -31,8 +31,11 @@
 .conversation-draft-photos { display: block; }
 .conversation-image-stack:empty { display: none; }
 .conversation-polaroid {
+  min-inline-size: 0;
+  max-inline-size: 100%;
   margin: 0;
-  padding: calc(var(--spacing) * 3) calc(var(--spacing) * 3) calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 3);
+  border: 1px solid color-mix(in oklab, var(--foreground) 18%, transparent);
   background: var(--paper, var(--card));
   color: var(--foreground);
   box-shadow: var(--paper-contact, var(--shadow-float));
@@ -41,18 +44,51 @@
 }
 .conversation-photo-media {
   position: relative;
+  inline-size: 100%;
+  min-inline-size: 0;
   aspect-ratio: var(--photo-aspect, 4 / 3);
   max-block-size: min(40svh, 22rem);
   overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
   background: var(--paper-plate, var(--muted));
 }
-.conversation-photo-media > a { display: block; width: 100%; height: 100%; }
+.conversation-photo-open {
+  position: absolute;
+  inset: 0;
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  min-inline-size: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  text-align: start;
+  cursor: zoom-in;
+}
+.conversation-polaroid[data-preview-state]:not([data-preview-state="ready"]) .conversation-photo-open-badge { visibility: hidden; }
 .conversation-polaroid img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
+.conversation-photo-open-badge {
+  position: absolute;
+  inset-inline-end: calc(var(--spacing) * 2);
+  inset-block-end: calc(var(--spacing) * 2);
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  max-inline-size: calc(100% - var(--spacing) * 4);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--background) 90%, transparent);
+  color: var(--foreground);
+  font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans);
+  pointer-events: none;
+}
+.conversation-photo-open-badge > svg { inline-size: 1em; block-size: 1em; flex-shrink: 0; }
 .conversation-polaroid[data-preview-state="loading"] img,
 .conversation-polaroid[data-preview-state="error"] img { opacity: 0; }
 .conversation-photo-status {
@@ -74,11 +110,20 @@
   align-items: center;
   gap: var(--spacing);
   min-width: 0;
-  min-block-size: calc(var(--spacing) * 11);
-  padding-top: calc(var(--spacing) * 2);
+  min-block-size: calc(var(--spacing) * 8);
+  padding-top: calc(var(--spacing) * 1.5);
   font: var(--text-xs)/var(--text-xs--line-height) var(--font-mono, monospace);
 }
-.conversation-photo-label { flex-shrink: 0; }
+.conversation-photo-label {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm, var(--radius));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-photo-label:has(+ .truncate) { flex-shrink: 0; }
+.conversation-polaroid figcaption > .truncate { flex: 1 1 auto; min-inline-size: 0; }
 .conversation-photo-index { display: flex; justify-content: end; flex-wrap: wrap; gap: var(--spacing); }
 .conversation-photo-index button {
   font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans);
@@ -88,6 +133,50 @@
 }
 .conversation-photo-index button[aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
 .conversation-photo-index button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.conversation-photo-preview {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-block-size: calc(100dvh - var(--spacing) * 8);
+  overflow: hidden;
+}
+.conversation-photo-preview-heading { display: flex; align-items: flex-start; gap: calc(var(--spacing) * 2); min-inline-size: 0; }
+.conversation-photo-preview-title { min-inline-size: 0; overflow-wrap: anywhere; }
+.conversation-photo-preview-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  min-inline-size: calc(var(--spacing) * 11);
+  min-block-size: calc(var(--spacing) * 11);
+  margin: calc(var(--spacing) * -2);
+  border-radius: var(--radius);
+}
+.conversation-photo-preview-close > svg { inline-size: 1rem; block-size: 1rem; }
+.conversation-photo-preview-stage {
+  display: grid;
+  place-items: center;
+  min-block-size: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+.conversation-photo-preview-stage img {
+  display: block;
+  inline-size: auto;
+  block-size: auto;
+  max-inline-size: 100%;
+  max-block-size: 65dvh;
+  object-fit: contain;
+}
+.conversation-photo-original {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-block-size: calc(var(--spacing) * 11);
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: calc(var(--spacing) * 1);
+}
+.conversation-photo-preview :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .conversation-photo-remove {
   flex-shrink: 0;
   margin-inline-start: auto;
@@ -112,6 +201,7 @@
 .conversation-polaroid[data-image-selected],
 .conversation-polaroid :focus-visible,
 .conversation-image-reference:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.conversation-polaroid .conversation-photo-open:focus-visible { outline-offset: -2px; }
 .conversation-image-annex { clear: both; padding-top: calc(var(--spacing) * 3); }
 .conversation-image-annex .conversation-image-stack { width: min(20rem, 100%); }
 .conversation-image-annex-label,
@@ -144,5 +234,7 @@
   .conversation-polaroid { transform: none; box-shadow: none; animation: none; }
   .conversation-polaroid { break-inside: avoid; margin-block: calc(var(--spacing) * 4); }
   .conversation-photo-remove,
-  .conversation-photo-index { display: none; }
+  .conversation-photo-index,
+  .conversation-photo-open-badge,
+  .conversation-photo-preview { display: none; }
 }

@@ -22,6 +22,7 @@ import {
   type ReadOptions,
 } from "@/lib/cache/data-cache";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from "fs";
+import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 import { join, dirname } from "path";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { validateDocumentEntries, withHistoryAttributes, type GuardedEntry, type DocumentWriteChecks } from "@/lib/docs/write-validation";
@@ -29,7 +30,6 @@ import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { withLocalFileCommit } from "@/lib/episodic/local-file-log";
 
-const MAX_FILE_SIZE_BYTES = 1_000_000;
 
 // ─── SIMULATED LOCAL LATENCY (dev-only, env-gated) ──────────────────────────
 // The local backend stands in for GitHub, where every read is a round trip.
@@ -118,8 +118,9 @@ async function readLocalDirect(path: string): Promise<string> {
   if (stat.isDirectory()) {
     throw new Error(`"${path}" is a directory, not a file`);
   }
-  if (stat.size > MAX_FILE_SIZE_BYTES) {
-    throw new Error(`File too large (${stat.size} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`);
+  const maxBytes = maxTextFileBytes(path);
+  if (stat.size > maxBytes) {
+    throw new Error(`File too large (${stat.size} bytes). Maximum is ${maxBytes} bytes.`);
   }
 
   return readFileSync(fullPath, "utf-8");
@@ -166,7 +167,7 @@ export async function commitLocalBatch(
     for (const entry of entries) {
       if (!isPathAllowed(entry.path)) throw new Error(`Access denied: path "${entry.path}" is outside allowed directories`);
       assertPortableRepoPath(entry.path);
-      if (entry.content !== null && (entry.encoding === "base64" ? Buffer.from(entry.content, "base64").length > MAX_BINARY_FILE_SIZE_BYTES : Buffer.byteLength(entry.content, "utf8") > MAX_FILE_SIZE_BYTES)) throw new Error("Content too large for storage");
+      if (entry.content !== null && (entry.encoding === "base64" ? Buffer.from(entry.content, "base64").length > MAX_BINARY_FILE_SIZE_BYTES : Buffer.byteLength(entry.content, "utf8") > maxTextFileBytes(entry.path))) throw new Error("Content too large for storage");
       const full = resolveLocalDataPath(entry.path);
       before.set(entry.path, existsSync(full) ? readFileSync(full) : null);
     }

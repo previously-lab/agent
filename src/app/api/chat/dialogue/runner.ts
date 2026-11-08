@@ -122,7 +122,16 @@ export const serverDialogueRunner: IDialogueRunner = {
         const inputs = await loadInputs(scope, utterance.inputIds);
         if (!inputs.length) return null;
         const env = await projectionEnv(scope, utterance.inputIds);
-        const receipt = await projectDialogueRecords({ inputs: inputs.map((input) => ({ input, turnId: input.inputId })), utterance, ...env });
+        // Resolve only sources admitted by this publication in the same store
+        // scope. The record projector verifies identity and bytes again.
+        const typedArtifacts = await Promise.all(utterance.blocks.flatMap(block => {
+          if (block.kind !== "artifact_ref" || block.artifact.kind !== "native_html") return [];
+          return [store.artifact(scope, block.artifact.artifactId).then(source => {
+            if (!source) throw new Error("Published dialogue artifact is unavailable for recording");
+            return { ...source, blockId: block.blockId };
+          })];
+        }));
+        const receipt = await projectDialogueRecords({ inputs: inputs.map((input) => ({ input, turnId: input.inputId })), utterance, typedArtifacts, ...env });
         return receipt && { ...receipt };
       }
       // work.status / projection.receipt events carry no record-plane content.

@@ -5,6 +5,7 @@ import { readSse } from "../../../src/lib/deepseek/sse";
 import { generateText, streamText } from "../../../src/lib/deepseek/generate";
 import { tool, isStepCount } from "../../../src/lib/deepseek/tools";
 import { toNativeMessages } from "../../../src/lib/deepseek/messages";
+import { runAgent, zeroUsage } from "../../../src/lib/deepseek/runner";
 import type { ModelRequest, ModelCallStreamPart, StepResult } from "../../../src/lib/deepseek/types";
 
 const encoder = new TextEncoder();
@@ -20,6 +21,33 @@ function response(events: unknown[], fragment = 7): Response {
 const base: ModelRequest = { messages: [{ role: "user", content: "fixture" }], thinking: true, reasoningEffort: "high", callId: "fixture" };
 
 describe("DeepSeek native protocol", () => {
+  it("announces a ready offer while a sibling is running, preserving provider history order", async () => {
+    const slow = Promise.withResolvers<void>();
+    const announced = Promise.withResolvers<void>();
+    const tools = {
+      recall: tool({ inputSchema: z.object({}), execute: async () => { await slow.promise; return "evidence"; } }),
+      offerReply: tool({ inputSchema: z.object({}), execute: async () => "ready" }),
+    };
+    const calls = ["recall", "offerReply"].map((name) => ({
+      id: name, type: "function" as const, function: { name, arguments: "{}" },
+    }));
+    const stepEnded = vi.fn();
+    const running = runAgent({
+      tools, stopWhen: isStepCount(1), onStepEnd: stepEnded,
+      onToolExecutionResult: ({ toolName, output }) => {
+        if (toolName === "offerReply" && output === "ready") announced.resolve();
+      },
+    }, async () => ({
+      message: { role: "assistant", content: null, tool_calls: calls },
+      toolCalls: calls, finishReason: "tool_calls", usage: zeroUsage(),
+    }));
+    await announced.promise;
+    expect(stepEnded).not.toHaveBeenCalled();
+    slow.resolve();
+    const result = await running;
+    expect(result.toolResults.map(({ toolName }) => toolName)).toEqual(["recall", "offerReply"]);
+  });
+
   it("decodes split UTF-8, CRLF, keep-alive comments and multiline data", async () => {
     const bytes = encoder.encode(": ping\r\n\r\ndata: 你🙂\r\ndata: second\r\n\r\n");
     const body = new ReadableStream<Uint8Array>({ start(controller) { for (const byte of bytes) controller.enqueue(new Uint8Array([byte])); controller.close(); } });

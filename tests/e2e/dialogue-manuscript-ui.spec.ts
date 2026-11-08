@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { collapseConversation } from "./manuscript-navigation";
 import type { Page } from "@playwright/test";
 import type { DialogueArtifactRef, DialogueEvent, DialogueInput, DialoguePage, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import { test, expect } from "./test";
@@ -66,7 +67,7 @@ test.describe("narrow phone", () => {
     await expect.poll(() => mock.posts.length).toBe(1);
     await input.fill("Draft across the mobile pill");
     const original = await input.elementHandle();
-    await page.getByRole("button", { name: "Exit full screen" }).click();
+    await collapseConversation(page);
     await expect(page.locator("[data-pill-composer]")).toBeVisible();
     expect(await input.count()).toBe(1);
     expect(await input.evaluate((node, before) => node === before, original)).toBe(true);
@@ -83,7 +84,7 @@ test.describe("narrow phone", () => {
     expect(mock.posts.map(post => post.messages[0].parts.map(part => part.text ?? "").join(""))).toEqual([
       "First accepted question", "Draft across the mobile pill", "A third question while earlier work is active",
     ]);
-    await page.getByRole("button", { name: "Exit full screen" }).click();
+    await collapseConversation(page);
     await expect(page.locator("[data-pill-expand]")).toBeVisible();
     await input.fill("Unsent follow-up");
     await page.locator("[data-pill-expand]").click();

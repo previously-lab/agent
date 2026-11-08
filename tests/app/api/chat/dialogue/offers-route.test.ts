@@ -47,4 +47,11 @@ describe("parent offer stream recovery", () => {
     expect(text).not.toContain('"type":"offer"');
     expect(text).toContain('"status":"failed"');
   });
+
+  it("does not mistake an interim offer for a final reply after the parent fails", async () => {
+    h.getRun.mockReturnValue(runWith("completed", [{ ...offer, stage: "checkpoint", publicSeq: 1 }], { error: "no final result" }));
+    const text = await (await call()).text();
+    expect(text).toContain('"stage":"checkpoint"');
+    expect(text).toContain('"status":"failed"');
+  });
 });

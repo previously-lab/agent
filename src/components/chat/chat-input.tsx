@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useId, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUp, AtSign, Maximize2, Plus, Square, Paperclip, Radio } from "lucide-react";
+import { ArrowUp, AtSign, Maximize2, Square, Paperclip, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -84,7 +84,6 @@ export function ChatInput({
   const mentionId = useId();
   const toolsId = useId();
   const composerRef = useRef<HTMLDivElement>(null);
-  const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const composingRef = useRef(false);
   const selectionRef = useRef({ start: 0, end: 0, direction: "none" as "forward" | "backward" | "none" });
   const [draft, setDraft] = useState({ value: "", revision: 0 });
@@ -100,7 +99,6 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [focused, setFocused] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [mention, setMention] = useState<{
     open: boolean;
     manual: boolean;
@@ -136,21 +134,11 @@ export function ChatInput({
 
   const openManualMention = () => {
     rememberSelection();
-    setToolsOpen(false);
     setMention((current) => current.open && current.manual
       ? { open: false, manual: false, query: "", range: null }
       : { open: true, manual: true, query: "", range: null });
     requestAnimationFrame(() => composerRef.current?.scrollIntoView({ block: "nearest" }));
   };
-
-  useEffect(() => {
-    if (!toolsOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !composerRef.current?.contains(event.target) && !controlsRef.current?.contains(event.target)) setToolsOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [toolsOpen]);
 
   useEffect(() => {
     const onDraft = (event: Event): void => {
@@ -178,7 +166,6 @@ export function ChatInput({
     submittingRef.current = true;
     setSubmitting(true);
     closeMention();
-    setToolsOpen(false);
     try {
       // New uploads travel only as staged identities; File[] is retained at
       // the parent boundary for legacy callers, never duplicated here.
@@ -292,6 +279,7 @@ export function ChatInput({
   const frontPhoto = selectedPhoto && images.some(image => image.localClientId === selectedPhoto)
     ? selectedPhoto : (images.find(image => image.status === "error") ?? images.at(-1))?.localClientId;
   const onPill = tier?.mode === "pill";
+  const inlineMention = mention.open && !mention.manual;
   const composerState = getComposerState({
     focused,
     value,
@@ -306,10 +294,10 @@ export function ChatInput({
       data-manuscript-composer
       data-composer-state={composerState}
       data-panel-form={onPill ? "pill" : "manuscript"}
-      data-editor-active={focused || toolsOpen || mention.open || isLoading ? "true" : "false"}
+      data-editor-active={focused || mention.open || isLoading ? "true" : "false"}
       data-composer-pill={onPill ? "" : undefined}
       data-pill-composer={onPill ? "" : undefined}
-      aria-busy={isLoading || undefined}
+      aria-busy={submitting || undefined}
       aria-live="off"
       className={`conversation-composer composer-bar relative ${onPill ? "conversation-composer--pill" : "conversation-composer--manuscript"} ${isDragOver ? "is-dragover" : ""}`}
       onDrop={onDrop}
@@ -317,18 +305,7 @@ export function ChatInput({
       onDragLeave={onDragLeave}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
-        if (!ownsTarget(event.relatedTarget)) {
-          setFocused(false);
-          setToolsOpen(false);
-        }
-      }}
-      onKeyDownCapture={(event) => {
-        if (event.key === "Escape" && toolsOpen && !composingRef.current && !isImeKeyboardEvent(event.nativeEvent)) {
-          event.preventDefault();
-          event.stopPropagation();
-          setToolsOpen(false);
-          toolsTriggerRef.current?.focus({ preventScroll: true });
-        }
+        if (!ownsTarget(event.relatedTarget)) setFocused(false);
       }}
     >
       <header className="conversation-byline conversation-composer-byline">
@@ -400,34 +377,20 @@ export function ChatInput({
             aria-label={t("placeholder")}
             aria-describedby={`${toolsId}-hint`}
             aria-keyshortcuts={enterBehavior === "send" ? "Enter Control+Enter Meta+Enter" : "Control+Enter Meta+Enter"}
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={mention.open}
-            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
-            aria-activedescendant={mention.open && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
+            role={inlineMention ? "combobox" : "textbox"}
+            aria-autocomplete={inlineMention ? "list" : undefined}
+            aria-expanded={inlineMention ? true : undefined}
+            aria-controls={inlineMention && catalog.items.length > 0 ? `${mentionId}-listbox` : undefined}
+            aria-activedescendant={inlineMention && catalog.items[catalog.activeIndex] ? `${mentionId}-option-${catalog.activeIndex}` : undefined}
             className="conversation-manuscript-editor w-full bg-transparent focus:outline-none"
           />
-          <p className="conversation-upload-status" data-composer-keyboard-caption>{t(enterBehavior === "send" ? "keyboardSendCaption" : "keyboardCaption")}</p>
         </div>
       </div>
 
       <span id={`${toolsId}-hint`} className="sr-only">{t(enterBehavior === "send" ? "keyboardSendHint" : "keyboardHint")}</span>
-      <ConversationControls inline={onPill} exposed={focused || toolsOpen || mention.open} rootRef={controlsRef}>
+      <ConversationControls inline={onPill} rootRef={controlsRef}>
       <div className="conversation-composer-toolbar" data-composer-mini-toolbar data-composer-floating-controls>
-        <button
-          ref={toolsTriggerRef}
-          type="button"
-          data-composer-tools-trigger
-          className="conversation-control conversation-composer-tools-trigger"
-          aria-label={t("tools")}
-          aria-expanded={toolsOpen}
-          aria-controls={toolsId}
-          onPointerDown={rememberSelection}
-          onClick={() => setToolsOpen((open) => !open)}
-        >
-          <Plus aria-hidden className="size-4" />
-        </button>
-        <div id={toolsId} className="conversation-composer-toolbar-left" data-composer-tools hidden={!onPill && !toolsOpen} role="group" aria-label={t("tools")}>
+        <div id={toolsId} className="conversation-composer-toolbar-left" data-composer-tools role="group" aria-label={t("tools")}>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -460,19 +423,37 @@ export function ChatInput({
             aria-label={t("references.open")}
             title={t("references.open")}
             aria-expanded={mention.open && mention.manual}
-            aria-controls={mention.open ? `${mentionId}-listbox` : undefined}
+            aria-controls={mention.open && mention.manual ? `${mentionId}-panel` : undefined}
             className="conversation-control"
           >
             <AtSign aria-hidden className="h-3.5 w-3.5" />
           </button>
-          <button type="button" data-composer-secondary-send onClick={() => { void handleSubmit(); }}
-            disabled={!hasContent || submitting || images.some(image => image.status !== "ready")}
-            aria-label={t("sendTooltip")} title={t("sendTooltip")} className="conversation-control">
-            <ArrowUp aria-hidden className="size-4" />
-          </button>
+          {onPill && (
+            <button type="button" data-composer-secondary-send onClick={() => { void handleSubmit(); }}
+              disabled={!hasContent || submitting || images.some(image => image.status !== "ready")}
+              aria-label={t("sendTooltip")} title={t("sendTooltip")} className="conversation-control">
+              <ArrowUp aria-hidden className="size-4" />
+            </button>
+          )}
         </div>
 
         <div className="conversation-composer-toolbar-right">
+          {!onPill && isLoading && onStop && (
+            <button
+              type="button"
+              data-composer-secondary-send
+              data-composer-send
+              data-composer-direct-send
+              onClick={() => { void handleSubmit(); }}
+              disabled={!hasContent || submitting || images.some(image => image.status !== "ready")}
+              aria-label={t("sendTooltip")}
+              title={t("sendTooltip")}
+              aria-describedby={`${toolsId}-hint`}
+              className="conversation-control conversation-send"
+            >
+              <ArrowUp aria-hidden className="size-4" />
+            </button>
+          )}
           {onPill && (
             <button
               type="button"

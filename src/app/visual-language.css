@@ -83,6 +83,204 @@
   border-radius: 3px;
 }
 
+/* The /app work surface and its portaled controls use the same warm ink.
+   Keep the scene, landing and settings on their own palette. */
+body:has([data-manuscript-header]) {
+  --background: #fcfaf4;
+  --foreground: #292723;
+  --card: #fcfaf4;
+  --card-foreground: var(--foreground);
+  --brand: #705344;
+  --primary: var(--brand);
+  --primary-foreground: #ffffff;
+  --popover: var(--tool);
+  --popover-foreground: var(--foreground);
+  --secondary: #eee8dc;
+  --secondary-foreground: var(--foreground);
+  --muted: #f2ede4;
+  --muted-foreground: #625a50;
+  --accent: #f0ebe1;
+  --accent-foreground: var(--foreground);
+  --border: #d3cbbb;
+  --input: #b5aa9a;
+  --manuscript-highlight: #0066ff;
+  --ring: var(--manuscript-highlight);
+  --field: #e6e1d9;
+  --paper: #fcfaf4;
+  --tool: #fffdf8;
+  --tool-line: #d9d0c1;
+  --tool-glass: rgb(255 253 248 / 94%);
+  --shadow-float: 0 2px 9px rgb(56 41 24 / 8%);
+  --shadow-panel: 0 8px 24px -10px rgb(56 41 24 / 20%), 0 24px 56px -26px rgb(56 41 24 / 22%);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+}
+
+body:has([data-manuscript-header]) .rich-block-frame :where(thead th) {
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+.dark body:has([data-manuscript-header]) {
+  --background: #2d2a24;
+  --foreground: #f1e9dc;
+  --card: #302d27;
+  --brand: #d9b79e;
+  --primary-foreground: #30261d;
+  --secondary: #40382e;
+  --muted: #3b342c;
+  --muted-foreground: #c5b8a5;
+  --accent: #443a31;
+  --border: #655a4b;
+  --input: #887866;
+  --field: #25231f;
+  --paper: #373229;
+  --tool: #383229;
+  --tool-line: #605344;
+  --tool-glass: rgb(56 50 41 / 94%);
+  --shadow-float: 0 2px 12px rgb(0 0 0 / 26%);
+  --shadow-panel: 0 8px 36px rgb(0 0 0 / 32%);
+}
+
+[data-manuscript-header] {
+  position: fixed;
+  z-index: 40;
+  inset: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  padding: max(calc(var(--spacing) * 3), env(safe-area-inset-top)) clamp(.75rem, 3.2vw, 3rem) calc(var(--spacing) * 3);
+  pointer-events: none;
+}
+
+.manuscript-header-brand,
+.manuscript-header-badges,
+.manuscript-header-actions,
+.manuscript-nav {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.manuscript-header-actions { justify-self: end; }
+.manuscript-header-actions .task-panel-control { position: static; transform: none; }
+.manuscript-header-actions .task-panel-toggle { width: calc(var(--spacing) * 9); height: calc(var(--spacing) * 9); }
+.manuscript-header-brand > *, .manuscript-header-actions > *, .manuscript-nav > * { pointer-events: auto; }
+.manuscript-header-badges button { background: var(--accent); color: var(--foreground); }
+.manuscript-wordmark {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 3);
+  margin-inline-start: calc(var(--spacing) * -3);
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -.045em;
+  line-height: 1.1;
+}
+
+.manuscript-nav button, .manuscript-room {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--spacing) * 1.5);
+  min-height: calc(var(--spacing) * 9);
+  padding-inline: calc(var(--spacing) * 3);
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+
+.manuscript-wordmark,
+.manuscript-nav button,
+.manuscript-header-actions .chrome-island {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+.manuscript-wordmark:not(:disabled):hover,
+.manuscript-nav button:not(:disabled):hover,
+.manuscript-header-actions .chrome-island:not(:disabled):hover,
+.manuscript-nav-conversation[aria-current],
+.manuscript-nav-trigger[aria-current],
+.manuscript-nav-trigger[aria-expanded="true"],
+.manuscript-nav-trigger[data-popup-open],
+.manuscript-header-actions .chrome-island[aria-expanded="true"],
+.manuscript-header-actions .chrome-island[data-popup-open] { background: var(--accent); }
+.manuscript-wordmark:disabled,
+.manuscript-nav button:disabled,
+.manuscript-header-actions .chrome-island:disabled { cursor: not-allowed; opacity: .5; }
+.manuscript-nav-conversation svg { display: none; }
+.manuscript-nav svg, .manuscript-room svg { width: 1em; height: 1em; flex: none; }
+.manuscript-room { padding-inline: 0; width: calc(var(--spacing) * 9); }
+.manuscript-path-menu button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+.manuscript-path-menu {
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-height: min(28rem, var(--available-height));
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--tool);
+  box-shadow: var(--shadow-panel);
+}
+.manuscript-path-crumbs {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  padding: var(--spacing) var(--spacing) calc(var(--spacing) * 2);
+  border-bottom: 1px solid var(--tool-line);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+.manuscript-path-crumbs button, .manuscript-month-back { border-radius: var(--radius-sm); padding: var(--spacing); }
+.manuscript-path-crumbs [aria-current] { font-weight: 650; color: var(--foreground); }
+.manuscript-path-list { display: grid; gap: var(--spacing); }
+.manuscript-path-list button, .manuscript-month-back {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-height: calc(var(--spacing) * 9);
+  padding-inline: calc(var(--spacing) * 2);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.manuscript-path-list button:hover, .manuscript-month-back:hover { background: var(--accent); }
+.manuscript-path-list .manuscript-menu-room { display: none; }
+.manuscript-path-list svg, .manuscript-month-back svg { width: 1em; height: 1em; flex: none; color: var(--muted-foreground); }
+.manuscript-path-list svg:last-child { margin-inline-start: auto; }
+.manuscript-path-menu .workspace-browser-heading { margin: 0; }
+.manuscript-path-menu .workspace-record-list button { display: grid; grid-template-columns: minmax(0, 1fr); padding: calc(var(--spacing) * 2); }
+.manuscript-path-menu .workspace-record-list { gap: var(--spacing); }
+.manuscript-path-menu .workspace-history-pages { margin-block: var(--spacing); }
+
+@media (max-width: 68rem) { .manuscript-header-badges { display: none; } }
+@media (max-width: 42rem) {
+  [data-manuscript-header] { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .manuscript-header-brand { min-width: 0; }
+  .manuscript-wordmark { font-size: var(--text-lg); margin-inline-start: calc(var(--spacing) * -1); padding-inline: calc(var(--spacing) * 2); }
+  .manuscript-nav button { padding-inline: calc(var(--spacing) * 2); }
+  .manuscript-nav-file { display: none; }
+  .manuscript-header-actions { gap: var(--spacing); }
+  .manuscript-header-actions button { width: calc(var(--spacing) * 8); }
+  .manuscript-header-actions .task-panel-toggle { width: calc(var(--spacing) * 8); height: calc(var(--spacing) * 8); }
+  .manuscript-room { display: none; }
+  .manuscript-path-list .manuscript-menu-room { display: flex; }
+}
+@media (max-width: 26rem) {
+  .manuscript-nav[data-locale="en"] .manuscript-nav-conversation svg { display: block; }
+  .manuscript-nav[data-locale="en"] .manuscript-nav-conversation span {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
+@media (max-width: 22rem) {
+  [data-manuscript-header] { padding-inline: calc(var(--spacing) * 2); gap: var(--spacing); }
+  .manuscript-wordmark { font-size: var(--text-base); padding-inline: var(--spacing); }
+  .manuscript-nav button { padding-inline: var(--spacing); }
+  .manuscript-nav { gap: var(--spacing); }
+  .manuscript-nav-conversation { min-width: calc(var(--spacing) * 8); }
+  .manuscript-nav-trigger > svg:last-child { display: none; }
+}
+
 .shadow-float { box-shadow: var(--shadow-float); }
 
 .scene-pause-controls {

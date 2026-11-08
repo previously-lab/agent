@@ -7,9 +7,25 @@ import type { ManuscriptEntry } from "./dialogue-projection";
  * not conversation order; stable time ordering also keeps a slice heading
  * ahead of its first turn and preserves same-time publication order. */
 export function orderDialogueItems(items: readonly ChatStreamItem[]): ChatStreamItem[] {
-  return items.map((item, index) => ({ item, index, time: Date.parse(item.timeIso) }))
+  const ordered = items.map((item, index) => ({ item, index, time: Date.parse(item.timeIso) }))
     .sort((a, b) => (Number.isFinite(a.time) && Number.isFinite(b.time) ? a.time - b.time : 0) || a.index - b.index)
     .map(({ item }) => item);
+  const grouped: ChatStreamItem[] = [];
+  for (const item of ordered) {
+    const previous = grouped.at(-1);
+    if (previous?.kind === "history-turn" && item.kind === "history-turn" && previous.sliceId === item.sliceId &&
+        previous.turn.dialogue?.kind === "public_utterance" && item.turn.dialogue?.kind === "public_utterance") {
+      const previousInputs = previous.turn.dialogue.inputIds;
+      const itemInputs = item.turn.dialogue.inputIds;
+      if (previousInputs.length === itemInputs.length && previousInputs.every((id, index) => id === itemInputs[index])) {
+        grouped[grouped.length - 1] = { ...previous,
+          continuations: [...(previous.continuations ?? []), item.turn, ...(item.continuations ?? [])] };
+        continue;
+      }
+    }
+    grouped.push(item);
+  }
+  return grouped;
 }
 
 /** Saved dialogue is the cross-device recovery source. Hide a saved turn only

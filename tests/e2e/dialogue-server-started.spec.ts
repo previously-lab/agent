@@ -38,6 +38,7 @@ type OfferEvent = {
   offerId?: string;
   runId?: string;
   sourceInputId?: string;
+  stage?: "checkpoint" | "final";
 };
 
 const gates = new Set<string>();
@@ -198,6 +199,183 @@ test.afterEach(async () => {
   gates.clear();
 });
 
+test("v2 speaks from a verified tool event and a structured final without a thinking draft", async ({ page }) => {
+  const token = randomUUID();
+  const ref = `research/dialogue-fixture-${token}`;
+  const folder = path.join(E2E_MEMORY_ROOT, ...ref.split("/"));
+  const privateDocumentMarker = `RAW_PRIVATE_DOCUMENT_${token}`;
+  const fact = `The pilot trial starts on Tuesday (${token}).`;
+  await fs.promises.mkdir(folder, { recursive: true });
+  await fs.promises.writeFile(path.join(folder, "index.md"),
+    `# Reading room\n\n${fact}\n\n${privateDocumentMarker}\n`, "utf8");
+  const firstReadId = `tool-first-read-${token}`;
+  const firstPublic = `I found the note and am checking the schedule. ${token}`;
+  const finalPublic = `The pilot trial starts on Tuesday. ${token}`;
+  const finalGate = `structured-final-${token}`;
+  gates.add(finalGate);
+  const terminalThinking = `terminal-thinking-${token}`;
+  const eventDialogue = `tool-event-dialogue-${token}`;
+  const finalDialogue = `structured-final-dialogue-${token}`;
+  await writeRules([
+    idleReflectionRule(),
+    analyzerRule(token, "structured"),
+    { id: `first-read-${token}`, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
+      frames: [toolFrame("recallRead", { ref }, firstReadId)] },
+    { id: `second-read-${token}`, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
+      frames: [toolFrame("recallRead", { ref }, `tool-second-read-${token}`)] },
+    { id: terminalThinking, contains: ["finishThinking", token], thinking: "enabled", gate: finalGate, finishReason: "tool_calls",
+      frames: [toolFrame("finishThinking", { findings: [{ kind: "project_fact", text: fact,
+        evidenceIds: [`${firstReadId}:1`] }] }, `finish-structured-${token}`)] },
+    { id: eventDialogue, contains: ["holdReply", token], thinking: "disabled", frames: [{ content: firstPublic }] },
+    { id: finalDialogue, contains: [fact], excludes: ["holdReply"], thinking: "disabled", frames: [{ content: finalPublic }] },
+  ]);
+  const accepted = await sendThroughComposer(page, `Check the schedule in my reading-room note ${token}`, `tool-event-${token}`);
+  const offers = await observeOffers(accepted.offersUrl);
+  try {
+    await expect.poll(async () => (await capturedRequests(terminalThinking)).length).toBe(1);
+    const firstThinkingRequest = (await capturedRequests(`first-read-${token}`))[0]!;
+    const thinkingSystem = (firstThinkingRequest.messages as Array<{ role: string; content: string }>)
+      .find(message => message.role === "system")?.content;
+    expect(thinkingSystem?.includes("finishThinking") && thinkingSystem.includes("needsUser"),
+      "native handoff instructions survive the assembled system prompt").toBe(true);
+    expect(thinkingSystem?.includes("SEPARATE tool step before the first investigative tool"),
+      "the model gets a separate starting handoff before investigation").toBe(true);
+    expect(thinkingSystem).toContain("checkpoints of at most 2,400 characters each");
+    expect(thinkingSystem?.includes("yours is the only mouth"),
+      "the private thinker does not receive the old speaking role").toBe(false);
+    const offeredTool = (firstThinkingRequest.tools as Array<{ function: { name: string; parameters: { required?: string[] } } }>)
+      .find(entry => entry.function.name === "offerReply");
+    expect(offeredTool?.function.parameters.required).toContain("stage");
+    await expect(assistantReply(page, firstPublic)).toHaveCount(1);
+    await expect(assistantReply(page, finalPublic)).toHaveCount(0);
+    const interimCall = (await capturedRequests(eventDialogue))[0]!;
+    const dialogueSystem = (interimCall.messages as Array<{ role: string; content: string }>)
+      .find(message => message.role === "system")?.content;
+    expect(dialogueSystem).toContain("If the user explicitly asks to inspect, test or debug Previously itself");
+    expect(dialogueSystem).toContain("not proof that a browser displayed it or the user saw it");
+    const interimRequest = JSON.stringify(interimCall);
+    expect(interimRequest).toContain("read_completed");
+    expect(interimRequest).not.toContain(ref);
+    expect(interimRequest).not.toContain(privateDocumentMarker);
+    await release(finalGate);
+    await expect(assistantReply(page, finalPublic)).toHaveCount(1);
+    await expect.poll(() => offers.events.some(event => event.type === "done")).toBe(true);
+    expect(offers.events.filter(event => event.type === "offer")).toHaveLength(2);
+    expect(await capturedRequests(eventDialogue)).toHaveLength(1);
+    const finalRequest = JSON.stringify((await capturedRequests(finalDialogue))[0]);
+    expect(finalRequest).toContain(fact);
+    expect(finalRequest).toContain(firstPublic);
+    expect(finalRequest).not.toContain(privateDocumentMarker);
+  } finally {
+    await offers.close();
+  }
+});
+
+test("v2 dialogue can hold one checkpoint, speak the next, and still stream a final reply", async ({ page }, testInfo) => {
+  const token = randomUUID();
+  await page.addInitScript(() => {
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (text: string) => { copied = text; },
+      readText: async () => copied,
+    } });
+  });
+  const firstNote = `NOTE_TO_HOLD_${token}`;
+  const secondNote = `NEW_FINDING_${token}`;
+  const staleNote = `SUPERSEDED_FINDING_${token}`;
+  const privateDraft = `UNPUBLISHED_DRAFT_${token}`;
+  const partialReply = `PUBLIC_CHECKPOINT_${token}`;
+  const staleDraft = `SUPERSEDED_DRAFT_${token}`;
+  const finalReply = `PUBLIC_CONCLUSION_${token}`;
+  const nextGate = `next-checkpoint-${token}`;
+  const thirdGate = `third-checkpoint-${token}`;
+  const staleGate = `stale-checkpoint-${token}`;
+  const finalGate = `final-checkpoint-${token}`;
+  gates.add(nextGate).add(thirdGate).add(staleGate).add(finalGate);
+  const finalThinking = `final-thinking-${token}`;
+  const finalDialogue = `final-dialogue-${token}`;
+  const staleDialogue = `stale-dialogue-${token}`;
+  await writeRules([
+    idleReflectionRule(),
+    analyzerRule(token, "checkpoint"),
+    { id: `hold-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled",
+      finishReason: "tool_calls",
+      frames: [toolFrame("offerReply", { stage: "checkpoint", text: firstNote }, `hold-${token}`)] },
+    { id: `speak-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled", gate: nextGate,
+      finishReason: "tool_calls",
+      frames: [toolFrame("offerReply", { stage: "checkpoint", text: secondNote }, `speak-${token}`)] },
+    { id: `stale-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled", gate: thirdGate,
+      finishReason: "tool_calls",
+      frames: [toolFrame("offerReply", { stage: "checkpoint", text: staleNote }, `stale-${token}`)] },
+    { id: finalThinking, contains: ["finishThinking", token], thinking: "enabled", gate: finalGate,
+      // Omitting offerReply here exercises the final fallback after a checkpoint.
+      frames: [{ content: `Final finding for ${token}` }] },
+    { id: `hold-dialogue-${token}`, contains: ["holdReply", firstNote], thinking: "disabled",
+      finishReason: "tool_calls",
+      frames: [{ content: privateDraft }, toolFrame("holdReply", {}, `silence-${token}`)] },
+    { id: `speak-dialogue-${token}`, contains: ["holdReply", secondNote], thinking: "disabled",
+      frames: [{ content: partialReply }] },
+    { id: staleDialogue, contains: ["holdReply", staleNote], thinking: "disabled", gate: staleGate,
+      frames: [{ content: staleDraft }] },
+    { id: finalDialogue, contains: ["Final finding for", token], excludes: ["holdReply"], thinking: "disabled",
+      frames: [{ content: finalReply }] },
+  ]);
+
+  const accepted = await sendThroughComposer(page, `Investigate step by step ${token}`, `checkpoint-${token}`);
+  const offers = await observeOffers(accepted.offersUrl);
+  let heldStream: Awaited<ReturnType<typeof observeNativeStream>> | undefined;
+  try {
+    await expect.poll(() => offers.events.find(event => event.offerId?.endsWith(`:hold-${token}`))?.stage)
+      .toBe("checkpoint");
+    const held = offers.events.find(event => event.offerId?.endsWith(`:hold-${token}`))!;
+    heldStream = await observeNativeStream(held.runId!);
+    await expect.poll(() => heldStream?.events.some(event => event.type === "finish")).toBe(true);
+    expect(heldStream.events.filter(event => event.type === "text-delta" ||
+      event.type === "tool-input-available" || event.type === "data-dialogue-publication")).toEqual([]);
+    await expect(assistantReply(page, privateDraft)).toHaveCount(0);
+    expect(await backgroundRecordRun(held.offerId!)).toBeNull();
+
+    await release(nextGate);
+    await expect(assistantReply(page, partialReply)).toHaveCount(1);
+    await expect(assistantReply(page, finalReply)).toHaveCount(0);
+    await expect(page.locator("[data-conversation-primary]")).toHaveAttribute("data-primary-action", "stop");
+
+    await release(thirdGate);
+    await expect.poll(async () => (await capturedRequests(staleDialogue)).length).toBe(1);
+    await expect.poll(async () => (await capturedRequests(finalThinking)).length).toBe(1);
+    await release(finalGate);
+    const reply = assistantReply(page, finalReply);
+    await expect(reply).toHaveCount(1);
+    await expect(reply).toContainText(partialReply);
+    await expect(reply.locator("[data-public-utterance]")).toHaveCount(2);
+    await expect(reply.locator(".conversation-speaker")).toHaveCount(1);
+    await expect(reply.locator(".conversation-message-actions")).toHaveCount(1);
+    await expect.poll(() => offers.events.some(event => event.type === "done")).toBe(true);
+    await expect(page.locator("[data-conversation-primary]")).toHaveAttribute("data-primary-action", "send");
+    const copy = reply.getByRole("button", { name: "Copy reply", exact: true });
+    await expect(copy).toHaveCount(1);
+    if (testInfo.project.name === "desktop") await reply.hover();
+    await expect(copy).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`continuous-reply-${testInfo.project.name}.png`), animations: "disabled", fullPage: true });
+    await copy.click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${partialReply}\n\n${finalReply}`);
+    const request = (await capturedRequests(finalDialogue))[0]!;
+    const messages = request.messages as Array<{ role: string; content: string }>;
+    const prompt = JSON.parse(messages.findLast(message => message.role === "user")!.content);
+    expect(prompt).toMatchObject({ stage: "final", priorCheckpoints: [firstNote, secondNote, staleNote], alreadySaid: [partialReply] });
+    expect(JSON.stringify(prompt)).not.toContain(privateDraft);
+    expect(offers.events.filter(event => event.type === "offer")).toHaveLength(4);
+    const stale = offers.events.find(event => event.offerId?.endsWith(`:stale-${token}`))!;
+    await release(staleGate);
+    await expect.poll(async () => (await localRun(stale.runId!)).status).toBe("completed");
+    await expect(assistantReply(page, staleDraft)).toHaveCount(0);
+    expect(await backgroundRecordRun(stale.offerId!)).toBeNull();
+  } finally {
+    await heldStream?.close();
+    await offers.close();
+  }
+});
+
 test("v2 real offerReply streams prose before parent finish and publishes typed HTML once", async ({ page }) => {
   const token = randomUUID();
   const persona = `e2e-v2-${token}`;
@@ -230,7 +408,7 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
     },
     {
       id: parentOfferId, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
-      frames: [{ content: safeOffer }, toolFrame("offerReply", { text: offerText }, `v2-offer-${token}`)],
+      frames: [{ content: safeOffer }, toolFrame("offerReply", { stage: "final", text: offerText }, `v2-offer-${token}`)],
     },
     {
       id: parentFinalId, contains: ["finishThinking", token], thinking: "enabled", gate: parentGate,
@@ -344,6 +522,17 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
       .filter(file => /(?:core|agent)\.md$/.test(file));
     const recordContents = await Promise.all(recordFiles.map(file => fs.promises.readFile(path.join(E2E_MEMORY_ROOT, file), "utf8")));
     const saved = recordContents.join("\n");
+    const coreIndex = recordFiles.findIndex((file, i) => /core\.md$/.test(file) && recordContents[i]?.includes(secondPublic));
+    expect(coreIndex).toBeGreaterThanOrEqual(0);
+    const core = recordContents[coreIndex]!;
+    const sliceId = recordFiles[coreIndex]!.split(/[\\/]/).slice(-5, -1).join("-");
+    expect(sliceId).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}$/);
+    expect(core).toContain(rawHtml);
+    const artifact = artifacts[0] as { data?: { artifact?: { artifactId?: string } } };
+    const artifactId = artifact.data?.artifact?.artifactId;
+    expect(artifactId).toMatch(/^[a-f0-9]{64}$/);
+    expect(fs.existsSync(path.join(E2E_MEMORY_ROOT, "dialogue-artifacts", artifactId!))).toBe(false);
+    expect(fs.existsSync(path.join(E2E_MEMORY_ROOT, "dialogue-artifacts", `${artifactId}.json`))).toBe(false);
     expect(saved).toContain(secondPublic);
     expect(saved).not.toContain(privateReasoning);
     expect(saved).not.toContain(safeThinking);
@@ -366,6 +555,17 @@ test("v2 real offerReply streams prose before parent finish and publishes typed 
     expect(oldDispatchRequests).toEqual([]);
     expect(stopRequests).toEqual([]);
     expect(fs.existsSync(path.join(E2E_MEMORY_ROOT, ".git"))).toBe(false);
+
+    // Read the actual saved record with both live and legacy artifact endpoints unavailable.
+    await page.route(/\/api\/chat\/.*\/artifacts\//, route => route.fulfill({ status: 404 }));
+    const recordUrl = new URL("/en/app", E2E_BASE_URL);
+    recordUrl.searchParams.set("doc", `records/${sliceId}`);
+    recordUrl.searchParams.set("persona", persona);
+    await page.goto(recordUrl.toString());
+    const archived = page.locator(`.desk-shell--top [data-artifact-ref="${artifactId}"]`);
+    await expect(archived).toHaveAttribute("data-artifact-state", "ready", { timeout: 30_000 });
+    await expect(archived.locator("[data-native-frame]").contentFrame().frameLocator("[data-native-content]")
+      .locator("#v2-fixture")).toHaveText(`Attachment ${token}`);
   } finally {
     await native?.close();
     await offers.close();

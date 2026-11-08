@@ -114,6 +114,9 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
       }
       const result: ToolResult = { toolCallId: native.id, toolName: native.function.name, output,
         ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : {}) };
+      // Deliver durable side effects as each tool returns; model history below
+      // still uses provider order and waits for the full batch.
+      if (!inputError) await options.onToolExecutionResult?.(result);
       return result;
     }));
     // Preserve provider order in prompt history even when tools finish out of

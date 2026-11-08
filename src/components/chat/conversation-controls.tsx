@@ -5,17 +5,17 @@ import { ArrowUp } from "lucide-react";
 import { useTranslations } from "next-intl";
 import "./conversation-controls.css";
 
-/** Manuscript controls occupy the draft's own final layout row, so they scroll
- * with the editor and reserve their space. The collapsed pill keeps its inline
+/** Manuscript controls occupy the draft's own final layout row, spanning the
+ * writing column as a compact toolbar: the tools cluster at the start, the
+ * Send/Stop group flush at the end. The collapsed pill keeps its inline
  * control row; neither form needs a viewport-fixed fallback. */
-export function ConversationControls({ children, inline = false, exposed = false, rootRef }: {
+export function ConversationControls({ children, inline = false, rootRef }: {
   children: ReactNode;
   inline?: boolean;
-  exposed?: boolean;
   rootRef?: Ref<HTMLDivElement>;
 }) {
   return <div ref={rootRef} data-conversation-controls data-controls-form={inline ? "inline" : "editor"}
-    data-controls-exposed={exposed || undefined} className="conversation-controls-seat">
+    className="conversation-controls-seat">
     {children}
   </div>;
 }

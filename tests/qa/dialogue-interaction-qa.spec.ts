@@ -39,7 +39,7 @@ test("two real server runs keep per-prompt captions and output separate", async 
     rules.push(
       { id: `analyzer-${id}`, contains: ["analyzeOutput", marker], ...laneGuard, finishReason: "tool_calls", frames: [tool("analyzeOutput", { intent: { type: "chat", reason: "Offline fixture" }, memory_worthy: false, emotional_signal: { intensity: "none", register: "neutral", note: "" } }, `analyze-${id}`)] },
       { id: `think-${id}`, contains: ["finishThinking", marker], ...laneGuard, thinking: "enabled", gate: `wait-${id}`, gateTimeoutMs: 175_000, finishReason: "tool_calls", frames: [{ content: `THOUGHT-${marker} ` + `${marker} detail. `.repeat(100) }, { frame: tool("currentTime", {}, `time-${id}`), gateAfter: `tool-${id}` }] },
-      { id: `offer-${id}`, contains: ["finishThinking", marker], ...laneGuard, thinking: "enabled", finishReason: "tool_calls", frames: [tool("offerReply", { text: `REPLY-${marker}` }, `offer-call-${id}`)] },
+      { id: `offer-${id}`, contains: ["finishThinking", marker], ...laneGuard, thinking: "enabled", finishReason: "tool_calls", frames: [tool("offerReply", { stage: "final", text: `REPLY-${marker}` }, `offer-call-${id}`)] },
       { id: `finish-${id}`, contains: ["finishThinking", marker], ...laneGuard, thinking: "enabled", gate: `finish-${id}`, gateTimeoutMs: 175_000, finishReason: "tool_calls", frames: [tool("finishThinking", { findings: [] }, `finish-call-${id}`)] },
       { id: `public-${id}`, contains: [marker], ...laneGuard, thinking: "disabled", gateTimeoutMs: 175_000, frames: [{ frame: { content: `PUBLIC-FIRST-${marker} ` }, gateAfter: `public-${id}` }, { content: `PUBLIC-LAST-${marker}` }] },
     );
@@ -137,7 +137,7 @@ test("a provider failure can be retried through the real composer workflow", asy
     { id: `hq-${token}`, contains: ["hqReport"], repeat: true, finishReason: "tool_calls", frames: [tool("hqReport", { actions: [], note: "Offline" }, `hq-call-${token}`)] },
     { id: `analyze-${token}`, contains: ["analyzeOutput", marker], repeat: true, finishReason: "tool_calls", frames: [tool("analyzeOutput", { intent: {type:"chat",reason:"Offline"}, memory_worthy:false, emotional_signal:{intensity:"none",register:"neutral",note:""} }, `analyze-call-${token}`)] },
     { id: `fail-${token}`, contains: ["finishThinking", marker], thinking: "enabled", status: 400, frames: [] },
-    { id: `retry-offer-${token}`, contains: ["finishThinking", marker], thinking: "enabled", finishReason: "tool_calls", frames: [tool("offerReply", {text:`RECOVERED-${token}`}, `offer-${token}`)] },
+    { id: `retry-offer-${token}`, contains: ["finishThinking", marker], thinking: "enabled", finishReason: "tool_calls", frames: [tool("offerReply", { stage: "final", text: `RECOVERED-${token}` }, `offer-${token}`)] },
     { id: `retry-finish-${token}`, contains: ["finishThinking", marker], thinking: "enabled", finishReason: "tool_calls", frames: [tool("finishThinking", {findings:[]}, `finish-${token}`)] },
     { id: `retry-public-${token}`, contains: [marker], thinking: "disabled", frames: [{content:`RECOVERED-${token}`}] },
   ];

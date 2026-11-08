@@ -294,6 +294,7 @@ export interface RecordTurnContent {
   content: string;
   documentContext?: import("@/lib/chat/document-context").DocumentContextSnapshot;
   dialogue?: import("@/lib/episodic/dialogue-record").DialogueRecordTurn;
+  artifactBodies?: Readonly<Record<string, string>>;
 }
 
 export interface RecordDocContent extends CaseDocContent {
@@ -334,6 +335,7 @@ export async function getRecordDoc(
     content: turn.content,
     ...(turn.documentContext?.length ? { documentContext: turn.documentContext } : {}),
     ...(turn.dialogue ? { dialogue: turn.dialogue } : {}),
+    ...(turn.artifactBodies ? { artifactBodies: turn.artifactBodies } : {}),
   }));
   const markdown = slice.turns
     .map(

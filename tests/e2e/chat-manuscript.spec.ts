@@ -1,4 +1,5 @@
 import type { ElementHandle, Locator, Page } from "@playwright/test";
+import { collapseConversation } from "./manuscript-navigation";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -46,7 +47,6 @@ function offlineSse(answer: string): string {
 
 async function selectReference(page: Page, title: string): Promise<void> {
   if (!(await page.locator("[data-document-mention]").isVisible())) {
-    await page.locator("[data-composer-tools-trigger]").click();
   }
   await page.locator("[data-document-mention]:visible").click();
   const search = page.getByRole("combobox", { name: "Search documents" });
@@ -166,7 +166,7 @@ for (const viewport of [
       const assetId = await attachFixture(page);
       await input.dispatchEvent("compositionstart", { data: "draft" });
 
-      await page.getByRole("button", { name: "Exit full screen" }).click();
+      await collapseConversation(page);
       await expect(page.locator("[data-pill-composer]")).toBeVisible();
       await expect(page.locator("[data-conversation-field]")).toBeVisible();
       await expect(agent).toBeVisible();
@@ -278,7 +278,6 @@ test.describe("manuscript editing integration", () => {
     // The editor's own control row remains reachable while prose grows.
     await expect(toolbar).toBeVisible();
     await expect(toolbar).toHaveCSS("position", "relative");
-    await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]:visible")).toBeVisible();
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
     await expect(page.locator("[data-composer-send]:visible")).toBeVisible();

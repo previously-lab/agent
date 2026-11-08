@@ -18,6 +18,8 @@ async function beforeInput(input: Locator, inputType: string) {
 async function open(page: Page) {
   await clearEpisodic(); await mockUploads(page); await page.goto("/en/app");
   await expect(editor(page)).toBeVisible({ timeout: 30_000 });
+  // The native editing controller sets this attribute after hydration.
+  await text(editor(page), "");
 }
 
 /** DOM ranges count serialized badge markers, matching the public plain-text
@@ -47,7 +49,6 @@ test("verified badge is atomic; backspace, delete and undo preserve adjacent pro
   await open(page); const input = editor(page);
   const root = await input.elementHandle();
   await input.fill("left right"); await select(input, 1, 4);
-  await page.locator("[data-composer-tools-trigger]").click();
   const choosing = page.waitForEvent("filechooser");
   await page.locator("[data-attach]:visible").click();
   await (await choosing).setFiles(imageFile("one.svg"));
@@ -109,24 +110,38 @@ test("actual Chromium IME keeps its node during composition and commits one undo
   await open(page); const input = editor(page);
   let posts = 0;
   await page.route("**/api/chat", route => { posts++; return route.fulfill({ contentType: "text/event-stream", body: replySse("fixture") }); });
-  await input.fill("prefix "); await select(input, 7);
+  let finishUpload!: () => void;
+  const pending = new Promise<void>(resolve => { finishUpload = resolve; });
+  await page.route("**/api/attachments/upload", async route => {
+    await pending;
+    return route.fulfill({ status: 500, json: { error: "Fixture upload failure" } });
+  });
+  await input.fill("prefix ");
+  await page.locator('input[type="file"]').setInputFiles(imageFile("pending.svg"));
+  await expect(page.locator('[data-upload-state="uploading"]')).toBeVisible();
+  await text(input, "prefix 〔图1〕");
+  await select(input, 7);
   const root = await input.elementHandle();
   const client = await page.context().newCDPSession(page);
   await client.send("Input.imeSetComposition", { text: "拼音", selectionStart: 2, selectionEnd: 2 });
   const composingNode = await input.evaluateHandle(element => element.firstChild);
-  // A tier/parent update must not rewrite the live IME text node.
-  await page.locator("[data-composer-tools-trigger]").dispatchEvent("click");
-  await expect(page.locator("[data-composer-tools]")).toBeVisible();
+  // A background update must not rewrite the live IME node. Opening the
+  // workflow popover would move focus and may legitimately commit composition.
+  finishUpload();
+  await expect(page.locator('[data-upload-state="error"]')).toBeVisible();
+  await expect(input).toBeFocused();
   await input.dispatchEvent("keydown", { key: "Enter", keyCode: 229, isComposing: true });
   expect(posts).toBe(0);
   expect(await input.evaluate((element, original) => element.firstChild === original, composingNode)).toBe(true);
   await client.send("Input.insertText", { text: "拼音" });
-  await text(input, "prefix 拼音");
+  await text(input, "prefix 拼音〔图1〕");
   expect(await input.evaluate((element, original) => element === original, root)).toBe(true);
-  await input.press("Control+z"); await text(input, "prefix ");
-  await input.press("Control+Shift+z"); await text(input, "prefix 拼音");
+  await input.press("Control+z"); await text(input, "prefix 〔图1〕");
+  await input.press("Control+Shift+z"); await text(input, "prefix 拼音〔图1〕");
+  await select(input, 9);
   await input.press("Shift+Enter"); await input.pressSequentially("new line");
-  await text(input, "prefix 拼音\nnew line"); expect(posts).toBe(0);
+  await text(input, "prefix 拼音\nnew line〔图1〕"); expect(posts).toBe(0);
+  await page.getByRole("button", { name: "Remove attachment: pending.svg" }).click();
   await input.press("Enter"); await expect.poll(() => posts).toBe(1); await text(input, "");
   await input.press("Control+z"); await text(input, "");
   await client.detach();

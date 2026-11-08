@@ -9,11 +9,12 @@
  * All file I/O delegates to the existing tools layer, which handles the
  * local-dev vs GitHub-production switch transparently.
  */
+import { createHash } from "node:crypto";
 import matter from "gray-matter";
 import { escapeTurnBody, parseTurns as parseRecordTurns } from "./turn-parser";
 import { decodeDocumentContext, encodeDocumentContext } from "@/lib/chat/document-context-codec";
 import { encodeImageAttachments, legacyRecordImageAttachments } from "@/lib/chat/image-attachments";
-import { decodeDialogueRecordTurn, encodeDialogueRecordTurn } from "./dialogue-record";
+import { decodeDialogueRecordTurn, encodeDialogueRecordTurn, publicRecordText, readDialogueRecordBody } from "./dialogue-record";
 import type {
   TimeSlice,
   Turn,
@@ -303,7 +304,7 @@ export function serializeSlice(slice: TimeSlice): string {
         `${turn.attachments?.length ? ` [attachments ${encodeImageAttachments(turn.attachments)}]` : ""}` +
         `${turn.sourceRole ? ` [source-role ${encodeURIComponent(turn.sourceRole)}]` : ""}` +
         `${turn.dialogue ? ` [dialogue ${encodeDialogueRecordTurn(turn.dialogue)}]` : ""}` +
-        ` [body-escaped v1]\n\n${escapeTurnBody(turn.content)}`
+        ` [body-escaped v1]\n\n${escapeTurnBody(turn.recordBody ?? turn.content)}`
     )
     .join("\n\n");
 
@@ -423,12 +424,21 @@ function parseTurns(body: string, sliceId?: string): Turn[] {
     const attachments = turn.attachments?.length ? turn.attachments
       : role === "user" && turn.boundary === "legacy_header" && sliceId
         ? legacyRecordImageAttachments(turn.content, sliceId, turn.turnId) : [];
+    const recordBody = dialogue?.kind === "public_utterance" ? turn.content.replace(/^\r?\n/, "") : undefined;
+    const record = recordBody !== undefined && dialogue?.kind === "public_utterance"
+      ? readDialogueRecordBody(recordBody, dialogue.blocks) : undefined;
+    const artifactRefs = new Map(dialogue?.kind === "public_utterance"
+      ? dialogue.blocks.flatMap((block) => block.kind === "artifact_ref" ? [[block.artifact.artifactId, block.artifact] as const] : []) : []);
+    const artifactBodies = record?.exact && Object.entries(record.artifactBodies).every(([artifactId, body]) => {
+      const ref = artifactRefs.get(artifactId);
+      return ref && createHash("sha256").update(body, "utf8").digest("hex") === ref.sha256;
+    }) ? record.artifactBodies : undefined;
     return {
       timestamp: turn.timestamp,
       role,
       ...(sourceRole ? { sourceRole: decodeMessageId(sourceRole) } : {}),
       ...(turn.boundary === "ambiguous" || role === "unknown" ? { attribution: "ambiguous" as const } : {}),
-      content: turn.content.trim(),
+      content: dialogue?.kind === "public_utterance" ? publicRecordText(dialogue.blocks) : turn.content.trim(),
       ...(!/^\d+$/.test(turn.turnId ?? "") ? { turnId: turn.turnId } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(burst ? { burst } : {}),
@@ -437,6 +447,8 @@ function parseTurns(body: string, sliceId?: string): Turn[] {
       ...(documentContext.length ? { documentContext } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(dialogue ? { dialogue } : {}),
+      ...(recordBody !== undefined ? { recordBody } : {}),
+      ...(artifactBodies && Object.keys(artifactBodies).length ? { artifactBodies } : {}),
     };
   });
 }

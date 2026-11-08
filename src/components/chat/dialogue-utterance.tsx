@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import type { ContentBlockV1, PublicUtterance } from "@/lib/chat/dialogue-contract";
+import type { ContentBlockV1 } from "@/lib/chat/dialogue-contract";
 import { DocumentLink } from "@/components/documents/document-navigation";
 import { ConversationTurn } from "./conversation-turn";
 import { ImagePolaroid } from "./conversation-images";
@@ -13,6 +13,7 @@ import type { NativeRenderMode } from "./native-html";
 import { formatDocumentLink, parseDocumentLink } from "@/lib/documents/document-link";
 import { MessageActions } from "./message-actions";
 import { findImageMarkers } from "@/lib/chat/image-markers";
+import type { DialoguePublicationSeat } from "./dialogue-stream-rows";
 
 export const DialogueContent = memo(function DialogueContent({ blocks, mode, artifactBodies }: {
   blocks: readonly ContentBlockV1[];
@@ -60,18 +61,26 @@ export const DialogueContent = memo(function DialogueContent({ blocks, mode, art
   return <div className="conversation-prose"><DialogueMarkdown content={content} slots={slots} imageMarkers={imageMarkers}>{children}</DialogueMarkdown></div>;
 });
 
-export const DialogueUtterance = memo(function DialogueUtterance({ utterance, artifactBodies, inReplyTo, onRegenerate }: {
-  utterance: PublicUtterance;
-  artifactBodies?: ReadonlyMap<string, string>;
+export const DialogueUtterance = memo(function DialogueUtterance({ publications, inReplyTo, onRegenerate }: {
+  publications: readonly DialoguePublicationSeat[];
   inReplyTo?: string;
   onRegenerate?: () => void;
 }) {
   const t = useTranslations("chat.dialogue");
-  const text = utterance.blocks.flatMap(block => block.kind === "markdown" ? [block.text] : []).join("\n\n");
-  return <div className="dialogue-publication" data-public-utterance={utterance.utteranceId} data-public-seq={utterance.publicSeq}>
+  const text = publications.map(({ utterance }) =>
+    utterance.blocks.flatMap(block => block.kind === "markdown" ? [block.text] : []).join("\n\n")).filter(Boolean).join("\n\n");
+  const blocks = publications.flatMap(({ utterance }) => utterance.blocks);
+  const first = publications[0]?.utterance;
+  if (!first) return null;
+  return <div className="dialogue-publication" data-dialogue-reply={first.inputIds.join(":")}>
     <ConversationTurn role="assistant" metadata={inReplyTo ? t("inReplyTo", { text: inReplyTo }) : undefined}>
-      <DialogueContent blocks={utterance.blocks} mode="interactive" artifactBodies={artifactBodies} />
-      {text && <MessageActions content={text} onRegenerate={onRegenerate} />}
+      <div className="dialogue-continuous-reply">
+        {publications.map(({ utterance, artifactBodies }) => <div className="dialogue-publication" key={utterance.utteranceId}
+          data-public-utterance={utterance.utteranceId} data-public-seq={utterance.publicSeq}>
+          <DialogueContent blocks={utterance.blocks} mode="interactive" artifactBodies={artifactBodies} />
+        </div>)}
+      </div>
+      {blocks.length > 0 && <MessageActions content={text} response={JSON.stringify(blocks, null, 2)} onRegenerate={onRegenerate} />}
     </ConversationTurn>
   </div>;
 });

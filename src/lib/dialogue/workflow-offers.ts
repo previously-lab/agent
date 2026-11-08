@@ -22,6 +22,9 @@ export async function listDialogueOffers(parentRunId: string): Promise<DialogueO
       if (offer && !offers.has(offer.offerId)) offers.set(offer.offerId, offer);
     }
   } finally {
+    // This is a snapshot, not a subscription. Releasing the reader lock alone
+    // leaves the SDK's underlying listener attached to the live stream.
+    await reader.cancel().catch(() => undefined);
     try { reader.releaseLock(); } catch { /* Already released. */ }
   }
   return [...offers.values()];

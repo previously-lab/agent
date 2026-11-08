@@ -975,14 +975,8 @@ function Inner({
     return [...merged, ...laneItems];
   }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles, parallelLanes]);
 
-  // ── Arrival forms (v0.10 §1.2 Rev 2, re-seated with the two-rungs rewrite):
-  // the PANEL is the in-memory current conversation — plus, on a briefing
-  // arrival, the cold-open page of history with the EmptyBriefing card seated
-  // as a stream item between the two (the field that used to host the card
-  // retired with the rung ladder). Resume mode restores the alive slice's
-  // turns under a banner HERE. The standalone full-screen briefing survives
-  // ONLY for an empty memory (not one slice), known once the episodic state
-  // settles.
+  // Only a truly empty workspace needs an arrival state. Saved text and new
+  // messages share the same flow without inserting a briefing card between them.
   const emptyMemory = dialogueEnabled ? dialogue.historyReady && !dialogue.historyFailed &&
     arrival.mode === "briefing" && !dialogue.historyWindow?.previous.length && dialogueRows.items.length === 0 :
     arrival.mode === "briefing" &&
@@ -990,7 +984,6 @@ function Inner({
     timelineSlices.length === 0 &&
     !episodicHasMore &&
     messages.length === 0 && dialogueRows.items.length === 0;
-  const showBriefingCard = !dialogueEnabled && arrival.mode === "briefing" && !emptyMemory;
 
   // ── Arrival skeleton cover ─────────────────────────────────────────────
   // Until the mount fetches settle (the episodic state), an isomorphic
@@ -1028,25 +1021,17 @@ function Inner({
     };
   }, [arrival, dialogueEnabled, persona]);
 
-  // THE PANEL'S ITEMS (2026-10-04; the briefing card re-seated HERE with the
-  // two-rungs rewrite — the field that hosted it is gone): the cold-open page
-  // of repository history on a briefing arrival, the briefing card as a
-  // stream item between history and the live edge, the arrival-restored
-  // resume block, and the live `useDurableChat` messages.
-  const [briefingTimeIso] = useState(() => new Date().toISOString());
+  // Saved conversation and live utterances share one uninterrupted flow.
   const items = useMemo<ChatStreamItem[]>(() => {
-    const history = unrepresentedHistory(buildHistoryItems(briefingSlices ?? [], resumeBlock), messages, dialogue.projection.entries);
-    const card: ChatStreamItem[] = showBriefingCard
-      ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
-      : [];
+    const history = unrepresentedHistory(buildHistoryItems(briefingSlices ?? [], resumeBlock), messages, dialogue.projection.entries)
+      .filter(item => item.kind !== "resume-banner");
     const combined = [
       ...history,
-      ...card,
       ...liveItems,
       ...dialogueRows.items,
     ];
     return dialogueEnabled ? orderDialogueItems(combined) : combined;
-  }, [briefingSlices, resumeBlock, liveItems, messages, showBriefingCard, briefingTimeIso, dialogueRows.items, dialogue.projection.entries, dialogueEnabled]);
+  }, [briefingSlices, resumeBlock, liveItems, messages, dialogueRows.items, dialogue.projection.entries, dialogueEnabled]);
 
   /**
    * Run `fn` against the list's handle as soon as it exists.
@@ -1503,7 +1488,7 @@ function Inner({
             <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("loadingHistory")}</p>
           ) : dialogueEnabled && dialogue.historyFailed && !items.length ? (
             <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("historyUnavailable")}</p>
-          ) : emptyMemory ? (
+          ) : emptyMemory && identity?.isDemo ? (
             <EmptyBriefing
               persona={persona}
               identity={identity}
@@ -1522,17 +1507,6 @@ function Inner({
                   onStop={dialogueEnabled ? () => { void dialogue.stop().catch(() => toast.error(tDialogue("stopFailed"))); } : handleStop} />
               </>}
             />
-          }
-          briefing={
-            showBriefingCard
-              ? {
-                  persona,
-                  identity,
-                  active: activeSlice,
-                  recent: timelineSlices,
-                  onSend: (msg) => void handleSubmit(msg, []),
-                }
-              : null
           }
         />
 

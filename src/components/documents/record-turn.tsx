@@ -32,7 +32,8 @@ export function RecordTurnView({
         </div>
         {turn.role === "assistant" && turn.dialogue?.kind === "public_utterance" ? (
           <div data-public-utterance={turn.dialogue.publicationId} data-public-seq={turn.dialogue.publicSeq}>
-            <DialogueContent blocks={turn.dialogue.blocks} mode="reader" />
+            <DialogueContent blocks={turn.dialogue.blocks} mode="reader"
+              artifactBodies={turn.artifactBodies ? new Map(Object.entries(turn.artifactBodies)) : undefined} />
           </div>
         ) : turn.role !== "assistant" ? <ConversationImageBody content={turn.content} images={turn.attachments ?? []} /> : <div className="conversation-prose">
           <MarkdownRenderer

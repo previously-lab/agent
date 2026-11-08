@@ -19,8 +19,7 @@ import {
   memoizeGitHubRead,
 } from "@/lib/github/read-view";
 import { listFiles } from "@/lib/tools/listFiles";
-
-const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
+import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 
 // ─── The GitHub read (cached in the Next.js Data Cache) ──────────────────
 //
@@ -103,14 +102,23 @@ async function fetchFromGitHub(
       throw new Error(`"${path}" is not a regular file (type: ${response.data.type})`);
     }
 
-    // Check file size before decoding
-    if (response.data.size > MAX_FILE_SIZE_BYTES) {
+    // Check file size before decoding. Canonical record cores have a bounded
+    // exception because embedded HTML can exceed the generic text limit.
+    const maxBytes = maxTextFileBytes(path);
+    if (response.data.size > maxBytes) {
       throw new Error(
-        `File "${path}" is too large (${response.data.size} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`
+        `File "${path}" is too large (${response.data.size} bytes). Maximum is ${maxBytes} bytes.`
       );
     }
 
-    // Content is base64-encoded
+    // GitHub omits inline content for larger files. Fetch the same content
+    // by its immutable blob sha, preserving the existing blob cache identity.
+    if (!response.data.content && response.data.size > 0) {
+      return Buffer.from(
+        await readBlobBase64(response.data.sha, repo, owner, ref ? { ref } : undefined),
+        "base64",
+      ).toString("utf-8");
+    }
     return response.data.content
       ? Buffer.from(response.data.content, "base64").toString("utf-8")
       : "";
@@ -451,9 +459,10 @@ export async function readFileViaTree(
   if (entry.type !== "blob") {
     throw new Error(`"${path}" is a directory, not a file`);
   }
-  if (entry.size !== undefined && entry.size > MAX_FILE_SIZE_BYTES) {
+  const maxBytes = maxTextFileBytes(normalized);
+  if (entry.size !== undefined && entry.size > maxBytes) {
     throw new Error(
-      `File "${path}" is too large (${entry.size} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`,
+      `File "${path}" is too large (${entry.size} bytes). Maximum is ${maxBytes} bytes.`,
     );
   }
   return readBlobText(entry.sha, repo, owner, opts);

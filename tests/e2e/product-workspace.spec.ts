@@ -1,5 +1,6 @@
 import { test, expect } from "./test";
 import type { Locator, Page } from "@playwright/test";
+import { collapseConversation } from "./manuscript-navigation";
 import {
   clearCases,
   clearEpisodic,
@@ -102,7 +103,8 @@ test.describe("Product workspace routes", () => {
     await page.goto("/en/app");
     const panel = page.locator("#conversation-panel");
     await expect(page.locator('[data-panel-tier="fullscreen"]')).toBeVisible();
-    await expect(page.getByRole("button", { name: "Exit full screen" }).first()).toBeVisible();
+    const header = page.locator("[data-manuscript-header]");
+    await expect(header.getByRole("button", { name: "Manuscripts" })).toBeVisible();
     const scroller = page.locator("[data-conversation-field]");
     await expect(scroller).toBeVisible();
     await expect(panel.getByText(slices[11].turns[0].content)).toBeVisible();
@@ -112,20 +114,21 @@ test.describe("Product workspace routes", () => {
     await scroller.evaluate((element) => {
       (element as HTMLElement).scrollTop = 0;
     });
-    await expect(panel.getByText(slices[2].turns[0].content)).toBeVisible();
-    await expect(panel.getByText(slices[0].turns[0].content)).toHaveCount(0);
-    const entrance = page.locator(".workspace-history-entrance button");
-    await expect(entrance).toBeVisible();
-    const reading = panel.getByText(slices[2].turns[0].content);
-    await expectNoOverlap(reading, page.locator(".conversation-panel-title"));
-    await expectNoOverlap(reading, page.locator(".workspace-history-entrance button"));
-    await page.screenshot({ path: testInfo.outputPath("wayfinding-desktop.png"), animations: "disabled" });
-    await entrance.click();
-    await expect(page).toHaveURL(/\/en\/app\?view=field&history=1$/);
+    const reading = panel.getByText(slices[11].turns[0].content);
+    await expect(reading).toBeVisible();
+    await expect(panel.getByText(slices[10].turns[0].content)).toHaveCount(0);
+    await expectNoOverlap(reading, header.getByRole("button", { name: "Manuscripts" }));
+    const screenshotOptions = { animations: "disabled", style: "nextjs-portal { visibility: hidden !important; }" } as const;
+    await page.screenshot({ path: testInfo.outputPath("wayfinding-desktop.png"), ...screenshotOptions });
+    await header.getByRole("button", { name: "Manuscripts" }).click();
+    await page.getByRole("button", { name: "Conversation records" }).click();
     const browser = page.locator(".workspace-history-browser");
     await expect(browser).toBeVisible();
     await expect(browser).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
+    await browser.getByRole("button", { name: "February 2026" }).click();
+    await expect(page).toHaveURL(/\/en\/app$/);
     await expect(page.locator(".workspace-record-list li")).toHaveCount(12);
+    await page.screenshot({ path: testInfo.outputPath("manuscript-path.png"), ...screenshotOptions });
     await expect(page.locator("canvas")).toHaveCount(0);
   });
 
@@ -139,17 +142,56 @@ test.describe("Product workspace routes", () => {
       const panel = page.locator("#conversation-panel");
       const reading = panel.getByText(slices[11].turns[0].content);
       await expect(reading).toBeVisible();
-      const heading = page.locator(".conversation-panel-title");
-      const history = page.locator(".workspace-history-entrance button");
+      const heading = page.locator("[data-manuscript-header]");
+      const history = heading.getByRole("button", { name: "Manuscripts" });
       await expect(heading).toBeVisible();
       await expect(history).toBeVisible();
       await expectNoOverlap(reading, heading);
       await expectNoOverlap(reading, history);
-      await page.screenshot({ path: testInfo.outputPath("wayfinding-mobile.png"), animations: "disabled" });
+      const screenshotOptions = { animations: "disabled", style: "nextjs-portal { visibility: hidden !important; }" } as const;
+      await page.screenshot({ path: testInfo.outputPath("wayfinding-mobile.png"), ...screenshotOptions });
+      const editor = page.locator("[data-manuscript-input]");
+      await editor.fill("Keep this draft.");
       await history.click();
-      await expect(page).toHaveURL(/\/en\/app\?view=field&history=1$/);
-      await expect(page.locator(".workspace-history-browser")).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
-      await expect(page.locator(".workspace-record-list li")).toHaveCount(12);
+      await page.getByRole("button", { name: "Conversation records" }).click();
+      const browser = page.locator(".workspace-history-browser");
+      await browser.getByRole("button", { name: "February 2026" }).click();
+      await browser.getByRole("button", { name: /M00/ }).click();
+      await expectReader(page, `records/${slices[0].id}`);
+      const paper = page.locator(".desk-shell--top .desk-paper");
+      await expect(paper).toBeVisible();
+      const geometry = () => paper.evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return { ratio: rect.width / rect.height, width: rect.width, font: getComputedStyle(el).fontSize };
+      });
+      await expect(page.locator("[data-zoom-fit]")).toHaveAttribute("aria-pressed", "true");
+      await expect.poll(async () => (await geometry()).width).toBeLessThan(390);
+      await expect.poll(() => paper.evaluate(el => el.getBoundingClientRect().width < innerWidth && el.closest(".desk-zoom")?.getAnimations().every(animation => animation.playState !== "running"))).toBe(true);
+      const fit = await geometry();
+      await page.screenshot({ path: testInfo.outputPath("mobile-actual-a4.png"), ...screenshotOptions });
+      await page.locator("[data-zoom-reading]").click();
+      await expect.poll(async () => (await geometry()).width).toBeGreaterThan(fit.width * 1.5);
+      await expect.poll(() => paper.evaluate(el => el.closest(".desk-zoom")?.getAnimations().every(animation => animation.playState !== "running"))).toBe(true);
+      const magnified = await geometry();
+      expect(fit.ratio).toBeCloseTo(210 / 297, 3);
+      expect(magnified.ratio).toBeCloseTo(fit.ratio, 3);
+      expect(magnified.font).toBe(fit.font);
+      await page.screenshot({ path: testInfo.outputPath("mobile-a4-reading.png"), ...screenshotOptions });
+      const left = () => paper.evaluate(el => el.getBoundingClientRect().left);
+      const initialLeft = await left();
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(left).toBeLessThan(initialLeft - 2);
+      await page.goBack();
+      await expect(editor).toHaveAttribute("data-editor-text", "Keep this draft.");
+      await page.setViewportSize({ width: 320, height: 780 });
+      const fits = await heading.evaluate(el => {
+        const [brand, nav, tools] = Array.from(el.children, child => child.getBoundingClientRect());
+        return brand.right <= nav.left && nav.right <= tools.left && tools.right <= innerWidth;
+      });
+      expect(fits).toBe(true);
+      await collapseConversation(page);
+      await expect(page.locator("[data-pill-composer]")).toBeVisible();
+      await expect(editor).toHaveAttribute("data-editor-text", "Keep this draft.");
     });
   });
   test("semantic records open exact turns, restore Back coordinates and refocus without duplicate history", async ({ page }) => {
@@ -282,7 +324,7 @@ test.describe("Product workspace routes", () => {
     await expect(host).toHaveAttribute("inert", "");
     await expect(input).toHaveValue("draft across workspace routes");
 
-    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
+    await page.locator("[data-manuscript-header]").getByRole("button", { name: "Room", exact: true }).click();
     await expect(page).toHaveURL(/\/en\/game$/);
     await expect(host).toBeVisible();
     await expect(host).toHaveAttribute("data-game-active", "true");

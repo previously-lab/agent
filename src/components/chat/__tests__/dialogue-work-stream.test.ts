@@ -45,6 +45,38 @@ describe("dialogue work stream's safe projection", () => {
     expect(applyDialogueWorkStreamEvent(state, { type: "status", cursor: 2, status: "waiting" })).toBe(state);
   });
 
+  it("keeps safe detail through start, completion and replay on the same tool ID", () => {
+    const start = parseDialogueWorkStreamEvent(event({
+      type: "tool", cursor: 1, toolCallId: "search-1", toolName: "webSearch", state: "running",
+    }));
+    const detail = parseDialogueWorkStreamEvent(event({
+      type: "tool", cursor: 2, toolCallId: "search-1", toolName: "webSearch", state: "running",
+      subject: "故宫开放时间", input: { query: "故宫开放时间", extra: "do not forward" },
+    }));
+    const complete = parseDialogueWorkStreamEvent(event({
+      type: "tool", cursor: 3, toolCallId: "search-1", toolName: "webSearch", state: "completed",
+      subject: "故宫开放时间", outcome: "found", resultCount: 2,
+      output: { answer: "do not forward", sources: [] },
+    }));
+    const state = [start, detail, complete].reduce(applyDialogueWorkStreamEvent, emptyDialogueWorkStream);
+    expect(state.tools).toEqual([{
+      id: "search-1", name: "webSearch", status: "completed", subject: "故宫开放时间", outcome: "found", resultCount: 2,
+    }]);
+    expect(applyDialogueWorkStreamEvent(state, complete)).toBe(state);
+    expect(JSON.stringify(state)).not.toContain("do not forward");
+  });
+
+  it("keeps the remaining parallel call in the activity caption when another finishes", () => {
+    const events: DialogueWorkStreamEvent[] = [
+      { type: "tool", cursor: 1, toolCallId: "recall", toolName: "recallSearch", state: "running", subject: "上次参观" },
+      { type: "tool", cursor: 2, toolCallId: "search", toolName: "webSearch", state: "running", subject: "故宫开放时间" },
+      { type: "tool", cursor: 3, toolCallId: "search", toolName: "webSearch", state: "completed", outcome: "found", resultCount: 2 },
+    ];
+    const state = events.reduce(applyDialogueWorkStreamEvent, emptyDialogueWorkStream);
+    expect(state.activity).toEqual({ type: "tool", toolCallId: "recall" });
+    expect(state.tools[1]).toMatchObject({ status: "completed", resultCount: 2 });
+  });
+
   it("reads split SSE frames from the authorized replay endpoint without a cancel request", async () => {
     const request = vi.fn(async () => response([
       event({ type: "status", cursor: 0, status: "live", retryAfterMs: 25 }),

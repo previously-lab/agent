@@ -142,8 +142,12 @@ describe("desk locale keys", () => {
       "recordAgent",
       "recordUser",
       "regionLabel",
+      "zoomActual",
+      "zoomFit",
       "zoomIn",
       "zoomOut",
+      "zoomPanHint",
+      "zoomRead",
       "zoomReset",
     ]);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());

@@ -2,6 +2,8 @@
 export const PAPER_MM = 96 / 25.4;
 export const PAPER_WIDTH = 210 * PAPER_MM;
 export const PAPER_HEIGHT = 297 * PAPER_MM;
+// .desk-paper uses 11.5pt body type. Read mode magnifies that same type.
+const PAPER_BODY_PX = 11.5 * 96 / 72;
 export const PAPER_ZOOM_MAX = 2.4;
 const PAPER_ZOOM_STOPS = [0.2, 0.33, 0.5, 0.65, 0.8, 1, 1.15, 1.45, 1.7, 2, PAPER_ZOOM_MAX];
 
@@ -9,6 +11,10 @@ const PAPER_ZOOM_STOPS = [0.2, 0.33, 0.5, 0.65, 0.8, 1, 1.15, 1.45, 1.7, 2, PAPE
 export function fitPaperZoom(width: number, height: number): number {
   if (width <= 0 || height <= 0) return 1;
   return Math.max(0.1, Math.min(1.08, (width - 40) / PAPER_WIDTH, (height - 40) / PAPER_HEIGHT));
+}
+
+export function readPaperZoom(width: number): number {
+  return Math.min(1, Math.max((width - 40) / PAPER_WIDTH, 15 / PAPER_BODY_PX));
 }
 
 /** The exact fit is a stop too, so a phone can always return to the whole sheet. */

@@ -56,6 +56,7 @@ import {
 import { parsePieceFileName } from "@/lib/docs/case-naming";
 import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { parseSliceId, parseTurns, applyRange, reassembleSlice } from "@/lib/episodic/turn-parser";
+import { projectRecordArtifactTranscript } from "@/lib/episodic/record-attribution";
 import { slicePartPathCandidates } from "@/lib/episodic/paths";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
 import { annotateSliceWithLocalTime, sliceLocalBanner } from "@/lib/episodic/time-localize";
@@ -1283,6 +1284,7 @@ export async function recallSearch(
         return { failed: true, entry: null };
       }
       if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
+      else if (unit.sliceId) raw = projectRecordArtifactTranscript(raw);
       if (unit.docPath.endsWith("/_current.md")) raw = parseCaseCurrent(raw).body;
       const segments = splitParagraphs(raw);
       const found = segmentSearch(segments, keywords, 1, 1);
@@ -1369,7 +1371,9 @@ export interface RecallReadInput {
 }
 
 /** Apply the five range filters to a slice core — the readSlice protocol. */
-export function applySliceRange(sliceId: string, raw: string, range?: RecallReadRange): string {
+export function applySliceRange(sliceId: string, record: string, range?: RecallReadRange): string {
+  // Range selection works on the same prose view as an unbounded recall.
+  const raw = projectRecordArtifactTranscript(record);
   if (!range) return raw;
   if (range.type === "search") {
     const keywords = range.keywords ?? [];

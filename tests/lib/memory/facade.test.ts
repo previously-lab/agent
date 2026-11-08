@@ -12,6 +12,8 @@
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import git from "isomorphic-git";
+import { createHash } from "node:crypto";
+import { composeDialogueRecordBody } from "@/lib/episodic/dialogue-record";
 import { caseStorageRevision, serializeCaseCurrent } from "@/lib/docs/case-doc";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -635,6 +637,37 @@ describe("recallRead", () => {
     expect(prev.content).toContain("snapshot body.");
     // The user-local banner is prepended above the snapshot (never raw-equal).
     expect(prev.content.startsWith("## User profile")).toBe(false);
+  });
+
+  it("recalls and searches public prose without exposing inline HTML source", async () => {
+    const html = "<script>const privateWidgetNeedle = 'fixture';</script>";
+    const artifactId = "a".repeat(64);
+    const body = composeDialogueRecordBody([
+      { kind: "markdown", blockId: "before", text: "Public widget explanation." },
+      { kind: "artifact_ref", blockId: "widget", artifact: {
+        artifactId, sourceOwnerId: "wrun_Fixture", revision: 1, kind: "native_html", mediaType: "text/html",
+        byteSize: Buffer.byteLength(html), sha256: createHash("sha256").update(html).digest("hex"),
+      } },
+      { kind: "markdown", blockId: "after", text: "Public follow-up." },
+    ], new Map([[artifactId, html]]));
+    const ref = "records/2026-10-14-1836";
+    const store = makeBackend({ "memory/records/2026/10/14/1836/core.md":
+      sliceCore("Widget discussion", "Please show a widget.\n\n```text\nAn unclosed user code fence.")
+        .replace("(user)\n", "(user) [body-escaped v1]\n")
+        .replace("(assistant)\n", "(assistant) [body-escaped v1]\n")
+        .replace("收到。", body),
+    });
+    for (const range of [undefined, { type: "lines" as const, start: 1, end: 100 }, { type: "last" as const, count: 1 }]) {
+      const result = await recallRead(store, { ref, range });
+      if (result.kind !== "content") throw new Error(`expected content, got ${result.kind}`);
+      expect(result.content).toContain("Public widget explanation.");
+      expect(result.content).toContain("Public follow-up.");
+      expect(result.content).not.toContain("privateWidgetNeedle");
+    }
+    const visible = await recallSearch(store, { category: "records", query: "Public widget explanation" });
+    expect(visible.kind).toBe("entries");
+    const source = await recallSearch(store, { category: "records", query: "privateWidgetNeedle" });
+    expect(source.kind).not.toBe("entries");
   });
 
   it("reads the bare-file specials (ruling #3)", async () => {

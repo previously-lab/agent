@@ -300,6 +300,20 @@ describe("readFileViaTree", () => {
     expect(hoisted.mockGetBlob).toHaveBeenCalledTimes(1);
   });
 
+  it("allows a canonical record core above the generic text cap", async () => {
+    const content = "x".repeat(1_000_001);
+    const subtree = structuredClone(MEMORY_SUBTREE);
+    const entry = subtree.data.tree.find((item) => item.path === "records/2026/08/11/1115/core.md");
+    if (!entry) throw new Error("Expected record core fixture");
+    entry.size = content.length;
+    primeTreeFetch(subtree);
+    hoisted.mockGetBlob.mockResolvedValue({
+      data: { content: wrappedB64(Buffer.from(content)) },
+    });
+
+    await expect(readFileViaTree("memory/records/2026/08/11/1115/core.md", repo, owner)).resolves.toBe(content);
+  });
+
   it("throws File not found for an absent path, without fetching a blob", async () => {
     primeTreeFetch();
 

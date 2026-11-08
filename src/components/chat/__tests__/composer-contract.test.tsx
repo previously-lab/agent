@@ -53,12 +53,17 @@ describe("the single manuscript input contract", () => {
     expect(html).toContain('data-controls-form="editor"');
     expect(html.match(/data-conversation-primary/g)).toHaveLength(1);
     expect(html).toContain('data-composer-mini-toolbar');
-    expect(html).toContain('data-composer-tools-trigger');
+    expect(html).toContain('data-attach');
+    expect(html).toContain('data-document-mention');
     expect(html).toContain('aria-keyshortcuts="Enter Control+Enter Meta+Enter"');
     expect(html).toContain('chat.input.keyboardSendHint');
-    expect(html).toContain('data-composer-tools="true" hidden=""');
+    expect(html).not.toContain('data-composer-tools="true" hidden=""');
     expect(html).toContain('data-panel-form="manuscript"');
     expect(html).toContain('data-composer-state="idle"');
+    expect(html).toContain('role="textbox"');
+    expect(html).toContain('aria-multiline="true"');
+    expect(html).not.toContain('role="combobox"');
+    expect(html).not.toContain('aria-autocomplete=');
     expect(html).toContain("Rest discussion");
     expect(html).not.toContain("data-pill-expand");
   });
@@ -80,8 +85,36 @@ describe("the single manuscript input contract", () => {
     const html = renderInput(true);
     expect(html.match(/data-conversation-primary/g)).toHaveLength(1);
     expect(html).toContain('data-primary-action="stop"');
-    expect(html).toContain('data-composer-secondary-send');
+    expect(html).toContain('data-composer-stop');
     expect(html).toContain('chat.input.stopTooltip');
     expect(html.match(/contentEditable="true"/g)).toHaveLength(1);
+    expect(html.match(/data-composer-secondary-send/g)).toHaveLength(1);
+    expect(html.match(/data-composer-send/g)).toHaveLength(1);
+    expect(html.match(/data-composer-direct-send/g)).toHaveLength(1);
+    const toolsGroup = html.slice(html.indexOf("data-composer-tools"), html.indexOf("conversation-composer-toolbar-right"));
+    expect(toolsGroup).not.toContain("data-composer-secondary-send");
+    const rightGroup = html.slice(html.indexOf("conversation-composer-toolbar-right"));
+    const directSend = rightGroup.slice(rightGroup.indexOf("<button"), rightGroup.indexOf("</button>"));
+    expect(directSend).toContain("data-composer-direct-send");
+    expect(directSend).toContain("conversation-send");
+    expect(directSend).toContain("aria-describedby=");
+    expect(rightGroup).toContain('data-primary-action="stop"');
+  });
+
+  it("keeps the direct send out of the fullscreen idle toolbar", () => {
+    panelMode = "fullscreen";
+    const html = renderInput();
+    expect(html).not.toContain("data-composer-secondary-send");
+    expect(html).not.toContain("data-composer-direct-send");
+    expect(html.match(/data-composer-send/g)).toHaveLength(1);
+  });
+
+  it("keeps the secondary send inside the pill tool group", () => {
+    panelMode = "pill";
+    const html = renderInput(true);
+    expect(html.match(/data-composer-secondary-send/g)).toHaveLength(1);
+    expect(html).not.toContain("data-composer-direct-send");
+    const toolsGroup = html.slice(html.indexOf("data-composer-tools"), html.indexOf("conversation-composer-toolbar-right"));
+    expect(toolsGroup).toContain("data-composer-secondary-send");
   });
 });

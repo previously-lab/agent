@@ -61,7 +61,7 @@ function measure(): number {
   return Math.ceil(bottom);
 }
 
-export function useChromeInset(): number {
+export function useChromeInset(refreshKey?: string): number {
   const [inset, setInset] = useState(0);
 
   useLayoutEffect(() => {
@@ -99,7 +99,7 @@ export function useChromeInset(): number {
       mo.disconnect();
       roots.length = 0;
     };
-  }, []);
+  }, [refreshKey]);
 
   return inset;
 }

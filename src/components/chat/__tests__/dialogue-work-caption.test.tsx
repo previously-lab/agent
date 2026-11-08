@@ -22,7 +22,11 @@ const stream = vi.hoisted(() => ({
 vi.mock("next-intl", () => ({
   useTranslations: (namespace: string) => {
     const messages = namespace === "chat.dialogue" ? stream.translations : undefined;
-    return Object.assign((key: string) => messages?.[key] ?? `${namespace}.${key}`, {
+    return Object.assign((key: string, values?: Record<string, unknown>) => {
+      const template = messages?.[key] ?? `${namespace}.${key}`;
+      return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+        values && name in values ? String(values[name]) : match);
+    }, {
       has: (key: string) => !messages || Object.hasOwn(messages, key),
     });
   },
@@ -163,9 +167,12 @@ describe("dialogue work caption status and rendering", () => {
     const html = renderToStaticMarkup(React.createElement(DialogueWorkCaption, {
       work: { ...work, status: "cancelled" }, persona: "user",
     }));
-    expect(html).toContain(`<span>${messages.tool_finishThinking}</span><span>${messages.tool_stopped}</span>`);
-    expect(html).toContain(`<span>${messages.tool_offerReply}</span><span>${messages.tool_completed}</span>`);
-    expect(html).toContain(`<span>${messages.tool_unknown}</span><span>${messages.tool_failed}</span>`);
+    expect(html).toContain(`title="${messages.tool_finishThinking}">${messages.tool_finishThinking}</span>`);
+    expect(html).toContain(`title="${messages.tool_offerReply}">${messages.tool_offerReply}</span>`);
+    expect(html).toContain(`title="${messages.tool_unknown}">${messages.tool_unknown}</span>`);
+    expect(html).toContain(`<span class="shrink-0 whitespace-nowrap">${messages.tool_stopped}</span>`);
+    expect(html).toContain(`<span class="shrink-0 whitespace-nowrap">${messages.tool_completed}</span>`);
+    expect(html).toContain(`<span class="shrink-0 whitespace-nowrap">${messages.tool_failed}</span>`);
     expect(html).not.toMatch(/finishThinking|offerReply|untranslatedInternalTool/);
     expect(html).not.toContain(messages.tool_running);
   });
@@ -186,6 +193,26 @@ describe("dialogue work caption status and rendering", () => {
     expect(dialogueWorkCaptionStatus(work, tools[2])).toBe("searching");
     expect(dialogueWorkCaptionStatus(work, tools[3])).toBe("reading");
     expect(dialogueWorkCaptionStatus(work, tools[4])).toBe("working");
+  });
+
+  it.each([en.chat.dialogue, zh.chat.dialogue])("shows a concrete subject in the header and tool row", messages => {
+    stream.translations = messages;
+    const running = applyDialogueWorkStreamEvent(emptyDialogueWorkStream, {
+      type: "tool", cursor: 1, toolCallId: "search-1", toolName: "webSearch", state: "running", subject: "故宫开放时间",
+    });
+    stream.current = running;
+    let html = renderToStaticMarkup(React.createElement(DialogueWorkCaption, { work, persona: "user" }));
+    expect(html).toContain(messages.activity_webSearch.replace("{subject}", "故宫开放时间"));
+    expect(html).toContain(messages.tool_webSearch_subject.replace("{subject}", "故宫开放时间"));
+
+    stream.current = applyDialogueWorkStreamEvent(running, {
+      type: "tool", cursor: 2, toolCallId: "search-1", toolName: "webSearch", state: "completed",
+      outcome: "found", resultCount: 2,
+    });
+    html = renderToStaticMarkup(React.createElement(DialogueWorkCaption, { work, persona: "user" }));
+    expect(html).toContain(messages.tool_webSearch_subject.replace("{subject}", "故宫开放时间"));
+    expect(html).toContain(messages.toolOutcome_webSearch.replace("{count}", "2"));
+    expect(html).toContain("min-w-0 flex-1 truncate");
   });
 
   it("keeps full reasoning and work Markdown replay available in a fixed-height output", () => {

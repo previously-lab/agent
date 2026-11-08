@@ -81,3 +81,35 @@ export function collectThinkingReads(messages: readonly ModelMessage[], scopeId:
   }
   return [...receipts.entries()].flatMap(([id, receipt]) => invalid.has(id) ? [] : receipt.reads);
 }
+
+export interface SubstantiveThinkingReadCheckpoint {
+  readonly kind: "read_completed";
+  readonly sourceKind: "semantic_document" | "original_turn";
+  readonly evidenceCount: number;
+}
+
+/**
+ * Production gate for the automatic read-checkpoint dialogue event. Only a
+ * well-formed receipt from the actual paired tool call, in the current read
+ * scope, with sequential evidence ids, qualifies — and only its substantive
+ * reads (verified revision, full/excerpt coverage) count. Returns nothing the
+ * dialogue may quote: no ref, excerpt, args, output, path or revision.
+ */
+export function substantiveThinkingReadCheckpoint(
+  output: unknown,
+  scopeId: string,
+  toolName: string,
+  toolCallId: string,
+): SubstantiveThinkingReadCheckpoint | null {
+  const sourceKind = toolName === "recallRead" ? "semantic_document"
+    : toolName === "recallScenario" ? "original_turn" : null;
+  if (!sourceKind) return null;
+  const receipt = readReceipt(output);
+  if (!receipt || receipt.scopeId !== scopeId || receipt.toolCallId !== toolCallId) return null;
+  if (!receipt.reads.every((read, index) => read.evidenceId === `${toolCallId}:${index + 1}`)) return null;
+  const evidenceCount = receipt.reads.filter((read) =>
+    read.sourceKind === sourceKind && read.revision !== null &&
+    (read.coverage === "full" || read.coverage === "excerpt")).length;
+  if (evidenceCount < 1 || evidenceCount > 24) return null;
+  return { kind: "read_completed", sourceKind, evidenceCount };
+}

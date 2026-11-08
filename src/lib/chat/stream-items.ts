@@ -55,6 +55,8 @@ export interface HistoryTurnItem {
   /** The owning slice's strands — the user bubble's tint source. */
   strands: string[];
   turn: Turn;
+  /** Adjacent saved publications for the same user input share this article. */
+  continuations?: readonly Turn[];
   timeIso: string;
 }
 

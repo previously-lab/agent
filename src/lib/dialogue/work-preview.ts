@@ -1,7 +1,8 @@
 /**
  * Safe, resumable projection of a thinking work's durable model stream.
- * Tool payloads, provider details and native source never cross the route
- * boundary. The per-turn thoughts endpoint can explicitly include model
+ * Raw tool payloads, provider details and native source never cross the route
+ * boundary. Only allowlisted, display-safe tool subjects and outcomes are
+ * projected. The per-turn thoughts endpoint can explicitly include model
  * reasoning in a separate channel. Replaying the prefix also makes a
  * reconnect inside a native fence safe.
  */
@@ -17,17 +18,31 @@ interface WorkPreviewEnvelope {
   cursor: number;
 }
 
+export type WorkPreviewToolOutcome = "found" | "empty";
+
+export type WorkPreviewToolSignal = {
+  type: "tool";
+  toolCallId: string;
+  toolName: string;
+  state: "running" | "completed" | "failed";
+  /** A short label derived server-side from one allowlisted input field. */
+  subject?: string;
+  /** Additional result semantics only when the tool contract proves them. */
+  outcome?: WorkPreviewToolOutcome;
+  resultCount?: number;
+};
+
 export type WorkPreviewEvent = WorkPreviewEnvelope & (
   | { type: "status"; status: WorkPreviewStatus; retryAfterMs?: number }
   | { type: "text"; partId?: string; delta: string }
   | { type: "reasoning"; partId?: string; delta: string }
-  | { type: "tool"; toolCallId: string; toolName: string; state: "running" | "completed" | "failed" }
+  | WorkPreviewToolSignal
 );
 
 export type WorkPreviewSignal =
   | { type: "text"; partId?: string; delta: string }
   | { type: "reasoning"; partId?: string; delta: string }
-  | { type: "tool"; toolCallId: string; toolName: string; state: "running" | "completed" | "failed" };
+  | WorkPreviewToolSignal;
 
 interface TextState {
   source: string;
@@ -43,6 +58,126 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+const MAX_SUBJECT_CODE_POINTS = 96;
+const DOCUMENT_CATEGORIES = new Set([
+  "events", "people", "things", "tasks", "research", "self", "timeline", "records", "places", "orgs",
+]);
+
+function textSubject(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const clean = value.replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/g, " ").trim();
+  if (!clean) return undefined;
+  const characters = Array.from(clean);
+  return characters.length > MAX_SUBJECT_CODE_POINTS
+    ? characters.slice(0, MAX_SUBJECT_CODE_POINTS - 1).join("") + "…"
+    : clean;
+}
+
+/** Show only the site; credentials and access tokens can live in the URL path as well. */
+function webPageSubject(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 4096) return undefined;
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || !url.host) {
+      return undefined;
+    }
+    return textSubject(url.hostname);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Free-form questions often continue with pasted evidence. Use only their
+ * first non-empty line, and reduce embedded HTTP(S) URLs to a hostname.
+ * Credentialed URLs are removed entirely. */
+function topicSubject(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const firstLine = value.split(/\r\n?|\n/).find(line => line.trim());
+  if (!firstLine) return undefined;
+  const safeLine = firstLine.replace(/https?:\/\/[^\s<>"'「」『』“”‘’，。；：！？、）》】]+/giu,
+    segment => webPageSubject(segment) ?? "");
+  return textSubject(safeLine);
+}
+
+/** Refs are user-facing document identities, never storage paths or links
+ * carrying location/query data. Bare legacy document names remain valid. */
+function documentSubject(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 512) return undefined;
+  const ref = value.trim();
+  if (!ref || /[\p{Cc}\p{Cf}?#\\]/u.test(ref) || /%[0-9a-f]{2}/i.test(ref) ||
+    /^(?:memory|sessions|tasks)(?:\/|$)/i.test(ref) || /^[a-z][a-z0-9+.-]*:\/\//i.test(ref)) {
+    return undefined;
+  }
+  const segments = ref.split("/");
+  if (segments.some(segment => !segment || segment === "." || segment === "..") || segments.length > 3) {
+    return undefined;
+  }
+  if (segments[0] === "records") {
+    return /^records\/\d{4}-\d{2}-\d{2}-\d{4}$/.test(ref) ? textSubject(ref) : undefined;
+  }
+  if (segments.length > 1 && !DOCUMENT_CATEGORIES.has(segments[0])) return undefined;
+  return textSubject(ref);
+}
+
+function toolSubject(toolName: string, input: unknown): string | undefined {
+  const record = asRecord(input);
+  if (!record) return undefined;
+  if (toolName === "webSearch") return topicSubject(record.query);
+  if (toolName === "webFetch") return webPageSubject(record.url);
+  if (toolName === "recallRead") return documentSubject(record.ref);
+  if (toolName === "recallSearch") return topicSubject(record.query);
+  if (toolName === "recallScenario" || toolName === "thinkDeep") return topicSubject(record.question);
+  return undefined;
+}
+
+interface ToolResultProjection {
+  failed?: boolean;
+  outcome?: WorkPreviewToolOutcome;
+  resultCount?: number;
+}
+
+function outputValue(output: unknown): unknown {
+  const record = asRecord(output);
+  return record && (record.type === "json" || record.type === "error-json" ||
+    record.type === "text" || record.type === "error-text") && "value" in record
+    ? record.value
+    : output;
+}
+
+/** Read only contract fields that establish a lightweight public outcome.
+ * Unknown shapes deliberately produce no outcome rather than a guess. */
+function toolResultProjection(toolName: string, rawOutput: unknown): ToolResultProjection {
+  const output = outputValue(rawOutput);
+  if (toolName === "webFetch" || toolName === "recallRead") {
+    if (typeof output !== "string") return {};
+    if (output.startsWith("ERROR:") || output.startsWith("This could not be read right now (")) {
+      return { failed: true };
+    }
+    if (toolName === "recallRead" && output.startsWith("Nothing named \"")) return { outcome: "empty", resultCount: 0 };
+    if (toolName === "webFetch" && !output.trim()) return { outcome: "empty", resultCount: 0 };
+    return {};
+  }
+  const record = asRecord(output);
+  if (!record) return {};
+  if (toolName === "webSearch") {
+    if (typeof record.error === "string") return { failed: true };
+    if (!Array.isArray(record.sources)) return {};
+    const resultCount = record.sources.length;
+    return { outcome: resultCount > 0 ? "found" : "empty", resultCount };
+  }
+  if (toolName === "recallScenario") {
+    if (record.status === "error") return { failed: true };
+    if (!Array.isArray(record.evidence)) return {};
+    const resultCount = record.evidence.length;
+    if (resultCount > 0) return { outcome: "found", resultCount };
+    return record.status === "ok" || record.status === "insufficient_evidence"
+      ? { outcome: "empty", resultCount }
+      : {};
+  }
+  if (toolName === "thinkDeep" && record.status === "error") return { failed: true };
+  return {};
 }
 
 /** Hold a trailing line that can still become a root-level `html live` fence.
@@ -81,7 +216,7 @@ function displayablePrefix(source: string): string {
  * the client's cursor points into the middle of a structure. */
 export function createWorkPreviewFilter({ includeReasoning = false }: { includeReasoning?: boolean } = {}) {
   const text = new Map<string, TextState>();
-  const tools = new Map<string, { toolName: string; state: "running" | "completed" | "failed" }>();
+  const tools = new Map<string, Omit<WorkPreviewToolSignal, "type">>();
 
   function textDelta(partId: string, delta: string): WorkPreviewSignal | null {
     const state = text.get(partId) ?? { source: "", emitted: "", invalid: false };
@@ -105,14 +240,25 @@ export function createWorkPreviewFilter({ includeReasoning = false }: { includeR
     toolCallId: string,
     toolName: string | undefined,
     state: "running" | "completed" | "failed",
+    detail: { subject?: string; outcome?: WorkPreviewToolOutcome; resultCount?: number } = {},
   ): WorkPreviewSignal | null {
     const prior = tools.get(toolCallId);
     const name = (toolName ?? prior?.toolName ?? "tool").slice(0, 128);
-    // Native streams emit both tool-input-start and tool-call. One running
-    // frame is enough; replay still reconstructs the name for result frames.
-    if (prior?.state === "running" && state === "running") return null;
-    tools.set(toolCallId, { toolName: name, state });
-    return { type: "tool", toolCallId, toolName: name, state };
+    const subject = detail.subject ?? prior?.subject;
+    const outcome = state === "completed" ? detail.outcome : undefined;
+    const resultCount = outcome === undefined ? undefined : detail.resultCount;
+    // Native streams emit both tool-input-start and tool-call. Suppress only
+    // exact duplicates: an input-available frame may add the public subject.
+    if (prior?.state === state && prior.toolName === name && prior.subject === subject &&
+      prior.outcome === outcome && prior.resultCount === resultCount) return null;
+    const next: Omit<WorkPreviewToolSignal, "type"> = {
+      toolCallId, toolName: name, state,
+      ...(subject ? { subject } : {}),
+      ...(outcome ? { outcome } : {}),
+      ...(resultCount !== undefined ? { resultCount } : {}),
+    };
+    tools.set(toolCallId, next);
+    return { type: "tool", ...next };
   }
 
   return {
@@ -146,17 +292,24 @@ export function createWorkPreviewFilter({ includeReasoning = false }: { includeR
       const toolCallId = nonEmptyString(chunk.toolCallId) ?? nonEmptyString(chunk.id);
       if (!toolCallId) return null;
       const toolName = nonEmptyString(chunk.toolName);
-      if (type === "tool-input-start" || type === "tool-input-available") {
+      if (type === "tool-input-start") {
         return toolSignal(toolCallId, toolName, "running");
       }
+      if (type === "tool-input-available") {
+        return toolSignal(toolCallId, toolName, "running", { subject: toolName ? toolSubject(toolName, chunk.input) : undefined });
+      }
       if (type === "tool-call") {
-        return toolSignal(toolCallId, toolName, chunk.invalid === true ? "failed" : "running");
+        return toolSignal(toolCallId, toolName, chunk.invalid === true ? "failed" : "running", {
+          subject: chunk.invalid === true || !toolName ? undefined : toolSubject(toolName, chunk.input),
+        });
       }
       if (type === "tool-input-error" || type === "tool-output-error" || type === "tool-error") {
         return toolSignal(toolCallId, toolName, "failed");
       }
       if (type === "tool-result" || type === "tool-output-available") {
-        return toolSignal(toolCallId, toolName, chunk.isError === true ? "failed" : "completed");
+        const name = toolName ?? tools.get(toolCallId)?.toolName ?? "tool";
+        const result = toolResultProjection(name, chunk.output);
+        return toolSignal(toolCallId, name, chunk.isError === true || result.failed ? "failed" : "completed", result);
       }
       return null;
     },

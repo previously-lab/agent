@@ -31,7 +31,6 @@ for (const view of [
     await mockUploads(page); await open(page);
     if (view.name === "dark") await page.evaluate(() => document.documentElement.classList.add("dark"));
     const original = await input(page).elementHandle();
-    await page.locator("[data-composer-tools-trigger]").click();
     await expect(page.locator("[data-attach]:visible")).toBeVisible();
     await expect(page.locator("[data-document-mention]:visible")).toBeVisible();
     await attach(page, ["coast.svg", "evening.svg"]);
@@ -43,7 +42,7 @@ for (const view of [
     await expect(composer(page)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(page.locator("[data-conversation-controls]")).toHaveCSS("position", "relative");
     await expect(page.locator("[data-composer-send]")).toBeEnabled();
-    await expect(page.locator("[data-composer-keyboard-caption]")).toContainText("Enter to send");
+    await expect(input(page)).toHaveAccessibleDescription(/Enter sends\. Shift plus Enter starts a new line/);
     const toolbarBox = await page.locator("[data-conversation-primary]").boundingBox();
     expect(toolbarBox!.x + toolbarBox!.width).toBeLessThanOrEqual(view.width);
     expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(view.height);

@@ -55,7 +55,7 @@ export function dialogueWorkCaptionStatus(
   if (replying) return "replying";
   const activity = stream.activity;
   if (activity?.type === "reasoning") return "thinking";
-  if (activity?.type === "tool") {
+  if (activity?.type === "tool" && stream.status !== "completed") {
     return toolActivity(stream.tools.find(tool => tool.id === activity.toolCallId));
   }
   // Private work text is output, not evidence that the public reply started.
@@ -99,19 +99,47 @@ export function DialogueWorkCaption({ work, persona, onCancel, onRetry, onResume
   const active = work.status === "queued" || work.status === "running";
   const disconnected = work.connection === "disconnected" || work.connection === "reconnecting";
   const streaming = active && status !== "unavailable" && !disconnected;
-  const label = status === "thinking" ? phase("thinking")
-    : status === "recalling" ? phase("stageRecalling")
-      : status === "searching" ? search("searching")
-        : status === "reading" ? t("reading")
-          : status === "working" ? phase("stageWorking")
-            : status === "replying" ? t("expressing")
-              : status === "completed" ? t("tool_completed")
-                : status === "failed" ? t("workFailed")
-                  : status === "cancelled" ? t("workCancelled")
-                    : status === "reconnecting" ? t("reconnecting")
-                      : status === "disconnected" ? t("connectionDisconnected")
-                        : t("streamUnavailable");
+  const activity = stream.activity;
+  const activityTool = activity?.type === "tool"
+    ? stream.tools.find(tool => tool.id === activity.toolCallId)
+    : undefined;
+  const activityKey = activityTool?.status === "running" && activityTool.subject &&
+    (status === "thinking" || status === "recalling" || status === "searching" ||
+      status === "reading" || status === "working")
+    ? `activity_${activityTool.name}`
+    : undefined;
+  const label = activityTool?.status === "running" && activityTool.subject && activityKey && t.has(activityKey)
+    ? t(activityKey, { subject: activityTool.subject })
+    : status === "thinking" ? phase("thinking")
+      : status === "recalling" ? phase("stageRecalling")
+        : status === "searching" ? search("searching")
+          : status === "reading" ? t("reading")
+            : status === "working" ? phase("stageWorking")
+              : status === "replying" ? t("expressing")
+                : status === "completed" ? t("tool_completed")
+                  : status === "failed" ? t("workFailed")
+                    : status === "cancelled" ? t("workCancelled")
+                      : status === "reconnecting" ? t("reconnecting")
+                        : status === "disconnected" ? t("connectionDisconnected")
+                          : t("streamUnavailable");
   const disclosureLabel = expanded ? t("hideThoughts") : t("showThoughts");
+
+  const toolLabel = (tool: DialogueWorkToolView) => {
+    const key = `tool_${tool.name}_subject`;
+    return tool.subject && t.has(key) ? t(key, { subject: tool.subject })
+      : t.has(`tool_${tool.name}`) ? t(`tool_${tool.name}`) : t("tool_unknown");
+  };
+  const toolStatus = (tool: DialogueWorkToolView) => {
+    if (tool.status !== "completed" || !tool.outcome) {
+      return t(`tool_${tool.status === "running" ? unfinishedToolStatus : tool.status}`);
+    }
+    const baseKey = `toolOutcome_${tool.name}`;
+    if (tool.outcome === "empty" && t.has(`${baseKey}_empty`)) return t(`${baseKey}_empty`);
+    if (tool.outcome === "found" && tool.resultCount !== undefined && t.has(baseKey)) {
+      return t(baseKey, { count: tool.resultCount });
+    }
+    return t(tool.outcome === "found" ? "toolOutcome_found" : "toolOutcome_empty");
+  };
 
   useEffect(() => {
     setCancelling(false);
@@ -177,7 +205,7 @@ export function DialogueWorkCaption({ work, persona, onCancel, onRetry, onResume
   return <Collapsible open={expanded} onOpenChange={setExpanded} data-dialogue-work={work.workId}
     className="my-1 data-[open]:rounded-lg data-[open]:border data-[open]:border-border/60 data-[open]:bg-muted/20">
     <div className="flex min-h-7 min-w-0 items-center gap-1 px-1 data-[open]:px-2">
-      <CollapsibleTrigger data-dialogue-work-caption="" title={disclosureLabel} aria-label={disclosureLabel}
+      <CollapsibleTrigger data-dialogue-work-caption="" title={label} aria-label={`${disclosureLabel}: ${label}`}
         className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
         {streaming && <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
         <span className="min-w-0 flex-1 truncate" role="status" aria-live="polite" aria-atomic="true">{label}</span>
@@ -208,8 +236,8 @@ export function DialogueWorkCaption({ work, persona, onCancel, onRetry, onResume
           </section>}
           {stream.tools.length > 0 && <ul className="space-y-1 border-t border-border/50 pt-2 text-xs text-muted-foreground">
             {stream.tools.map(tool => <li key={tool.id} className="flex items-center justify-between gap-3">
-              <span>{t.has(`tool_${tool.name}`) ? t(`tool_${tool.name}`) : t("tool_unknown")}</span>
-              <span>{t(`tool_${tool.status === "running" ? unfinishedToolStatus : tool.status}`)}</span>
+              <span className="min-w-0 flex-1 truncate" title={toolLabel(tool)}>{toolLabel(tool)}</span>
+              <span className="shrink-0 whitespace-nowrap">{toolStatus(tool)}</span>
             </li>)}
           </ul>}
           {stream.unavailable && <p role="status" className="text-xs text-muted-foreground">{t("streamUnavailable")}</p>}

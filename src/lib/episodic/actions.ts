@@ -244,13 +244,21 @@ async function mapLimited<T, R>(
   return out;
 }
 
+function displayTurns(turns: Turn[]): Turn[] {
+  if (!turns.some(turn => turn.recordBody !== undefined)) return turns;
+  return turns.map(turn => {
+    if (turn.recordBody === undefined) return turn;
+    // The browser only needs the verified sources, not a duplicate of the
+    // serialized core.md body used to preserve bytes on server rewrites.
+    const display = { ...turn };
+    delete display.recordBody;
+    return display;
+  });
+}
+
 /**
- * Load a run of catalog entries into `SliceWithContent`. The slice-file reads
- * run CONCURRENTLY — one round trip's latency for the whole batch, not one per
- * slice — but bounded, because a jump window can hold hundreds of them and an
- * unbounded `Promise.all` is a burst the GitHub rate limiter reads as abuse.
- * Catalog entries whose slice file is missing (phantoms) are skipped, never
- * faked.
+ * Load a run of catalog entries concurrently, with bounded parallel reads.
+ * Missing slice files are skipped.
  */
 async function loadEntriesWithContent(
   entries: TimelineSliceEntry[],
@@ -272,7 +280,7 @@ async function loadEntriesWithContent(
         turnCount: slice.turns.length,
         continuesFrom: entry.continues_from,
         closedBy: entry.closed_by,
-        turns: slice.turns,
+        turns: displayTurns(slice.turns),
       };
     },
   );
@@ -433,7 +441,7 @@ export async function getArrivalState(persona?: string): Promise<ArrivalState> {
       return {
         mode: "resume",
         sliceId: slice.slice_id,
-        turns: slice.turns,
+        turns: displayTurns(slice.turns),
         focus: slice.focus,
         start: slice.start,
         // Strands were a weave-resolved projection field (strands.json) — with
@@ -645,10 +653,12 @@ function truncateFrameTurn(content: string): string {
 function frameTurns(turns: Turn[]): Turn[] {
   return turns
     .slice(0, FRAME_TURN_COUNT)
-    .map((t) => ({
-      ...t,
-      content: truncateFrameTurn(projectNativeReplySemantics(t.content, t.role)),
-    }));
+    .map((t) => {
+      const frame = { ...t, content: truncateFrameTurn(projectNativeReplySemantics(t.content, t.role)) };
+      delete frame.recordBody;
+      delete frame.artifactBodies;
+      return frame;
+    });
 }
 
 export async function getSliceContent(
@@ -685,7 +695,7 @@ export async function getSliceContent(
       start: slice.start,
       status: slice.status,
       timezone: slice.timezone,
-      turns: full ? slice.turns : frameTurns(slice.turns),
+      turns: full ? displayTurns(slice.turns) : frameTurns(slice.turns),
       observedRevision: caseStorageRevision(raw),
       totalTurns: slice.turns.length,
       totalChars,

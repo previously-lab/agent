@@ -25,6 +25,7 @@ import {
   parseTurns,
 } from "@/lib/episodic/turn-parser";
 import { annotateSliceWithLocalTime } from "@/lib/episodic/time-localize";
+import { projectRecordArtifactTranscript } from "@/lib/episodic/record-attribution";
 import {
   slicePartPathCandidates,
   RECORDS_ROOT,
@@ -117,7 +118,7 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
     readSlice: tool({
       description:
         "Open a time slice's original conversation record (core timeline) — " +
-        "the verbatim turns of that slice, with the user's local time annotated " +
+        "the original turns of that slice, with interactive source omitted and the user's local time annotated " +
         "on each turn header. This is the SOURCE of a narration: read it before " +
         "speaking about a slice. Returns an ERROR line when the slice does not " +
         "exist — never invent content for a missing slice.",
@@ -132,12 +133,13 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
           if (raw === null) {
             return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
           }
+          const transcript = projectRecordArtifactTranscript(raw);
           // Pre-render the user's local time so the model never converts UTC itself.
           return ctx.timezone
-            ? annotateSliceWithLocalTime(raw, ctx.timezone, sliceId, {
+            ? annotateSliceWithLocalTime(transcript, ctx.timezone, sliceId, {
                 locale: ctx.locale,
               })
-            : raw;
+            : transcript;
         } catch (e) {
           const msg = domainError(e);
           if (msg === null) throw e;

@@ -1,5 +1,7 @@
 "use client";
 
+import { RichViewEnabled } from "./rich-content-view";
+
 /**
  * DomChatList renders every loaded stream item in normal document flow.
  * Navigation, time reporting and the band feed use the committed browser
@@ -39,7 +41,6 @@ import {
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import { HistoryEntrance } from "@/components/workspace/history-entrance";
 
 const BOTTOM_SLOP_PX = 8;
 const INDICATOR_HOLD_MS = 1000;
@@ -102,8 +103,8 @@ export function DomChatList({
   publicationCount.current = newPublications;
   const unread = Math.max(0, newPublications - seenPublications);
   const dialogueNotifications = dialogueUtterances !== undefined || newPublications > 0;
-  const latestPublicationKey = useMemo(
-    () => [...(dialogueUtterances?.keys() ?? [])].at(-1),
+  const latestPublicationId = useMemo(
+    () => [...(dialogueUtterances?.values() ?? [])].at(-1)?.publications.at(-1)?.utterance.utteranceId,
     [dialogueUtterances],
   );
 
@@ -128,6 +129,24 @@ export function DomChatList({
   const feedDirtyRef = useRef(true);
   const programmaticScrollTopRef = useRef<number | null>(null);
   const disclosureScrollGuardRef = useRef(false);
+  const nativeComposerInputRef = useRef(false);
+  const nativeComposerInputFrameRef = useRef(0);
+
+  const noteNativeComposerInput = useCallback((target: EventTarget | null) => {
+    if (!(target instanceof Element) || !target.closest("[data-manuscript-composer]")) return;
+    nativeComposerInputRef.current = true;
+    if (nativeComposerInputFrameRef.current) cancelAnimationFrame(nativeComposerInputFrameRef.current);
+    nativeComposerInputFrameRef.current = requestAnimationFrame(() => {
+      nativeComposerInputRef.current = false;
+      nativeComposerInputFrameRef.current = 0;
+    });
+  }, []);
+
+  const releaseNativeComposerInput = useCallback(() => {
+    nativeComposerInputRef.current = false;
+    if (nativeComposerInputFrameRef.current) cancelAnimationFrame(nativeComposerInputFrameRef.current);
+    nativeComposerInputFrameRef.current = 0;
+  }, []);
 
   const updateFollowing = useCallback((value: boolean) => {
     followingRef.current = value;
@@ -162,10 +181,11 @@ export function DomChatList({
   }, [updateFollowing]);
 
   const allowOuterScroll = useCallback((target: EventTarget | null) => {
+    releaseNativeComposerInput();
     if (target instanceof Element && target.closest('[data-slot="scroll-area-viewport"]')) return;
     disclosureScrollGuardRef.current = false;
     setAnchoring(true);
-  }, []);
+  }, [releaseNativeComposerInput]);
 
   const reportTop = useCallback(() => {
     feedDirtyRef.current = true;
@@ -201,7 +221,10 @@ export function DomChatList({
     const wasProgrammatic = programmaticScrollTopRef.current === el.scrollTop;
     programmaticScrollTopRef.current = null;
     const wasDisclosure = disclosureScrollGuardRef.current;
-    if (!wasProgrammatic && !wasDisclosure) {
+    // Native caret scrolling is part of editing, not reader intent. Keep the
+    // live-edge lease until ResizeObserver can account for the grown composer.
+    const nativeComposerInput = nativeComposerInputRef.current;
+    if (!wasProgrammatic && !wasDisclosure && !nativeComposerInput) {
       if (!atBottom) arrivingRef.current = false;
       updateFollowing(atBottom);
       if (atBottom) setSeenPublications(publicationCount.current);
@@ -222,6 +245,7 @@ export function DomChatList({
   useEffect(
     () => () => {
       if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      if (nativeComposerInputFrameRef.current) cancelAnimationFrame(nativeComposerInputFrameRef.current);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     },
     [],
@@ -457,6 +481,8 @@ export function DomChatList({
               attachments={item.turn.attachments}
               sourceRole={item.turn.sourceRole}
               dialogue={item.turn.dialogue}
+              artifactBodies={item.turn.artifactBodies}
+              continuations={item.continuations}
             />
           </div>
         );
@@ -468,6 +494,8 @@ export function DomChatList({
           }
         }
         const publication = dialogueUtterances?.get(item.key);
+        const publicationInputId = publication?.publications[0]?.utterance.inputIds[0];
+        const latestPublication = publication?.publications.at(-1)?.utterance;
         const inputId = item.key.startsWith("dialogue-input:")
           ? item.key.slice("dialogue-input:".length)
           : undefined;
@@ -477,10 +505,10 @@ export function DomChatList({
               <DialogueUtterance
                 {...publication}
                 onRegenerate={
-                  item.key === latestPublicationKey &&
-                  publication.utterance.inputIds.length === 1 &&
+                  latestPublication?.utteranceId === latestPublicationId &&
+                  publicationInputId && publication.publications[0]?.utterance.inputIds.length === 1 &&
                   dialogueRegenerate
-                    ? () => dialogueRegenerate(publication.utterance.inputIds[0])
+                    ? () => dialogueRegenerate(publicationInputId)
                     : undefined
                 }
               />
@@ -511,10 +539,8 @@ export function DomChatList({
   };
 
   return (
+    <RichViewEnabled.Provider value>
     <div className={`conversation-stream-shell mx-auto flex h-full flex-col ${floatingComposer ? "" : "relative"}`}>
-      <div className="conversation-history-seat" inert={contentInert || undefined}>
-        <HistoryEntrance />
-      </div>
       <div
         ref={scrollerRef}
         data-conversation-field
@@ -522,6 +548,8 @@ export function DomChatList({
         role="log"
         aria-live={dialogueNotifications ? "off" : undefined}
         onScroll={handleScroll}
+        onBeforeInputCapture={event => noteNativeComposerInput(event.target)}
+        onInputCapture={event => noteNativeComposerInput(event.target)}
         onWheelCapture={event => allowOuterScroll(event.target)}
         onTouchMoveCapture={event => allowOuterScroll(event.target)}
         onPointerDown={event => {
@@ -544,7 +572,7 @@ export function DomChatList({
           paddingBottom: (composer ? 0 : insetBottom) + TAIL_PAD_PX,
         }}
       >
-        <div ref={contentRef} className="shrink-0 grow" inert={contentInert || undefined}>
+        <div ref={contentRef} className={composer && !floatingComposer ? "shrink-0" : "shrink-0 grow"} inert={contentInert || undefined}>
           {emptyState ? (
             emptyState
           ) : (
@@ -608,5 +636,6 @@ export function DomChatList({
         </div>
       )}
     </div>
+    </RichViewEnabled.Provider>
   );
 }

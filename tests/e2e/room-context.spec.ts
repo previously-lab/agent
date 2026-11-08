@@ -1,4 +1,5 @@
 import { test, expect } from "./test";
+import { openAllManuscripts } from "./manuscript-navigation";
 import type { Page } from "@playwright/test";
 import path from "node:path";
 import { clearCases, clearEpisodic, makeSlice, seedCases, seedSlices } from "./memory-fixture";
@@ -161,7 +162,7 @@ test.describe("Room context from real records", () => {
     await page.goto("/en/game");
     await expect.poll(async () => (await read(page))?.snapshot?.sliceId, { timeout: 60_000 }).toBe(slice.id);
     await page.locator("[data-pill-expand]").click();
-    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await openAllManuscripts(page);
     await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
     await page.getByRole("button", { name: /^Research/ }).click();
     await page.getByRole("button", { name: /room-pause-paper/ }).click();
@@ -180,7 +181,7 @@ test.describe("Room context from real records", () => {
     const paused = await read(page);
     expect({ x: paused?.x, z: paused?.z, elapsed: paused?.elapsed, snapshot: paused?.snapshot })
       .toEqual({ x: frozen?.x, z: frozen?.z, elapsed: frozen?.elapsed, snapshot: frozen?.snapshot });
-    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
+    await page.locator("[data-manuscript-header]").getByRole("button", { name: "Room", exact: true }).click();
     await expect(page).toHaveURL(/\/en\/game$/);
     await expect(host).toBeVisible();
     await expect(host).toHaveAttribute("data-game-active", "true");

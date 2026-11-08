@@ -942,8 +942,9 @@ export const chatTools = {
 
 export const offerReplyTool = tool({
   description:
-    "Offer a useful partial or final result to the user-facing dialogue. Call as soon as the result is useful; you may continue working and offer another distinct result later. This starts delivery and returns immediately without waiting for the reply to finish. Pass the result itself, not a status acknowledgment. Complete html live fences are carried unchanged as typed artifacts.",
+    "REQUIRED task-state handoff to the dialogue, never user-facing prose. Checkpoints are limited to 2,400 characters each: use them for substantive start and real key search/recall/read/phase boundaries, including the first answer-ready finding. Start in a separate tool step before investigating; after results, make checkpoint the next tool step. Combine closely related and parallel results into one boundary checkpoint carrying every material result/status; do not make arbitrary per-tool calls. Give compact readable status, subject/action, verified result with evidence/source or concrete error, and what remains; use state-only before results and never invent facts or include private reasoning/payloads. If a checkpoint is rejected, do not retry or claim delivery; carry all remaining unhanded evidence into final. A genuinely simple direct turn skips manufactured checkpoints but still sends final before finishThinking. A completed offer is not the public answer. For a genuine user-input blocker, finishThinking with needsUser is the sole typed blocker handoff; otherwise send exactly one final with the complete verified result and any native HTML, wait for it to succeed, then call finishThinking in a separate later tool step—never bundled or parallel. An accepted explicit final suppresses the host fallback final.",
   inputSchema: z.object({
+    stage: z.enum(["checkpoint", "final"]).describe("checkpoint while work continues; final for a complete result that needs direct handoff."),
     text: z.string().max(200_000).refine((text) => text.trim().length > 0, "text must not be blank"),
   }).strict(),
   contextSchema: toolContextSchema,

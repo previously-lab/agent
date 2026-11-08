@@ -193,6 +193,7 @@ export function ConversationPanel({
   const sourceScope = useNativeSourceScope();
   const locationScope = `${pathname}?${searchParams.toString()}`;
   const surface = workspaceSurface(pathname, searchParams.toString());
+  const manuscriptHeader = pathname === "/app";
   const panelRef = useRef<HTMLDivElement>(null);
   const open = mode === "fullscreen";
   const modeRequest = useRef(workspaceNativeNavigationIntent);
@@ -321,7 +322,7 @@ export function ConversationPanel({
         }}
         className={`conversation-panel fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
-            ? "z-50 bg-background"
+            ? manuscriptHeader ? "z-[39] bg-background" : "z-50 bg-background"
             : "pointer-events-none z-40 overflow-hidden bg-transparent"
         }`}
       >
@@ -376,13 +377,14 @@ export function ConversationPanel({
             nor clickable. In-flow, so the conversation below reserves
             nothing. */}
         <div
-          aria-hidden={!open}
-          inert={!open}
+          aria-hidden={!open || manuscriptHeader}
+          inert={!open || manuscriptHeader}
+          data-manuscript-header-clearance={manuscriptHeader || undefined}
           className={`conversation-panel-heading shrink-0 items-center gap-1 transition-opacity duration-200 ${
             open ? "flex opacity-100" : "pointer-events-none flex opacity-0"
           }`}
         >
-          <span className="conversation-panel-title truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
+          {!manuscriptHeader && <><span className="conversation-panel-title truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
           {surface !== "utility" && <WorkspaceRouteNav current={surface} />}
@@ -403,7 +405,7 @@ export function ConversationPanel({
             className="rounded-full text-muted-foreground"
           >
             <X aria-hidden />
-          </Button>
+          </Button></>}
         </div>
 
         {/* THE CONVERSATION BODY — the fullscreen surface. It folds away by

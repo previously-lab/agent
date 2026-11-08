@@ -61,9 +61,9 @@ export default async function LocaleLayout({ children, params }: Props) {
 
   return (
     <NextIntlClientProvider messages={messages} locale={locale}>
-      <AppHeader isDemo={isDemo} />
       <NativeSourceScopeProvider value={nativeSourceScopeForDeployment()}>
         <ShellProvider>
+          <Suspense fallback={null}><AppHeader isDemo={isDemo} /></Suspense>
           <DocumentNavigationAdapter>
             <DocumentContextProvider>
               {children}

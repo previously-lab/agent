@@ -60,6 +60,7 @@ import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { getMemoryRoot, isPathAllowed } from "@/lib/whitelist";
 import { commitEmpty, commitPaths, isGitRepo } from "./local-git";
+import { isCanonicalRecordCorePath, MAX_RECORD_CORE_BYTES } from "./record-size-limit";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { historyDigest } from "@/lib/docs/history-archive";
 import { absentDocumentError, validateDocumentEntries, type DocumentMaintenance } from "@/lib/docs/write-validation";
@@ -278,6 +279,9 @@ export async function fsWriteFile(
 ): Promise<{ path: string; created: boolean }> {
   if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
   assertPortableRepoPath(path);
+  if (isCanonicalRecordCorePath(path) && Buffer.byteLength(content, "utf8") > MAX_RECORD_CORE_BYTES) {
+    throw new Error(`Conversation record exceeds its ${MAX_RECORD_CORE_BYTES}-byte storage limit`);
+  }
   // With a batch: queue the write, don't touch the backend yet.
   if (batch) {
     assertBatchOpen(batch);

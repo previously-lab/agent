@@ -17,10 +17,8 @@ import {
   CompanionPod,
   type NarrationTarget,
 } from "@/components/companion/companion-pod";
-import { TaskPanel } from "@/components/tasks/task-panel";
-import type { TaskPanelEvent } from "@/components/tasks/events";
+import { WorkspaceTaskPanel } from "./workspace-task-panel";
 import { useNativeSourceScope } from "@/components/chat/native-source-scope";
-import { useShell } from "@/components/shell/shell-provider";
 
 export function WorkspaceFeatures() {
   const pathname = usePathname();
@@ -28,7 +26,6 @@ export function WorkspaceFeatures() {
   const sourceScope = useNativeSourceScope();
   const persona = searchParams.get("persona") ?? "user";
   const lane = JSON.stringify([sourceScope, persona]);
-  const { screen } = useShell();
   const tCompanion = useTranslations("companion");
   const [narrateTarget, setNarrateTarget] = useState<NarrationTarget | null>(null);
   const narrateGenRef = useRef(0);
@@ -54,16 +51,10 @@ export function WorkspaceFeatures() {
     }
   }), [tCompanion]);
 
-  const onTaskPanelEvent = useCallback((event: TaskPanelEvent) => {
-    if (event.type === "panel_opened") screen.taskPanelViewed();
-    else if (event.type === "panel_closed") screen.taskPanelClosed();
-    else if (event.type === "task_selected") screen.taskSelected({ ref: event.ref });
-  }, [screen]);
-
   if (pathname !== "/app" && pathname !== "/game") return null;
   return (
     <div data-workspace-features className="workspace-features">
-      <TaskPanel key={lane} onEvent={onTaskPanelEvent} />
+      {pathname === "/game" && <WorkspaceTaskPanel key={lane} />}
       <CompanionPod
         target={narrateTarget}
         onDismiss={() => setNarrateTarget(null)}

@@ -25,7 +25,7 @@
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
-import { BookOpen, MoreHorizontal, Settings } from "lucide-react";
+import { BookOpen, Minimize2, MoreHorizontal, Settings } from "lucide-react";
 import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import {
   DropdownMenu,
@@ -46,9 +46,10 @@ import { cn } from "@/lib/utils";
 const GITHUB_URL = "https://github.com/previously-lab/agent";
 const THEME_ORDER = ["light", "dark", "system"] as const;
 
-export function NavOverflowMenu() {
+export function NavOverflowMenu({ onCollapseConversation }: { onCollapseConversation?: () => void } = {}) {
   const t = useTranslations("nav");
   const tTheme = useTranslations("theme");
+  const tPanel = useTranslations("conversationPanel");
   const locale = useLocale();
   const pathname = usePathname();
   const router = useRouter();
@@ -81,6 +82,9 @@ export function NavOverflowMenu() {
         className="w-48 rounded-2xl! bg-tool text-foreground shadow-[var(--shadow-panel)] ring-tool-line"
       >
         <DropdownMenuGroup>
+          {onCollapseConversation && <DropdownMenuItem className="chrome-menu-item" onClick={onCollapseConversation}>
+            <Minimize2 />{tPanel("exitFullscreen")}
+          </DropdownMenuItem>}
           {/* Disabled, not hidden: the entry is where the reader left it, and
               the hint under it says why. A row that disappears mid-turn reads
               as a bug; one that is visibly unavailable reads as a rule. */}

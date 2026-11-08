@@ -16,8 +16,10 @@ import type { ModelMessage } from "@/lib/deepseek/types";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
-import type { DialogueOfferContext, OfferReplyResult } from "@/lib/dialogue/transport";
-import { dialogueOfferId, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS } from "@/lib/dialogue/transport";
+import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
+import { CHECKPOINT_TEXT_MAX_CHARS, dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS, parseOfferReplyResult } from "@/lib/dialogue/transport";
+import { substantiveThinkingReadCheckpoint } from "@/lib/agents/thinking-read-receipt";
+import { parseNativeSections } from "@/lib/markdown/native-sections";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
@@ -1270,9 +1272,7 @@ function offerPublicSeq(messages: ModelMessage[] | undefined, toolCallId: string
     if (message.role !== "tool" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (part.type !== "tool-result" || part.toolName !== "offerReply") continue;
-      const value = part.output.value;
-      if (value && typeof value === "object" && (value as { kind?: unknown }).kind === DIALOGUE_OFFER_RESULT
-        && (value as { ok?: unknown }).ok === true) prior++;
+      prior++;
     }
   }
   // Parallel offer calls in one model response receive distinct public slots.
@@ -1286,25 +1286,81 @@ function offerPublicSeq(messages: ModelMessage[] | undefined, toolCallId: string
   return prior + 1;
 }
 
-
-export async function offerReplyExecute(
-  input: { text: string },
-  { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
-): Promise<OfferReplyResult> {
-  "use step";
-  const context = ctx.dialogueOffer as DialogueOfferContext | undefined;
-  const offerId = dialogueOfferId(context?.workId ?? ctx.turnId, toolCallId);
-  if (!context) return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: "This run has no dialogue offer context." };
-  if (!input.text.trim() || input.text.length > OFFER_TEXT_MAX_CHARS) {
-    return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: `text must be nonblank and at most ${OFFER_TEXT_MAX_CHARS} characters.` };
+/** An eligible substantive read anywhere in prior messages reserves one slot. */
+function hasEligibleThinkingRead(messages: ModelMessage[] | undefined, readScopeId: string): boolean {
+  for (const message of messages ?? []) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.isError) continue;
+      if (part.toolName !== "recallRead" && part.toolName !== "recallScenario") continue;
+      if (part.output.type !== "text" && part.output.type !== "json") continue;
+      if (substantiveThinkingReadCheckpoint(part.output.value, readScopeId, part.toolName, part.toolCallId)) return true;
+    }
   }
+  return false;
+}
+
+/**
+ * Deterministic public sequence. After a valid eligible read in prior
+ * messages, every offer except the read checkpoint itself reserves ONE slot
+ * for the potential automatic read checkpoint, so a later explicit/host offer
+ * never lands on the checkpoint's sequence. Sequences with no eligible read
+ * are unchanged.
+ */
+function nextOfferPublicSeq(
+  messages: ModelMessage[] | undefined,
+  toolCallId: string,
+  readScopeId: string,
+  claimReadSlot: boolean,
+): number {
+  const base = offerPublicSeq(messages, toolCallId);
+  if (!claimReadSlot && hasEligibleThinkingRead(messages, readScopeId)) return base + 1;
+  return base;
+}
+
+function precedingCheckpoints(messages: ModelMessage[] | undefined, workId: string): DialogueCheckpoint[] {
+  const candidates = new Map<string, string>();
+  const checkpoints = new Map<string, DialogueCheckpoint>();
+  for (const message of messages ?? []) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (message.role === "assistant" && part.type === "tool-call" && part.toolName === "offerReply") {
+        const input = part.input as { stage?: unknown; text?: unknown } | null | undefined;
+        if (input?.stage === "checkpoint" && typeof input.text === "string") {
+          candidates.set(part.toolCallId, input.text.slice(0, CHECKPOINT_TEXT_MAX_CHARS));
+        }
+      } else if (message.role === "tool" && part.type === "tool-result" && part.toolName === "offerReply") {
+        const result = parseOfferReplyResult(part.output.value);
+        const text = candidates.get(part.toolCallId);
+        if (result?.stage === "checkpoint" && result.offerId === dialogueOfferId(workId, part.toolCallId) && text) {
+          checkpoints.set(result.offerId, { offerId: result.offerId, runId: result.runId, text });
+        }
+      }
+    }
+  }
+  return [...checkpoints.values()];
+}
+
+async function startDialogueOffer(params: {
+  context: DialogueOfferContext;
+  offerId: string;
+  publicSeq: number;
+  text: string;
+  event?: DialogueSemanticEvent;
+  stage?: DialogueOfferStage;
+  priorCheckpoints: DialogueCheckpoint[];
+}): Promise<OfferReplyResult> {
+  const { context, offerId, publicSeq, text, event, stage, priorCheckpoints } = params;
   try {
     const { dialogueWorkflow } = await import("../chat/dialogue-workflow");
     const run = await start(dialogueWorkflow, [{
       offerId,
-      publicSeq: offerPublicSeq(messages, toolCallId),
-      text: input.text,
+      publicSeq,
+      text,
+      ...(event ? { event } : {}),
       context,
+      ...(stage ? { stage } : {}),
+      ...(priorCheckpoints.length ? { priorCheckpoints } : {}),
     }], {
       region: "hkg1",
       attributes: {
@@ -1316,7 +1372,9 @@ export async function offerReplyExecute(
     });
     // The follow-on parent step publishes this SDK value to native control.
     // The child and /offers use that stream as admission; no completion wait.
-    return { ok: true, kind: DIALOGUE_OFFER_RESULT, offerId, runId: run.runId, sourceInputId: context.sourceInputId };
+    return { ok: true, kind: DIALOGUE_OFFER_RESULT, offerId, runId: run.runId, sourceInputId: context.sourceInputId,
+      ...(stage ? { stage, publicSeq } : {}),
+      ...(event ? { eventKind: event.kind } : {}) };
   } catch (error) {
     return {
       ok: false,
@@ -1325,6 +1383,74 @@ export async function offerReplyExecute(
       reason: `The dialogue could not be started: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
+
+export async function offerReplyExecute(
+  input: { text: string; stage?: DialogueOfferStage },
+  { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
+): Promise<OfferReplyResult> {
+  "use step";
+  const context = ctx.dialogueOffer as DialogueOfferContext | undefined;
+  const offerId = dialogueOfferId(context?.workId ?? ctx.turnId, toolCallId);
+  if (!context) return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: "This run has no dialogue offer context." };
+  const reject = (reason: string): OfferReplyResult => ({ ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason });
+  const checkpoint = input.stage === "checkpoint";
+  const limit = checkpoint ? CHECKPOINT_TEXT_MAX_CHARS : OFFER_TEXT_MAX_CHARS;
+  if (!input.text.trim() || input.text.length > limit) {
+    return reject(`text must be nonblank and at most ${limit} characters.`);
+  }
+  const priorCheckpoints = precedingCheckpoints(messages, context.workId);
+  if (checkpoint) {
+    if (priorCheckpoints.some((prior) => prior.text.trim() === input.text.trim())) return reject("This checkpoint was already offered.");
+    if (parseNativeSections(input.text).some((section) => section.kind === "native")) return reject("Include native artifacts only in the final result.");
+    const current = messages?.at(-1);
+    if (current?.role === "assistant" && Array.isArray(current.content)) {
+      const calls = current.content.filter((part) => part.type === "tool-call" && part.toolName === "offerReply");
+      const first = calls[0];
+      if (first?.type === "tool-call" && calls.some((part) => part.type === "tool-call" && part.toolCallId === toolCallId)) {
+        if (calls.some((part) => part.type === "tool-call" && (part.input as { stage?: unknown } | null)?.stage !== "checkpoint")) {
+          return reject("The final result in this step replaces this checkpoint.");
+        }
+        if (first.toolCallId !== toolCallId) return reject("Send one combined checkpoint per model response.");
+      }
+    }
+  }
+  const publicSeq = nextOfferPublicSeq(messages, toolCallId, ctx.readScopeId, false);
+  return startDialogueOffer({
+    context, offerId, publicSeq, text: input.text,
+    ...(input.stage ? { stage: input.stage } : {}),
+    priorCheckpoints,
+  });
+}
+
+// ─── offerDialogueEvent — host semantic offers, never model-issued ─────────
+
+/**
+ * Start a public dialogue run from a host semantic event (automatic read
+ * checkpoint, needs-user handoff, structured findings final). Same admission
+ * and non-waiting start as offerReply; the stable synthetic toolCallId makes
+ * the offer id a durable duplicate fence across retries.
+ */
+export async function offerDialogueEventExecute(
+  input: { event: DialogueSemanticEvent; stage?: DialogueOfferStage },
+  { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
+): Promise<OfferReplyResult> {
+  "use step";
+  const context = ctx.dialogueOffer as DialogueOfferContext | undefined;
+  const offerId = dialogueOfferId(context?.workId ?? ctx.turnId, toolCallId);
+  if (!context) return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: "This run has no dialogue offer context." };
+  const reject = (reason: string): OfferReplyResult => ({ ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason });
+  const parsed = dialogueSemanticEventSchema.safeParse(input.event);
+  if (!parsed.success) return reject("event must be a valid dialogue semantic event.");
+  const stage = input.stage === "checkpoint" || input.stage === "final" ? input.stage : undefined;
+  const priorCheckpoints = precedingCheckpoints(messages, context.workId);
+  // The read checkpoint claims the slot reserved for it; other events reserve it.
+  const publicSeq = nextOfferPublicSeq(messages, toolCallId, ctx.readScopeId, parsed.data.kind === "read_completed");
+  return startDialogueOffer({
+    context, offerId, publicSeq, text: "", event: parsed.data,
+    ...(stage ? { stage } : {}),
+    priorCheckpoints,
+  });
 }
 // ─── startLongTask — the conversation's sub-stream, dispatched on the spot ──
 

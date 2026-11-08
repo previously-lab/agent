@@ -46,7 +46,7 @@ export const ManuscriptEditor = forwardRef<ManuscriptEditorHandle, ManuscriptEdi
     isComposing: () => controller.current?.isComposing() ?? false,
     clearHistory: () => controller.current?.clearHistory(),
   }), []);
-  return <div {...attributes} ref={element} role={role} aria-multiline="true"
+  return <div {...attributes} ref={element} role={role} aria-multiline={role === "textbox" ? true : undefined}
     contentEditable suppressContentEditableWarning data-testid="manuscript-editor" data-manuscript-input=""
     data-placeholder={placeholder} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", ...style }}
     onKeyDown={event => { onKeyDown?.(event); if (!event.defaultPrevented) controller.current?.keydown(event.nativeEvent); }} />;

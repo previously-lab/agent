@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HistoryStreamItem } from "@/lib/chat/stream-items";
+import type { HistoryStreamItem, HistoryTurnItem } from "@/lib/chat/stream-items";
 import type { Turn } from "@/lib/episodic/types";
 import type { ManuscriptEntry } from "../dialogue-projection";
 import { orderDialogueItems, unrepresentedHistory } from "../dialogue-history";
@@ -8,7 +8,7 @@ const timestamp = "2026-11-07T01:00:00.000Z";
 const input = { inputId: "input-1", clientMessageId: "client-1", userSeq: 1, eventSeq: 1, text: "你好", acceptedAt: timestamp };
 const utterance = { utteranceId: "input-1:fallback", publicSeq: 1, committedAt: timestamp,
   inputIds: [input.inputId], sourceResults: [], blocks: [{ kind: "markdown" as const, blockId: "reply", text: "你好。" }] };
-function row(turn: Turn): HistoryStreamItem {
+function row(turn: Turn): HistoryTurnItem {
   return { kind: "history-turn", key: turn.turnId!, sliceId: "2026-11-07-0100", strands: [], timeIso: timestamp, turn };
 }
 const saved = [
@@ -42,6 +42,18 @@ describe("saved native dialogue recovery", () => {
     expect(unrepresentedHistory([old, seam], [{ id: "restored", role: "assistant", parts: [],
       metadata: { recoveryTurnId: "legacy-turn" } }], [])).toEqual([seam]);
   });
+  it("groups adjacent saved publications for one input, but never across a user message", () => {
+    const continuation = row({ role: "agent", content: "Continue.", timestamp, turnId: "continuation",
+      dialogue: { kind: "public_utterance", publicationId: "continuation", publicSeq: 2,
+        inputIds: [input.inputId], sourceResults: [], blocks: [{ kind: "markdown", blockId: "next", text: "Continue." }] } });
+    const grouped = orderDialogueItems([...saved, continuation]);
+    expect(grouped).toHaveLength(2);
+    expect(grouped[1]).toMatchObject({ kind: "history-turn", continuations: [continuation.turn] });
+
+    const nextUser = row({ role: "user", content: "Next", timestamp, turnId: "next-user" });
+    expect(orderDialogueItems([...saved, nextUser, continuation])).toHaveLength(4);
+  });
+
   it("keeps newer v2 records at the live edge when the legacy projection arrives last", () => {
     const old = { ...row({ role: "agent", timestamp, turnId: "old", content: "Yesterday" }),
       timeIso: "2026-11-06T15:58:00.000Z" };

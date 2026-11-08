@@ -1,2 +1,4 @@
 # History payload hashes require byte-identical Git checkout.
 **/*-history-v1-*.md -text
+# Dialogue core files may contain exact, checksummed HTML source.
+memory/records/*/*/*/*/core.md -text

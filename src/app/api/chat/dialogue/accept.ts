@@ -43,7 +43,7 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
 
   const prepared = await prepareTurnInput({
     ...args,
-    messages: args.messages,
+    messages: withVerifiedImages(args.messages, args.verifiedImages),
     ...(args.verifiedImages.length ? { verifiedImages: args.verifiedImages } : {}),
   });
   if (!prepared.clientMessageId) {

@@ -21,9 +21,36 @@ describe("per-prompt thinking seats", () => {
     const before = dialogueStreamRows(entries, inputs, works);
     const after = dialogueStreamRows([...entries, streamed], inputs, works);
     expect(after.items.map(item => item.key)).toEqual(before.items.map(item => item.key));
-    expect(after.workSeats.get("dialogue-work:work-A")?.reply).toBe(streamed);
-    expect(after.workSeats.get("dialogue-work:work-B")?.reply).toBeUndefined();
+    expect(after.workSeats.get("dialogue-work:work-A")?.replies?.[0]).toBe(streamed);
+    expect(after.workSeats.get("dialogue-work:work-B")?.replies).toBeUndefined();
   });
+  it("groups contiguous replies for one input without crossing a user message", () => {
+    const publication = (id: string, publicSeq: number): ManuscriptEntry => ({ kind: "utterance", id, utterance: {
+      utteranceId: id, inputIds: ["A"], publicSeq, committedAt: `2026-11-07T00:00:0${publicSeq + 3}Z`, sourceResults: [],
+      blocks: [{ kind: "markdown", blockId: id, text: id }],
+    } });
+    const first = publication("first-A", 1);
+    const second = publication("second-A", 2);
+    const continuous = dialogueStreamRows([entries[0], first, second], inputs, [works[0]]);
+    expect(continuous.workSeats.get("dialogue-work:work-A")?.replies?.map(reply => reply.id)).toEqual(["first-A", "second-A"]);
+    expect(continuous.items.map(item => item.key)).toEqual(["dialogue-input:A", "dialogue-work:work-A"]);
+
+    const separated = dialogueStreamRows([...entries, first, second], inputs, works);
+    expect(separated.workSeats.get("dialogue-work:work-A")?.replies?.map(reply => reply.id)).toEqual(["first-A"]);
+    expect(separated.items.at(-1)?.key).toBe("dialogue-utterance:second-A");
+    expect(separated.utterances.get("dialogue-utterance:second-A")?.publications).toHaveLength(1);
+
+    const multi: ManuscriptEntry = { kind: "utterance", id: "shared-A-B", utterance: {
+      utteranceId: "shared-A-B", inputIds: ["A", "B"], publicSeq: 3, committedAt: "2026-11-07T00:00:08Z", sourceResults: [],
+      blocks: [{ kind: "markdown", blockId: "shared", text: "Shared" }],
+    } };
+    const shared = dialogueStreamRows([...entries, first, multi], inputs, works);
+    const owners = [...shared.workSeats.values()].filter(seat => seat.replies?.some(reply => reply.id === multi.id));
+    expect(owners).toHaveLength(1);
+    expect(shared.workSeats.get("dialogue-work:work-A")?.replies?.map(reply => reply.id)).toEqual(["first-A"]);
+    expect([...shared.utterances.values()].flatMap(seat => seat.publications)).toHaveLength(0);
+  });
+
   it("preserves the same seat when a provisional message becomes a committed publication", () => {
     const final: ManuscriptEntry = { kind: "utterance", id: "final-A", utterance: {
       utteranceId: "final-A", inputIds: ["A"], publicSeq: 1, committedAt: "2026-11-07T00:00:04Z", sourceResults: [],
@@ -32,6 +59,6 @@ describe("per-prompt thinking seats", () => {
     const preview = dialogueStreamRows([...entries, streamed], inputs, works);
     const complete = dialogueStreamRows([...entries, final], inputs, works);
     expect(complete.items.map(item => item.key)).toEqual(preview.items.map(item => item.key));
-    expect(complete.workSeats.get("dialogue-work:work-A")?.reply).toBe(final);
+    expect(complete.workSeats.get("dialogue-work:work-A")?.replies?.[0]).toBe(final);
   });
 });

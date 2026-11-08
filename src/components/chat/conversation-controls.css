@@ -5,9 +5,9 @@
 .conversation-controls-seat[data-controls-form="editor"] {
   position: relative;
   grid-area: controls;
-  inline-size: var(--conversation-action-size);
-  block-size: var(--conversation-action-size);
-  margin-inline-start: auto;
+  inline-size: auto;
+  block-size: auto;
+  margin-inline-start: 0;
   pointer-events: none;
 }
 .conversation-primary-action {
@@ -27,45 +27,51 @@
 .conversation-primary-action:focus-visible,
 .conversation-controls-seat button:focus-visible { outline: 2px solid var(--ring); outline-offset: calc(var(--spacing)); }
 .conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar {
-  display: contents;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--conversation-action-gap);
 }
-.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-tools-trigger {
-  position: absolute;
-  inset-inline-end: calc(100% + var(--conversation-action-gap));
-  bottom: 0;
-  inline-size: var(--conversation-action-size);
-  block-size: var(--conversation-action-size);
-  background: var(--tool-glass, var(--background));
-  box-shadow: var(--shadow-float);
-  opacity: 0;
-  pointer-events: none;
-}
-.conversation-controls-seat[data-controls-exposed] .conversation-composer-tools-trigger,
-.conversation-controls-seat:focus-within .conversation-composer-tools-trigger,
-.conversation-composer-tools-trigger:focus-visible { opacity: 1; pointer-events: auto; }
 .conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar-left {
   display: flex;
-  gap: var(--spacing);
-  position: absolute;
-  inset-inline-end: 0;
-  bottom: calc(100% + var(--conversation-action-gap));
-  width: max-content;
-  max-inline-size: calc(100vw - var(--spacing) * 8);
-  max-block-size: calc(100dvh - var(--conversation-action-size) - var(--spacing) * 10);
-  overflow: auto;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0;
   padding: var(--spacing);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow-float);
+  border-radius: 999rem;
+  background: var(--tool-glass, var(--background));
+  box-shadow: var(--shadow-float), inset 0 0 0 1px var(--border);
   pointer-events: auto;
 }
-.conversation-controls-seat .conversation-composer-toolbar-left[hidden] { display: none; }
 .conversation-controls-seat .conversation-control { min-inline-size: calc(var(--spacing) * 11); min-block-size: calc(var(--spacing) * 11); }
+/* The busy right group is a compact warm-neutral pill: the direct Send rides
+   beside the primary Stop. The outer right edge adds no border or padding —
+   an inset shadow draws the outline — so the primary stays flush with the
+   seat's right edge, and the group shadow replaces the primary's own. */
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--conversation-action-gap);
+  border-radius: 999rem;
+  background: var(--tool-glass, var(--background));
+  box-shadow: var(--shadow-float), inset 0 0 0 1px var(--border);
+  pointer-events: auto;
+}
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar-right:has([data-composer-direct-send]) {
+  padding-inline-start: var(--conversation-action-gap);
+}
+.conversation-controls-seat[data-controls-form="editor"] .conversation-composer-toolbar-right .conversation-primary-action {
+  box-shadow: none;
+}
+.conversation-controls-seat[data-controls-form="editor"] [data-composer-send]:not(:disabled) {
+  background: var(--manuscript-highlight, var(--primary));
+  color: white;
+}
+.conversation-controls-seat[data-controls-form="editor"] [data-composer-send]:disabled,
+.conversation-controls-seat[data-controls-form="editor"] [data-composer-stop] { background: transparent; color: var(--muted-foreground); }
+.conversation-controls-seat[data-controls-form="editor"] [data-composer-stop]:hover { background: var(--accent); color: var(--foreground); }
 .conversation-controls-seat[data-controls-form="inline"],
 .conversation-controls-seat[data-controls-form="inline"] .conversation-composer-toolbar { display: contents; }
-.conversation-controls-seat[data-controls-form="inline"] .conversation-composer-tools-trigger { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .conversation-controls-seat, .conversation-controls-seat * { transition: none; animation: none; }
 }

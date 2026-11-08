@@ -4,18 +4,23 @@ import { useEffect, useState } from "react";
 import { readChatEvents } from "@/lib/chat/client-stream";
 
 export type DialogueWorkToolStatus = "running" | "completed" | "failed";
+export type DialogueWorkToolOutcome = "found" | "empty";
 export type DialogueWorkStreamStatus = "waiting" | "live" | "completed" | "failed" | "cancelled";
 
 export type DialogueWorkStreamEvent =
   | { type: "text"; cursor: number; delta: string }
   | { type: "reasoning"; cursor: number; delta: string }
-  | { type: "tool"; cursor: number; toolCallId: string; toolName: string; state: DialogueWorkToolStatus }
+  | { type: "tool"; cursor: number; toolCallId: string; toolName: string; state: DialogueWorkToolStatus;
+    subject?: string; outcome?: DialogueWorkToolOutcome; resultCount?: number }
   | { type: "status"; cursor: number; status: DialogueWorkStreamStatus; retryAfterMs?: number };
 
 export interface DialogueWorkToolView {
   id: string;
   name: string;
   status: DialogueWorkToolStatus;
+  subject?: string;
+  outcome?: DialogueWorkToolOutcome;
+  resultCount?: number;
 }
 
 export type DialogueWorkActivity =
@@ -38,8 +43,9 @@ export const emptyDialogueWorkStream: DialogueWorkStreamView = {
 };
 
 /** The work stream is a deliberately narrow, safe projection. Reasoning is
- * accepted only through its explicit safe event; tool arguments, provider
- * fields and error details never enter the client view model. */
+ * accepted only through its explicit safe event. Tool subjects/outcomes are
+ * server-derived allowlisted fields; raw arguments, outputs, provider fields
+ * and error details never enter the client view model. */
 export function parseDialogueWorkStreamEvent(value: unknown): DialogueWorkStreamEvent {
   if (!value || typeof value !== "object") throw new Error("Invalid work stream event");
   const event = value as Record<string, unknown>;
@@ -51,8 +57,15 @@ export function parseDialogueWorkStreamEvent(value: unknown): DialogueWorkStream
   }
   if (event.type === "tool" && typeof event.toolCallId === "string" && event.toolCallId &&
     typeof event.toolName === "string" && event.toolName &&
-    (event.state === "running" || event.state === "completed" || event.state === "failed")) {
-    return { type: "tool", cursor: event.cursor as number, toolCallId: event.toolCallId, toolName: event.toolName, state: event.state };
+    (event.state === "running" || event.state === "completed" || event.state === "failed") &&
+    (event.subject === undefined || (typeof event.subject === "string" && event.subject.trim() &&
+      Array.from(event.subject).length <= 96)) &&
+    (event.outcome === undefined || event.outcome === "found" || event.outcome === "empty") &&
+    (event.resultCount === undefined || (Number.isSafeInteger(event.resultCount) && (event.resultCount as number) >= 0))) {
+    return { type: "tool", cursor: event.cursor as number, toolCallId: event.toolCallId, toolName: event.toolName, state: event.state,
+      ...(typeof event.subject === "string" ? { subject: event.subject } : {}),
+      ...(typeof event.outcome === "string" ? { outcome: event.outcome as DialogueWorkToolOutcome } : {}),
+      ...(typeof event.resultCount === "number" ? { resultCount: event.resultCount } : {}) };
   }
   if (event.type === "status" && (event.status === "waiting" || event.status === "live" || event.status === "completed" ||
     event.status === "failed" || event.status === "cancelled") &&
@@ -73,9 +86,23 @@ export function applyDialogueWorkStreamEvent(state: DialogueWorkStreamView, even
   if (event.type === "status") return { ...next, status: event.status };
   const tools = [...state.tools];
   const index = tools.findIndex(tool => tool.id === event.toolCallId);
-  const tool = { id: event.toolCallId, name: event.toolName, status: event.state };
+  const prior = index < 0 ? undefined : tools[index];
+  const subject = event.subject ?? prior?.subject;
+  const outcome = event.state === "completed" ? event.outcome ?? prior?.outcome : undefined;
+  const resultCount = outcome ? event.resultCount ?? prior?.resultCount : undefined;
+  const tool: DialogueWorkToolView = {
+    id: event.toolCallId, name: event.toolName, status: event.state,
+    ...(subject ? { subject } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(resultCount !== undefined ? { resultCount } : {}),
+  };
   if (index < 0) tools.push(tool); else tools[index] = tool;
-  return { ...next, tools, activity: { type: "tool", toolCallId: event.toolCallId } };
+  // Finishing one parallel call must not hide the tool that is still working.
+  const previouslyActive = state.activity?.type === "tool" ? state.activity.toolCallId : undefined;
+  const running = tools.find(tool => tool.id === previouslyActive && tool.status === "running")
+    ?? tools.findLast(tool => tool.status === "running");
+  const toolCallId = event.state === "running" ? event.toolCallId : running?.id ?? event.toolCallId;
+  return { ...next, tools, activity: { type: "tool", toolCallId } };
 }
 
 type Fetch = typeof fetch;

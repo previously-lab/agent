@@ -1,7 +1,8 @@
 /** Source attribution for model-facing records. No I/O or semantic classification. */
 import type { ModelMessage } from "@/lib/deepseek/types";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
-import { applyRange, parseTurns } from "./turn-parser";
+import { applyRange, parseTurns, reassembleSlice } from "./turn-parser";
+import { projectRecordArtifactSources } from "./dialogue-record";
 
 export const RECORD_ATTRIBUTION_RULE =
   "Source role identifies who authored a turn, not who endorses every sentence. " +
@@ -14,6 +15,22 @@ export function conversationRole(role: string): "user" | "assistant" | null {
   if (role === "user") return "user";
   if (role === "agent" || role === "assistant") return "assistant";
   return null;
+}
+
+/** Scan each assistant body separately: an unclosed fence in an earlier
+ * turn must not swallow the next turn's record fence during model reads. */
+export function projectRecordArtifactTranscript(raw: string): string {
+  if (!raw.includes("record-artifact")) return raw;
+  const { frontmatter, turns } = parseTurns(raw);
+  let changed = false;
+  const prose = turns.map(turn => {
+    if (conversationRole(turn.role) !== "assistant") return turn;
+    const content = projectRecordArtifactSources(turn.content);
+    if (content === turn.content) return turn;
+    changed = true;
+    return { ...turn, content };
+  });
+  return changed ? reassembleSlice(frontmatter, prose) : raw;
 }
 
 /** Legacy/unrecognized roles cannot become user wire messages by default. */

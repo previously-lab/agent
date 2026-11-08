@@ -17,8 +17,8 @@ import { withSliceLock } from "./slice-mutex";
 import { deterministicSliceMark } from "./slice-mark";
 import { parseSliceId } from "./turn-parser";
 import type { TimeSlice } from "./types";
-import { dialogueResearchMaterialId, encodeDialogueResearchRecord, makeDialogueResearchRecord, publicRecordText, publicRecordTurn, readDialogueResearchRecords } from "./dialogue-record";
-import { archiveDialogueArtifacts } from "./dialogue-artifact-archive";
+import { composeDialogueRecordBody, dialogueResearchMaterialId, encodeDialogueResearchRecord, makeDialogueResearchRecord, publicRecordText, publicRecordTurn, readDialogueResearchRecords } from "./dialogue-record";
+import { readArchivedDialogueArtifact, verifiedDialogueRecordArtifacts } from "./dialogue-artifact-archive";
 
 export interface DialogueProjectionInput {
   inputs: Array<{ input: DialogueInput; turnId: string; sliceId?: string; images?: ImageAttachmentEvidence[];
@@ -71,7 +71,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
   if (input.useDemo) return null;
   return withSliceLock("summary:local-storage", () => withGitHubReadView(async () => {
     const batch = createBatch();
-    await archiveDialogueArtifacts(input.utterance, input.typedArtifacts, batch);
+    const bodies = verifiedDialogueRecordArtifacts(input.utterance, input.typedArtifacts);
     const entries = [...input.inputs].sort((a, b) => a.input.userSeq - b.input.userSeq);
     if (!entries.length) throw new Error("A dialogue projection needs its accepted source input");
     if (entries.some((entry) => !/^[A-Za-z0-9_-]{1,128}$/.test(entry.turnId))) throw new Error("Invalid source turn identity");
@@ -216,9 +216,25 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       const old = slice.turns.find((turn) => turn.turnId === turnId ||
         turn.dialogue?.kind === "public_utterance" && turn.dialogue.publicationId === utterance.utteranceId);
       if (old && JSON.stringify(old.dialogue) !== JSON.stringify(dialogue)) throw new Error("Immutable publication changed");
+      const content = publicRecordText(dialogue.blocks);
+      const recordBody = bodies.size ? composeDialogueRecordBody(dialogue.blocks, bodies) : undefined;
+      if (old && recordBody !== undefined &&
+        (old.recordBody !== recordBody.trimEnd() || [...bodies].some(([id, source]) => old.artifactBodies?.[id] !== source))) {
+        // A retry of a legacy record leaves it as it was. A partial or changed
+        // inline body is not a successful replay of the immutable publication.
+        if (old.recordBody !== content.trimEnd() || old.artifactBodies) throw new Error("Immutable publication body changed");
+        for (const block of dialogue.blocks) {
+          if (block.kind !== "artifact_ref" || block.artifact.kind !== "native_html" ||
+            !/^wrun_[A-Za-z0-9]+$/.test(block.artifact.sourceOwnerId)) continue;
+          const archived = await readArchivedDialogueArtifact(block.artifact.artifactId);
+          if (!archived || JSON.stringify(archived.artifact) !== JSON.stringify(block.artifact) ||
+            archived.body !== bodies.get(block.artifact.artifactId)) throw new Error("Immutable publication body missing");
+        }
+      }
       if (!old) {
         appendTurn(slice, { role: "agent", turnId, timestamp: utterance.committedAt,
-          content: publicRecordText(dialogue.blocks), replyTo: landing.turnId, dialogue });
+          content, replyTo: landing.turnId, dialogue,
+          ...(recordBody !== undefined ? { recordBody, artifactBodies: Object.fromEntries(bodies) } : {}) });
         touched.add(slice.slice_id);
       }
       utteranceIds.push(utterance.utteranceId);

@@ -19,19 +19,26 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount } from "@/lib/deepseek/tools";
-import { type ModelMessage, type StepResult } from "@/lib/deepseek/types";
+import { type ModelMessage, type StepResult, type ToolResult } from "@/lib/deepseek/types";
 import { createHook, getWritable, sleep } from "workflow";
 import { start } from "workflow/api";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
-import { offerReplyExecute, type ToolContext } from "@/app/api/agent/tool-executors";
+import { offerReplyExecute, offerDialogueEventExecute, type ToolContext } from "@/app/api/agent/tool-executors";
+import { buildThinkingProduct, thinkingExpressionClaims, thinkingReportSchema } from "@/lib/agents/thinking-product";
+import { substantiveThinkingReadCheckpoint } from "@/lib/agents/thinking-read-receipt";
 import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
 import {
   DIALOGUE_FALLBACK_TOOL_CALL_ID,
+  DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
+  DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
+  DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
   DIALOGUE_THOUGHTS_NAMESPACE,
   DIALOGUE_TRANSPORT,
+  parseOfferReplyResult,
+  type DialogueNeedsUser,
   type DialogueOfferContext,
   type DialogueRecordRequest,
 } from "@/lib/dialogue/transport";
@@ -1173,10 +1180,100 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const producedMessages: ModelMessage[] = [];
   let allCognition = "";
   let latestThinkingText = "";
-  let successfulDialogueOffers = 0;
+  let latestFinalOfferText = "";
+  /** Valid needsUser report from finishThinking, kept for tail recovery. */
+  let pendingNeedsUser: DialogueNeedsUser | undefined;
+  const finalDialogueOffers = new Set<string>();
+  // Fast-path duplicate/race guards; the durable fence is the stable host
+  // offer id + the /offers admission store.
+  let dialogueOfferObserved = false;
+  let autoReadCheckpointAttempted = false;
+  const onToolExecutionResult = async (result: ToolResult) => {
+    if (!nativeDialogue || result.error) return;
+    if (result.toolName === "offerReply") {
+      const offer = parseOfferReplyResult(result.output);
+      if (!offer) return;
+      dialogueOfferObserved = true;
+      try {
+        await publishDialogueOfferControlsStep([offer]);
+        if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
+      } catch (error) {
+        // Do not interrupt research for an uncertain control write. The final
+        // handoff reconciles the stream before attempting a replacement.
+        console.warn("[Dialogue] offer announcement failed", offer.offerId, error);
+      }
+      return;
+    }
+    // First eligible substantive read announces one automatic checkpoint;
+    // anything explicit already observed wins and later reads stay silent.
+    if (autoReadCheckpointAttempted || dialogueOfferObserved) return;
+    if (result.toolName !== "recallRead" && result.toolName !== "recallScenario") return;
+    const checkpoint = substantiveThinkingReadCheckpoint(
+      result.output, turnToolsContext.readScopeId, result.toolName, result.toolCallId);
+    if (!checkpoint) return;
+    autoReadCheckpointAttempted = true;
+    try {
+      const offer = await offerDialogueEventExecute(
+        { stage: "checkpoint", event: checkpoint },
+        {
+          context: turnToolsContext,
+          toolCallId: DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
+          messages: producedMessages,
+        },
+      );
+      if (offer.ok) await publishDialogueOfferControlsStep([offer]);
+    } catch (error) {
+      // Silent by design: a lost announcement must not retry or flood; the
+      // durable admission fence keeps a later identical start harmless.
+      console.warn("[Dialogue] automatic read checkpoint announcement failed", error);
+    }
+  };
 
   const onStepEnd = async (step: StepResult<ChatToolSet>) => {
-      if (nativeDialogue && step.text.trim()) latestThinkingText = step.text;
+      if (nativeDialogue && step.text.trim() && !step.toolCalls.some((call) => call.toolName !== "finishThinking")) {
+        latestThinkingText = step.text;
+      }
+      let explicitFinalObserved = false;
+      if (nativeDialogue) {
+        for (const call of step.toolCalls) {
+          if (call.toolName !== "offerReply" || call.invalid) continue;
+          const candidate = call.input as { text?: unknown; stage?: unknown } | null;
+          if (candidate?.stage !== "checkpoint" && typeof candidate?.text === "string" && candidate.text.trim()) {
+            latestFinalOfferText = candidate.text;
+            explicitFinalObserved = true;
+          }
+        }
+      }
+      // A valid needsUser report is an immediate terminal handoff: the run is
+      // blocked on the user, so ask through the dialogue now instead of
+      // waiting for the tail. An explicit final offer already observed wins.
+      if (nativeDialogue && !explicitFinalObserved && finalDialogueOffers.size === 0) {
+        for (const call of step.toolCalls) {
+          if (call.toolName !== "finishThinking" || call.invalid) continue;
+          const parsed = thinkingReportSchema.safeParse(call.input);
+          const needsUser = parsed.success ? parsed.data.needsUser : undefined;
+          if (!needsUser) continue;
+          pendingNeedsUser = needsUser;
+          try {
+            const offer = await offerDialogueEventExecute(
+              { stage: "final", event: { kind: "needs_user", needsUser } },
+              {
+                context: turnToolsContext,
+                toolCallId: DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
+                messages: producedMessages,
+              },
+            );
+            if (offer.ok) {
+              await publishDialogueOfferControlsStep([offer]);
+              finalDialogueOffers.add(offer.offerId);
+            }
+          } catch (error) {
+            // Tail recovery retries the same stable typed handoff.
+            console.warn("[Dialogue] needs-user handoff announcement failed", error);
+          }
+          break;
+        }
+      }
 
       producedMessages.push(...step.response.messages);
       allCognition += extractCognition(step.response.messages, [step]);
@@ -1214,10 +1311,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           };
         }),
       });
-      if (nativeDialogue) {
-        const offers = step.toolResults.filter((result) => result.toolName === "offerReply").map((result) => result.output);
-        if (offers.length) successfulDialogueOffers += await publishDialogueOfferControlsStep(offers);
-      }
     };
 
   // Dialogue works answer through the thinking agent (private work output,
@@ -1244,6 +1337,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         reasoningEffort: input.reasoningEffort,
         toolsContext: buildChatToolsContext(turnToolsContext),
         onStepEnd,
+        onToolExecutionResult,
       })
     : createChatAgent({
         model: input.modelConfig,
@@ -1958,29 +2052,118 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     let offerControlKnown = true;
     try {
       const durableOffers = await reconcileDialogueOffersStep(parentRunId);
-      successfulDialogueOffers = Math.max(successfulDialogueOffers, durableOffers.length);
+      for (const offer of durableOffers) {
+        if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
+      }
     } catch (controlError) {
       offerControlKnown = false;
       outcome.error ??= errorMessage(controlError, "The offer control stream could not be recovered.");
     }
-    if (offerControlKnown && successfulDialogueOffers === 0 && latestThinkingText.trim()) {
-      const fallback = await offerReplyExecute(
-        { text: latestThinkingText },
-        {
-          context: turnToolsContext,
-          toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID,
-          messages: producedMessages,
-        },
-      );
-      if (fallback.ok) {
-        try {
-          successfulDialogueOffers += await publishDialogueOfferControlsStep([fallback]);
-        } catch (controlError) {
-          outcome.error ??= errorMessage(controlError, "The reply offer could not be announced.");
-        }
-      } else outcome.error ??= fallback.reason;
+    if (offerControlKnown && finalDialogueOffers.size === 0 && pendingNeedsUser) {
+      // Control-uncertainty recovery: retry the same stable typed handoff. A
+      // needsUser report is never replaced by raw prose — if this fails too,
+      // the no-final error/record path below follows.
+      try {
+        const handoff = await offerDialogueEventExecute(
+          { stage: "final", event: { kind: "needs_user", needsUser: pendingNeedsUser } },
+          {
+            context: turnToolsContext,
+            toolCallId: DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
+            messages: producedMessages,
+          },
+        );
+        if (handoff.ok) {
+          try {
+            if (await publishDialogueOfferControlsStep([handoff])) finalDialogueOffers.add(handoff.offerId);
+          } catch (controlError) {
+            outcome.error ??= errorMessage(controlError, "The needs-user reply could not be announced.");
+          }
+        } else outcome.error ??= handoff.reason;
+      } catch (handoffError) {
+        outcome.error ??= errorMessage(handoffError, "The needs-user reply could not be handed off.");
+      }
     }
-    if (successfulDialogueOffers === 0) {
+    if (offerControlKnown && finalDialogueOffers.size === 0 && !pendingNeedsUser) {
+      // Structured final from a nonempty validated finishThinking report:
+      // admitted finding and status claims only — never openQuestions,
+      // nextAction, memoryDelta, tool payloads or raw thoughts. Empty and
+      // invalid reports retain the plain compatibility fallback below.
+      const report = extractThinkingReport(producedMessages);
+      const cleanFinish =
+        outcome.finishReason === "stop" ||
+        (outcome.finishReason === "tool-calls" && report !== undefined);
+      const parsedReport = report === undefined ? null : thinkingReportSchema.safeParse(report);
+      const hasNonemptyValidatedReport = parsedReport?.success === true &&
+        (parsedReport.data.findings?.length ?? 0) > 0;
+      if (parsedReport?.success && parsedReport.data.findings?.length) {
+        try {
+          const documentContext = input.documentContext ?? [];
+          const product = buildThinkingProduct({
+            text: "",
+            messages: producedMessages,
+            inputScope: {
+              scopeKey: dialogue!.scopeKey,
+              workId: dialogue!.workId,
+              inputIds: [dialogue!.sourceInputId ?? input.turnId],
+              inputText: input.lastUserMessage,
+              readScopeId: turnToolsContext.readScopeId,
+              locale: input.locale,
+              ...(documentContext.length ? { documentContext } : {}),
+            },
+            asOf: input.startedAtIso,
+            report: parsedReport.data,
+            interrupted: !cleanFinish || !!outcome.error,
+          });
+          const findings = thinkingExpressionClaims(product)
+            .slice(0, 12)
+            .map((claim) => ({
+              text: claim.text,
+              kind: claim.kind,
+              ...(claim.uncertainty ? { uncertainty: claim.uncertainty.slice(0, 600) } : {}),
+              ...(claim.decision ? { decision: claim.decision } : {}),
+            }));
+          if (findings.length > 0) {
+            const offer = await offerDialogueEventExecute(
+              { stage: "final", event: { kind: "findings", findings } },
+              {
+                context: turnToolsContext,
+                toolCallId: DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
+                messages: producedMessages,
+              },
+            );
+            if (offer.ok) {
+              try {
+                if (await publishDialogueOfferControlsStep([offer])) finalDialogueOffers.add(offer.offerId);
+              } catch (controlError) {
+                outcome.error ??= errorMessage(controlError, "The structured reply could not be announced.");
+              }
+            } else outcome.error ??= offer.reason;
+          }
+        } catch (productError) {
+          // Unchecked prose is never substituted for a validated report.
+          console.warn("[Dialogue] structured final product could not be built", productError);
+        }
+      }
+      const fallbackText = latestFinalOfferText || latestThinkingText;
+      if (finalDialogueOffers.size === 0 && !hasNonemptyValidatedReport && fallbackText.trim()) {
+        const fallback = await offerReplyExecute(
+          { text: fallbackText },
+          {
+            context: turnToolsContext,
+            toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID,
+            messages: producedMessages,
+          },
+        );
+        if (fallback.ok) {
+          try {
+            if (await publishDialogueOfferControlsStep([fallback])) finalDialogueOffers.add(fallback.offerId);
+          } catch (controlError) {
+            outcome.error ??= errorMessage(controlError, "The reply offer could not be announced.");
+          }
+        } else outcome.error ??= fallback.reason;
+      }
+    }
+    if (finalDialogueOffers.size === 0) {
       outcome.error ??= "The thinking run ended without a reply to deliver.";
       outcome.finishReason = "error";
       try {

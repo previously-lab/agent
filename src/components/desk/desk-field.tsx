@@ -37,10 +37,12 @@ import { formatDeskZoom } from "./desk-zoom";
 import {
   fitPaperZoom,
   PAPER_HEIGHT,
+  PAPER_MM,
   PAPER_WIDTH,
   PAPER_ZOOM_MAX,
   paperPageCount,
   paperZoomAtMin,
+  readPaperZoom,
   stepPaperZoom,
 } from "./paper-view";
 import {
@@ -131,9 +133,11 @@ export interface DeskTexts {
   zoomOut: string;
   /** aria-label of the zoom island's zoom-in button. */
   zoomIn: string;
-  /** aria-label of the zoom readout — activating it fits the whole page
-   *  (the visible twin of the `0` key), like the page bar's readout. */
   zoomReset: string;
+  zoomFit: string;
+  zoomActual: string;
+  zoomRead: string;
+  zoomPanHint: string;
   /** The transcript paper's speaker labels (v0.25b §三) — handed to the
    *  record read, which composes the turns' markdown with them. */
   recordUserLabel: string;
@@ -289,8 +293,8 @@ export function DeskField({
       ? doc.current.view.observedRevision
       : undefined;
   // The paper's display title: a record prints NONE (§三 — the transcript's
-  // identity is the letterhead's clock + shelf lines; the body is the turns
-  // alone); a dossier prints its fixed English name; a case its own.
+  // identity is the letterhead's clock; the body is the turns alone); a
+  // dossier prints its fixed English name; a case its own.
   const displayTitle =
     model.kind === "record"
       ? ""
@@ -519,14 +523,16 @@ export function DeskField({
   // paper layout and the shell's camera. Fit mode alone follows resizing.
   const cameraRef = useRef<DeskCameraState>(createPaperCamera());
   const fitModeRef = useRef(true);
+  const readingModeRef = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef({ w: 0, h: 0 });
   const [panTick, setPanTick] = useState(0);
-  const [zoomView, setZoomView] = useState({ text: formatDeskZoom(1), atMin: false, atMax: false });
+  const [zoomView, setZoomView] = useState({ text: formatDeskZoom(1), atMin: false, atMax: false, fit: true, read: false, canPanX: false });
   const syncZoomView = useCallback(() => {
     const zoom = cameraRef.current.zoomTarget;
     const fit = fitPaperZoom(viewRef.current.w, viewRef.current.h);
-    setZoomView({ text: formatDeskZoom(zoom), atMin: paperZoomAtMin(zoom, fit), atMax: zoom >= PAPER_ZOOM_MAX - 0.001 });
+    setZoomView({ text: formatDeskZoom(zoom), atMin: paperZoomAtMin(zoom, fit), atMax: zoom >= PAPER_ZOOM_MAX - 0.001,
+      fit: fitModeRef.current, read: readingModeRef.current, canPanX: PAPER_WIDTH * zoom > viewRef.current.w + 1 });
   }, []);
   const clampCameraPan = useCallback((cam: DeskCameraState): DeskCameraState => {
     const view = viewRef.current;
@@ -540,7 +546,9 @@ export function DeskField({
       viewRef.current = { w: el.clientWidth, h: el.clientHeight };
       cameraRef.current = fitModeRef.current
         ? createPaperCamera(fitPaperZoom(el.clientWidth, el.clientHeight))
-        : clampCameraPan(cameraRef.current);
+        : clampCameraPan(readingModeRef.current
+          ? { ...cameraRef.current, zoomTarget: readPaperZoom(el.clientWidth) }
+          : cameraRef.current);
       syncZoomView();
       setPanTick((tick) => tick + 1);
     };
@@ -551,6 +559,7 @@ export function DeskField({
   }, [clampCameraPan, syncZoomView]);
   const zoomStep = useCallback((dir: 1 | -1) => {
     fitModeRef.current = false;
+    readingModeRef.current = false;
     const cam = cameraRef.current;
     const zoom = stepPaperZoom(cam.zoomTarget, dir, fitPaperZoom(viewRef.current.w, viewRef.current.h));
     cameraRef.current = clampCameraPan({ ...cam, zoom, zoomTarget: zoom });
@@ -558,9 +567,28 @@ export function DeskField({
   }, [clampCameraPan, syncZoomView]);
   const zoomReset = useCallback(() => {
     fitModeRef.current = true;
+    readingModeRef.current = false;
     cameraRef.current = createPaperCamera(fitPaperZoom(viewRef.current.w, viewRef.current.h));
     syncZoomView();
   }, [syncZoomView]);
+  const zoomActual = useCallback(() => {
+    fitModeRef.current = false;
+    readingModeRef.current = false;
+    cameraRef.current = clampCameraPan({ ...cameraRef.current, zoomTarget: 1 });
+    syncZoomView();
+  }, [clampCameraPan, syncZoomView]);
+  const zoomRead = useCallback(() => {
+    fitModeRef.current = false;
+    readingModeRef.current = true;
+    const { w, h } = viewRef.current;
+    const zoom = readPaperZoom(w);
+    const bounds = panBoundsFor(PAPER_WIDTH, PAPER_HEIGHT, w, h, zoom);
+    // Start at the left of the printed text, rather than at the middle of a
+    // cut-off line, when a phone can't show the whole paper at reading scale.
+    const panTarget = { x: bounds.x > 0 ? -bounds.x + 18 * PAPER_MM : 0, y: bounds.y };
+    cameraRef.current = clampCameraPan({ ...createPaperCamera(zoom), panTarget });
+    syncZoomView();
+  }, [clampCameraPan, syncZoomView]);
   const panBy = useCallback((dx: number, dy: number) => {
     cameraRef.current = clampCameraPan(dragPanBy(cameraRef.current, dx, dy));
     setPanTick((tick) => tick + 1);
@@ -599,6 +627,7 @@ export function DeskField({
     setLocationNotice(null);
     settledRef.current = true;
     fitModeRef.current = true;
+    readingModeRef.current = false;
     cameraRef.current = createPaperCamera(fitPaperZoom(viewRef.current.w, viewRef.current.h));
     setEntered(false);
   }
@@ -617,6 +646,7 @@ export function DeskField({
       setViewChoice({ docRef, view: stored.edition });
       setPage(stored.page);
       fitModeRef.current = stored.fit;
+      readingModeRef.current = false;
       cameraRef.current = clampCameraPan({
         zoom: stored.zoom,
         zoomTarget: stored.zoom,
@@ -946,9 +976,10 @@ export function DeskField({
   }, [ready, total, panBy]);
 
   /** `+`/`=` and `-` step zoom, `0` fits the whole page. Up/down pan;
-   *  shift-left/right reach the sides without changing pages. Callers guard
-   *  modifiers (ctrl/cmd+= is the browser's own zoom) and editable targets
-   *  (a `+` typed into the floating chat is text). */
+   *  left/right pan when the sheet is wider than the viewport (Shift still
+   *  offers the explicit gesture), otherwise they remain page turns. Callers
+   *  guard modifiers (ctrl/cmd+= is the browser's own zoom) and editable
+   *  targets (a `+` typed into the floating chat is text). */
   const applyZoomKey = useCallback(
     (key: string, shiftKey = false): boolean => {
       if (key === "+" || key === "=") {
@@ -959,17 +990,17 @@ export function DeskField({
         zoomReset();
       } else if (key === "ArrowDown" || key === "ArrowUp") {
         panBy(0, key === "ArrowDown" ? -60 : 60);
-      } else if (shiftKey && (key === "ArrowLeft" || key === "ArrowRight")) {
+      } else if ((shiftKey || zoomView.canPanX) && (key === "ArrowLeft" || key === "ArrowRight")) {
         panBy(key === "ArrowRight" ? -60 : 60, 0);
       } else {
         return false;
       }
       return true;
     },
-    [zoomStep, zoomReset, panBy],
+    [zoomStep, zoomReset, panBy, zoomView.canPanX],
   );
 
-  // Escape puts the document back; the arrows turn its pages. The desk is
+  // Escape puts the document back; fitting arrows turn its pages. The desk is
   // plain DOM now (no Canvas boundary), so the wrapper's own keydown sees
   // every key pressed over the paper. The window backstop stays for the
   // chrome that is NOT in this subtree: the page/zoom islands render through
@@ -1019,10 +1050,9 @@ export function DeskField({
     return () => window.removeEventListener("keydown", onKey);
   }, [closeDesk, applyZoomKey]);
 
-  // The letterhead (v0.28): `Previously` over the model's three derived
-  // lines — clock, bare category, shelf — each omitted when its data does
-  // not exist. Fixed English, one ink; the paper's furniture is not
-  // translated.
+  // The letterhead (v0.28): `Previously` over the model's derived identity
+  // lines. Records print only the clock; other kinds also print category and
+  // shelf when present. Fixed English, one ink; the furniture is not translated.
   const head = mastheadLines(model);
 
   // One shell when the document is not a stack at all: in flight, dead
@@ -1139,6 +1169,7 @@ export function DeskField({
       setOrder(Array.from({ length: SHELL_COUNT }, (_, i) => i));
       settledRef.current = true;
       fitModeRef.current = true;
+      readingModeRef.current = false;
       cameraRef.current = createPaperCamera(
         fitPaperZoom(viewRef.current.w, viewRef.current.h),
       );
@@ -1451,11 +1482,12 @@ export function DeskField({
                               )}
                               {/* The head is page-aware (v0.27 原稿 §4.3,
                                   v0.28 letterhead): the FIRST page opens
-                                  with the letterhead — the wordmark over the
-                                  file's three identity lines (clock · bare
-                                  category · shelf, each omitted when its
-                                  data does not exist); every page after it
-                                  carries only the running line. The head
+                                  with the wordmark and the file's identity
+                                  lines. A conversation record keeps only its
+                                  meaningful clock, not the RECORD label or a
+                                  shelf line repeating its date; other files
+                                  keep their distinct category and shelf.
+                                  Later pages carry the running line. The head
                                   lives on the physical shell, so shellPage
                                   drives the swap — the paging mechanism is
                                   untouched. */}
@@ -1468,12 +1500,12 @@ export function DeskField({
                                         {head.clock}
                                       </span>
                                     )}
-                                    {head.category !== null && (
+                                    {model.kind !== "record" && head.category !== null && (
                                       <span className="desk-masthead-cat">
                                         {head.category}
                                       </span>
                                     )}
-                                    {head.shelf !== null && (
+                                    {model.kind !== "record" && head.shelf !== null && (
                                       <span className="desk-masthead-line">
                                         {head.shelf}
                                       </span>
@@ -1572,7 +1604,7 @@ export function DeskField({
       </div>
       {browserMounted && createPortal(
         <div className="desk-toolbar" data-desk-toolbar>
-          <div className="desk-toolbar-group" data-page-controls>
+          {total > 1 && <div className="desk-toolbar-group" data-page-controls>
             <button type="button" data-page-prev aria-label={texts.prevPage} title={texts.prevPage}
               disabled={!ready || total <= 1 || turn !== null} onClick={() => turnPage("prev")} className="desk-tool-button">
               <ChevronLeft className="size-4" />
@@ -1582,19 +1614,26 @@ export function DeskField({
               disabled={!ready || total <= 1 || turn !== null} onClick={() => turnPage("next")} className="desk-tool-button">
               <ChevronRight className="size-4" />
             </button>
-          </div>
+          </div>}
           <div className="desk-toolbar-group" data-zoom-controls>
             <button type="button" data-zoom-out aria-label={texts.zoomOut} title={texts.zoomOut}
               disabled={!ready || zoomView.atMin} onClick={() => zoomStep(-1)} className="desk-tool-button">
               <Minus className="size-4" />
             </button>
-            <button type="button" data-zoom-readout aria-label={texts.zoomReset} title={texts.zoomReset}
-              onClick={zoomReset} className="desk-tool-button desk-tool-readout">{zoomView.text}</button>
+            <button type="button" data-zoom-readout aria-label={texts.zoomActual} title={texts.zoomActual}
+              disabled={!ready} onClick={zoomActual} className="desk-tool-button desk-tool-readout">{zoomView.text}</button>
             <button type="button" data-zoom-in aria-label={texts.zoomIn} title={texts.zoomIn}
               disabled={!ready || zoomView.atMax} onClick={() => zoomStep(1)} className="desk-tool-button">
               <Plus className="size-4" />
             </button>
+            <button type="button" data-zoom-fit aria-label={texts.zoomReset} aria-pressed={zoomView.fit}
+              disabled={!ready} onClick={zoomReset} className="desk-tool-button desk-tool-preset">{texts.zoomFit}</button>
+            <button type="button" data-zoom-reading aria-pressed={zoomView.read}
+              disabled={!ready} onClick={zoomRead} className="desk-tool-button desk-tool-preset">{texts.zoomRead}</button>
           </div>
+          {ready && zoomView.canPanX && (
+            <span className="desk-pan-hint"><kbd>← →</kbd> {texts.zoomPanHint}</span>
+          )}
           {ready && (
             <div className="desk-toolbar-group" data-reference-controls>
               <AddDocumentReferenceAction

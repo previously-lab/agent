@@ -1,4 +1,5 @@
 import { test, expect } from "./test";
+import { openAllManuscripts } from "./manuscript-navigation";
 import type { Page } from "@playwright/test";
 import { clearCases, clearEpisodic, makeSlice, seedCases, seedSlices } from "./memory-fixture";
 
@@ -60,7 +61,7 @@ async function openPaper(page: Page, pauseScene = false) {
     await expect(host).toBeVisible();
     await expect(host).toHaveAttribute("data-game-active", "true");
     await page.locator("[data-pill-expand]").click();
-    await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await openAllManuscripts(page);
     await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
     await page.getByRole("button", { name: /^Research/ }).click();
     await page.getByRole("button", { name: /fixed-print/ }).click();
@@ -197,7 +198,7 @@ test.describe("Fixed A4 reader", () => {
 
   test("keeps paper ink readable at night and respects index and editable keyboard boundaries", async ({ page }) => {
     await openPaper(page, true);
-    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+    await openAllManuscripts(page);
     await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
     await page.goBack();
     await expect(page.locator('[data-workspace-surface="reader"]')).toBeVisible();
@@ -260,14 +261,14 @@ test.describe("Fixed A4 reader", () => {
       await page.goto("/en/app?doc=people/user");
       await expect.poll(() => responseHeld).toBe(true);
       expect(readFixtureConfirmed).toBe(true);
-      await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "Room", exact: true }).click();
+      await page.locator("[data-manuscript-header]").getByRole("button", { name: "Room", exact: true }).click();
       await expect(page).toHaveURL(/\/en\/game$/);
       const host = page.locator("[data-workspace-game-host]");
       await expect(host).toBeVisible();
       await expect(host).toHaveAttribute("data-game-active", "true");
       // Navigate to the library while the original document response is held.
       await page.locator("[data-pill-expand]").click();
-      await page.locator(".conversation-panel-heading .workspace-route-nav").getByRole("button", { name: "Library", exact: true }).click();
+      await openAllManuscripts(page);
       await expect(page.locator('[data-workspace-surface="library"]')).toBeVisible();
       await expect(host).toBeHidden();
       await expect(host).toHaveAttribute("inert", "");

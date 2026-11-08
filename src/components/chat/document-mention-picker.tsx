@@ -95,6 +95,7 @@ export function DocumentMentionPicker({
   const { items, status, activeIndex, setActiveIndex } = catalog;
   return (
     <section
+      id={`${id}-panel`}
       aria-label={t("title")}
       className={`document-mention-panel${floating ? " document-mention-panel--floating" : ""}`}
     >
@@ -109,7 +110,7 @@ export function DocumentMentionPicker({
             role="combobox"
             aria-autocomplete="list"
             aria-expanded="true"
-            aria-controls={`${id}-listbox`}
+            aria-controls={items.length > 0 ? `${id}-listbox` : undefined}
             aria-activedescendant={activeIndex >= 0 && items[activeIndex] ? `${id}-option-${activeIndex}` : undefined}
             autoFocus={manual}
             maxLength={120}

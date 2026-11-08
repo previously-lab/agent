@@ -58,4 +58,22 @@ describe("native dialogue acceptance", () => {
     expect(h.confirm).toHaveBeenCalledOnce();
     expect(h.release).not.toHaveBeenCalled();
   });
+
+  it("passes server-verified image bytes and the vision-tool mapping to the thinking parent", async () => {
+    const snapshot = { version: 1, assetId: `img_${"a".repeat(32)}`, ref: "drafts/image", ordinal: 1, name: "sample.png", mediaType: "image/png", byteSize: 3 };
+    const result = await acceptDialogueTurnV2({
+      messages: [{ id: "message-1", role: "user", parts: [{ type: "text", text: "Think now." }] }],
+      originalUserText: "Think now.", verifiedImages: [{ snapshot, dataBase64: "AQID" }],
+      persona: "user", regenerate: false, reservation: { confirm: h.confirm, release: h.release },
+    } as unknown as AcceptDialogueArgs);
+    expect(result.status).toBe(200);
+    expect((await result.json()).input.attachments).toEqual([snapshot]);
+    const args = h.prepare.mock.calls[0]![0];
+    expect(args.originalUserText).toBe("Think now.");
+    expect(args.messages[0].parts).toEqual([
+      { type: "text", text: "Think now." },
+      { type: "text", text: expect.stringContaining('viewImage source="attachment:0"') },
+      { type: "file", mediaType: "image/png", filename: "sample.png", url: "data:image/png;base64,AQID" },
+    ]);
+  });
 });

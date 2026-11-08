@@ -47,12 +47,12 @@ function payload() {
 }
 
 describe("dialogue records on a plain local directory", () => {
-  it("serves archived native HTML after its child Workflow is gone without inlining it into core", async () => {
+  it("stores exact native HTML in the original core reply without new sidecars or legacy migration", async () => {
     const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
     const { readArchivedDialogueArtifact } = await import("@/lib/episodic/dialogue-artifact-archive");
     const { readSlicePart } = await import("@/lib/episodic/paths");
-    const { GET } = await import("@/app/api/chat/dialogue/artifacts/[artifactId]/route");
-    const body = "<!doctype html>\r\n<p>Archived interactive HTML</p>\r\n";
+    const { createSlice, loadSlice, serializeSlice } = await import("@/lib/episodic/manager");
+    const body = "<!doctype html>\r\n<p>Inline interactive HTML</p>\r\n<pre>```</pre>\r\n";
     const artifact = {
       artifactId: "c".repeat(64), sourceOwnerId: "wrun_expired", revision: 1 as const,
       sha256: createHash("sha256").update(body).digest("hex"), byteSize: Buffer.byteLength(body),
@@ -60,20 +60,118 @@ describe("dialogue records on a plain local directory", () => {
     };
     const utterance: PublicUtterance = {
       utteranceId: "public-native", publicSeq: 2, committedAt: stamp, inputIds: ["u1"], sourceResults: [],
-      blocks: [{ kind: "artifact_ref", blockId: "widget", artifact }],
+      blocks: [{ kind: "markdown", blockId: "lead", text: "Here is the original reply." },
+        { kind: "artifact_ref", blockId: "widget", artifact }],
     };
+
+    const legacyBody = "<p>Legacy archived HTML</p>\n";
+    const legacyArtifact = {
+      artifactId: "d".repeat(64), sourceOwnerId: "wrun_legacyArchive", revision: 1 as const,
+      sha256: createHash("sha256").update(legacyBody).digest("hex"), byteSize: Buffer.byteLength(legacyBody),
+      kind: "native_html" as const, mediaType: "text/html",
+    };
+    const legacy = createSlice("Old input", "UTC", "old-input");
+    legacy.slice_id = "2026-11-05-0300";
+    legacy.start = stamp;
+    legacy.turns.push({ role: "agent", turnId: "legacy-public", timestamp: stamp, content: "Legacy reply.",
+      dialogue: { kind: "public_utterance", publicationId: "legacy-public", publicSeq: 1, inputIds: ["old-input"],
+        sourceResults: [], blocks: [{ kind: "artifact_ref", blockId: "legacy-widget", artifact: legacyArtifact }] } });
+    const legacyPath = join(memoryRoot, slicePartPath(legacy.slice_id, "core").replace(/^memory\//, ""));
+    fs.mkdirSync(dirname(legacyPath), { recursive: true });
+    const legacyRaw = serializeSlice(legacy);
+    fs.writeFileSync(legacyPath, legacyRaw, "utf8");
+    const archiveRoot = join(memoryRoot, "dialogue-artifacts");
+    fs.mkdirSync(archiveRoot, { recursive: true });
+    fs.writeFileSync(join(archiveRoot, `${legacyArtifact.artifactId}.json`), JSON.stringify(legacyArtifact), "utf8");
+    fs.writeFileSync(join(archiveRoot, legacyArtifact.artifactId), legacyBody, "utf8");
+
     await projectDialogueRecords({ ...payload(), utterance,
       typedArtifacts: [{ blockId: "widget", artifact, body }] });
 
-    // No Workflow exists in this test: both reads are exclusively from file memory.
-    await expect(readArchivedDialogueArtifact(artifact.artifactId)).resolves.toEqual({ artifact, body });
-    const response = await GET(new Request(`http://localhost/api/chat/dialogue/artifacts/${artifact.artifactId}?persona=user`),
-      { params: Promise.resolve({ artifactId: artifact.artifactId }) });
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ artifact, body });
-    expect(await readSlicePart("2026-11-06-0300", "core")).not.toContain("Archived interactive HTML");
+    const core = await readSlicePart("2026-11-06-0300", "core");
+    expect(core).toContain("Here is the original reply.");
+    expect(core).toContain(body);
+    expect(core).toContain(`html live record-artifact=${artifact.artifactId} record-block=widget`);
+    expect(core).not.toContain(legacyBody);
+    expect(core.split(/\r?\n/).find((line) => line.startsWith("## Turn p"))).not.toContain("<!doctype html>");
+    const turn = (await loadSlice("2026-11-06-0300"))?.turns.at(-1);
+    expect(turn?.content).toBe("Here is the original reply.");
+    expect(turn?.recordBody).toContain(body);
+    expect(turn?.artifactBodies).toEqual({ [artifact.artifactId]: body });
+    expect(turn?.dialogue).toMatchObject({ kind: "public_utterance", publicationId: "public-native", blocks: utterance.blocks });
+    expect(fs.readdirSync(archiveRoot).sort()).toEqual([legacyArtifact.artifactId, `${legacyArtifact.artifactId}.json`].sort());
+    await expect(readArchivedDialogueArtifact(legacyArtifact.artifactId)).resolves.toEqual({ artifact: legacyArtifact, body: legacyBody });
+    expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyRaw);
   });
 
+  it("replays inline records byte-identically and rejects a tampered source without repairing it", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { readSlicePart } = await import("@/lib/episodic/paths");
+    const body = "<p>Replay HTML</p>\n";
+    const artifact = {
+      artifactId: "e".repeat(64), sourceOwnerId: "wrun_replay", revision: 1 as const,
+      sha256: createHash("sha256").update(body).digest("hex"), byteSize: Buffer.byteLength(body),
+      kind: "native_html" as const, mediaType: "text/html",
+    };
+    const utterance: PublicUtterance = { utteranceId: "public-replay", publicSeq: 1, committedAt: stamp,
+      inputIds: ["u1"], sourceResults: [], blocks: [{ kind: "artifact_ref", blockId: "widget", artifact }] };
+    const projection = { ...payload(), utterance, typedArtifacts: [{ blockId: "widget", artifact, body }] };
+    await projectDialogueRecords(projection);
+    const original = await readSlicePart("2026-11-06-0300", "core");
+    await projectDialogueRecords(projection);
+    expect(await readSlicePart("2026-11-06-0300", "core")).toBe(original);
+
+    const corePath = join(memoryRoot, slicePartPath("2026-11-06-0300", "core").replace(/^memory\//, ""));
+    const tampered = original.replace(body, "<p>Tampered HTML</p>\n");
+    expect(tampered).not.toBe(original);
+    fs.writeFileSync(corePath, tampered, "utf8");
+    await expect(projectDialogueRecords(projection)).rejects.toThrow(/publication|record|source/i);
+    expect(fs.readFileSync(corePath, "utf8")).toBe(tampered);
+    expect(fs.existsSync(join(memoryRoot, "dialogue-artifacts"))).toBe(false);
+  });
+
+  it("accepts verified legacy replays without migrating their inline storage", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { createSlice, serializeSlice } = await import("@/lib/episodic/manager");
+    const cases = [
+      { sourceOwnerId: "wrun_legacyReplay", artifactId: "f".repeat(64), sidecar: true },
+      { sourceOwnerId: "scoped-v1-owner", artifactId: "a".repeat(64), sidecar: false },
+    ];
+    for (const [index, fixture] of cases.entries()) {
+      const body = `<p>Legacy replay ${index}</p>\n`;
+      const artifact = {
+        artifactId: fixture.artifactId, sourceOwnerId: fixture.sourceOwnerId, revision: 1 as const,
+        sha256: createHash("sha256").update(body).digest("hex"), byteSize: Buffer.byteLength(body),
+        kind: "native_html" as const, mediaType: "text/html",
+      };
+      const utterance: PublicUtterance = { utteranceId: `legacy-replay-${index}`, publicSeq: 1, committedAt: stamp,
+        inputIds: ["u1"], sourceResults: [], blocks: [{ kind: "artifact_ref", blockId: "widget", artifact }] };
+      const legacy = createSlice(accepted.text, "UTC", "u1");
+      legacy.slice_id = "2026-11-06-0300";
+      legacy.start = stamp;
+      legacy.turns[0]!.timestamp = stamp;
+      legacy.turns[0]!.dialogue = { kind: "user_input", inputId: "u1", userSeq: 1 };
+      legacy.turns.push({ role: "agent", turnId: `legacy-replay-${index}`, timestamp: stamp, content: "",
+        dialogue: { kind: "public_utterance", publicationId: utterance.utteranceId, publicSeq: 1,
+          inputIds: ["u1"], sourceResults: [], blocks: utterance.blocks } });
+      const corePath = join(memoryRoot, slicePartPath(legacy.slice_id, "core").replace(/^memory\//, ""));
+      fs.mkdirSync(dirname(corePath), { recursive: true });
+      const original = serializeSlice(legacy);
+      fs.writeFileSync(corePath, original, "utf8");
+      const projection = { ...payload(), utterance, typedArtifacts: [{ blockId: "widget", artifact, body }] };
+      if (fixture.sidecar) {
+        await expect(projectDialogueRecords(projection)).rejects.toThrow(/archive|publication|source|record/i);
+        expect(fs.readFileSync(corePath, "utf8")).toBe(original);
+        const archiveRoot = join(memoryRoot, "dialogue-artifacts");
+        fs.mkdirSync(archiveRoot, { recursive: true });
+        fs.writeFileSync(join(archiveRoot, `${artifact.artifactId}.json`), JSON.stringify(artifact), "utf8");
+        fs.writeFileSync(join(archiveRoot, artifact.artifactId), body, "utf8");
+      }
+      await projectDialogueRecords(projection);
+      expect(fs.readFileSync(corePath, "utf8")).toBe(original);
+      expect(original).not.toContain(body);
+    }
+  });
   it("T07/T09/T15: restores accepted input and separates internal results from actual public speech without Git", async () => {
     const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
     const { loadSlice } = await import("@/lib/episodic/manager");

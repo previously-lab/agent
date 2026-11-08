@@ -110,7 +110,7 @@ function pieceRef(category: CaseCategory, caseName: string, stem: string): strin
   return `${category}/${caseName}/${stem}`;
 }
 
-export function DocLibrary({ persona }: { persona?: string }) {
+export function DocLibrary({ persona, onChoose }: { persona?: string; onChoose?: () => void }) {
   const t = useTranslations("library");
   const tField = useTranslations("archiveField");
   const locale = useLocale();
@@ -126,6 +126,11 @@ export function DocLibrary({ persona }: { persona?: string }) {
   } | null>(null);
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
   const [detailPending, setDetailPending] = useState(false);
+  const floating = Boolean(onChoose);
+  const chooseDocument = useCallback((ref: string) => {
+    openDesk(ref, "manual");
+    onChoose?.();
+  }, [onChoose, openDesk]);
 
   // The shelf loads ONCE at mount — the column is a permanent pane fixture,
   // not a dialog that refetches per open. Detail still rides one round trip
@@ -159,7 +164,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
       .catch(() => {
         if (live) setDossier(null);
       });
-    getArchiveRecordIndex()
+    if (!floating) getArchiveRecordIndex()
       .then((list) => {
         if (live) setRecords(list);
       })
@@ -169,7 +174,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
     return () => {
       live = false;
     };
-  }, [persona]);
+  }, [floating, persona]);
 
   // THE RECORDS' groups: the field's own time buckets (the model's
   // `bucketKeyFor` — the trailing week by day, older by ISO week), newest
@@ -255,21 +260,21 @@ export function DocLibrary({ persona }: { persona?: string }) {
       setActiveCase({ category, name });
       setCaseDetail(null);
       setDetailPending(true);
-      openDesk(`${category}/${name}`, "manual");
+      if (!floating) openDesk(`${category}/${name}`, "manual");
       getCaseDetail(category, name, persona)
         .then((detail) => setCaseDetail(detail))
         .catch(() => setCaseDetail(null))
         .finally(() => setDetailPending(false));
     },
-    [openDesk, persona],
+    [floating, openDesk, persona],
   );
 
   const openPiece = useCallback(
     (stem: string) => {
       if (!activeCase) return;
-      openDesk(pieceRef(activeCase.category, activeCase.name, stem), "manual");
+      chooseDocument(pieceRef(activeCase.category, activeCase.name, stem));
     },
-    [openDesk, activeCase],
+    [chooseDocument, activeCase],
   );
 
   return (
@@ -294,7 +299,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
                     type="button"
                     data-dossier-doc={entry.name}
                     disabled={!entry.available}
-                    onClick={() => openDesk(entry.ref, "manual")}
+                    onClick={() => chooseDocument(entry.ref)}
                     className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
                       active ? "is-active" : ""
                     }`}
@@ -416,6 +421,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
                     detailPending={detailPending}
                     onOpenCase={(name) => selectCase(category, name)}
                     onOpenPiece={openPiece}
+                    onReadCase={floating ? (name) => chooseDocument(`${category}/${name}`) : undefined}
                   />
                 ) : (
                   <p className="py-2 pl-9 pr-2 text-xs text-muted-foreground">
@@ -442,6 +448,7 @@ function CaseRows({
   detailPending,
   onOpenCase,
   onOpenPiece,
+  onReadCase,
 }: {
   category: CaseCategory;
   cases: CaseShelf["categories"][number]["cases"];
@@ -451,8 +458,10 @@ function CaseRows({
   detailPending: boolean;
   onOpenCase: (name: string) => void;
   onOpenPiece: (stem: string) => void;
+  onReadCase?: (name: string) => void;
 }) {
   const t = useTranslations("library");
+  const tNav = useTranslations("workspace.nav");
 
   if (cases.length === 0) {
     return (
@@ -473,6 +482,7 @@ function CaseRows({
             <button
               type="button"
               onClick={() => onOpenCase(item.name)}
+              aria-expanded={onReadCase ? caseOpen : undefined}
               className={`chrome-row flex-col items-stretch gap-0.5 py-2 pl-8 pr-2 ${
                 caseDocActive ? "is-active" : ""
               }`}
@@ -488,12 +498,15 @@ function CaseRows({
               )}
             </button>
             {caseOpen && (
-              <CaseDetailRows
+              <>
+                {onReadCase && <button type="button" className="chrome-row py-1.5 pl-14 pr-2 text-sm" onClick={() => onReadCase(item.name)}>{tNav("openDocument")}</button>}
+                <CaseDetailRows
                 detail={detail}
                 pending={detailPending}
                 activeDocRef={activeDocRef}
                 onOpenPiece={onOpenPiece}
-              />
+                />
+              </>
             )}
           </li>
         );

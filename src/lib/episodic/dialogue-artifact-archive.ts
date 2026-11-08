@@ -3,7 +3,7 @@ import type { DialogueArtifactRef, PublicUtterance } from "@/lib/chat/dialogue-c
 import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
 import { absentDocumentError } from "@/lib/docs/write-validation";
 import { parseDialogueArtifactRef } from "./dialogue-record";
-import { fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
+import { fsReadFile } from "./io-helpers";
 
 const ARTIFACT_ID = /^[a-f0-9]{64}$/;
 const CHILD_RUN = /^wrun_[A-Za-z0-9]+$/;
@@ -25,28 +25,27 @@ function verifyBody(artifact: DialogueArtifactRef, body: string): void {
   }
 }
 
-/** Archive only bytes already published by a native child, never producer-only output. */
-export async function archiveDialogueArtifacts(
+/** Only sources admitted by the public utterance may enter its record body. */
+export function verifiedDialogueRecordArtifacts(
   utterance: PublicUtterance | undefined,
   typedArtifacts: readonly DialogueTypedArtifact[] | undefined,
-  batch: WriteBatch,
-): Promise<void> {
-  if (!utterance) return;
+): Map<string, string> {
+  const bodies = new Map<string, string>();
+  if (!utterance) return bodies;
   const available = new Map((typedArtifacts ?? []).map((entry) => [`${entry.blockId}:${entry.artifact.artifactId}`, entry]));
   for (const block of utterance.blocks) {
-    if (block.kind !== "artifact_ref" || !CHILD_RUN.test(block.artifact.sourceOwnerId)) continue;
+    if (block.kind !== "artifact_ref" || block.artifact.kind !== "native_html") continue;
     const expected = parseDialogueArtifactRef(block.artifact);
     const typed = available.get(`${block.blockId}:${block.artifact.artifactId}`);
     const actual = parseDialogueArtifactRef(typed?.artifact);
     if (!expected || !ARTIFACT_ID.test(expected.artifactId) || !typed || typeof typed.body !== "string"
       || !actual || JSON.stringify(actual) !== JSON.stringify(expected)) {
-      throw new Error("Published native artifact has no verified archive source");
+      throw new Error("Published native artifact has no verified record source");
     }
     verifyBody(expected, typed.body);
-    const paths = archivePaths(expected.artifactId);
-    await fsWriteFile(paths.reference, JSON.stringify(expected), batch);
-    await fsWriteFile(paths.body, typed.body, batch);
+    bodies.set(expected.artifactId, typed.body);
   }
+  return bodies;
 }
 
 /** Read the durable background copy after the source Workflow has expired. */

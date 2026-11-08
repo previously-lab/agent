@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { getWorkflowMetadata, getWritable } from "workflow";
-import { start } from "workflow/api";
+import { getRun, start } from "workflow/api";
 import type { UIMessageChunk } from "@/lib/chat/protocol";
 import type { PublicUtterance } from "@/lib/chat/dialogue-contract";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
@@ -9,6 +9,7 @@ import {
   DIALOGUE_ARTIFACT_CHUNK,
   DIALOGUE_OFFERS_NAMESPACE,
   DIALOGUE_PUBLICATION_CHUNK,
+  CHECKPOINT_TEXT_MAX_CHARS,
   offerEventFromResult,
   parseOfferReplyResult,
   type DialogueRecordRequest,
@@ -33,7 +34,7 @@ export async function dialogueAdmissionStep(
   return readDialogueAdmission(parentRunId, offerId, childRunId);
 }
 
-/** Runs after offerReply's start step is durable, before the next model call. */
+/** Runs as soon as offerReply's start step is durable, independent of its siblings. */
 export async function publishDialogueOfferControlsStep(results: unknown[]): Promise<number> {
   "use step";
   const offers = results.map(parseOfferReplyResult).filter((result): result is NonNullable<typeof result> => !!result);
@@ -57,12 +58,70 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function checkpointSuperseded(input: DialogueRunInput, offers: DialogueOfferEvent[]): boolean {
+  if (input.stage !== "checkpoint") return false;
+  return offers.some((offer) => {
+    if (offer.offerId === input.offerId || offer.sourceInputId !== input.context.sourceInputId) return false;
+    // A final (or stageless) offer and any newer checkpoint supersede as before.
+    if (offer.stage !== "checkpoint") return true;
+    if ((offer.publicSeq ?? 0) > input.publicSeq) return true;
+    // An automatic read_completed checkpoint loses to any other same-source
+    // explicit/semantic offer — including an explicit checkpoint at the same
+    // publicSeq — so a race never speaks a bare read announcement last.
+    return input.event?.kind === "read_completed" && offer.eventKind !== "read_completed";
+  });
+}
+
+/** Read a snapshot of a prior checkpoint's committed public output without waiting on it. */
+async function readSpokenCheckpoint(offer: DialogueOfferEvent): Promise<string[]> {
+  try {
+    const readable = getRun(offer.runId).getReadable({ startIndex: 0 });
+    const tail = await readable.getTailIndex();
+    if (tail < 0) return [];
+    // Checkpoints emit a short single delta plus the typed publication.
+    const reader = readable.getReader();
+    try {
+      for (let index = 0; index <= Math.min(tail, 10); index++) {
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = next.value as { type?: string; data?: PublicUtterance } | undefined;
+        if (chunk?.type === DIALOGUE_PUBLICATION_CHUNK && chunk.data?.utteranceId === offer.offerId) {
+          return chunk.data.blocks.flatMap((block) => block.kind === "markdown"
+            ? [block.text.slice(0, CHECKPOINT_TEXT_MAX_CHARS)] : []);
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  } catch { /* Background context may still be publishing or no longer retained. */ }
+  return [];
+}
+
 /** Native source is stored as typed Workflow data, unchanged and out of the prompt. */
 export async function prepareDialogueOfferStep(
   input: DialogueRunInput,
   childRunId: string,
 ): Promise<PreparedDialogueOffer> {
   "use step";
+  const prior = input.priorCheckpoints ?? [];
+  const offers = input.stage === "checkpoint" || input.stage === "final" || prior.length
+    ? await listDialogueOffers(input.context.parentRunId) : [];
+  if (checkpointSuperseded(input, offers)) return { artifacts: [], prompt: "", superseded: true };
+  const automaticRead = input.stage === "checkpoint" || input.stage === "final"
+    ? offers.find((offer) => offer.offerId !== input.offerId && offer.runId !== childRunId &&
+      offer.stage === "checkpoint" && offer.eventKind === "read_completed" &&
+      offer.sourceInputId === input.context.sourceInputId && (offer.publicSeq ?? 0) < input.publicSeq &&
+      !prior.some((entry) => entry.offerId === offer.offerId && entry.runId === offer.runId))
+    : undefined;
+  const alreadySaid = (await Promise.all([
+    ...prior.flatMap((entry) => {
+      const admitted = offers.find((offer) => offer.offerId === entry.offerId && offer.runId === entry.runId &&
+        offer.stage === "checkpoint" && offer.sourceInputId === input.context.sourceInputId);
+      return admitted ? [readSpokenCheckpoint(admitted)] : [];
+    }),
+    ...(automaticRead ? [readSpokenCheckpoint(automaticRead)] : []),
+  ])).flat();
   const artifacts: DialogueTypedArtifact[] = [];
   const sections = parseNativeSections(input.text);
   const prose = sections.map((section) => {
@@ -94,7 +153,7 @@ export async function prepareDialogueOfferStep(
     artifacts.push(artifact);
     return `\n\n[Interactive artifact ${ordinal}: ${artifactId}]\n\n`;
   }).join("");
-  return { artifacts, prompt: buildDialoguePrompt(input, artifacts, prose) };
+  return { artifacts, prompt: buildDialoguePrompt(input, artifacts, prose, alreadySaid) };
 }
 
 export async function openDialogueStreamStep(input: DialogueRunInput): Promise<void> {
@@ -122,9 +181,13 @@ export async function publishDialogueResultStep(args: {
   input: DialogueRunInput;
   artifacts: DialogueTypedArtifact[];
   text: string;
-}): Promise<PublicUtterance> {
+}): Promise<PublicUtterance | undefined> {
   "use step";
   const { input, artifacts, text } = args;
+  // While the dialogue was choosing what to say, the thinking flow may have
+  // handed off a newer result. Skip an interim publication in that case.
+  if (input.stage === "checkpoint" &&
+      checkpointSuperseded(input, await listDialogueOffers(input.context.parentRunId))) return undefined;
   const utterance: PublicUtterance = {
     utteranceId: input.offerId,
     publicSeq: input.publicSeq,
@@ -139,6 +202,12 @@ export async function publishDialogueResultStep(args: {
   const writable = getWritable<UIMessageChunk>();
   const writer = writable.getWriter();
   try {
+    if (input.stage === "checkpoint") {
+      const id = `${input.offerId}:checkpoint`;
+      await writer.write({ type: "text-start", id });
+      await writer.write({ type: "text-delta", id, delta: text });
+      await writer.write({ type: "text-end", id });
+    }
     for (const artifact of artifacts) {
       await writer.write({
         type: DIALOGUE_ARTIFACT_CHUNK,

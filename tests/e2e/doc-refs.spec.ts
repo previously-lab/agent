@@ -142,7 +142,8 @@ test.describe("In-paper reference links", () => {
     await expect(page.locator("[data-desk-place]")).toHaveCount(0);
     // Related travel follows the open record even when the world cursor has
     // never been set. Reading alone must not silently move that cursor.
-    await page.locator(".workspace-reader-nav .workspace-route-nav").getByRole("button", { name: "View this moment in the room" }).click();
+    await page.locator("[data-manuscript-header]").getByRole("button", { name: "Manuscripts", exact: true }).click();
+    await page.getByRole("button", { name: "View this moment in the room" }).click();
     await expect(page.locator('[data-workspace-game-host][data-game-active]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-desk-field]")).toHaveCount(0);
     await expect.poll(() => dbg(page).read().then((d) => d?.space), { timeout: 60_000 }).toBe(sliceId);

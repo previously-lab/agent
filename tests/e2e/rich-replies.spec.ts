@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { collapseConversation } from "./manuscript-navigation";
 import { test, expect } from "./test";
 import {
   clearCases,
@@ -872,9 +873,7 @@ test("initial arrival Retry and Expand work with a real pointer", async ({ page 
   await expect(expand.or(composer).first()).toBeVisible({ timeout: 30_000 });
   if (!(await composer.isVisible()) && (await expand.isVisible())) await expand.click();
   await expect(composer).toBeVisible();
-  const exit = page.getByRole("button", { name: "Exit full screen", exact: true });
-  await expect(exit).toBeVisible();
-  await exit.click();
+  await collapseConversation(page);
   const expandAgain = page.getByRole("button", { name: "Expand to full screen" });
   await expect(expandAgain).toBeVisible();
   await expandAgain.click();
@@ -887,7 +886,7 @@ test("native state follows the resolved persona through utility navigation", asy
   await seedAndOpen(page, nativeFixture({ value: 10 }), "alpha");
   await setRange(page, 68, 0, "native-turn");
   await expect.poll(() => storedControlValues(page)).toContain("68");
-  await page.getByRole("button", { name: "Exit full screen", exact: true }).click();
+  await collapseConversation(page);
   await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/settings/);

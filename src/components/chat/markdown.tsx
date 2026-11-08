@@ -37,6 +37,7 @@ import {
 import { useNativeTurnIdentity } from "./native-identity";
 import { remarkDialogueSlots, remarkDialogueImageSlots } from "./dialogue-markdown";
 import type { ImageMarkerMatch } from "@/lib/chat/image-markers";
+import { RichContentFrame, RichConversationImage, RichViewEnabled } from "./rich-content-view";
 
 export interface DocRefContextValue {
   status: ReadonlyMap<string, boolean>;
@@ -184,7 +185,7 @@ function MarkdownLink({ node, href, children, ...props }: React.JSX.IntrinsicEle
       {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       {...props}
     >
-      {children}
+      <RichViewEnabled.Provider value={false}>{children}</RichViewEnabled.Provider>
     </a>
   );
 }
@@ -232,12 +233,22 @@ function NativeMarkdownIsland({
   );
 }
 
+function MarkdownTable({ children }: React.ComponentProps<"table"> & ExtraProps) {
+  const enabled = useContext(RichViewEnabled);
+  const table = <div className="typeset-scroll" data-rich-block="table" tabIndex={0}><Table>{children}</Table></div>;
+  return enabled ? <RichContentFrame kind="table">{table}</RichContentFrame> : table;
+}
+
+function MarkdownImage({ node: _node, alt, ...props }: React.ComponentProps<"img"> & ExtraProps) {
+  const enabled = useContext(RichViewEnabled);
+  return enabled ? <RichConversationImage alt={alt} loading="lazy" decoding="async" {...props} />
+    : <img alt={alt ?? ""} className="conversation-rich-image" data-rich-block="image" loading="lazy" decoding="async" {...props} />;
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   code: MarkdownCode,
   pre: MarkdownPre,
-  table({ node: _node, children }) {
-    return <div className="typeset-scroll" data-rich-block="table" tabIndex={0}><Table>{children}</Table></div>;
-  },
+  table: MarkdownTable,
   thead({ node: _node, children }) {
     return <TableHeader>{children}</TableHeader>;
   },
@@ -273,9 +284,7 @@ const MARKDOWN_COMPONENTS: Components = {
   li: MarkdownListItem,
   ul: MarkdownUl,
   ol: MarkdownOl,
-  img({ node: _node, alt, ...props }) {
-    return <img alt={alt ?? ""} className="conversation-rich-image" data-rich-block="image" loading="lazy" decoding="async" {...props} />;
-  },
+  img: MarkdownImage,
   blockquote({ node: _node, children, ...props }) {
     return <MarkdownBlockquote {...props}>{children}</MarkdownBlockquote>;
   },

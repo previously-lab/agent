@@ -92,6 +92,7 @@ export interface AgentOptions<Tools extends ToolSet = ToolSet> {
   onChunk?: (event: { chunk: ModelCallStreamPart }) => void | Promise<void>;
   onError?: (event: { error: unknown }) => void | Promise<void>;
   onStepEnd?: (step: StepResult<Tools>) => void | Promise<void>;
+  onToolExecutionResult?: (result: ToolResult) => void | Promise<void>;
   onToolExecutionStart?: (event: { toolCall: ToolCall }) => void | Promise<void>;
   writable?: WritableStream<ModelCallStreamPart>; sendFinish?: boolean; preventClose?: boolean;
 }

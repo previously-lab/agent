@@ -17,7 +17,8 @@
  * right-edge column never meets it. (An open composer's card can grow over
  * ~300px tall — chrome yields to an open composer.) 220 is a verified
  * constant, not a guess: the probe fails the build's geometry assertions if
- * any of the measured rects touch.
+ * any of the measured rects touch. In the narrow fullscreen manuscript the
+ * dock moves into the lower safe area to clear the in-flow Send/Stop row.
  *
  * One narration at a time, unchanged: a new target (new `gen`) aborts the
  * previous reader, and dismissing an unfinished stream ends it. The button
@@ -1253,7 +1254,7 @@ function CompanionPodBody({
               data-active={active}
               aria-label={t("wfTabWorkflows")}
               title={t("wfTabWorkflows")}
-              className="pointer-events-auto gap-1.5 font-mono text-xs data-[active=true]:border-brand/50 data-[active=true]:bg-brand/10 data-[active=true]:text-brand"
+              className={`${styles.trigger} pointer-events-auto gap-1.5 font-mono text-xs data-[active=true]:border-brand/50 data-[active=true]:bg-brand/10 data-[active=true]:text-brand`}
             />
           }
         >

@@ -3,9 +3,10 @@ import { isStepCount } from "@/lib/deepseek/tools";
 import type { ModelCallStreamPart } from "@/lib/deepseek/types";
 import { getWritable } from "workflow";
 import { createDialogueAgent } from "@/app/api/agent/agent";
-import type {
-  DialogueRunInput,
-  DialogueRunResult,
+import {
+  DIALOGUE_CHECKPOINT_NAMESPACE,
+  type DialogueRunInput,
+  type DialogueRunResult,
 } from "@/lib/dialogue/transport";
 import type { PublicUtterance } from "@/lib/chat/dialogue-contract";
 import {
@@ -47,32 +48,47 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
 
   const prepared = await prepareDialogueOfferStep(input, childRunId);
   await openDialogueStreamStep(input);
+  const checkpoint = input.stage === "checkpoint";
+  if (prepared.superseded) {
+    await closeDialogueStreamStep({ offerId: input.offerId, text: "" });
+    return { kind: "dialogue-reply", offerId: input.offerId, status: "completed", held: true };
+  }
 
   let text = "";
+  let held = false;
   let error: string | undefined;
   try {
-    const agent = createDialogueAgent();
+    const agent = createDialogueAgent(checkpoint);
     const result = await agent.stream({
       prompt: prepared.prompt,
-      writable: getWritable<ModelCallStreamPart>(),
+      // Keep the checkpoint's candidate and hold decision off the public stream.
+      writable: getWritable<ModelCallStreamPart>(checkpoint ? { namespace: DIALOGUE_CHECKPOINT_NAMESPACE } : undefined),
       stopWhen: isStepCount(1),
       sendFinish: false,
-      preventClose: true,
+      preventClose: !checkpoint,
       onStepEnd: (step) => {
         if (step.text) text = step.text;
       },
     });
     text = result.text || text;
+    if (checkpoint) held = result.toolCalls.some((call) => call.toolName === "holdReply" && !call.invalid);
   } catch (cause) {
     error = failureMessage(cause);
+    if (checkpoint) text = "";
   }
 
   let utterance: PublicUtterance | undefined;
   let recordRunId: string | undefined;
   let recordError: string | undefined;
-  if (text.trim()) {
+  if (held) {
+    text = "";
+  } else if (text.trim()) {
     try {
       utterance = await publishDialogueResultStep({ input, artifacts: prepared.artifacts, text });
+      if (checkpoint && !utterance) {
+        held = true;
+        text = "";
+      }
     } catch (cause) {
       error ??= failureMessage(cause);
     }
@@ -91,21 +107,23 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     });
   }
 
-  // Actual public output (or an honest user-only failure) is handed off after
-  // publication. A summary failure never retracts or suppresses that output.
-  try {
-    recordRunId = await startDialogueRecordRunStep(dialogueRecordRequest(input, utterance));
-  } catch (cause) {
-    recordError = failureMessage(cause);
-    console.warn("[Dialogue] record handoff failed after public output", {
-      offerId: input.offerId,
-      error: recordError,
-    });
+  // A held or failed checkpoint is background context, not a memory entry.
+  if (!checkpoint || utterance) {
+    try {
+      recordRunId = await startDialogueRecordRunStep(dialogueRecordRequest(input, utterance));
+    } catch (cause) {
+      recordError = failureMessage(cause);
+      console.warn("[Dialogue] record handoff failed after public output", {
+        offerId: input.offerId,
+        error: recordError,
+      });
+    }
   }
   return {
     kind: "dialogue-reply",
     offerId: input.offerId,
     status: error ? "failed" : "completed",
+    ...(held ? { held: true } : {}),
     ...(utterance ? { utterance } : {}),
     artifacts: prepared.artifacts,
     ...(recordRunId ? { recordRunId } : {}),

@@ -8,6 +8,13 @@ import { DemoBadge } from "@/components/layout/demo-badge";
 import { ClientBadge } from "@/components/layout/client-badge";
 import { SearchPalette } from "@/components/layout/search-palette";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
+import { ISLAND } from "@/components/layout/island";
+import { DoorOpen } from "lucide-react";
+import { useShell } from "@/components/shell/shell-provider";
+import { ManuscriptNavigation } from "@/components/workspace/manuscript-navigation";
+import { WorkspaceTaskPanel } from "@/components/workspace/workspace-task-panel";
+import { useSearchParams } from "next/navigation";
+import { useNativeSourceScope } from "@/components/chat/native-source-scope";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
@@ -17,6 +24,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const isHome = pathname === "/";
   const onGame = pathname === "/game";
   if (onGame) return null;
+  if (pathname === "/app") return <ManuscriptHeader isDemo={isDemo} />;
 
   return (
     <header
@@ -53,6 +61,28 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           <NavOverflowMenu />
         </nav>
       )}
+    </header>
+  );
+}
+
+function ManuscriptHeader({ isDemo }: { isDemo: boolean }) {
+  const t = useTranslations("workspace.nav");
+  const { openConversation, openGame, panelMode, collapseConversation } = useShell();
+  const persona = useSearchParams().get("persona") ?? "user";
+  const source = useNativeSourceScope();
+  return (
+    <header data-app-header data-manuscript-header>
+      <div className="manuscript-header-brand">
+        <button type="button" className={`${ISLAND} manuscript-wordmark`} aria-label={`Previously. ${t("conversation")}`} onClick={openConversation}>Previously.</button>
+        <div className="manuscript-header-badges">{isDemo && <DemoBadge />}<ClientBadge /></div>
+      </div>
+      <ManuscriptNavigation />
+      <div className="manuscript-header-actions">
+        <button type="button" className={`${ISLAND} manuscript-room`} aria-label={t("game")} title={t("game")} onClick={openGame}><DoorOpen aria-hidden /></button>
+        <SearchPalette />
+        <WorkspaceTaskPanel key={JSON.stringify([source, persona])} />
+        <NavOverflowMenu onCollapseConversation={panelMode === "fullscreen" ? collapseConversation : undefined} />
+      </div>
     </header>
   );
 }

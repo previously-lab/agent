@@ -2,6 +2,45 @@
   bottom: calc(13.75rem + env(safe-area-inset-bottom, 0px));
 }
 
+/* The full manuscript has a normal-flow Send/Stop row. On narrow screens
+   the dock shares its right edge, so use the safe foot below the row. */
+@media (max-width: 64rem) {
+  :global(body:has(.conversation-panel[data-panel-tier="fullscreen"])) .root.root {
+    bottom: calc(var(--spacing) * 2 + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Match the floating shell controls while leaving the pod's shape,
+   label and activity markers untouched. */
+.trigger.trigger {
+  border-color: var(--tool-line);
+  background: var(--tool-glass);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(16px) saturate(1.08);
+}
+
+.trigger.trigger:not(:disabled):hover {
+  border-color: var(--ring);
+  background: var(--accent);
+}
+
+.trigger.trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  box-shadow: var(--shadow-float);
+}
+
+.trigger.trigger[aria-expanded="true"],
+.trigger.trigger[data-popup-open] {
+  background: var(--accent);
+}
+
+.trigger.trigger[data-active="true"] {
+  border-color: color-mix(in oklab, var(--brand) 50%, transparent);
+  background: color-mix(in oklab, var(--brand) 10%, transparent);
+  color: var(--brand);
+}
+
 .panel.panel {
   animation: none;
   width: min(24rem, calc(100vw - 2rem));
