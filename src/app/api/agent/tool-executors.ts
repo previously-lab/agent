@@ -18,7 +18,6 @@ import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
 import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
 import { CHECKPOINT_TEXT_MAX_CHARS, dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS, parseOfferReplyResult } from "@/lib/dialogue/transport";
-import { substantiveThinkingReadCheckpoint } from "@/lib/agents/thinking-read-receipt";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
@@ -1286,38 +1285,6 @@ function offerPublicSeq(messages: ModelMessage[] | undefined, toolCallId: string
   return prior + 1;
 }
 
-/** An eligible substantive read anywhere in prior messages reserves one slot. */
-function hasEligibleThinkingRead(messages: ModelMessage[] | undefined, readScopeId: string): boolean {
-  for (const message of messages ?? []) {
-    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-result" || part.isError) continue;
-      if (part.toolName !== "recallRead" && part.toolName !== "recallScenario") continue;
-      if (part.output.type !== "text" && part.output.type !== "json") continue;
-      if (substantiveThinkingReadCheckpoint(part.output.value, readScopeId, part.toolName, part.toolCallId)) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Deterministic public sequence. After a valid eligible read in prior
- * messages, every offer except the read checkpoint itself reserves ONE slot
- * for the potential automatic read checkpoint, so a later explicit/host offer
- * never lands on the checkpoint's sequence. Sequences with no eligible read
- * are unchanged.
- */
-function nextOfferPublicSeq(
-  messages: ModelMessage[] | undefined,
-  toolCallId: string,
-  readScopeId: string,
-  claimReadSlot: boolean,
-): number {
-  const base = offerPublicSeq(messages, toolCallId);
-  if (!claimReadSlot && hasEligibleThinkingRead(messages, readScopeId)) return base + 1;
-  return base;
-}
-
 function precedingCheckpoints(messages: ModelMessage[] | undefined, workId: string): DialogueCheckpoint[] {
   const candidates = new Map<string, string>();
   const checkpoints = new Map<string, DialogueCheckpoint>();
@@ -1415,7 +1382,7 @@ export async function offerReplyExecute(
       }
     }
   }
-  const publicSeq = nextOfferPublicSeq(messages, toolCallId, ctx.readScopeId, false);
+  const publicSeq = offerPublicSeq(messages, toolCallId);
   return startDialogueOffer({
     context, offerId, publicSeq, text: input.text,
     ...(input.stage ? { stage: input.stage } : {}),
@@ -1426,8 +1393,8 @@ export async function offerReplyExecute(
 // ─── offerDialogueEvent — host semantic offers, never model-issued ─────────
 
 /**
- * Start a public dialogue run from a host semantic event (automatic read
- * checkpoint, needs-user handoff, structured findings final). Same admission
+ * Start a public dialogue run from a host semantic event, such as a user
+ * blocker or structured findings. Same admission
  * and non-waiting start as offerReply; the stable synthetic toolCallId makes
  * the offer id a durable duplicate fence across retries.
  */
@@ -1444,8 +1411,7 @@ export async function offerDialogueEventExecute(
   if (!parsed.success) return reject("event must be a valid dialogue semantic event.");
   const stage = input.stage === "checkpoint" || input.stage === "final" ? input.stage : undefined;
   const priorCheckpoints = precedingCheckpoints(messages, context.workId);
-  // The read checkpoint claims the slot reserved for it; other events reserve it.
-  const publicSeq = nextOfferPublicSeq(messages, toolCallId, ctx.readScopeId, parsed.data.kind === "read_completed");
+  const publicSeq = offerPublicSeq(messages, toolCallId);
   return startDialogueOffer({
     context, offerId, publicSeq, text: "", event: parsed.data,
     ...(stage ? { stage } : {}),

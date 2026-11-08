@@ -39,10 +39,19 @@ describe("dialogue DeepSeek profile", () => {
     const system = request.messages.find(message => message.role === "system")?.content;
     expect(system).toContain("sourceInput.text is the original user ask");
     expect(system).toContain("priorCheckpoints and alreadySaid");
-    expect(system).toContain("Join verified facts across the work");
-    expect(system).toContain("Researched or complex replies must include the detail needed to answer well");
+    expect(system).toContain("You own how to say it.");
+    expect(system).toContain("Do not investigate, fact-check");
+    expect(system).toContain("Preserve the event's attribution, corrections, and confidence level.");
+    expect(system).toContain("An offer_reply event");
     expect(system).toContain("Do not ask the user a question unless the current event is needs_user");
     expect(system).not.toContain("Keep ordinary replies to one or two short sentences");
+  });
+
+  it("gives the checkpoint wording model no tools, even for an opening that is only a plan", async () => {
+    await createDialogueAgent(true).stream({ prompt: "Opening | Plan: check the forecast." });
+    const request = h.call.mock.calls[0]![0] as CapturedRequest;
+    expect(request.tools).toBeUndefined();
+    expect(request.messages[0]?.content).toContain("including when it only confirms the task or states a plan");
   });
 
   it("assembles lifecycle handoffs and separate final steps into the thinking request", async () => {
@@ -59,7 +68,13 @@ describe("dialogue DeepSeek profile", () => {
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     const system = request.messages.find(message => message.role === "system")?.content;
     expect(system?.startsWith("BASE PROMPT")).toBe(true);
+    expect(system).toContain("Leave ordinary assistant message content empty on every step, including the last.");
+    expect(system).toContain("FIRST action after receiving every user task");
     expect(system).toContain("SEPARATE tool step before the first investigative tool");
+    expect(system).toContain("give your initial take");
+    expect(system).toContain("After each search, recall, source read");
+    expect(system).toContain("your NEXT tool step MUST be offerReply");
+    expect(system).not.toContain("may skip all checkpoints");
     expect(system).toContain("checkpoints of at most 2,400 characters each");
     expect(system).toContain("ONE combined checkpoint as the next tool step");
     expect(system).toContain("every material still-unhanded result or error");
@@ -75,7 +90,9 @@ describe("dialogue DeepSeek profile", () => {
 
     const offeredTool = request.tools?.find(entry => entry.function.name === "offerReply");
     expect(offeredTool?.function.description).toContain("Checkpoints are limited to 2,400 characters each");
-    expect(offeredTool?.function.description).toContain("do not make arbitrary per-tool calls");
+    expect(offeredTool?.function.description).toContain("Opening |");
+    expect(offeredTool?.function.description).toContain("After EACH search, recall");
+    expect(offeredTool?.function.description).toContain("Progress |");
     expect(offeredTool?.function.description).toContain("carry all remaining unhanded evidence into final");
     expect(offeredTool?.function.description).toContain("never bundled or parallel");
   });

@@ -24,11 +24,11 @@ export function dialoguePriorContext(messages: readonly ModelMessage[], sourceIn
   }).slice(-PRIOR_CONTEXT_MESSAGES);
 }
 
-/** The model sees descriptors, prose and typed events; native source never enters this prompt. */
+/** Supply only handoff events and public context; native source never enters this prompt. */
 export function buildDialoguePrompt(
   input: DialogueRunInput,
   artifacts: readonly DialogueTypedArtifact[],
-  prose: string,
+  handoffNotes: string,
   alreadySaid: readonly string[] = [],
 ): string {
   return JSON.stringify({
@@ -47,10 +47,7 @@ export function buildDialoguePrompt(
     stage: input.stage ?? "final",
     priorCheckpoints: (input.priorCheckpoints ?? []).map(({ text }) => text),
     alreadySaid,
-    result: prose.trim(),
-    // Machine-labeled host semantic input; omitted for ordinary result offers.
-    // Event offers carry an empty result. `needs_user` is its own distinct kind.
-    ...(input.event ? { event: input.event } : {}),
+    event: input.event ?? { kind: "offer_reply", notes: handoffNotes.trim() },
     artifacts: artifacts.map(({ artifact }, index) => ({
       ordinal: index + 1,
       artifactId: artifact.artifactId,

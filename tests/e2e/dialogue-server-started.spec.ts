@@ -199,7 +199,7 @@ test.afterEach(async () => {
   gates.clear();
 });
 
-test("v2 speaks from a verified tool event and a structured final without a thinking draft", async ({ page }) => {
+test("v2 keeps verified reads out of the chat and publishes the structured final", async ({ page }) => {
   const token = randomUUID();
   const ref = `research/dialogue-fixture-${token}`;
   const folder = path.join(E2E_MEMORY_ROOT, ...ref.split("/"));
@@ -209,12 +209,10 @@ test("v2 speaks from a verified tool event and a structured final without a thin
   await fs.promises.writeFile(path.join(folder, "index.md"),
     `# Reading room\n\n${fact}\n\n${privateDocumentMarker}\n`, "utf8");
   const firstReadId = `tool-first-read-${token}`;
-  const firstPublic = `I found the note and am checking the schedule. ${token}`;
   const finalPublic = `The pilot trial starts on Tuesday. ${token}`;
   const finalGate = `structured-final-${token}`;
   gates.add(finalGate);
   const terminalThinking = `terminal-thinking-${token}`;
-  const eventDialogue = `tool-event-dialogue-${token}`;
   const finalDialogue = `structured-final-dialogue-${token}`;
   await writeRules([
     idleReflectionRule(),
@@ -226,11 +224,10 @@ test("v2 speaks from a verified tool event and a structured final without a thin
     { id: terminalThinking, contains: ["finishThinking", token], thinking: "enabled", gate: finalGate, finishReason: "tool_calls",
       frames: [toolFrame("finishThinking", { findings: [{ kind: "project_fact", text: fact,
         evidenceIds: [`${firstReadId}:1`] }] }, `finish-structured-${token}`)] },
-    { id: eventDialogue, contains: ["holdReply", token], thinking: "disabled", frames: [{ content: firstPublic }] },
-    { id: finalDialogue, contains: [fact], excludes: ["holdReply"], thinking: "disabled", frames: [{ content: finalPublic }] },
+    { id: finalDialogue, contains: [fact], thinking: "disabled", frames: [{ content: finalPublic }] },
   ]);
   const accepted = await sendThroughComposer(page, `Check the schedule in my reading-room note ${token}`, `tool-event-${token}`);
-  const offers = await observeOffers(accepted.offersUrl);
+  let offers: Awaited<ReturnType<typeof observeOffers>> | undefined;
   try {
     await expect.poll(async () => (await capturedRequests(terminalThinking)).length).toBe(1);
     const firstThinkingRequest = (await capturedRequests(`first-read-${token}`))[0]!;
@@ -246,32 +243,29 @@ test("v2 speaks from a verified tool event and a structured final without a thin
     const offeredTool = (firstThinkingRequest.tools as Array<{ function: { name: string; parameters: { required?: string[] } } }>)
       .find(entry => entry.function.name === "offerReply");
     expect(offeredTool?.function.parameters.required).toContain("stage");
-    await expect(assistantReply(page, firstPublic)).toHaveCount(1);
     await expect(assistantReply(page, finalPublic)).toHaveCount(0);
-    const interimCall = (await capturedRequests(eventDialogue))[0]!;
-    const dialogueSystem = (interimCall.messages as Array<{ role: string; content: string }>)
+    await release(finalGate);
+    // The endpoint can wait to send headers until the first offer. With no
+    // read-only checkpoint, start observing after we release the final.
+    const observed = await observeOffers(accepted.offersUrl);
+    offers = observed;
+    await expect(assistantReply(page, finalPublic)).toHaveCount(1);
+    await expect.poll(() => observed.events.some(event => event.type === "done")).toBe(true);
+    expect(offers.events.filter(event => event.type === "offer")).toHaveLength(1);
+    const finalCall = (await capturedRequests(finalDialogue))[0]!;
+    const dialogueSystem = (finalCall.messages as Array<{ role: string; content: string }>)
       .find(message => message.role === "system")?.content;
     expect(dialogueSystem).toContain("If the user explicitly asks to inspect, test or debug Previously itself");
     expect(dialogueSystem).toContain("not proof that a browser displayed it or the user saw it");
-    const interimRequest = JSON.stringify(interimCall);
-    expect(interimRequest).toContain("read_completed");
-    expect(interimRequest).not.toContain(ref);
-    expect(interimRequest).not.toContain(privateDocumentMarker);
-    await release(finalGate);
-    await expect(assistantReply(page, finalPublic)).toHaveCount(1);
-    await expect.poll(() => offers.events.some(event => event.type === "done")).toBe(true);
-    expect(offers.events.filter(event => event.type === "offer")).toHaveLength(2);
-    expect(await capturedRequests(eventDialogue)).toHaveLength(1);
-    const finalRequest = JSON.stringify((await capturedRequests(finalDialogue))[0]);
+    const finalRequest = JSON.stringify(finalCall);
     expect(finalRequest).toContain(fact);
-    expect(finalRequest).toContain(firstPublic);
     expect(finalRequest).not.toContain(privateDocumentMarker);
   } finally {
-    await offers.close();
+    await offers?.close();
   }
 });
 
-test("v2 dialogue can hold one checkpoint, speak the next, and still stream a final reply", async ({ page }, testInfo) => {
+test("v2 publishes a plan-only opening, progress and final while discarding stale drafts", async ({ page }, testInfo) => {
   const token = randomUUID();
   await page.addInitScript(() => {
     let copied = "";
@@ -280,10 +274,11 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
       readText: async () => copied,
     } });
   });
-  const firstNote = `NOTE_TO_HOLD_${token}`;
+  const firstNote = `Opening | Plan: check the original record ${token}`;
   const secondNote = `NEW_FINDING_${token}`;
   const staleNote = `SUPERSEDED_FINDING_${token}`;
-  const privateDraft = `UNPUBLISHED_DRAFT_${token}`;
+  const openingReply = `I’ll check the original record. ${token}`;
+  const openingDialogue = `opening-dialogue-${token}`;
   const partialReply = `PUBLIC_CHECKPOINT_${token}`;
   const staleDraft = `SUPERSEDED_DRAFT_${token}`;
   const finalReply = `PUBLIC_CONCLUSION_${token}`;
@@ -298,9 +293,9 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
   await writeRules([
     idleReflectionRule(),
     analyzerRule(token, "checkpoint"),
-    { id: `hold-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled",
+    { id: `opening-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled",
       finishReason: "tool_calls",
-      frames: [toolFrame("offerReply", { stage: "checkpoint", text: firstNote }, `hold-${token}`)] },
+      frames: [toolFrame("offerReply", { stage: "checkpoint", text: firstNote }, `opening-${token}`)] },
     { id: `speak-thinking-${token}`, contains: ["finishThinking", token], thinking: "enabled", gate: nextGate,
       finishReason: "tool_calls",
       frames: [toolFrame("offerReply", { stage: "checkpoint", text: secondNote }, `speak-${token}`)] },
@@ -308,32 +303,27 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
       finishReason: "tool_calls",
       frames: [toolFrame("offerReply", { stage: "checkpoint", text: staleNote }, `stale-${token}`)] },
     { id: finalThinking, contains: ["finishThinking", token], thinking: "enabled", gate: finalGate,
-      // Omitting offerReply here exercises the final fallback after a checkpoint.
-      frames: [{ content: `Final finding for ${token}` }] },
-    { id: `hold-dialogue-${token}`, contains: ["holdReply", firstNote], thinking: "disabled",
-      finishReason: "tool_calls",
-      frames: [{ content: privateDraft }, toolFrame("holdReply", {}, `silence-${token}`)] },
-    { id: `speak-dialogue-${token}`, contains: ["holdReply", secondNote], thinking: "disabled",
+      finishReason: "tool_calls", frames: [toolFrame("offerReply", { stage: "final",
+        text: `Final finding for ${token}` }, `final-offer-${token}`)] },
+    { id: `finish-checkpoints-${token}`, contains: ["finishThinking", token], thinking: "enabled",
+      finishReason: "tool_calls", frames: [toolFrame("finishThinking", { findings: [] }, `finish-checkpoints-${token}`)] },
+    { id: openingDialogue, contains: [firstNote, "This is an interim update intended for the user"], thinking: "disabled",
+      frames: [{ content: openingReply }] },
+    { id: `speak-dialogue-${token}`, contains: [secondNote, "This is an interim update intended for the user"], thinking: "disabled",
       frames: [{ content: partialReply }] },
-    { id: staleDialogue, contains: ["holdReply", staleNote], thinking: "disabled", gate: staleGate,
+    { id: staleDialogue, contains: [staleNote, "This is an interim update intended for the user"], thinking: "disabled", gate: staleGate,
       frames: [{ content: staleDraft }] },
-    { id: finalDialogue, contains: ["Final finding for", token], excludes: ["holdReply"], thinking: "disabled",
+    { id: finalDialogue, contains: ["Final finding for", token, "This is the final reply"], thinking: "disabled",
       frames: [{ content: finalReply }] },
   ]);
 
   const accepted = await sendThroughComposer(page, `Investigate step by step ${token}`, `checkpoint-${token}`);
   const offers = await observeOffers(accepted.offersUrl);
-  let heldStream: Awaited<ReturnType<typeof observeNativeStream>> | undefined;
   try {
-    await expect.poll(() => offers.events.find(event => event.offerId?.endsWith(`:hold-${token}`))?.stage)
-      .toBe("checkpoint");
-    const held = offers.events.find(event => event.offerId?.endsWith(`:hold-${token}`))!;
-    heldStream = await observeNativeStream(held.runId!);
-    await expect.poll(() => heldStream?.events.some(event => event.type === "finish")).toBe(true);
-    expect(heldStream.events.filter(event => event.type === "text-delta" ||
-      event.type === "tool-input-available" || event.type === "data-dialogue-publication")).toEqual([]);
-    await expect(assistantReply(page, privateDraft)).toHaveCount(0);
-    expect(await backgroundRecordRun(held.offerId!)).toBeNull();
+    await expect(assistantReply(page, openingReply)).toHaveCount(1);
+    const openingCall = (await capturedRequests(openingDialogue))[0]!;
+    expect(openingCall).not.toHaveProperty("tools");
+    expect(offers.events.find(event => event.offerId?.endsWith(`:opening-${token}`))?.stage).toBe("checkpoint");
 
     await release(nextGate);
     await expect(assistantReply(page, partialReply)).toHaveCount(1);
@@ -346,8 +336,9 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
     await release(finalGate);
     const reply = assistantReply(page, finalReply);
     await expect(reply).toHaveCount(1);
+    await expect(reply).toContainText(openingReply);
     await expect(reply).toContainText(partialReply);
-    await expect(reply.locator("[data-public-utterance]")).toHaveCount(2);
+    await expect(reply.locator("[data-public-utterance]")).toHaveCount(3);
     await expect(reply.locator(".conversation-speaker")).toHaveCount(1);
     await expect(reply.locator(".conversation-message-actions")).toHaveCount(1);
     await expect.poll(() => offers.events.some(event => event.type === "done")).toBe(true);
@@ -358,12 +349,11 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
     await expect(copy).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`continuous-reply-${testInfo.project.name}.png`), animations: "disabled", fullPage: true });
     await copy.click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${partialReply}\n\n${finalReply}`);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${openingReply}\n\n${partialReply}\n\n${finalReply}`);
     const request = (await capturedRequests(finalDialogue))[0]!;
     const messages = request.messages as Array<{ role: string; content: string }>;
     const prompt = JSON.parse(messages.findLast(message => message.role === "user")!.content);
-    expect(prompt).toMatchObject({ stage: "final", priorCheckpoints: [firstNote, secondNote, staleNote], alreadySaid: [partialReply] });
-    expect(JSON.stringify(prompt)).not.toContain(privateDraft);
+    expect(prompt).toMatchObject({ stage: "final", priorCheckpoints: [firstNote, secondNote, staleNote], alreadySaid: [openingReply, partialReply] });
     expect(offers.events.filter(event => event.type === "offer")).toHaveLength(4);
     const stale = offers.events.find(event => event.offerId?.endsWith(`:stale-${token}`))!;
     await release(staleGate);
@@ -371,7 +361,6 @@ test("v2 dialogue can hold one checkpoint, speak the next, and still stream a fi
     await expect(assistantReply(page, staleDraft)).toHaveCount(0);
     expect(await backgroundRecordRun(stale.offerId!)).toBeNull();
   } finally {
-    await heldStream?.close();
     await offers.close();
   }
 });

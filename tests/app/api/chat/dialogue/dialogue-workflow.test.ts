@@ -105,16 +105,20 @@ describe("dialogueWorkflow", () => {
     expect(result.status).toBe("failed");
   });
 
-  it("keeps a held checkpoint and its candidate prose out of the public transcript and record", async () => {
-    h.stream.mockResolvedValue({ text: "uncommitted draft", toolCalls: [{ toolName: "holdReply" }] });
-    const result = await dialogueWorkflow({ ...input, stage: "checkpoint" });
+  it("publishes and records a checkpoint that only announces the plan", async () => {
+    const opening = { ...input, stage: "checkpoint" as const, text: "Opening | Plan: check the forecast." };
+    const text = "我先查一下明天的天气。";
+    const published = { ...utterance, blocks: [{ kind: "markdown" as const, blockId: "reply", text }] };
+    h.stream.mockResolvedValue({ text, toolCalls: [] });
+    h.publish.mockResolvedValue(published);
+    const result = await dialogueWorkflow(opening);
     expect(h.stream).toHaveBeenCalledWith(expect.objectContaining({
       writable: { namespace: DIALOGUE_CHECKPOINT_NAMESPACE },
     }));
-    expect(h.publish).not.toHaveBeenCalled();
-    expect(h.record).not.toHaveBeenCalled();
-    expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });
-    expect(result).toMatchObject({ status: "completed", held: true });
+    expect(h.publish).toHaveBeenCalledWith({ input: opening, artifacts: [], text });
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ utterance: published }));
+    expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text });
+    expect(result).toMatchObject({ status: "completed", utterance: published });
   });
 
   it("drops a draft superseded during checkpoint inference", async () => {

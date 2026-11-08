@@ -94,7 +94,7 @@ describe("offerReply native handoff", () => {
     expect(startedInput.priorCheckpoints.map((entry: { text: string }) => entry.text)).toEqual(texts);
     const prompt = JSON.parse(buildDialoguePrompt(startedInput, [], startedInput.text));
     expect(prompt.priorCheckpoints).toEqual(texts);
-    expect(prompt.result).toBe(sixth);
+    expect(prompt.event).toEqual({ kind: "offer_reply", notes: sixth });
 
     const duplicate = await offerReplyExecute(
       { stage: "checkpoint", text: sixth },
@@ -153,7 +153,7 @@ describe("offerDialogueEventExecute host event handoff", () => {
     expect(h.start).toHaveBeenCalledOnce();
   });
 
-  it("reserves one public slot after an eligible prior read receipt", async () => {
+  it("does not reserve a public slot for a tool read", async () => {
     const receipt = createThinkingReadReceipt("input-1", "read-1", [{
       ref: "research/audio", sourceKind: "semantic_document", edition: "current", revision: "bytes-v1",
       asOf: "2026-11-06T00:00:00.000Z", coverage: "full",
@@ -163,21 +163,9 @@ describe("offerDialogueEventExecute host event handoff", () => {
       { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "read-1", toolName: "recallRead",
         output: { type: "text" as const, value: wrapThinkingRead(receipt, "Observed source") } }] },
     ];
-    await offerReplyExecute({ text: "two" }, { context: ctx(), toolCallId: "call-2", messages });
-    expect(h.start.mock.calls[0]![1][0].publicSeq).toBe(2);
+    const offer = await offerReplyExecute({ stage: "checkpoint", text: "First public offer" },
+      { context: ctx(), toolCallId: "call-2", messages });
+    expect(offer).toMatchObject({ ok: true, stage: "checkpoint", publicSeq: 1 });
   });
 
-  it("does not reserve a slot for a noneligible prior read", async () => {
-    const receipt = createThinkingReadReceipt("input-1", "read-1", [{
-      ref: "research/audio", sourceKind: "semantic_document", edition: "current", revision: "bytes-v1",
-      asOf: "2026-11-06T00:00:00.000Z", coverage: "outline",
-    }]);
-    const messages = [
-      { role: "assistant" as const, content: [{ type: "tool-call" as const, toolCallId: "read-1", toolName: "recallRead", input: { ref: "research/audio" } }] },
-      { role: "tool" as const, content: [{ type: "tool-result" as const, toolCallId: "read-1", toolName: "recallRead",
-        output: { type: "text" as const, value: wrapThinkingRead(receipt, "skeleton only") } }] },
-    ];
-    await offerReplyExecute({ text: "two" }, { context: ctx(), toolCallId: "call-2", messages });
-    expect(h.start.mock.calls[0]![1][0].publicSeq).toBe(1);
-  });
 });

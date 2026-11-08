@@ -27,13 +27,11 @@ import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet 
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import { offerReplyExecute, offerDialogueEventExecute, type ToolContext } from "@/app/api/agent/tool-executors";
 import { buildThinkingProduct, thinkingExpressionClaims, thinkingReportSchema } from "@/lib/agents/thinking-product";
-import { substantiveThinkingReadCheckpoint } from "@/lib/agents/thinking-read-receipt";
 import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
 import {
   DIALOGUE_FALLBACK_TOOL_CALL_ID,
   DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
-  DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
   DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
   DIALOGUE_THOUGHTS_NAMESPACE,
   DIALOGUE_TRANSPORT,
@@ -1179,60 +1177,24 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let interruptedSteps: ContinuationStepSnapshot[] = [];
   const producedMessages: ModelMessage[] = [];
   let allCognition = "";
-  let latestThinkingText = "";
   let latestFinalOfferText = "";
   /** Valid needsUser report from finishThinking, kept for tail recovery. */
   let pendingNeedsUser: DialogueNeedsUser | undefined;
   const finalDialogueOffers = new Set<string>();
-  // Fast-path duplicate/race guards; the durable fence is the stable host
-  // offer id + the /offers admission store.
-  let dialogueOfferObserved = false;
-  let autoReadCheckpointAttempted = false;
   const onToolExecutionResult = async (result: ToolResult) => {
-    if (!nativeDialogue || result.error) return;
-    if (result.toolName === "offerReply") {
-      const offer = parseOfferReplyResult(result.output);
-      if (!offer) return;
-      dialogueOfferObserved = true;
-      try {
-        await publishDialogueOfferControlsStep([offer]);
-        if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
-      } catch (error) {
-        // Do not interrupt research for an uncertain control write. The final
-        // handoff reconciles the stream before attempting a replacement.
-        console.warn("[Dialogue] offer announcement failed", offer.offerId, error);
-      }
-      return;
-    }
-    // First eligible substantive read announces one automatic checkpoint;
-    // anything explicit already observed wins and later reads stay silent.
-    if (autoReadCheckpointAttempted || dialogueOfferObserved) return;
-    if (result.toolName !== "recallRead" && result.toolName !== "recallScenario") return;
-    const checkpoint = substantiveThinkingReadCheckpoint(
-      result.output, turnToolsContext.readScopeId, result.toolName, result.toolCallId);
-    if (!checkpoint) return;
-    autoReadCheckpointAttempted = true;
+    if (!nativeDialogue || result.error || result.toolName !== "offerReply") return;
+    const offer = parseOfferReplyResult(result.output);
+    if (!offer) return;
     try {
-      const offer = await offerDialogueEventExecute(
-        { stage: "checkpoint", event: checkpoint },
-        {
-          context: turnToolsContext,
-          toolCallId: DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
-          messages: producedMessages,
-        },
-      );
-      if (offer.ok) await publishDialogueOfferControlsStep([offer]);
+      await publishDialogueOfferControlsStep([offer]);
+      if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
     } catch (error) {
-      // Silent by design: a lost announcement must not retry or flood; the
-      // durable admission fence keeps a later identical start harmless.
-      console.warn("[Dialogue] automatic read checkpoint announcement failed", error);
+      // The final handoff reconciles the stream before attempting a replacement.
+      console.warn("[Dialogue] offer announcement failed", offer.offerId, error);
     }
   };
 
   const onStepEnd = async (step: StepResult<ChatToolSet>) => {
-      if (nativeDialogue && step.text.trim() && !step.toolCalls.some((call) => call.toolName !== "finishThinking")) {
-        latestThinkingText = step.text;
-      }
       let explicitFinalObserved = false;
       if (nativeDialogue) {
         for (const call of step.toolCalls) {
@@ -2086,8 +2048,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     if (offerControlKnown && finalDialogueOffers.size === 0 && !pendingNeedsUser) {
       // Structured final from a nonempty validated finishThinking report:
       // admitted finding and status claims only — never openQuestions,
-      // nextAction, memoryDelta, tool payloads or raw thoughts. Empty and
-      // invalid reports retain the plain compatibility fallback below.
+      // nextAction, memoryDelta, tool payloads or raw thoughts. A missed
+      // publication can retry an explicit final handoff, never ordinary text.
       const report = extractThinkingReport(producedMessages);
       const cleanFinish =
         outcome.finishReason === "stop" ||
@@ -2144,10 +2106,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           console.warn("[Dialogue] structured final product could not be built", productError);
         }
       }
-      const fallbackText = latestFinalOfferText || latestThinkingText;
-      if (finalDialogueOffers.size === 0 && !hasNonemptyValidatedReport && fallbackText.trim()) {
+      if (finalDialogueOffers.size === 0 && !hasNonemptyValidatedReport && latestFinalOfferText.trim()) {
         const fallback = await offerReplyExecute(
-          { text: fallbackText },
+          { stage: "final", text: latestFinalOfferText },
           {
             context: turnToolsContext,
             toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID,

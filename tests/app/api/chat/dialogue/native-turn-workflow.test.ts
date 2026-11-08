@@ -73,6 +73,8 @@ vi.mock("@/app/api/agent/agent", () => ({
         text: h.text,
         response: { messages: [{ role: "assistant", content: h.text }, ...h.extraMessages] },
         toolCalls: [
+          ...(h.offerInModel ? [{ toolCallId: "call", toolName: "offerReply",
+            input: { stage: h.checkpointInModel ? "checkpoint" : "final", text: "显式交接事件" } }] : []),
           ...(h.finishThinking
             ? [{ toolCallId: h.finishThinking.toolCallId, toolName: "finishThinking", input: h.finishThinking.input }]
             : []),
@@ -92,7 +94,6 @@ vi.mock("@/lib/capabilities", () => ({ DEPLOY_GUIDE_URL: "https://example.test" 
 import { turnWorkflow } from "@/app/api/chat/turn-workflow";
 import {
   DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
-  DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
   DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
 } from "@/lib/dialogue/transport";
 import {
@@ -140,11 +141,6 @@ describe("native thinking parent offer tail", () => {
     h.readResults = [];
     h.extraMessages = [];
     h.finishThinking = null;
-    h.eventOffer.mockResolvedValue({
-      ok: true, kind: "dialogue-offer", offerId: "work:host-read-checkpoint",
-      runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input",
-      stage: "checkpoint", publicSeq: 1, eventKind: "read_completed",
-    });
     h.housekeeping.mockResolvedValue({
       slice, previouslyContent: "", sliceHeadBlock: "", identityPrompt: "", analysis: null,
       evidenceAttachments: null, previouslyUpdate: null, sliceOnDisk: true,
@@ -155,11 +151,12 @@ describe("native thinking parent offer tail", () => {
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
   });
 
-  it("uses the stable server fallback for forgotten offerReply", async () => {
+  it("does not turn ordinary thinking prose into a dialogue offer", async () => {
     const result = await turnWorkflow(input());
-    expect(h.offer).toHaveBeenCalledWith({ text: "可以交付的结果" }, expect.objectContaining({ toolCallId: "fallback" }));
-    expect(h.publish).toHaveBeenCalledWith([startedOffer]);
-    expect(h.record).not.toHaveBeenCalled();
+    expect(h.offer).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.record).toHaveBeenCalledOnce();
+    expect(result.error).toContain("without a reply");
     expect(h.finalizeTurn).not.toHaveBeenCalled();
     expect(h.beginLegacy).not.toHaveBeenCalled();
     expect(h.completeLegacy).not.toHaveBeenCalled();
@@ -175,15 +172,15 @@ describe("native thinking parent offer tail", () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
-  it("still delivers the final fallback when the model only handed off a checkpoint", async () => {
+  it("does not publish ordinary prose as a final after a checkpoint", async () => {
     h.offerInModel = true;
     h.checkpointInModel = true;
     h.reconcile.mockResolvedValue([{ type: "offer", offerId: "work:call", runId: startedOffer.runId,
       sourceInputId: "input", stage: "checkpoint", publicSeq: 1 }]);
     await turnWorkflow(input());
     expect(h.publish).toHaveBeenNthCalledWith(1, [expect.objectContaining({ stage: "checkpoint" })]);
-    expect(h.offer).toHaveBeenCalledWith({ text: h.text }, expect.objectContaining({ toolCallId: "fallback" }));
-    expect(h.publish).toHaveBeenNthCalledWith(2, [startedOffer]);
+    expect(h.offer).not.toHaveBeenCalled();
+    expect(h.publish).toHaveBeenCalledOnce();
   });
 
   it("recovers an uncertain model-offer control write without another dialogue", async () => {
@@ -195,12 +192,12 @@ describe("native thinking parent offer tail", () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
-  it("falls back when a model-offer control write never landed", async () => {
+  it("retries only the explicit final handoff when its control write never landed", async () => {
     h.offerInModel = true;
     h.publish.mockRejectedValueOnce(new Error("not written")).mockResolvedValueOnce(1);
     h.reconcile.mockResolvedValue([]);
     await turnWorkflow(input());
-    expect(h.offer).toHaveBeenCalledWith({ text: "可以交付的结果" }, expect.objectContaining({ toolCallId: "fallback" }));
+    expect(h.offer).toHaveBeenCalledWith({ stage: "final", text: "显式交接事件" }, expect.objectContaining({ toolCallId: "fallback" }));
     expect(h.publish).toHaveBeenCalledTimes(2);
   });
   it("preserves only the accepted user draft when no result can be offered", async () => {
@@ -267,55 +264,23 @@ describe("native semantic event wiring", () => {
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
   });
 
-  it("auto-wakes at most one checkpoint offer for the first eligible read and forwards no raw output", async () => {
+  it("does not turn verified read receipts into public dialogue offers", async () => {
     const semantic = createThinkingReadReceipt("input", "read-1", [docRead()]);
-    const wrappedSemantic = wrapThinkingRead(semantic, "Observed source body that must not leak");
+    const wrapped = wrapThinkingRead(semantic, "Observed source body that must not leak");
     const original = createThinkingReadReceipt("input", "rec-1", [turnRead()]);
-    const scenarioOutput = { answer: "用户当时倾向静音车厢。", thinkingReceipt: original };
-    h.text = "";
+    const scenario = { answer: "用户当时倾向静音车厢。", thinkingReceipt: original };
     h.readResults = [
-      { toolCallId: "read-1", toolName: "recallRead", output: wrappedSemantic },
-      { toolCallId: "rec-1", toolName: "recallScenario", output: scenarioOutput },
+      { toolCallId: "read-1", toolName: "recallRead", output: wrapped },
+      { toolCallId: "rec-1", toolName: "recallScenario", output: scenario },
     ];
     h.extraMessages = [
-      ...readExchange("read-1", "recallRead", wrappedSemantic),
-      ...readExchange("rec-1", "recallScenario", scenarioOutput),
-    ];
-    const result = await turnWorkflow(input());
-    expect(h.eventOffer).toHaveBeenCalledTimes(1);
-    const [eventInput, eventOpts] = h.eventOffer.mock.calls[0]!;
-    expect(eventInput).toEqual({
-      event: { kind: "read_completed", sourceKind: "semantic_document", evidenceCount: 1 },
-      stage: "checkpoint",
-    });
-    expect(eventOpts).toEqual(expect.objectContaining({
-      toolCallId: DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID,
-      context: expect.objectContaining({ dialogueOffer: expect.objectContaining({ workId: "work" }) }),
-    }));
-    const forwarded = JSON.stringify(eventInput);
-    expect(forwarded).not.toContain("research/audio");
-    expect(forwarded).not.toContain("Observed source body");
-    expect(forwarded).not.toContain("静音车厢");
-    expect(h.publish).toHaveBeenCalledWith([expect.objectContaining({
-      offerId: "work:host-read-checkpoint", stage: "checkpoint", eventKind: "read_completed",
-    })]);
-    expect(h.offer).not.toHaveBeenCalled();
-    expect(result.replyText).toBe("");
-  });
-
-  it("ignores receipt-less and noneligible read results without any event offer", async () => {
-    const outlined = createThinkingReadReceipt("input", "read-2", [{ ...docRead(), coverage: "outline" }]);
-    h.readResults = [
-      { toolCallId: "read-1", toolName: "recallRead", output: "raw observation text with no receipt" },
-      { toolCallId: "read-2", toolName: "recallRead", output: wrapThinkingRead(outlined, "skeleton only") },
-    ];
-    h.extraMessages = [
-      ...readExchange("read-1", "recallRead", "raw observation text with no receipt"),
-      ...readExchange("read-2", "recallRead", wrapThinkingRead(outlined, "skeleton only")),
+      ...readExchange("read-1", "recallRead", wrapped),
+      ...readExchange("rec-1", "recallScenario", scenario),
     ];
     await turnWorkflow(input());
     expect(h.eventOffer).not.toHaveBeenCalled();
-    expect(h.offer).toHaveBeenCalledWith({ text: "可以交付的结果" }, expect.objectContaining({ toolCallId: "fallback" }));
+    expect(h.offer).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
   });
 
   it("emits a typed final needs_user for a valid finishThinking blocker and skips the prose fallback", async () => {
@@ -350,31 +315,16 @@ describe("native semantic event wiring", () => {
     h.readResults = [{ toolCallId: "read-1", toolName: "recallRead", output: wrapped }];
     h.finishThinking = { toolCallId: "finish-1", input: report };
     h.extraMessages = [...readExchange("read-1", "recallRead", wrapped), finishExchange(report)];
-    h.eventOffer
-      .mockResolvedValueOnce({
-        ok: true, kind: "dialogue-offer", offerId: "work:host-read-checkpoint",
-        runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input",
-        stage: "checkpoint", publicSeq: 1, eventKind: "read_completed",
-      })
-      .mockResolvedValueOnce({
-        ok: true, kind: "dialogue-offer", offerId: "work:host-structured-report",
-        runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input",
-        stage: "final", publicSeq: 2, eventKind: "findings",
-      });
     const result = await turnWorkflow(input());
-    // The eligible read auto-wakes one checkpoint; the admitted report is the typed final.
-    expect(h.eventOffer).toHaveBeenCalledTimes(2);
-    expect(h.eventOffer).toHaveBeenNthCalledWith(1,
-      { event: { kind: "read_completed", sourceKind: "semantic_document", evidenceCount: 1 }, stage: "checkpoint" },
-      expect.objectContaining({ toolCallId: DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID }));
-    expect(h.eventOffer).toHaveBeenNthCalledWith(2,
+    expect(h.eventOffer).toHaveBeenCalledOnce();
+    expect(h.eventOffer).toHaveBeenCalledWith(
       { event: { kind: "findings", findings: [{ text: "对比结论：A 方案更省。", kind: "observation", uncertainty: "样本只有两周" }] }, stage: "final" },
       expect.objectContaining({ toolCallId: DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID }),
     );
     expect(h.offer).not.toHaveBeenCalled();
     expect(h.record).not.toHaveBeenCalled();
     expect(result.error ?? "").not.toContain("without a reply");
-    const forwarded = JSON.stringify(h.eventOffer.mock.calls[1]![0]);
+    const forwarded = JSON.stringify(h.eventOffer.mock.calls[0]![0]);
     expect(forwarded).not.toContain("openQuestions");
     expect(forwarded).not.toContain("nextAction");
     expect(forwarded).not.toContain("memoryDelta");

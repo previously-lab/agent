@@ -55,13 +55,13 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   }
 
   let text = "";
-  let held = false;
+  let superseded = false;
   let error: string | undefined;
   try {
     const agent = createDialogueAgent(checkpoint);
     const result = await agent.stream({
       prompt: prepared.prompt,
-      // Keep the checkpoint's candidate and hold decision off the public stream.
+      // Publish checkpoint text only after the server checks it is still current.
       writable: getWritable<ModelCallStreamPart>(checkpoint ? { namespace: DIALOGUE_CHECKPOINT_NAMESPACE } : undefined),
       stopWhen: isStepCount(1),
       sendFinish: false,
@@ -71,7 +71,6 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
       },
     });
     text = result.text || text;
-    if (checkpoint) held = result.toolCalls.some((call) => call.toolName === "holdReply" && !call.invalid);
   } catch (cause) {
     error = failureMessage(cause);
     if (checkpoint) text = "";
@@ -80,13 +79,11 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   let utterance: PublicUtterance | undefined;
   let recordRunId: string | undefined;
   let recordError: string | undefined;
-  if (held) {
-    text = "";
-  } else if (text.trim()) {
+  if (text.trim()) {
     try {
       utterance = await publishDialogueResultStep({ input, artifacts: prepared.artifacts, text });
       if (checkpoint && !utterance) {
-        held = true;
+        superseded = true;
         text = "";
       }
     } catch (cause) {
@@ -107,7 +104,7 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     });
   }
 
-  // A held or failed checkpoint is background context, not a memory entry.
+  // Only published checkpoints are stored in the conversation record.
   if (!checkpoint || utterance) {
     try {
       recordRunId = await startDialogueRecordRunStep(dialogueRecordRequest(input, utterance));
@@ -123,7 +120,7 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     kind: "dialogue-reply",
     offerId: input.offerId,
     status: error ? "failed" : "completed",
-    ...(held ? { held: true } : {}),
+    ...(superseded ? { held: true } : {}),
     ...(utterance ? { utterance } : {}),
     artifacts: prepared.artifacts,
     ...(recordRunId ? { recordRunId } : {}),

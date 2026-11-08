@@ -29,28 +29,28 @@ function runInput(event?: DialogueSemanticEvent): DialogueRunInput {
 }
 
 describe("buildDialoguePrompt semantic event field", () => {
-  it("carries an explicit needs_user event while the prose result stays empty", () => {
+  it("carries an explicit needs_user event without a prose result", () => {
     const event: DialogueSemanticEvent = {
       kind: "needs_user", needsUser: { kind: "decision", detail: "选 A 方案还是 B 方案？" },
     };
     const parsed = JSON.parse(buildDialoguePrompt(runInput(event), [], ""));
     expect(parsed.event).toEqual(event);
-    expect(parsed.result).toBe("");
+    expect(parsed).not.toHaveProperty("result");
   });
 
-  it("carries only broad metadata for a read_completed event and keeps the prose result", () => {
+  it("uses only the semantic event when the host supplies one", () => {
     const parsed = JSON.parse(buildDialoguePrompt(
       runInput({ kind: "read_completed", sourceKind: "semantic_document", evidenceCount: 3 }),
       [], "阶段性结论",
     ));
     expect(Object.keys(parsed.event).sort()).toEqual(["evidenceCount", "kind", "sourceKind"]);
     expect(parsed.event).toEqual({ kind: "read_completed", sourceKind: "semantic_document", evidenceCount: 3 });
-    expect(parsed.result).toBe("阶段性结论");
+    expect(JSON.stringify(parsed)).not.toContain("阶段性结论");
   });
 
-  it("keeps legacy prose offers free of any event field and unchanged in result", () => {
+  it("presents offerReply notes as an event for the wording layer", () => {
     const parsed = JSON.parse(buildDialoguePrompt(runInput(), [], "普通结果"));
-    expect("event" in parsed).toBe(false);
-    expect(parsed.result).toBe("普通结果");
+    expect(parsed.event).toEqual({ kind: "offer_reply", notes: "普通结果" });
+    expect(parsed).not.toHaveProperty("result");
   });
 });
