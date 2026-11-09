@@ -56,12 +56,28 @@ function isWithin(root, path) {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
+function realpathWithMissingTail(path) {
+  const tail = [];
+  let current = path;
+  for (;;) {
+    try { return resolve(realpathSync(current), ...tail.reverse()); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 /** Next's trace may include a hoisted pnpm link but omit its versioned target.
  * Recover only that exact installed path, never a different package version. */
 function missingTraceSource(path) {
-  const tracedModules = join(standaloneDir, "node_modules");
-  if (!isWithin(tracedModules, path)) return null;
-  const source = resolve(repoRoot, "node_modules", relative(tracedModules, path));
+  const tracedModules = realpathSync(join(standaloneDir, "node_modules"));
+  const tracedPath = realpathWithMissingTail(path);
+  if (!isWithin(tracedModules, tracedPath)) return null;
+  const source = resolve(repoRoot, "node_modules", relative(tracedModules, tracedPath));
   try { lstatSync(source); return source; }
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
 }

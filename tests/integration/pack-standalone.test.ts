@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -52,7 +52,7 @@ describe("standalone dependency packaging", () => {
     const copiedPackage = join(relocated, "node_modules", ".pnpm", "node_modules", "sample");
     const loaded = createRequire(import.meta.url)(copiedPackage);
     expect(loaded.value).toBe("exact dependency");
-    expect(loaded.dependency).toBe(join(copiedPackage, "node_modules", "helper", "index.js"));
+    expect(loaded.dependency).toBe(realpathSync(join(copiedPackage, "node_modules", "helper", "index.js")));
     expect(readFileSync(join(relocated, ".next", "static", "app.css"), "utf8")).toBe("fixture css");
     expect(readFileSync(join(relocated, "public", "favicon.txt"), "utf8")).toBe("fixture asset");
   });

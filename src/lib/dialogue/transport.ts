@@ -98,6 +98,8 @@ export interface DialogueOfferContext {
 export interface DialogueRunInput {
   offerId: string;
   publicSeq: number;
+  /** Server-started final reply from a completed thought run; no offer admission. */
+  direct?: boolean;
   /** Model/host prose result; empty for host semantic event offers. */
   text: string;
   /** Host semantic input; when present it is the machine-labeled event. */
@@ -168,6 +170,7 @@ export interface DialogueRecordRequest {
   source: DialogueInput;
   sourceTurnId: string;
   environment: DialogueRecordEnvironment;
+  work?: import("@/lib/chat/turn-types").DialogueWorkResult;
   utterance?: PublicUtterance;
 }
 

@@ -45,7 +45,7 @@ async function readDialogueRecordArtifactsStep(utterance?: PublicUtterance): Pro
   return expected.map((entry) => found.get(`${entry.artifact.sourceOwnerId}:${entry.blockId}:${entry.artifact.artifactId}`)!);
 }
 
-/** Background memory flow: only actual public output or a user-only failure. */
+/** Background memory flow: private work, actual public output, or a user-only failure. */
 export async function dialogueRecordWorkflow(
   request: DialogueRecordRequest,
 ): Promise<DialogueProjectionReceipt | null> {
@@ -57,8 +57,9 @@ export async function dialogueRecordWorkflow(
       turnId: request.sourceTurnId,
       ...(request.environment.sliceId ? { sliceId: request.environment.sliceId } : {}),
       ...(request.environment.images?.length ? { images: request.environment.images } : {}),
-      reflectUserOnly: true,
+      reflectUserOnly: !request.work,
     }],
+    ...(request.work ? { work: request.work } : {}),
     ...(request.utterance ? { utterance: request.utterance } : {}),
     typedArtifacts,
     useGithub: request.environment.useGithub,

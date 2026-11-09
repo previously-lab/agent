@@ -28,7 +28,7 @@ const contentBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("citation_ref"), blockId: id, ref: z.string().min(1).max(2048), label: z.string().max(600).optional() }).strict(),
 ]);
 const dialogueTurn = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user_input"), inputId: id, userSeq: seq }).strict(),
+  z.object({ kind: z.literal("user_input"), inputId: id, userSeq: seq.optional() }).strict(),
   z.object({ kind: z.literal("public_utterance"), publicationId: id, publicSeq: seq, inputIds: z.array(id).max(64),
     sourceResults: z.array(z.object({ resultId: id, productRevision: seq, claimIds: z.array(id).max(32) }).strict()).max(32),
     blocks: z.array(contentBlock).max(32),
@@ -178,6 +178,8 @@ const researchResult = z.object({
   inputIds: z.array(id).max(64), sourceTurnId: id, asOf: at,
   sourceRevision: z.string().max(256).nullable(), status: z.enum(["complete", "incomplete"]),
   artifacts: z.array(artifact).max(16),
+  outputRef: z.string().regex(/^works\/[a-f0-9]{64}\.json$/).optional(),
+  outputSha256: hash.optional(),
   delta: z.object({ readerQuestion: z.string().max(400), newInformation: z.string().max(600),
     targetRefs: z.array(z.string().max(2048)).max(4),
     claims: z.array(z.object({ claimId: id, text: z.string().max(600), kind: z.string().max(64),
@@ -228,9 +230,9 @@ export function selectDialogueResearchProducts(
   return selected;
 }
 
-/** Store a pointer and useful bounded delta, not the final report or reasoning trace. */
+/** Index one immutable work result; the optional output file carries full text and product. */
 export function makeDialogueResearchRecord(input: { resultId: string; productRevision: number; sourceTurnId: string;
-  product: ThinkingProduct; artifacts?: readonly DialogueArtifactRef[] }): DialogueResearchRecord {
+  product: ThinkingProduct; artifacts?: readonly DialogueArtifactRef[]; outputRef?: string; outputSha256?: string }): DialogueResearchRecord {
   const product = input.product;
   const proposed = product.memoryDelta;
   const delta = proposed && {
@@ -245,6 +247,7 @@ export function makeDialogueResearchRecord(input: { resultId: string; productRev
   return researchResult.parse({ kind: "research_result", resultId: input.resultId, productRevision: input.productRevision,
     workId: product.inputScope.workId, inputIds: product.inputScope.inputIds, sourceTurnId: input.sourceTurnId,
     asOf: product.asOf, sourceRevision: product.sourceRevision, status: product.status, artifacts: input.artifacts ?? [],
+    ...(input.outputRef ? { outputRef: input.outputRef, outputSha256: input.outputSha256 } : {}),
     ...(delta?.claims.length ? { delta } : {}) });
 }
 

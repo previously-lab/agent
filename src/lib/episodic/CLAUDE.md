@@ -94,6 +94,7 @@ memory/episodic/
             timeline/
               core.md           -- time slice body (YAML frontmatter + turns)
               agent.md          -- agent cognition log (+ the [doc-marker] mailbox)
+              works/            -- immutable full private dialogue work results linked from agent.md
             previously.md       -- user-card snapshot (Previously Agent evolution)
         _index.json             -- monthly index of all slices in this month
   strands.json                  -- the strand index: strand (keyword) -> slice paths

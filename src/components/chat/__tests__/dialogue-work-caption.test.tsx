@@ -183,7 +183,8 @@ describe("dialogue work caption status and rendering", () => {
     expect(dialogueWorkCaptionStatus(work, text)).toBe("thinking");
     expect(dialogueWorkCaptionStatus(work, text, true)).toBe("replying");
     expect(dialogueWorkCaptionStatus(work, { ...text, status: "completed" }, true)).toBe("replying");
-    expect(dialogueWorkCaptionStatus({ ...work, status: "completed" }, text, true)).toBe("completed");
+    expect(dialogueWorkCaptionStatus({ ...work, status: "completed" }, text, true)).toBe("replying");
+    expect(dialogueWorkCaptionStatus({ ...work, status: "completed" }, text)).toBe("completed");
     expect(dialogueWorkCaptionStatus({ ...work, status: "completed" }, { ...text, unavailable: true })).toBe("unavailable");
 
     const tools = ["recallRead", "webSearch", "webFetch", "viewImage", "currentTime"].map((name, index) =>

@@ -3,6 +3,7 @@ import type { HistoryStreamItem, HistoryTurnItem } from "@/lib/chat/stream-items
 import type { Turn } from "@/lib/episodic/types";
 import type { ManuscriptEntry } from "../dialogue-projection";
 import { orderDialogueItems, unrepresentedHistory } from "../dialogue-history";
+import { mergeDialogueHistory } from "../dialogue-stream-rows";
 
 const timestamp = "2026-11-07T01:00:00.000Z";
 const input = { inputId: "input-1", clientMessageId: "client-1", userSeq: 1, eventSeq: 1, text: "你好", acceptedAt: timestamp };
@@ -60,5 +61,23 @@ describe("saved native dialogue recovery", () => {
     const boundary: HistoryStreamItem = { kind: "resume-banner", key: "boundary", startIso: timestamp, timeIso: timestamp };
     expect(orderDialogueItems([boundary, ...saved, old]).map(item => item.key))
       .toEqual(["old", "boundary", "input-1", "p-hashed-storage-id"]);
+  });
+
+  it("projects the current record into UIMessages and dedupes late history by publicationId", () => {
+    const turns = saved.map(item => item.turn);
+    const restored = mergeDialogueHistory([], turns);
+    expect(restored.map(message => [message.id, message.role])).toEqual([
+      ["client-1", "user"], ["p-hashed-storage-id", "assistant"],
+    ]);
+    expect(mergeDialogueHistory(restored, turns)).toEqual(restored);
+
+    const liveMessages = [
+      { id: "client-1", role: "user" as const, parts: [], metadata: { sourceInputId: "input-1" } },
+      { id: "fixed-assistant", role: "assistant" as const, parts: [{ type: "text" as const, text: "你好。" }],
+        metadata: { sourceInputId: "input-1", publicationId: utterance.utteranceId } },
+    ];
+    const merged = mergeDialogueHistory(liveMessages, turns);
+    expect(merged).toEqual(liveMessages);
+    expect(unrepresentedHistory(saved, liveMessages, [])).toEqual([]);
   });
 });

@@ -36,9 +36,8 @@ export interface TurnInput {
   verifiedImages?: import("./image-attachments").ImageAttachmentEvidence[];
   /**
    * Converted chat history from the client (capped at a broad payload limit
-   * in start-turn). The workflow cuts the slice-aligned window from its tail
-   * before streaming (sliceAlignedWindow in turn-workflow.ts) — the client
-   * remains the history source, the slice decides what the model sees.
+   * in start-turn). Native dialogue thinking uses it in full; other turns cut
+   * a slice-aligned window before streaming.
    */
   modelMessages: ModelMessage[];
   /** Trimmed recent turns for Flash + context assembly. */
@@ -470,6 +469,20 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
 }
 
 
+/** Server-owned private thinking output, archived separately and consumed by the public reply route. */
+export interface DialogueWorkResult {
+  workId: string;
+  scopeKey: string;
+  text: string;
+  product: import("@/lib/agents/thinking-product").ThinkingProduct;
+  producerRunId: string;
+  report?: import("@/lib/agents/thinking-product").ThinkingReport;
+  source: import("@/lib/chat/dialogue-contract").DialogueInput;
+  sourceTurnId: string;
+  locale: string;
+  record: import("@/lib/dialogue/transport").DialogueRecordEnvironment;
+}
+
 /**
  * A completed turn's durable record. Each burst turn carries its own record
  * into an incremental summary run; completed siblings may enhance that batch.
@@ -478,6 +491,7 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
 export interface TurnRunResult extends TaskAckSource {
   /** Exact current-turn replay, kept in Workflow/client state rather than GitHub memory files. */
   nativeMessages?: ModelMessage[];
+  dialogueWork?: DialogueWorkResult;
   /** This turn's id (the turn headers + dedupe keys carry it). */
   turnId: string;
   clientMessageId?: string;

@@ -232,7 +232,7 @@ describe("dialogue records on a plain local directory", () => {
     expect(fs.readFileSync(absoluteLegacy, "utf8")).toBe(raw);
     const currentPath = join(memoryRoot, slicePartPath(legacyId, "core").replace(/^memory\//, ""));
     expect(fs.existsSync(currentPath)).toBe(true);
-    expect((await loadSlice(legacyId))?.turns[0]?.dialogue).toMatchObject({ kind: "user_input", inputId: "u1", userSeq: 1 });
+    expect((await loadSlice(legacyId))?.turns[0]?.dialogue).toEqual({ kind: "user_input", inputId: "u1" });
     expect(fs.existsSync(join(memoryRoot, ".git"))).toBe(false);
   });
 });

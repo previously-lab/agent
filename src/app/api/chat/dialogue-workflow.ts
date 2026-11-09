@@ -26,24 +26,26 @@ function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** One admitted offer, one public dialogue run. No Git/file/runtime store. */
+/** One admitted offer or direct final, one public dialogue run. No runtime store. */
 export async function dialogueWorkflow(input: DialogueRunInput): Promise<DialogueRunResult> {
   "use workflow";
   const childRunId = await dialogueOwnRunIdStep();
-  let admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
-  for (let poll = 1; admission === "pending" && poll < ADMISSION_POLLS; poll++) {
-    await sleep("1s");
-    admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
-  }
-  if (admission !== "admitted") {
-    return {
-      kind: "dialogue-reply",
-      offerId: input.offerId,
-      status: admission === "pending" ? "admission_timeout" : "not_admitted",
-      error: admission === "pending"
-        ? "The reply admission did not become visible in time."
-        : "This reply offer was superseded or its parent had already ended.",
-    };
+  if (!input.direct) {
+    let admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
+    for (let poll = 1; admission === "pending" && poll < ADMISSION_POLLS; poll++) {
+      await sleep("1s");
+      admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
+    }
+    if (admission !== "admitted") {
+      return {
+        kind: "dialogue-reply",
+        offerId: input.offerId,
+        status: admission === "pending" ? "admission_timeout" : "not_admitted",
+        error: admission === "pending"
+          ? "The reply admission did not become visible in time."
+          : "This reply offer was superseded or its parent had already ended.",
+      };
+    }
   }
 
   const prepared = await prepareDialogueOfferStep(input, childRunId);
@@ -58,7 +60,7 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   let superseded = false;
   let error: string | undefined;
   try {
-    const agent = createDialogueAgent(checkpoint);
+    const agent = createDialogueAgent(checkpoint, input.direct === true);
     const result = await agent.stream({
       prompt: prepared.prompt,
       // Publish checkpoint text only after the server checks it is still current.
@@ -89,6 +91,8 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     } catch (cause) {
       error ??= failureMessage(cause);
     }
+  } else if (input.direct) {
+    superseded = true;
   } else {
     error ??= "The dialogue ended without a public reply.";
   }

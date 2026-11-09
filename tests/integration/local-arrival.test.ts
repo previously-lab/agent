@@ -131,7 +131,7 @@ describe("local arrival without a Git repository", () => {
   });
 
   it("propagates access failures instead of reporting an empty root", async () => {
-    remote.deniedDirectory = join(fixtureRoot, "memory", "records");
+    remote.deniedDirectory = join(process.cwd(), "memory", "records");
     await expect(arrival()).rejects.toMatchObject({ code: "EACCES" });
     expect(remote.github).not.toHaveBeenCalled();
     expect(remote.demo).not.toHaveBeenCalled();

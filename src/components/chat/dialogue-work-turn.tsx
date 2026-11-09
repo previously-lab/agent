@@ -11,7 +11,7 @@ import type { DialogueWorkSeat } from "./dialogue-stream-rows";
 
 /** A work keeps the same message seat from its first caption through its
  * contiguous public replies. Its preview never migrates into another prompt. */
-export function DialogueWorkTurn({ seat: { work, replies = [] }, persona, onCancel, onRetry, onResume }: {
+export function DialogueWorkTurn({ seat: { work, replying, replies = [] }, persona, onCancel, onRetry, onResume }: {
   seat: DialogueWorkSeat;
   persona: string;
   onCancel: (workId: string) => Promise<void>;
@@ -25,7 +25,7 @@ export function DialogueWorkTurn({ seat: { work, replies = [] }, persona, onCanc
   const blocks = replies.flatMap<ContentBlockV1 | UIMessagePart>(reply => reply.kind === "utterance" ? reply.utterance.blocks : reply.message.parts);
   return <div className="conversation-stream-row dialogue-publication" data-dialogue-work-turn={work.workId} data-dialogue-reply={work.inputId}>
     <ConversationTurn role="assistant">
-      <DialogueWorkCaption work={work} persona={persona} replying={streaming}
+      <DialogueWorkCaption work={work} persona={persona} replying={replying}
         onCancel={onCancel} onRetry={onRetry} onResume={onResume} />
       <div className="dialogue-continuous-reply">
         {replies.map(reply => reply.kind === "utterance" ? <div className="dialogue-publication" key={reply.id}

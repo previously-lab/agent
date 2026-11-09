@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueResult } from "@/lib/dialogue/types";
 import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
@@ -24,6 +25,7 @@ export interface DialogueProjectionInput {
   inputs: Array<{ input: DialogueInput; turnId: string; sliceId?: string; images?: ImageAttachmentEvidence[];
     previously?: string; reflectUserOnly?: boolean }>;
   result?: DialogueResult;
+  work?: import("@/lib/chat/turn-types").DialogueWorkResult;
   utterance?: PublicUtterance;
   typedArtifacts?: DialogueTypedArtifact[];
   useGithub: boolean;
@@ -146,7 +148,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
         throw new Error("Accepted input conflicts with its stored record identity");
       }
       if (!user.dialogue) {
-        user.dialogue = { kind: "user_input", inputId: event.inputId, userSeq: event.userSeq };
+        user.dialogue = { kind: "user_input", inputId: event.inputId };
         user.clientMessageId = event.clientMessageId;
         if (event.documentContext?.length) user.documentContext = event.documentContext;
         touched.add(slice.slice_id);
@@ -190,13 +192,36 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       set.add(materialId);
       reflection.set(landing.sliceId, set);
     };
-    if (input.result) {
-      const result = input.result;
+    const work = input.work;
+    const result = input.result ?? (work ? {
+      resultId: `${work.workId}:1`, productRevision: 1, workId: work.workId,
+      inputIds: [work.source.inputId], producerRunId: work.producerRunId,
+      sliceId: work.record.sliceId ?? atMinute(work.source.acceptedAt), availableAt: work.product.asOf,
+      product: work.product, claims: [], blocks: [],
+    } satisfies DialogueResult : undefined);
+    if (result) {
       const landing = landings.find((entry) => result.inputIds.includes(entry.inputId));
       if (!landing) throw new Error("Research result has no projected source input");
+      let output: { outputRef: string; outputSha256: string } | undefined;
+      if (work) {
+        const serialized = `${JSON.stringify({
+          kind: "dialogue_work_result", version: 1, resultId: result.resultId,
+          productRevision: result.productRevision, workId: work.workId, sourceTurnId: landing.turnId,
+          producerRunId: work.producerRunId, asOf: work.product.asOf,
+          text: work.text, ...(work.report ? { report: work.report } : {}), product: work.product,
+          artifacts: result.blocks.flatMap((block) => block.kind === "artifact_ref" ? [block.artifact] : []),
+        }, null, 2)}\n`;
+        const outputRef = `works/${caseStorageRevision(result.resultId)}.json`;
+        const outputPath = join(dirname(slicePartPath(landing.sliceId, "agent")), outputRef);
+        const previous = await readOptional(outputPath, batch);
+        if (previous !== null && previous !== serialized) throw new Error("Immutable work output changed");
+        if (previous === null) await fsWriteFile(outputPath, serialized, batch);
+        output = { outputRef, outputSha256: caseStorageRevision(serialized) };
+      }
       const record = makeDialogueResearchRecord({ resultId: result.resultId, productRevision: result.productRevision,
         sourceTurnId: landing.turnId, product: result.product,
-        artifacts: result.blocks.flatMap((block) => block.kind === "artifact_ref" ? [block.artifact] : []) });
+        artifacts: result.blocks.flatMap((block) => block.kind === "artifact_ref" ? [block.artifact] : []),
+        ...(output ?? {}) });
       const old = readDialogueResearchRecords(await readAgent(landing.sliceId)).find((entry) =>
         entry.resultId === record.resultId && entry.productRevision === record.productRevision);
       if (old && encodeDialogueResearchRecord(old) !== encodeDialogueResearchRecord(record)) throw new Error("Immutable research result changed");

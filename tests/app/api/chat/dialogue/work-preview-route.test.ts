@@ -121,7 +121,7 @@ describe("work preview authorization and recovery", () => {
     ]);
     const response = await readStream("persona=alice&startIndex=3");
     const body = await response.text();
-    expect(mocks.getReadable).toHaveBeenCalledWith({ startIndex: 0 });
+    expect(mocks.getReadable).toHaveBeenCalledWith({ namespace: "dialogue-thinking-v2", startIndex: 0 });
     expect(events(body)).toEqual([
       { type: "text", partId: "text-1", delta: "lo", workId: "work-1", runId: "run-1", cursor: 4 },
       { type: "tool", toolCallId: "call-1", toolName: "readFile", state: "running", workId: "work-1", runId: "run-1", cursor: 5 },
@@ -211,7 +211,7 @@ describe("work preview authorization and recovery", () => {
       controller.abort();
       await observed;
 
-      expect(mocks.getReadable).toHaveBeenNthCalledWith(2, { startIndex: 12 });
+      expect(mocks.getReadable).toHaveBeenNthCalledWith(2, { namespace: "dialogue-thinking-v2", startIndex: 12 });
       expect(received.filter(event => event.type === "text")).toHaveLength(1);
       expect(received).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "tool", toolName: "currentTime", state: "running", cursor: 13 }),

@@ -14,6 +14,7 @@ import {
   type WorkPreviewStatus,
 } from "@/lib/dialogue/work-preview";
 import { authorizeWorkPreview } from "../../work-preview-auth";
+import { DIALOGUE_THOUGHTS_NAMESPACE } from "@/lib/dialogue/transport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -151,7 +152,7 @@ export async function GET(
   try {
     // Always replay internally. startIndex alone cannot reconstruct whether
     // the cursor sits inside an HTML fence or an unfinished tool structure.
-    readable = run.getReadable({ startIndex: 0 });
+    readable = run.getReadable({ namespace: DIALOGUE_THOUGHTS_NAMESPACE, startIndex: 0 });
     diagnostic("open.initial", 0);
   } catch {
     return unavailable();
@@ -222,7 +223,7 @@ export async function GET(
             pendingRead = undefined;
             void stalled.cancel().catch(() => undefined);
             try { stalled.releaseLock(); } catch { /* Cancellation may settle on a later microtask. */ }
-            readable = run.getReadable({ startIndex: rawIndex });
+            readable = run.getReadable({ namespace: DIALOGUE_THOUGHTS_NAMESPACE, startIndex: rawIndex });
             diagnostic("open.resume", rawIndex);
             reader = readable.getReader();
             continue;

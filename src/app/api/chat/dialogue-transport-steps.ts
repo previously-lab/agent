@@ -105,7 +105,7 @@ export async function prepareDialogueOfferStep(
 ): Promise<PreparedDialogueOffer> {
   "use step";
   const prior = input.priorCheckpoints ?? [];
-  const offers = input.stage === "checkpoint" || input.stage === "final" || prior.length
+  const offers = !input.direct && (input.stage === "checkpoint" || input.stage === "final" || prior.length)
     ? await listDialogueOffers(input.context.parentRunId) : [];
   if (checkpointSuperseded(input, offers)) return { artifacts: [], prompt: "", superseded: true };
   const automaticRead = input.stage === "checkpoint" || input.stage === "final"

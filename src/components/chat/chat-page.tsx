@@ -97,7 +97,13 @@ import {
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { buildDialogueRegenerationRequest } from "@/lib/chat/dialogue-regenerate";
 import { DialogueDisabled, useDialogueManuscript } from "./use-dialogue-manuscript";
-import { dialogueStreamRows } from "./dialogue-stream-rows";
+import {
+  appendDialogueTurn,
+  dialogueMetadata,
+  dialogueStreamRows,
+  removeDialogueTurn,
+  resetDialogueAssistant,
+} from "./dialogue-stream-rows";
 import { orderDialogueItems, unrepresentedHistory } from "./dialogue-history";
 import { DialogueWorkTurn } from "./dialogue-work-turn";
 
@@ -673,36 +679,41 @@ function Inner({
     onEnd: clearStoredRunId,
   });
 
-  // ── Persist the conversation (debounced) so a refresh restores it via
-  // `initialMessages`.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const setSharedMessages = useCallback((update: UIMessage[] | ((previous: UIMessage[]) => UIMessage[])) => {
+    const next = typeof update === "function" ? update(messagesRef.current) : update;
+    messagesRef.current = next;
+    setMessages(next);
+  }, [setMessages]);
+  const bindDialogueHistory = dialogue.bindHistory;
+  useEffect(() => {
+    bindDialogueHistory(() => messagesRef.current, setSharedMessages);
+  }, [bindDialogueHistory, setSharedMessages]);
+
+  // Only the legacy transport uses the local message stash. Dialogue restores
+  // saved turns from records and in-flight work from its durable run ids.
   const firstRenderRef = useRef(true);
   useEffect(() => {
     if (firstRenderRef.current) {
       firstRenderRef.current = false;
       return;
     }
+    if (dialogue.mode === "dialogue") return;
     const id = setTimeout(() => {
       writeStoredMessages(messages.slice(-PERSIST_MESSAGE_CAP));
     }, 100);
     return () => clearTimeout(id);
-  }, [messages]);
+  }, [messages, dialogue.mode]);
 
   const isStreaming = status === "streaming";
   const isLoading = status === "submitted" || isStreaming;
   const dialogueEnabled = dialogue.mode === "dialogue";
-  const dialogueWorks = useMemo(() => [...dialogue.projection.works.values()], [dialogue.projection.works]);
+  const dialogueRows = useMemo(() => dialogueStreamRows(messages), [messages]);
+  const dialogueWorks = useMemo(() => [...dialogueRows.workSeats.values()].map(seat => seat.work), [dialogueRows.workSeats]);
   const thinking = dialogueWorks.some(work => work.status === "queued" || work.status === "running");
-  const dialogueActive = dialogue.expression !== "paused" && (thinking || dialogue.expression === "running");
+  const dialogueActive = dialogue.expression !== "paused" && thinking;
   const composerBusy = dialogueEnabled ? dialogueActive : isLoading;
-  const dialogueRows = useMemo(() => dialogueStreamRows(dialogue.projection.entries, dialogue.projection.inputs, dialogueWorks),
-    [dialogue.projection.entries, dialogue.projection.inputs, dialogueWorks]);
-  const receiptCount = dialogue.projection.receiptCount;
-  const observedReceipt = useRef(0);
-  useEffect(() => {
-    if (receiptCount <= observedReceipt.current) return;
-    observedReceipt.current = receiptCount;
-    onTurnSettled?.();
-  }, [receiptCount, onTurnSettled]);
 
   // ── The post-burst fold (v0.33 §6) ───────────────────────────────────────
   // Once every lane has settled AND the main stream is idle, the burst's
@@ -864,6 +875,7 @@ function Inner({
   );
 
   const liveItems = useMemo<ChatStreamItem[]>(() => {
+    if (dialogueEnabled) return [];
     const lastMessage = messages[messages.length - 1];
     // v0.33: while the main lane's answer streams collapsed (a burst is in
     // flight), its streaming shell leaves the list — the lane block renders
@@ -973,7 +985,7 @@ function Inner({
       });
     });
     return [...merged, ...laneItems];
-  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles, parallelLanes]);
+  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles, parallelLanes, dialogueEnabled]);
 
   // Only a truly empty workspace needs an arrival state. Saved text and new
   // messages share the same flow without inserting a briefing card between them.
@@ -1021,17 +1033,19 @@ function Inner({
     };
   }, [arrival, dialogueEnabled, persona]);
 
-  // Saved conversation and live utterances share one uninterrupted flow.
+  // The current dialogue slice is already projected into messages; only the
+  // preceding saved record remains a history item prefix.
   const items = useMemo<ChatStreamItem[]>(() => {
-    const history = unrepresentedHistory(buildHistoryItems(briefingSlices ?? [], resumeBlock), messages, dialogue.projection.entries)
-      .filter(item => item.kind !== "resume-banner");
+    const history = unrepresentedHistory(
+      buildHistoryItems(briefingSlices ?? [], dialogueEnabled ? null : resumeBlock), messages, [],
+    ).filter(item => item.kind !== "resume-banner");
     const combined = [
       ...history,
       ...liveItems,
       ...dialogueRows.items,
     ];
     return dialogueEnabled ? orderDialogueItems(combined) : combined;
-  }, [briefingSlices, resumeBlock, liveItems, messages, dialogueRows.items, dialogue.projection.entries, dialogueEnabled]);
+  }, [briefingSlices, resumeBlock, liveItems, messages, dialogueRows.items, dialogueEnabled]);
 
   /**
    * Run `fn` against the list's handle as soon as it exists.
@@ -1079,18 +1093,23 @@ function Inner({
         type: "file" as const, mediaType: file.type, filename: file.name, url: await fileToDataUrl(file),
       })));
       if (message) parts.push({ type: "text", text: message });
+      const userMessage: UIMessage = { id: messageId ?? mintTurnId(), role: "user", parts, metadata };
+      const assistantId = crypto.randomUUID();
+      const submittedMessages = appendDialogueTurn(messagesRef.current, userMessage, assistantId);
+      setMessages(submittedMessages);
       try {
         await dialogue.submit({
-          messages: [{ id: messageId ?? mintTurnId(), role: "user", parts, metadata }], locale,
+          messages: submittedMessages, locale,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           ...(view ? { view } : {}), ...screenContextRequestField(() => screen),
           ...(documentContext.length ? { documentContext: createDocumentContextEnvelope(documentContext) } : {}),
           ...(stagedAttachments.length ? { stagedAttachments } : {}),
-        });
+        }, assistantId);
         clearReferences(documentContext);
         requestAnimationFrame(scrollToBottom);
         return;
       } catch (failure) {
+        setMessages(previous => removeDialogueTurn(previous, assistantId, userMessage.id));
         if (!(failure instanceof DialogueDisabled)) throw failure;
         // Only the explicit, unaccepted compatibility response allows the
         // old transport. An outage cannot create a second worker.
@@ -1222,8 +1241,14 @@ function Inner({
 
   const regeneration = useRef<{ inputId: string; requestId: string; pending: boolean } | undefined>(undefined);
   const regenerateDialogue = async (inputId: string) => {
-    const input = dialogue.projection.inputs.get(inputId);
-    if (!input) {
+    const current = messagesRef.current;
+    const assistantIndex = current.findIndex((message, index) => message.role === "assistant" &&
+      (dialogueMetadata(message).sourceInputId === inputId || current[index - 1]?.id === inputId));
+    const assistant = assistantIndex >= 0 ? current[assistantIndex] : undefined;
+    const user = current.find(message => message.role === "user" &&
+      (message.id === inputId || dialogueMetadata(message).sourceInputId === inputId)) ??
+      (assistantIndex > 0 && current[assistantIndex - 1]?.role === "user" ? current[assistantIndex - 1] : undefined);
+    if (!user || !assistant) {
       toast.error(tDialogue("regenerateFailed"));
       return;
     }
@@ -1231,14 +1256,35 @@ function Inner({
     const request = regeneration.current;
     if (request.pending) return;
     request.pending = true;
+    const previousAssistant = assistant;
     try {
-      await dialogue.submit(buildDialogueRegenerationRequest(input, request.requestId, {
+      const userMetadata = dialogueMetadata(user);
+      const input = {
+        inputId,
+        clientMessageId: user.id,
+        userSeq: 0,
+        eventSeq: 0,
+        acceptedAt: userMetadata.acceptedAt ?? new Date().toISOString(),
+        text: user.parts.flatMap(part => part.type === "text" ? [part.text] : []).join("\n\n"),
+        attachments: messageImageAttachments(user.metadata),
+        documentContext: documentContextFromMetadata(user.metadata),
+      };
+      const submittedMessages = resetDialogueAssistant(current, assistant.id);
+      setMessages(submittedMessages);
+      const regenerationRequest = buildDialogueRegenerationRequest(input, request.requestId, {
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      }));
+      });
+      await dialogue.submit({
+        ...regenerationRequest,
+        // The acceptance contract derives its request identity from the last
+        // user. Keep the complete hot history, then retain that synthetic user.
+        messages: [...submittedMessages, ...(regenerationRequest.messages as UIMessage[])],
+      }, assistant.id);
       if (regeneration.current === request) regeneration.current = undefined;
       requestAnimationFrame(scrollToBottom);
     } catch {
+      setMessages(latest => latest.map(message => message.id === previousAssistant.id ? previousAssistant : message));
       toast.error(tDialogue("regenerateFailed"));
     } finally {
       request.pending = false;
@@ -1424,10 +1470,12 @@ function Inner({
   // where the last activity would otherwise linger one commit).
   useEffect(() => {
     onSubtitleLineChange?.(
-      dialogueEnabled ? (dialogueActive ? { activity: dialogue.expression === "running" ? "replying" : "thinking", count: 0 } : null)
-        : isLoading ? foldSubtitleLineLatest(subtitleSourcesOf(items)) : null,
+      dialogueEnabled ? (dialogueActive ? {
+        activity: [...dialogueRows.workSeats.values()].some(seat => seat.replying) ? "replying" : "thinking",
+        count: 0,
+      } : null) : isLoading ? foldSubtitleLineLatest(subtitleSourcesOf(items)) : null,
     );
-  }, [items, isLoading, dialogueEnabled, dialogueActive, dialogue.expression, onSubtitleLineChange]);
+  }, [items, isLoading, dialogueEnabled, dialogueActive, dialogueRows.workSeats, onSubtitleLineChange]);
 
   // The panel tier this page is hosted at (null only outside a panel): at
   // the pill tier the conversation body is folded away and the stream goes

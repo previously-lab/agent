@@ -22,6 +22,11 @@ export function emptyDialogueProjection(): DialogueProjection {
   return { cursor: 0, entries: [], inputs: new Map(), utterances: new Set(), works: new Map(), receiptCount: 0 };
 }
 
+export function dialogueWorkView(work: DialogueWork): DialogueWorkView {
+  if (!work.runId) return work;
+  return { ...work, thoughtsUrl: `/api/chat/dialogue/work/${encodeURIComponent(work.workId)}/stream` };
+}
+
 /** A page is a contiguous event prefix. Never insert into an already visible
  * part of the manuscript, even if an accepted POST races a catch-up read. */
 export function projectDialoguePage(previous: DialogueProjection, page: Pick<DialoguePage, "version" | "events" | "cursor">): DialogueProjection {
@@ -32,7 +37,7 @@ export function projectDialoguePage(previous: DialogueProjection, page: Pick<Dia
   let entries: ManuscriptEntry[] | undefined;
   let inputs: Map<string, DialogueInput> | undefined;
   let utterances: Set<string> | undefined;
-  let works: Map<string, DialogueWork> | undefined;
+  let works: Map<string, DialogueWorkView> | undefined;
   for (const event of page.events) {
     if (!Number.isSafeInteger(event.eventSeq)) throw new Error("Invalid dialogue event");
     if (event.eventSeq <= cursor) continue;
@@ -49,7 +54,7 @@ export function projectDialoguePage(previous: DialogueProjection, page: Pick<Dia
       (utterances ??= new Set(previous.utterances)).add(event.utterance.utteranceId);
       (entries ??= [...previous.entries]).push({ kind: "utterance", id: event.utterance.utteranceId, utterance: event.utterance });
     } else if (event.type === "work.status") {
-      (works ??= new Map(previous.works)).set(event.work.workId, event.work);
+      (works ??= new Map(previous.works)).set(event.work.workId, dialogueWorkView(event.work));
     } else if (event.type === "projection.receipt") {
       receiptCount++;
     } else {

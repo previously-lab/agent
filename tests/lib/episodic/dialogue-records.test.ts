@@ -78,6 +78,7 @@ describe("three record lanes", () => {
     expect(slice?.turns.map((turn) => turn.role)).toEqual(["user", "agent", "agent", "agent"]);
     expect(slice?.turns[0]).toMatchObject({ content: accepted.text, dialogue: { kind: "user_input", inputId: "u1" },
       attachments: [{ assetId: image.assetId, ordinal: 4 }] });
+    expect(slice?.turns[0]?.dialogue).not.toHaveProperty("userSeq");
     expect(slice?.turns[1]?.dialogue).toMatchObject({ kind: "public_utterance", publicationId: "public-1", publicSeq: 1, blocks });
     expect(slice?.turns[3]).toMatchObject({ content: "",
       dialogue: { kind: "public_utterance", publicationId: "public-3", blocks: [{ kind: "artifact_ref", artifact }] } });
@@ -87,6 +88,37 @@ describe("three record lanes", () => {
     expect((await readSlicePart(sliceId, "core"))).not.toContain("Internal private conclusion.");
     expect(fs.existsSync(join(memoryRoot, ".git"))).toBe(false);
     await expect(projectDialogueRecords({ ...payload, utterance: { ...utterance, blocks: second.blocks } })).rejects.toThrow("Immutable publication changed");
+  });
+
+  it("stores the complete work result in an immutable linked output file", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { buildThinkingProduct } = await import("@/lib/agents/thinking-product");
+    const { readDialogueResearchRecords } = await import("@/lib/episodic/dialogue-record");
+    const { readSlicePart, slicePartPath } = await import("@/lib/episodic/paths");
+    const payload = { useGithub: false, owner: "fixture", repo: "fixture", timezone: "UTC",
+      inputs: [{ input: accepted, turnId: "u1", sliceId: "2026-11-06-0300" }] };
+    const product = buildThinkingProduct({ text: "Complete work output", messages: [], asOf: stamp,
+      inputScope: { scopeKey: "fixture", workId: "u1", inputIds: ["u1"], inputText: accepted.text, readScopeId: "u1" } });
+    const work = {
+      workId: "u1", scopeKey: "fixture", text: "Complete work output\n\nWith every detail intact.", product,
+      producerRunId: "wrun_fixture", source: accepted, sourceTurnId: "u1", locale: "en",
+      record: { useGithub: false, useDemo: false, owner: "fixture", repo: "fixture", timezone: "UTC",
+        slicing: { idleGapMinutes: 30, maxSliceMinutes: 60, maxTurnsPerSlice: 40 } },
+    };
+    const projected = await projectDialogueRecords({ ...payload, work });
+    const agent = await readSlicePart(projected!.sliceId, "agent");
+    const marker = readDialogueResearchRecords(agent)[0]!;
+    expect(marker.outputRef).toMatch(/^works\/[a-f0-9]{64}\.json$/);
+    expect(marker.outputSha256).toMatch(/^[a-f0-9]{64}$/);
+    const outputPath = join(memoryRoot, dirname(slicePartPath(projected!.sliceId, "agent").replace(/^memory\//, "")), marker.outputRef!);
+    const stored = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+    expect(stored).toMatchObject({ kind: "dialogue_work_result", text: work.text, product, artifacts: [] });
+    const beforeReplay = fs.readFileSync(outputPath, "utf8");
+    await projectDialogueRecords({ ...payload, work });
+    expect(fs.readFileSync(outputPath, "utf8")).toBe(beforeReplay);
+    expect(readDialogueResearchRecords(await readSlicePart(projected!.sliceId, "agent"))).toHaveLength(1);
+    fs.writeFileSync(outputPath, `${beforeReplay}tampered\n`);
+    await expect(projectDialogueRecords({ ...payload, work })).rejects.toThrow("Immutable work output changed");
   });
 
   it("keeps exact result versions as distinct reflection material and dedupes replay bytes", async () => {

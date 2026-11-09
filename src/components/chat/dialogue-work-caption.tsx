@@ -51,8 +51,8 @@ export function dialogueWorkCaptionStatus(
   if (work.status === "failed" || stream.status === "failed") return "failed";
   if (work.status === "cancelled" || stream.status === "cancelled") return "cancelled";
   if (stream.unavailable) return "unavailable";
-  if (work.status === "completed") return "completed";
   if (replying) return "replying";
+  if (work.status === "completed") return "completed";
   const activity = stream.activity;
   if (activity?.type === "reasoning") return "thinking";
   if (activity?.type === "tool" && stream.status !== "completed") {
@@ -89,7 +89,7 @@ export function DialogueWorkCaption({ work, persona, onCancel, onRetry, onResume
   const identity = `${work.workId}\0${work.runId ?? ""}\0${work.thoughtsUrl ?? ""}\0${persona}`;
   const identityRef = useRef(identity);
   identityRef.current = identity;
-  const stream = useDialogueWorkStream(work, persona, true, previewRetry);
+  const stream = useDialogueWorkStream(work, persona, Boolean(work.runId && work.thoughtsUrl), previewRetry);
   const status = dialogueWorkCaptionStatus(work, stream, replying);
   // A terminal thoughts stream may have no result for its final tool call.
   // End its running indicator without inventing a successful tool result.

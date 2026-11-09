@@ -1,9 +1,5 @@
-/**
- * Native dialogue acceptance. Request preparation is the only work before the
- * thinking Workflow starts; Workflow owns every runtime ID and recovery path.
- */
+/** Native V2 starts thinking directly; legacy V1 remains store-backed. */
 import { after } from "next/server";
-import type { UIMessage } from "@/lib/chat/protocol";
 import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
 import type { DialogueInput } from "@/lib/chat/dialogue-contract";
 import type { ImageReservation } from "@/lib/tools/staged-images";
@@ -70,7 +66,7 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
       : {}),
     ...(prepared.documentContext?.length ? { documentContext: prepared.documentContext } : {}),
   };
-  const launch = {
+  const run = await startPreparedTurn({
     ...prepared,
     turnId: sourceInputId,
     dialogue: {
@@ -79,26 +75,22 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
       transport: DIALOGUE_TRANSPORT,
       sourceInputId,
     },
-  };
-
-  const run = await startPreparedTurn(launch);
-  // The accepted Workflow owns the verified bytes and the native source input.
+  });
   await args.reservation.confirm().catch((error) =>
     console.error("[Images] accepted turn confirmation needs recovery", { runId: run.runId, error }));
-  const parentRunId = run.runId;
   const response: DialogueAcceptedV2 = {
     version: 2,
-    parentRunId,
-    runId: parentRunId,
+    parentRunId: run.runId,
+    runId: run.runId,
     sourceInputId,
     workId,
     input,
-    offersUrl: `/api/chat/${encodeURIComponent(parentRunId)}/offers`,
-    thoughtsUrl: `/api/chat/${encodeURIComponent(parentRunId)}/thoughts?workId=${encodeURIComponent(workId)}&namespace=${DIALOGUE_THOUGHTS_NAMESPACE}`,
+    offersUrl: `/api/chat/${encodeURIComponent(run.runId)}/offers`,
+    thoughtsUrl: `/api/chat/${encodeURIComponent(run.runId)}/thoughts?workId=${encodeURIComponent(workId)}&namespace=${DIALOGUE_THOUGHTS_NAMESPACE}`,
   };
   return Response.json(response);
 }
-/** Legacy v1 acceptance remains byte-for-byte store/outbox based. */
+
 export async function acceptDialogueTurn(args: AcceptDialogueArgs): Promise<Response> {
   let store: Awaited<ReturnType<typeof getDialogueStore>>;
   let scope: string;

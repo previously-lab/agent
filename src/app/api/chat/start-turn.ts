@@ -231,9 +231,9 @@ export async function prepareTurnInput(args: StartTurnArgs): Promise<TurnInput> 
   // negligible for a time slice's lifetime).
   const turnId = crypto.randomBytes(4).toString("base64url");
 
-  // The full client history goes to the WORKFLOW — the slice-aligned window
-  // is cut there (sliceAlignedWindow in turn-workflow.ts, v0.9 Phase 1.4).
-  // This is only a broad payload cap guarding against a misbehaving client.
+  // The full client history goes to the WORKFLOW. Native dialogue uses it in
+  // full; other turns cut a slice-aligned window there. This is only a broad
+  // payload cap guarding against a misbehaving client.
   const MAX_HISTORY_MESSAGES = 200;
   let inbound = args.messages;
   let imageAttachments: string[] = [];
@@ -342,7 +342,7 @@ export async function startPreparedTurn(input: TurnInput) {
     // its role first appeared).
     attributes: {
       role: input.dialogue ? "thinking" : "turn",
-      ...(input.dialogue ? { dialogue: "1", work: input.dialogue.workId } : {}),
+      ...(input.dialogue ? { dialogue: "1", work: input.dialogue.workId, scope: input.dialogue.scopeKey } : {}),
       turn: input.turnId,
       ...(input.burstId ? { burst: input.burstId } : {}),
     },

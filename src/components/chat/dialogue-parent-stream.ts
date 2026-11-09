@@ -1,13 +1,17 @@
 "use client";
 
-import type { ContentBlockV1, DialogueArtifactRef, DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
-import { documentContextFromMetadata } from "@/lib/chat/document-context";
-import { messageImageAttachments } from "@/lib/chat/image-attachment-message";
 import { readDurableChat } from "@/lib/chat/client-transport";
 import { readChatEvents } from "@/lib/chat/client-stream";
 import type { UIMessage } from "@/lib/chat/protocol";
 import type { DialogueOfferStage } from "@/lib/dialogue/transport";
-import { emptyDialogueProjection, type DialogueProjection, type ManuscriptEntry } from "./dialogue-projection";
+import { findDialogueThoughtRuns, type DialogueThoughtRecovery } from "@/lib/chat/dialogue-run-recovery";
+import {
+  appendDialogueTurn,
+  applyDialoguePublicMessage,
+  dialogueMetadata,
+  patchDialogueAssistant,
+  type DialogueMessageMetadata,
+} from "./dialogue-stream-rows";
 
 export interface DialogueAcceptedV2 {
   version: 2;
@@ -34,32 +38,22 @@ export interface DialogueParentDone {
 
 export type DialogueParentEvent = ({ type: "offer" } & DialogueOffer) | DialogueParentDone;
 
-interface DialogueChildRecord extends DialogueOffer {
-  messageId?: string;
-  messageAt?: string;
-  /** Terminal child error/interruption, never a transport disconnect. */
-  failed?: boolean;
-  /** This checkpoint settled without creating a reply to recover. */
-  silent?: boolean;
-}
-
-interface DialoguePublicationView {
-  utterance: PublicUtterance;
-  artifactBodies: ReadonlyMap<string, string>;
-}
-
 export interface DialogueParentRecord extends DialogueAcceptedV2 {
   acceptedAt: string;
+  assistantId: string;
   userMessage?: UIMessage;
-  offers: DialogueChildRecord[];
   done: boolean;
   cancelled?: boolean;
-  /** Terminal server failure, distinct from a recoverable transport disconnect. */
   failed?: boolean;
+  replyStarted?: boolean;
+  replyCompleted?: boolean;
+  dialogueRunId?: string;
+  publicationId?: string;
 }
 
 type ParentStorage = Pick<Storage, "getItem" | "setItem">;
 type Fetch = typeof fetch;
+type HistorySetter = (update: (previous: UIMessage[]) => UIMessage[]) => void;
 
 const STORAGE_PREFIX = "previously:dialogue:parents:v2:";
 const STORED_COMPLETED_PARENTS = 8;
@@ -113,12 +107,14 @@ export function parseDialogueParentEvent(value: unknown): DialogueParentEvent {
 }
 
 export function parseSubmittedUserMessage(body: Record<string, unknown>): UIMessage | undefined {
-  if (body.regenerate) return undefined;
   const messages = Array.isArray(body.messages) ? body.messages : [];
-  const value = messages.at(-1) as Record<string, unknown> | undefined;
-  if (!value || value.role !== "user" || !nonEmpty(value.id) || !Array.isArray(value.parts)) {
-    throw new Error("Invalid dialogue input");
-  }
+  const inputId = nonEmpty(body.dialogueInputId) ? body.dialogueInputId : undefined;
+  const candidates = messages.filter((candidate): candidate is Record<string, unknown> => Boolean(candidate && typeof candidate === "object" &&
+    (candidate as Record<string, unknown>).role === "user"));
+  const value = inputId ? candidates.find(candidate => candidate.id === inputId ||
+      candidate.metadata && typeof candidate.metadata === "object" &&
+      (candidate.metadata as Record<string, unknown>).sourceInputId === inputId) : candidates.at(-1);
+  if (!value || !nonEmpty(value.id) || !Array.isArray(value.parts)) throw new Error("Invalid dialogue input");
   return { id: value.id, role: "user", parts: value.parts as UIMessage["parts"], metadata: value.metadata };
 }
 
@@ -126,31 +122,26 @@ function parseStoredRecord(value: unknown): DialogueParentRecord | null {
   try {
     const acceptance = parseDialogueAcceptedV2(value);
     const record = value as Record<string, unknown>;
-    if (!nonEmpty(record.acceptedAt) || !Array.isArray(record.offers) || typeof record.done !== "boolean") return null;
-    const offers: DialogueChildRecord[] = [];
-    const offerIds = new Set<string>();
-    for (const candidate of record.offers) {
-      const parsed = parseDialogueParentEvent(candidate);
-      if (parsed.type !== "offer" || offerIds.has(parsed.offerId)) continue;
-      offerIds.add(parsed.offerId);
-      const child = candidate as Record<string, unknown>;
-      offers.push({
-        ...parsed,
-        ...(nonEmpty(child.messageId) ? { messageId: child.messageId } : {}),
-        ...(nonEmpty(child.messageAt) ? { messageAt: child.messageAt } : {}),
-        ...(child.failed === true ? { failed: true } : {}),
-        ...(parsed.stage === "checkpoint" && child.silent === true ? { silent: true } : {}),
-      });
-    }
+    if (!nonEmpty(record.acceptedAt) || !nonEmpty(record.assistantId) || typeof record.done !== "boolean") return null;
     let userMessage: UIMessage | undefined;
     if (record.userMessage && typeof record.userMessage === "object") {
       const message = record.userMessage as Record<string, unknown>;
       if (!nonEmpty(message.id) || message.role !== "user" || !Array.isArray(message.parts)) return null;
       userMessage = { id: message.id, role: "user", parts: message.parts as UIMessage["parts"], metadata: message.metadata };
     }
-    return { ...acceptance, acceptedAt: record.acceptedAt, offers, done: record.done,
-      ...(record.cancelled === true ? { cancelled: true } : {}), ...(record.failed === true ? { failed: true } : {}),
-      ...(userMessage ? { userMessage } : {}) };
+    return {
+      ...acceptance,
+      acceptedAt: record.acceptedAt,
+      assistantId: record.assistantId,
+      done: record.done,
+      ...(userMessage ? { userMessage } : {}),
+      ...(record.cancelled === true ? { cancelled: true } : {}),
+      ...(record.failed === true ? { failed: true } : {}),
+      ...(record.replyStarted === true ? { replyStarted: true } : {}),
+      ...(record.replyCompleted === true ? { replyCompleted: true } : {}),
+      ...(nonEmpty(record.dialogueRunId) ? { dialogueRunId: record.dialogueRunId } : {}),
+      ...(nonEmpty(record.publicationId) ? { publicationId: record.publicationId } : {}),
+    };
   } catch {
     return null;
   }
@@ -172,8 +163,8 @@ export function readDialogueParentRecords(persona: string, storage = defaultStor
 
 function writeDialogueParentRecords(persona: string, records: readonly DialogueParentRecord[], storage = defaultStorage()) {
   if (!storage) return;
-  const active = records.filter(record => !record.done && !record.cancelled);
-  const completed = records.filter(record => record.done || record.cancelled).slice(-STORED_COMPLETED_PARENTS);
+  const active = records.filter(record => !record.replyCompleted && !record.cancelled && !record.failed);
+  const completed = records.filter(record => record.replyCompleted || record.cancelled || record.failed).slice(-STORED_COMPLETED_PARENTS);
   try { storage.setItem(storageKey(persona), JSON.stringify([...active, ...completed])); } catch { /* local recovery is best-effort */ }
 }
 
@@ -209,14 +200,10 @@ function waitForReconnect(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function publicMessageIds(message: UIMessage): string[] {
-  const ids = new Set([message.id]);
-  if (message.metadata && typeof message.metadata === "object") {
-    const metadata = message.metadata as Record<string, unknown>;
-    if (nonEmpty(metadata.utteranceId)) ids.add(metadata.utteranceId);
-    if (nonEmpty(metadata.publicationId)) ids.add(metadata.publicationId);
-  }
-  return [...ids];
+function isTerminalDialogueStreamError(error: unknown): boolean {
+  if (!error || typeof error !== "object" || (error as { terminal?: unknown }).terminal !== true) return false;
+  const message = error instanceof Error ? error.message : "";
+  return message !== "Run not available" && !/^Chat stream HTTP \d{3}$/.test(message);
 }
 
 function hasVisibleContent(message: UIMessage): boolean {
@@ -224,275 +211,229 @@ function hasVisibleContent(message: UIMessage): boolean {
     : part.type === "file" || part.type === "data-dialogue-publication");
 }
 
-/** readDurableChat uses terminal for both explicit stream failures and local
- * request/setup failures. Only the former proves that the child turn failed. */
-function isTerminalDialogueStreamError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || (error as { terminal?: unknown }).terminal !== true) return false;
-  const message = error instanceof Error ? error.message : "";
-  return message !== "Run not available" && !/^Chat stream HTTP \d{3}$/.test(message);
-}
-
-function provisionalPublicMessage(message: UIMessage): UIMessage {
-  return { ...message, parts: message.parts.filter(part => part.type === "text" || part.type === "file") };
-}
-
-function inputForRecord(record: DialogueParentRecord, userSeq: number): DialogueInput | undefined {
-  const message = record.userMessage;
-  if (!message) return undefined;
-  return {
-    inputId: record.sourceInputId,
-    clientMessageId: message.id,
-    userSeq,
-    eventSeq: 0,
-    acceptedAt: record.acceptedAt,
-    text: message.parts.flatMap(part => part.type === "text" ? [part.text] : []).join("\n\n"),
-    attachments: messageImageAttachments(message.metadata),
-    documentContext: documentContextFromMetadata(message.metadata),
-  };
-}
-
-
-function parseArtifactRef(value: unknown): DialogueArtifactRef | null {
-  if (!value || typeof value !== "object") return null;
-  const artifact = value as Record<string, unknown>;
-  if (!nonEmpty(artifact.artifactId) || !nonEmpty(artifact.sourceOwnerId) || artifact.revision !== 1 ||
-      (artifact.kind !== "native_html" && artifact.kind !== "document") || !nonEmpty(artifact.mediaType) ||
-      !nonEmpty(artifact.sha256) || !Number.isSafeInteger(artifact.byteSize) || (artifact.byteSize as number) < 0) return null;
-  return artifact as unknown as DialogueArtifactRef;
-}
-
-function sameArtifactIdentity(a: DialogueArtifactRef, b: DialogueArtifactRef): boolean {
-  return a.artifactId === b.artifactId && a.sourceOwnerId === b.sourceOwnerId && a.revision === b.revision &&
-    a.sha256 === b.sha256 && a.kind === b.kind && a.mediaType === b.mediaType && a.byteSize === b.byteSize;
-}
-
-function parsePublicationBlocks(value: unknown): ContentBlockV1[] | null {
-  if (!Array.isArray(value)) return null;
-  const blocks: ContentBlockV1[] = [];
-  for (const candidate of value) {
-    if (!candidate || typeof candidate !== "object") return null;
-    const block = candidate as Record<string, unknown>;
-    if (!nonEmpty(block.blockId)) return null;
-    if (block.kind === "markdown" && typeof block.text === "string") {
-      blocks.push({ kind: "markdown", blockId: block.blockId, text: block.text });
-    } else if (block.kind === "artifact_ref") {
-      const artifact = parseArtifactRef(block.artifact);
-      if (!artifact) return null;
-      blocks.push({ kind: "artifact_ref", blockId: block.blockId, artifact });
-    } else if (block.kind === "image_ref" && block.image && typeof block.image === "object") {
-      blocks.push(candidate as unknown as ContentBlockV1);
-    } else if (block.kind === "citation_ref" && nonEmpty(block.ref)) {
-      blocks.push({ kind: "citation_ref", blockId: block.blockId, ref: block.ref,
-        ...(typeof block.label === "string" ? { label: block.label } : {}) });
-    } else return null;
-  }
-  return blocks;
-}
-
-/** The terminal typed publication replaces provisional stream parts. Artifact
- * bytes are accepted only for an exact ref in that publication and are still
- * size/hash checked by DialogueArtifact before they reach the sandbox. */
-function publicationFromMessage(message: UIMessage): DialoguePublicationView | undefined {
-  const artifactBodies = new Map<string, { ref: DialogueArtifactRef; body: string }>();
-  let utterance: PublicUtterance | undefined;
+function publicationIdOf(message: UIMessage): string | undefined {
+  const metadata = dialogueMetadata(message);
+  if (nonEmpty(metadata.publicationId)) return metadata.publicationId;
   for (const part of message.parts) {
-    if (part.type === "data-dialogue-artifact" && part.data && typeof part.data === "object") {
-      const data = part.data as Record<string, unknown>;
-      const artifact = parseArtifactRef(data.artifact);
-      if (artifact && nonEmpty(data.blockId) && typeof data.body === "string") {
-        artifactBodies.set(artifact.artifactId, { ref: artifact, body: data.body });
-      }
-    }
     if (part.type !== "data-dialogue-publication" || !part.data || typeof part.data !== "object") continue;
-    const data = part.data as Record<string, unknown>;
-    const blocks = parsePublicationBlocks(data.blocks);
-    if (!nonEmpty(data.utteranceId) || data.utteranceId !== message.id || !Number.isSafeInteger(data.publicSeq) ||
-        !nonEmpty(data.committedAt) || !Array.isArray(data.inputIds) || !data.inputIds.every(nonEmpty) ||
-        !Array.isArray(data.sourceResults) || !blocks) continue;
-    utterance = { utteranceId: data.utteranceId, publicSeq: data.publicSeq as number, committedAt: data.committedAt,
-      inputIds: data.inputIds, sourceResults: data.sourceResults as PublicUtterance["sourceResults"], blocks };
+    const id = (part.data as Record<string, unknown>).utteranceId;
+    if (nonEmpty(id)) return id;
   }
-  if (!utterance) return undefined;
-  const bodies = new Map<string, string>();
-  for (const block of utterance.blocks) {
-    if (block.kind !== "artifact_ref") continue;
-    const candidate = artifactBodies.get(block.artifact.artifactId);
-    if (!candidate || !sameArtifactIdentity(candidate.ref, block.artifact)) continue;
-    bodies.set(block.artifact.artifactId, candidate.body);
-  }
-  return { utterance, artifactBodies: bodies };
+  return nonEmpty(message.id) ? message.id : undefined;
 }
 
-/** Owns only v2 live transport. The optional historical projection is a
- * separate input to the hook and is never read or polled by this controller. */
+/** One controller owns independent thought/reply pipelines, but every pipeline
+ * writes through the caller's single UIMessage[] history. */
 export class DialogueParentController {
   private records: DialogueParentRecord[] = [];
-  private readonly messages = new Map<string, UIMessage>();
-  private readonly publications = new Map<string, DialoguePublicationView>();
-  private readonly settledChildren = new Set<string>();
-  private readonly disconnectedChildren = new Set<string>();
-  private readonly disconnectedParents = new Set<string>();
-  private readonly reconnectingParents = new Set<string>();
+  private readonly settledReplies = new Set<string>();
+  private readonly disconnected = new Set<string>();
+  private readonly reconnecting = new Set<string>();
   private readonly parentCursors = new Map<string, number>();
   private readonly parentTasks = new Map<string, Promise<void>>();
-  private readonly childTasks = new Map<string, Promise<void>>();
+  private readonly replyTasks = new Map<string, Promise<void>>();
+  private readonly published = new Set<string>();
   private readonly request: Fetch;
   private readonly storage?: ParentStorage;
   private readonly retryDelayMs: number;
+  private registryTask?: Promise<void>;
 
   constructor(private readonly options: {
     persona: string;
     signal: AbortSignal;
-    onProjection: (projection: DialogueProjection) => void;
+    getMessages: () => UIMessage[];
+    setMessages: HistorySetter;
     onPublication: () => void;
     request?: Fetch;
     storage?: ParentStorage;
     retryDelayMs?: number;
   }) {
-    // stop() calls this as a controller method; native Window.fetch requires
-    // its original receiver even though injected transports need no binding.
     this.request = options.request ?? globalThis.fetch.bind(globalThis);
     this.storage = options.storage ?? defaultStorage();
     this.retryDelayMs = options.retryDelayMs ?? 500;
+    this.records = readDialogueParentRecords(this.options.persona, this.storage);
   }
 
   start(since?: string, savedPublications: ReadonlySet<string> = new Set()) {
+    this.records = this.records.filter(record => !record.publicationId || !savedPublications.has(record.publicationId));
     const current = new Set(this.records.map(record => record.parentRunId));
     const restored = readDialogueParentRecords(this.options.persona, this.storage)
       .filter(record => !current.has(record.parentRunId) && (!since || record.acceptedAt >= since))
-      .filter(record => !(record.done && !record.failed && record.offers.length &&
-        record.offers.every(offer => offer.silent || !offer.failed && savedPublications.has(offer.offerId))));
+      .filter(record => !record.publicationId || !savedPublications.has(record.publicationId));
     this.records = [...restored, ...this.records];
-    this.emit();
+    for (const record of this.records) this.restoreSeat(record);
     this.resumeRecords(true);
+    void this.recoverFromRegistry();
   }
 
   resume() {
     this.resumeRecords(false);
   }
 
-  private resumeRecords(replayFailedChildren: boolean) {
-    for (const record of this.records) {
-      this.disconnectedParents.delete(record.parentRunId);
-      if (!record.done && !record.cancelled) this.startParent(record);
-      for (const offer of record.offers) {
-        if (offer.silent) continue;
-        if (offer.failed) {
-          // A fresh controller may replay the durable output once to restore
-          // partial text. The terminal failure itself remains sticky.
-          if (replayFailedChildren) this.startChild(record, offer);
-          else this.settledChildren.add(offer.runId);
-          continue;
-        }
-        this.disconnectedChildren.delete(offer.runId);
-        this.startChild(record, offer);
-      }
-    }
-    this.emit();
+  private recoverFromRegistry() {
+    if (this.registryTask || this.options.signal.aborted) return;
+    const task = findDialogueThoughtRuns(this.options.persona).then(entries => {
+      for (const entry of entries) this.mergeRegistryEntry(entry);
+      for (const record of this.records) this.restoreSeat(record);
+      this.persist();
+      this.resumeRecords(true);
+    }).catch(() => {
+      // Local recovery remains available when the registry cannot be read.
+    }).finally(() => {
+      if (this.registryTask === task) this.registryTask = undefined;
+    });
+    this.registryTask = task;
   }
 
-  accept(acceptance: DialogueAcceptedV2, userMessage?: UIMessage) {
+  private mergeRegistryEntry(entry: DialogueThoughtRecovery) {
+    const current = this.options.getMessages();
+    const userMessage = entry.input ? {
+      id: entry.input.clientMessageId,
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: entry.input.text }],
+      metadata: { acceptedAt: entry.input.acceptedAt, sourceInputId: entry.input.inputId },
+    } : current.find(message => message.role === "user" && dialogueMetadata(message).sourceInputId === entry.sourceInputId);
+    const existingSeat = current.find(message => message.role === "assistant" &&
+      dialogueMetadata(message).thoughtRunId === entry.runId);
+    let record = this.records.find(candidate => candidate.parentRunId === entry.runId);
+    if (!record) {
+      record = {
+        version: 2,
+        parentRunId: entry.runId,
+        sourceInputId: entry.sourceInputId,
+        workId: entry.workId,
+        offersUrl: `/api/chat/${encodeURIComponent(entry.runId)}/offers`,
+        thoughtsUrl: `/api/chat/${encodeURIComponent(entry.runId)}/thoughts?workId=${encodeURIComponent(entry.workId)}&namespace=dialogue-thinking-v2`,
+        acceptedAt: entry.createdAt ?? entry.input?.acceptedAt ?? new Date().toISOString(),
+        assistantId: existingSeat?.id ?? `recovered-${entry.workId}`,
+        ...(userMessage ? { userMessage } : {}),
+        done: entry.status === "completed" || entry.status === "failed" || entry.status === "cancelled",
+      };
+      this.records.push(record);
+    }
+    if (entry.status === "failed") { record.failed = true; record.done = true; }
+    if (entry.status === "cancelled") { record.cancelled = true; record.done = true; }
+    if (entry.status === "completed") record.done = true;
+    if (!record.userMessage && userMessage) record.userMessage = userMessage;
+    if (existingSeat) record.assistantId = existingSeat.id;
+  }
+
+  private resumeRecords(replayCompleted: boolean) {
+    for (const record of this.records) {
+      this.disconnected.delete(record.parentRunId);
+      if (record.cancelled || record.failed) {
+        this.patch(record, { workStatus: record.cancelled ? "cancelled" : "failed", workConnection: "connected" });
+        continue;
+      }
+      if (!record.done) {
+        this.startParent(record);
+        continue;
+      }
+      if (this.settledReplies.has(record.parentRunId) || this.replyTasks.has(record.parentRunId)) continue;
+      if (record.replyCompleted && !replayCompleted) {
+        this.settledReplies.add(record.parentRunId);
+        continue;
+      }
+      if (record.dialogueRunId) this.startPublicReplay(record);
+      else this.startReply(record);
+    }
+  }
+
+  accept(acceptance: DialogueAcceptedV2, assistantId: string, userMessage?: UIMessage) {
     if (this.records.some(record => record.parentRunId === acceptance.parentRunId)) return;
-    const record: DialogueParentRecord = { ...acceptance, acceptedAt: new Date().toISOString(),
-      ...(userMessage ? { userMessage } : {}), offers: [], done: false };
+    const record: DialogueParentRecord = {
+      ...acceptance,
+      acceptedAt: new Date().toISOString(),
+      assistantId,
+      ...(userMessage ? { userMessage } : {}),
+      done: false,
+    };
     this.records.push(record);
+    if (userMessage) {
+      this.options.setMessages(previous => previous.map(message => message.id === userMessage.id && message.role === "user"
+        ? { ...message, metadata: { ...dialogueMetadata(message), sourceInputId: acceptance.sourceInputId } }
+        : message));
+    }
+    this.patch(record, this.workMetadata(record, "running"));
     this.persist();
-    this.emit();
     this.startParent(record);
   }
 
   async stop(workId?: string) {
     const targets = this.records.filter(record => (!workId || record.workId === workId) && !record.cancelled &&
-      (!record.done || record.offers.some(offer => offer.stage !== "checkpoint" && !this.settledChildren.has(offer.runId))));
+      !record.failed && !record.replyCompleted);
     await Promise.all(targets.map(async record => {
-      const response = await this.request(`/api/chat/${encodeURIComponent(record.parentRunId)}/cancel`, {
+      const runIds = [...new Set([record.parentRunId, ...(record.dialogueRunId ? [record.dialogueRunId] : [])])];
+      const responses = await Promise.all(runIds.map(runId => this.request(`/api/chat/${encodeURIComponent(runId)}/cancel`, {
         method: "POST", credentials: "same-origin", keepalive: true,
-      });
-      if (!response.ok) throw new Error("Dialogue stop failed");
+      })));
+      if (responses.some(response => !response.ok)) throw new Error("Dialogue stop failed");
       record.cancelled = true;
       record.done = true;
+      this.patch(record, { workStatus: "cancelled", workConnection: "connected" });
     }));
     this.persist();
-    this.emit();
   }
 
   private persist() {
     writeDialogueParentRecords(this.options.persona, this.records, this.storage);
   }
 
-  private emit() {
-    this.options.onProjection(this.projection());
+  private workMetadata(record: DialogueParentRecord, workStatus: DialogueMessageMetadata["workStatus"]): DialogueMessageMetadata {
+    return {
+      sourceInputId: record.sourceInputId,
+      workId: record.workId,
+      workStatus,
+      workConnection: this.disconnected.has(record.parentRunId) ? "disconnected"
+        : this.reconnecting.has(record.parentRunId) ? "reconnecting" : "connected",
+      thoughtRunId: record.parentRunId,
+      thoughtsUrl: record.thoughtsUrl,
+      offersUrl: record.offersUrl,
+      ...(record.dialogueRunId ? { dialogueRunId: record.dialogueRunId } : {}),
+      ...(record.publicationId ? { publicationId: record.publicationId } : {}),
+    };
   }
 
-  private projection(): DialogueProjection {
-    const base = emptyDialogueProjection();
-    const entries: ManuscriptEntry[] = [];
-    const inputs = new Map(base.inputs);
-    const works = new Map(base.works);
-    const utterances = new Set(base.utterances);
-    this.records.forEach((record, index) => {
-      const input = inputForRecord(record, index + 1);
-      if (input) {
-        inputs.set(input.inputId, input);
-        entries.push({ kind: "input", id: input.inputId, input });
+  private patch(record: DialogueParentRecord, metadata: DialogueMessageMetadata) {
+    this.options.setMessages(previous => patchDialogueAssistant(previous, record.assistantId, metadata));
+  }
+
+  private restoreSeat(record: DialogueParentRecord) {
+    this.options.setMessages(previous => {
+      const existing = previous.find(message => message.id === record.assistantId ||
+        message.role === "assistant" && dialogueMetadata(message).thoughtRunId === record.parentRunId);
+      if (existing) {
+        record.assistantId = existing.id;
+        return patchDialogueAssistant(previous, existing.id, this.workMetadata(record,
+          record.cancelled ? "cancelled" : record.failed ? "failed" : record.replyCompleted ? "completed" : "running"));
       }
-      const required = record.offers.filter(offer => offer.stage !== "checkpoint");
-      const disconnected = this.disconnectedParents.has(record.parentRunId) ||
-        required.some(offer => this.disconnectedChildren.has(offer.runId));
-      const connection = disconnected ? "disconnected" : this.reconnectingParents.has(record.parentRunId) ? "reconnecting" : "connected";
-      const settled = required.every(offer => this.settledChildren.has(offer.runId));
-      const failed = record.failed || required.some(offer => offer.failed);
-      const status = record.cancelled ? "cancelled" : failed ? "failed"
-        : record.done && settled ? "completed"
-          : this.parentTasks.has(record.parentRunId) || record.offers.length || disconnected ? "running" : "queued";
-      works.set(record.workId, { workId: record.workId, inputId: record.sourceInputId, userSeq: index + 1,
-        status, connection, runId: record.parentRunId, thoughtsUrl: record.thoughtsUrl });
-      const seenChildren = new Set<string>();
-      for (const offer of record.offers) {
-        if (seenChildren.has(offer.runId)) continue;
-        seenChildren.add(offer.runId);
-        const message = this.messages.get(offer.runId);
-        if (!message || !hasVisibleContent(message)) continue;
-        const publication = this.publications.get(offer.runId);
-        if (publication) {
-          entries.push({ kind: "utterance", id: publication.utterance.utteranceId, utterance: publication.utterance,
-            artifactBodies: publication.artifactBodies });
-          utterances.add(publication.utterance.utteranceId);
-        } else {
-          entries.push({ kind: "message", id: message.id, sourceInputId: record.sourceInputId, message: provisionalPublicMessage(message), timeIso: offer.messageAt ?? record.acceptedAt,
-            isStreaming: !this.settledChildren.has(offer.runId) && !this.disconnectedChildren.has(offer.runId) });
-        }
-        for (const id of publicMessageIds(message)) utterances.add(id);
-      }
+      if (!record.userMessage) return previous;
+      const appended = appendDialogueTurn(previous, record.userMessage, record.assistantId, record.acceptedAt);
+      return patchDialogueAssistant(appended, record.assistantId, this.workMetadata(record,
+        record.cancelled ? "cancelled" : record.failed ? "failed" : record.replyCompleted ? "completed" : "running"));
     });
-    entries.sort((a, b) => {
-      const aTime = a.kind === "input" ? a.input.acceptedAt : a.kind === "message" ? a.timeIso : a.utterance.committedAt;
-      const bTime = b.kind === "input" ? b.input.acceptedAt : b.kind === "message" ? b.timeIso : b.utterance.committedAt;
-      return aTime.localeCompare(bTime);
-    });
-    return { ...base, entries, inputs, works, utterances };
   }
 
   private startParent(record: DialogueParentRecord) {
-    if (this.options.signal.aborted || record.done || record.cancelled || this.parentTasks.has(record.parentRunId)) return;
+    if (this.options.signal.aborted || record.done || record.cancelled || record.failed || this.parentTasks.has(record.parentRunId)) return;
+    this.patch(record, this.workMetadata(record, "running"));
     const task = (async () => {
       let failures = 0;
       while (!this.options.signal.aborted && !record.done && !record.cancelled) {
         try {
-          const done = await readDialogueParentOffers({ offersUrl: record.offersUrl, startIndex: this.parentCursors.get(record.parentRunId),
-            signal: this.options.signal, request: this.request, onEvent: event => {
-              if (event.type === "offer") {
-                if (!record.offers.some(offer => offer.offerId === event.offerId)) record.offers.push(event);
-                const offer = record.offers.find(candidate => candidate.offerId === event.offerId)!;
-                this.startChild(record, offer);
-                this.persist();
-                this.emit();
-              }
-            } });
+          const done = await readDialogueParentOffers({
+            offersUrl: record.offersUrl,
+            startIndex: this.parentCursors.get(record.parentRunId),
+            signal: this.options.signal,
+            request: this.request,
+            onEvent: () => {},
+          });
           if (!done) throw new Error("Parent stream ended before done");
           if (done.cursor !== undefined) this.parentCursors.set(record.parentRunId, Math.max(done.cursor, this.parentCursors.get(record.parentRunId) ?? 0));
           failures = 0;
+          this.reconnecting.delete(record.parentRunId);
           if (done.status === "running" || done.retryAfterMs !== undefined) {
+            this.patch(record, this.workMetadata(record, "running"));
             await waitForReconnect(done.retryAfterMs ?? this.retryDelayMs, this.options.signal);
             continue;
           }
@@ -500,90 +441,119 @@ export class DialogueParentController {
           if (done.status === "cancelled") record.cancelled = true;
           if (done.status === "failed") record.failed = true;
           this.persist();
-          this.emit();
+          if (record.cancelled || record.failed) {
+            this.patch(record, this.workMetadata(record, record.cancelled ? "cancelled" : "failed"));
+          } else {
+            this.startReply(record);
+          }
           return;
-        } catch (error) {
+        } catch {
           if (this.options.signal.aborted || record.cancelled) return;
           if (failures === 3) {
-            this.reconnectingParents.delete(record.parentRunId);
-            this.disconnectedParents.add(record.parentRunId);
-            this.emit();
+            this.reconnecting.delete(record.parentRunId);
+            this.disconnected.add(record.parentRunId);
+            this.patch(record, this.workMetadata(record, "running"));
             return;
           }
-          this.reconnectingParents.add(record.parentRunId);
-          this.emit();
+          this.reconnecting.add(record.parentRunId);
+          this.patch(record, this.workMetadata(record, "running"));
           await waitForReconnect(Math.min(8_000, this.retryDelayMs * 2 ** failures++), this.options.signal);
-          this.reconnectingParents.delete(record.parentRunId);
-          this.emit();
+          this.reconnecting.delete(record.parentRunId);
+          this.patch(record, this.workMetadata(record, "running"));
         }
       }
     })().catch(() => {}).finally(() => {
       this.parentTasks.delete(record.parentRunId);
-      this.emit();
     });
     this.parentTasks.set(record.parentRunId, task);
-    this.emit();
   }
 
-  private startChild(record: DialogueParentRecord, offer: DialogueChildRecord) {
-    if (this.options.signal.aborted || record.cancelled || this.settledChildren.has(offer.runId) || this.childTasks.has(offer.runId)) return;
-    this.disconnectedChildren.delete(offer.runId);
-    const rememberSilentCheckpoint = () => {
-      if (offer.stage !== "checkpoint" || offer.messageAt) return;
-      offer.silent = true;
+  private startReply(record: DialogueParentRecord) {
+    if (this.options.signal.aborted || record.cancelled || record.failed || this.settledReplies.has(record.parentRunId) ||
+        this.replyTasks.has(record.parentRunId)) return;
+    record.replyStarted = true;
+    this.persist();
+    const task = (async () => {
+      const response = await this.request("/api/chat/dialogue/reply", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({
+          thoughtRunId: record.parentRunId,
+          workId: record.workId,
+          messages: this.options.getMessages(),
+        }),
+        signal: this.options.signal,
+      });
+      if (!response.ok) throw Object.assign(new Error(`Dialogue reply HTTP ${response.status}`), {
+        terminal: response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429,
+      });
+      const runId = response.headers.get("x-workflow-run-id");
+      if (!runId) throw new Error("Dialogue reply run unavailable");
+      record.dialogueRunId = runId;
       this.persist();
-    };
-    const task = readDurableChat({
-      runId: offer.runId,
-      assistantId: `dialogue-child-${offer.runId}`,
+      this.patch(record, this.workMetadata(record, "running"));
+      await this.readPublicReply(record, response);
+    })().catch(error => this.handleReplyError(record, error)).finally(() => {
+      this.replyTasks.delete(record.parentRunId);
+    });
+    this.replyTasks.set(record.parentRunId, task);
+  }
+
+  private startPublicReplay(record: DialogueParentRecord) {
+    if (this.options.signal.aborted || record.cancelled || record.failed || this.settledReplies.has(record.parentRunId) ||
+        this.replyTasks.has(record.parentRunId) || !record.dialogueRunId) return;
+    const task = this.readPublicReply(record).catch(error => this.handleReplyError(record, error)).finally(() => {
+      this.replyTasks.delete(record.parentRunId);
+    });
+    this.replyTasks.set(record.parentRunId, task);
+  }
+
+  private async readPublicReply(record: DialogueParentRecord, response?: Response) {
+    await readDurableChat({
+      runId: record.dialogueRunId!,
+      assistantId: record.assistantId,
       signal: this.options.signal,
+      response,
       fetch: this.request,
       retryDelayMs: this.retryDelayMs,
       onData: chunk => {
         if (chunk.type !== "data-turn-status" || !chunk.data || typeof chunk.data !== "object") return;
         const status = (chunk.data as Record<string, unknown>).status;
         if (status !== "error" && status !== "interrupted") return;
-        offer.failed = true;
-        rememberSilentCheckpoint();
-        this.settledChildren.add(offer.runId);
-        this.disconnectedChildren.delete(offer.runId);
-        this.persist();
-        this.emit();
-        throw Object.assign(new Error(`Dialogue child ${status}`), { terminal: true });
+        throw Object.assign(new Error(`Dialogue reply ${status}`), { terminal: true });
       },
       onMessage: message => {
-        if (record.cancelled) return;
+        if (record.cancelled || this.options.signal.aborted) return;
+        const publicationId = publicationIdOf(message);
+        if (publicationId) record.publicationId = publicationId;
         const visible = hasVisibleContent(message);
-        const first = visible && !offer.messageAt;
-        if (visible) offer.messageAt ??= new Date().toISOString();
-        const identityChanged = offer.messageId !== message.id;
-        offer.messageId = message.id;
-        this.messages.set(offer.runId, message);
-        const publication = publicationFromMessage(message);
-        if (publication) this.publications.set(offer.runId, publication);
-        if (first) this.options.onPublication();
-        if (first || identityChanged) this.persist();
-        this.emit();
-      },
-    }).then(() => {
-      rememberSilentCheckpoint();
-      this.settledChildren.add(offer.runId);
-      this.disconnectedChildren.delete(offer.runId);
-    }).catch(error => {
-      if (this.options.signal.aborted || record.cancelled || offer.failed) return;
-      if (isTerminalDialogueStreamError(error)) {
-        offer.failed = true;
-        rememberSilentCheckpoint();
-        this.settledChildren.add(offer.runId);
-        this.disconnectedChildren.delete(offer.runId);
+        this.options.setMessages(previous => applyDialoguePublicMessage(previous, record.assistantId, message,
+          this.workMetadata(record, "running")));
+        if (visible && !this.published.has(record.parentRunId)) {
+          this.published.add(record.parentRunId);
+          this.options.onPublication();
+        }
         this.persist();
-      } else {
-        this.disconnectedChildren.add(offer.runId);
-      }
-    }).finally(() => {
-      this.childTasks.delete(offer.runId);
-      this.emit();
+      },
     });
-    this.childTasks.set(offer.runId, task);
+    if (record.cancelled || this.options.signal.aborted) return;
+    record.replyCompleted = true;
+    this.settledReplies.add(record.parentRunId);
+    this.disconnected.delete(record.parentRunId);
+    this.patch(record, this.workMetadata(record, "completed"));
+    this.persist();
+  }
+
+  private handleReplyError(record: DialogueParentRecord, error: unknown) {
+    if (this.options.signal.aborted || record.cancelled) return;
+    if (isTerminalDialogueStreamError(error) || error instanceof Error && error.message === "Dialogue reply run unavailable") {
+      record.failed = true;
+      this.patch(record, this.workMetadata(record, "failed"));
+    } else {
+      this.disconnected.add(record.parentRunId);
+      this.patch(record, this.workMetadata(record, "running"));
+    }
+    this.persist();
   }
 }

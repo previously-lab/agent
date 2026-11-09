@@ -23,7 +23,7 @@ export function createChatAgent(opts: {
 }
 
 /** Public wording only: one-shot, non-thinking DeepSeek Chat Completions. */
-export function createDialogueAgent(checkpoint = false) {
+export function createDialogueAgent(checkpoint = false, direct = false) {
   return new DeepSeekAgent({
     role: "chat",
     thinking: false,
@@ -41,6 +41,9 @@ export function createDialogueAgent(checkpoint = false) {
       "The event is input for wording, not a draft to quote. An offer_reply event contains the thinking role's handoff notes for the current stage; host events can provide findings or a question that must be asked.",
       "needs_user: the work is blocked on the user. Ask exactly ONE targeted, natural question in the user's locale. Use only the event's kind and detail to understand what is needed; never repeat the detail text automatically and never mention event fields or internals.",
       "findings: keep the reported findings, their attribution and uncertainty. Render them in the user's language without changing their meaning.",
+      ...(direct ? [
+        "The current work may have been superseded or made irrelevant by a later user input in priorContext. If no public reply is useful now, return empty text. Never invent a reply just because the work completed.",
+      ] : []),
       ...(checkpoint ? [
         "This is an interim update intended for the user. Always turn the current handoff into a nonempty reply of one or two natural sentences, including when it only confirms the task or states a plan. Do not decide whether to speak.",
         "Use priorCheckpoints and alreadySaid to keep continuity and avoid repeating earlier wording. Preserve the current update's meaning and uncertainty. Do not imply the work has finished.",

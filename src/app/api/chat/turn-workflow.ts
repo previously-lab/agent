@@ -19,32 +19,22 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount } from "@/lib/deepseek/tools";
-import { type ModelMessage, type StepResult, type ToolResult } from "@/lib/deepseek/types";
+import { type ModelMessage, type StepResult } from "@/lib/deepseek/types";
 import { createHook, getWritable, sleep } from "workflow";
 import { start } from "workflow/api";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
-import { offerReplyExecute, offerDialogueEventExecute, type ToolContext } from "@/app/api/agent/tool-executors";
-import { buildThinkingProduct, thinkingExpressionClaims, thinkingReportSchema } from "@/lib/agents/thinking-product";
+import { type ToolContext } from "@/app/api/agent/tool-executors";
 import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
-import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
+import { buildThinkingProduct } from "@/lib/agents/thinking-product";
 import {
-  DIALOGUE_FALLBACK_TOOL_CALL_ID,
-  DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
-  DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
   DIALOGUE_THOUGHTS_NAMESPACE,
   DIALOGUE_TRANSPORT,
-  parseOfferReplyResult,
-  type DialogueNeedsUser,
-  type DialogueOfferContext,
   type DialogueRecordRequest,
 } from "@/lib/dialogue/transport";
 import {
-  closeDialogueOffersStep,
   closeDialogueThoughtsStep,
-  publishDialogueOfferControlsStep,
-  reconcileDialogueOffersStep,
   startDialogueRecordRunStep,
 } from "./dialogue-transport-steps";
 import {
@@ -991,8 +981,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // The stream is gone too — nothing left to degrade into; the rethrow
       // below still marks the run failed.
     }
-    if (input.dialogue?.transport === DIALOGUE_TRANSPORT) {
-      try { await closeDialogueOffersStep(); } catch { /* terminal status remains authoritative */ }
+    if (input.dialogue) {
       try { await closeDialogueThoughtsStep(); } catch { /* terminal status remains authoritative */ }
     }
     throw hkErr;
@@ -1014,7 +1003,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // the worker.
   const dialogue = input.dialogue ?? null;
   const nativeDialogue = dialogue?.transport === DIALOGUE_TRANSPORT;
-  const parentRunId = nativeDialogue ? await ownRunId() : "";
   let workWindow: DialogueWorkAdmission | null = null;
   if (dialogue && !nativeDialogue) {
     const admitted = await beginDialogueWorkStep(dialogue, await ownRunId());
@@ -1089,7 +1077,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     dateAnchor,
   });
 
-  // ── Slice-aligned history window (v0.9) ────────────────────────────────
+  // Native dialogue thinking receives the complete client history. Other turns
+  // keep the slice-aligned window below.
   // The client still supplies the history, but the model only receives the
   // CURRENT slice's turns: N user turns in the slice → the tail of the client
   // history covering those N user messages. A fresh slice (just closed /
@@ -1100,7 +1089,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // continues seamlessly. Within a slice the prefix grows append-only,
   // keeping the provider cache warm.
   const userTurnsInSlice = slice.turns.filter((t) => t.role === "user").length;
-  const historyWindow = buildHistoryWindow({
+  const historyWindow = nativeDialogue ? input.modelMessages : buildHistoryWindow({
     modelMessages: input.modelMessages,
     userTurnsInSlice,
     maxMessages: input.config.slicing.maxTurnsPerSlice * 2,
@@ -1177,66 +1166,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let interruptedSteps: ContinuationStepSnapshot[] = [];
   const producedMessages: ModelMessage[] = [];
   let allCognition = "";
-  let latestFinalOfferText = "";
-  /** Valid needsUser report from finishThinking, kept for tail recovery. */
-  let pendingNeedsUser: DialogueNeedsUser | undefined;
-  const finalDialogueOffers = new Set<string>();
-  const onToolExecutionResult = async (result: ToolResult) => {
-    if (!nativeDialogue || result.error || result.toolName !== "offerReply") return;
-    const offer = parseOfferReplyResult(result.output);
-    if (!offer) return;
-    try {
-      await publishDialogueOfferControlsStep([offer]);
-      if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
-    } catch (error) {
-      // The final handoff reconciles the stream before attempting a replacement.
-      console.warn("[Dialogue] offer announcement failed", offer.offerId, error);
-    }
-  };
-
   const onStepEnd = async (step: StepResult<ChatToolSet>) => {
-      let explicitFinalObserved = false;
-      if (nativeDialogue) {
-        for (const call of step.toolCalls) {
-          if (call.toolName !== "offerReply" || call.invalid) continue;
-          const candidate = call.input as { text?: unknown; stage?: unknown } | null;
-          if (candidate?.stage !== "checkpoint" && typeof candidate?.text === "string" && candidate.text.trim()) {
-            latestFinalOfferText = candidate.text;
-            explicitFinalObserved = true;
-          }
-        }
-      }
-      // A valid needsUser report is an immediate terminal handoff: the run is
-      // blocked on the user, so ask through the dialogue now instead of
-      // waiting for the tail. An explicit final offer already observed wins.
-      if (nativeDialogue && !explicitFinalObserved && finalDialogueOffers.size === 0) {
-        for (const call of step.toolCalls) {
-          if (call.toolName !== "finishThinking" || call.invalid) continue;
-          const parsed = thinkingReportSchema.safeParse(call.input);
-          const needsUser = parsed.success ? parsed.data.needsUser : undefined;
-          if (!needsUser) continue;
-          pendingNeedsUser = needsUser;
-          try {
-            const offer = await offerDialogueEventExecute(
-              { stage: "final", event: { kind: "needs_user", needsUser } },
-              {
-                context: turnToolsContext,
-                toolCallId: DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
-                messages: producedMessages,
-              },
-            );
-            if (offer.ok) {
-              await publishDialogueOfferControlsStep([offer]);
-              finalDialogueOffers.add(offer.offerId);
-            }
-          } catch (error) {
-            // Tail recovery retries the same stable typed handoff.
-            console.warn("[Dialogue] needs-user handoff announcement failed", error);
-          }
-          break;
-        }
-      }
-
       producedMessages.push(...step.response.messages);
       allCognition += extractCognition(step.response.messages, [step]);
       // Provider warnings (unsupported settings, silent downgrades such as
@@ -1279,19 +1209,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // evidence-gated finishThinking report, read receipts). Legacy turns keep
   // the chat agent. Same native tool protocol and checkpoints either way.
   const turnToolsContext = buildTurnToolContext(input, slice.slice_id, systemPrompt, true);
-  if (nativeDialogue) {
-    const offerContext: DialogueOfferContext = {
-      parentRunId,
-      workId: dialogue!.workId,
-      sourceInputId: dialogue!.sourceInputId ?? input.turnId,
-      sourceTurnId: input.turnId,
-      source: nativeDialogueSource(input),
-      priorContext: dialoguePriorContext(historyWindow, input.lastUserMessage),
-      locale: input.locale,
-      record: nativeDialogueRecordRequest(input, slice.slice_id).environment,
-    };
-    turnToolsContext.dialogueOffer = offerContext;
-  }
   const agent = dialogue
     ? createThinkingAgent({
         model: input.modelConfig,
@@ -1299,7 +1216,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         reasoningEffort: input.reasoningEffort,
         toolsContext: buildChatToolsContext(turnToolsContext),
         onStepEnd,
-        onToolExecutionResult,
       })
     : createChatAgent({
         model: input.modelConfig,
@@ -1311,7 +1227,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
 
   /** Shared stream options (continuation-safe, see below). No maxOutputTokens. */
   const streamOpts = {
-    writable: getWritable<ModelCallStreamPart>(nativeDialogue ? { namespace: DIALOGUE_THOUGHTS_NAMESPACE } : undefined),
+    writable: getWritable<ModelCallStreamPart>(dialogue ? { namespace: DIALOGUE_THOUGHTS_NAMESPACE } : undefined),
     stopWhen: isStepCount(20),
     sendFinish: false,
     preventClose: true,
@@ -1978,10 +1894,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     streamError ??= err;
     outcome.error ??= errorMessage(err, "The turn's final write failed.");
   }
-  // 思考流 dialogue work: the durable handoff is the WORK PRODUCT (claims,
-  // artifacts, evidence) — never the public reply text. No burst merge line,
-  // no task acknowledgments from research success, and no summary-stream
-  // persistence: the record plane projects from the control store's events.
+  // Legacy store-backed thinking hands its work product to the control store.
+  // Native thinking instead returns dialogueWork below; neither writes a
+  // public reply or a private finalize/summary copy here.
   if (dialogue && !nativeDialogue) {
     try {
       // The thinking agent's terminal act is the report-only finishThinking
@@ -2010,127 +1925,62 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       outcome.error ??= errorMessage(err, "The work result could not be handed off.");
     }
   }
+  let dialogueWork: TurnRunResult["dialogueWork"];
   if (nativeDialogue) {
-    let offerControlKnown = true;
-    try {
-      const durableOffers = await reconcileDialogueOffersStep(parentRunId);
-      for (const offer of durableOffers) {
-        if (offer.stage !== "checkpoint") finalDialogueOffers.add(offer.offerId);
-      }
-    } catch (controlError) {
-      offerControlKnown = false;
-      outcome.error ??= errorMessage(controlError, "The offer control stream could not be recovered.");
-    }
-    if (offerControlKnown && finalDialogueOffers.size === 0 && pendingNeedsUser) {
-      // Control-uncertainty recovery: retry the same stable typed handoff. A
-      // needsUser report is never replaced by raw prose — if this fails too,
-      // the no-final error/record path below follows.
-      try {
-        const handoff = await offerDialogueEventExecute(
-          { stage: "final", event: { kind: "needs_user", needsUser: pendingNeedsUser } },
-          {
-            context: turnToolsContext,
-            toolCallId: DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID,
-            messages: producedMessages,
-          },
-        );
-        if (handoff.ok) {
-          try {
-            if (await publishDialogueOfferControlsStep([handoff])) finalDialogueOffers.add(handoff.offerId);
-          } catch (controlError) {
-            outcome.error ??= errorMessage(controlError, "The needs-user reply could not be announced.");
-          }
-        } else outcome.error ??= handoff.reason;
-      } catch (handoffError) {
-        outcome.error ??= errorMessage(handoffError, "The needs-user reply could not be handed off.");
-      }
-    }
-    if (offerControlKnown && finalDialogueOffers.size === 0 && !pendingNeedsUser) {
-      // Structured final from a nonempty validated finishThinking report:
-      // admitted finding and status claims only — never openQuestions,
-      // nextAction, memoryDelta, tool payloads or raw thoughts. A missed
-      // publication can retry an explicit final handoff, never ordinary text.
-      const report = extractThinkingReport(producedMessages);
-      const cleanFinish =
-        outcome.finishReason === "stop" ||
-        (outcome.finishReason === "tool-calls" && report !== undefined);
-      const parsedReport = report === undefined ? null : thinkingReportSchema.safeParse(report);
-      const hasNonemptyValidatedReport = parsedReport?.success === true &&
-        (parsedReport.data.findings?.length ?? 0) > 0;
-      if (parsedReport?.success && parsedReport.data.findings?.length) {
-        try {
-          const documentContext = input.documentContext ?? [];
-          const product = buildThinkingProduct({
-            text: "",
-            messages: producedMessages,
-            inputScope: {
-              scopeKey: dialogue!.scopeKey,
-              workId: dialogue!.workId,
-              inputIds: [dialogue!.sourceInputId ?? input.turnId],
-              inputText: input.lastUserMessage,
-              readScopeId: turnToolsContext.readScopeId,
-              locale: input.locale,
-              ...(documentContext.length ? { documentContext } : {}),
-            },
-            asOf: input.startedAtIso,
-            report: parsedReport.data,
-            interrupted: !cleanFinish || !!outcome.error,
-          });
-          const findings = thinkingExpressionClaims(product)
-            .slice(0, 12)
-            .map((claim) => ({
-              text: claim.text,
-              kind: claim.kind,
-              ...(claim.uncertainty ? { uncertainty: claim.uncertainty.slice(0, 600) } : {}),
-              ...(claim.decision ? { decision: claim.decision } : {}),
-            }));
-          if (findings.length > 0) {
-            const offer = await offerDialogueEventExecute(
-              { stage: "final", event: { kind: "findings", findings } },
-              {
-                context: turnToolsContext,
-                toolCallId: DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID,
-                messages: producedMessages,
-              },
-            );
-            if (offer.ok) {
-              try {
-                if (await publishDialogueOfferControlsStep([offer])) finalDialogueOffers.add(offer.offerId);
-              } catch (controlError) {
-                outcome.error ??= errorMessage(controlError, "The structured reply could not be announced.");
-              }
-            } else outcome.error ??= offer.reason;
-          }
-        } catch (productError) {
-          // Unchecked prose is never substituted for a validated report.
-          console.warn("[Dialogue] structured final product could not be built", productError);
-        }
-      }
-      if (finalDialogueOffers.size === 0 && !hasNonemptyValidatedReport && latestFinalOfferText.trim()) {
-        const fallback = await offerReplyExecute(
-          { stage: "final", text: latestFinalOfferText },
-          {
-            context: turnToolsContext,
-            toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID,
-            messages: producedMessages,
-          },
-        );
-        if (fallback.ok) {
-          try {
-            if (await publishDialogueOfferControlsStep([fallback])) finalDialogueOffers.add(fallback.offerId);
-          } catch (controlError) {
-            outcome.error ??= errorMessage(controlError, "The reply offer could not be announced.");
-          }
-        } else outcome.error ??= fallback.reason;
-      }
-    }
-    if (finalDialogueOffers.size === 0) {
-      outcome.error ??= "The thinking run ended without a reply to deliver.";
+    const report = extractThinkingReport(producedMessages);
+    const cleanFinish =
+      outcome.finishReason === "stop" ||
+      (outcome.finishReason === "tool-calls" && report !== undefined);
+    const hasReport = Boolean(report && (
+      report.findings?.length || report.needsUser || report.openQuestions?.length ||
+      report.nextAction || report.memoryDelta
+    ));
+    if (cleanFinish && !outcome.error && (outcome.text.trim() || hasReport)) {
+      const request = nativeDialogueRecordRequest(input, hk.slice.slice_id);
+      const product = buildThinkingProduct({
+        text: outcome.text,
+        messages: producedMessages,
+        inputScope: {
+          scopeKey: dialogue!.scopeKey,
+          workId: dialogue!.workId,
+          inputIds: [request.source.inputId],
+          inputText: input.lastUserMessage,
+          readScopeId: dialogue!.workId,
+          locale: input.locale,
+          documentContext: input.documentContext ?? [],
+        },
+        asOf: input.startedAtIso,
+        report,
+      });
+      dialogueWork = {
+        workId: dialogue!.workId,
+        scopeKey: dialogue!.scopeKey,
+        text: outcome.text,
+        product,
+        producerRunId: await ownRunId(),
+        ...(report ? { report } : {}),
+        source: request.source,
+        sourceTurnId: request.sourceTurnId,
+        locale: input.locale,
+        record: request.environment,
+      };
+    } else {
+      outcome.error ??= "The thinking run ended without a work result.";
       outcome.finishReason = "error";
       try {
         await startDialogueRecordRunStep(nativeDialogueRecordRequest(input, hk.slice.slice_id));
       } catch (recordError) {
         console.warn("[Dialogue] user-only record handoff after thinking failure needs retry", recordError);
+      }
+    }
+    if (dialogueWork) {
+      try {
+        await startDialogueRecordRunStep({
+          ...nativeDialogueRecordRequest(input, hk.slice.slice_id),
+          work: dialogueWork,
+        });
+      } catch (recordError) {
+        console.warn("[Dialogue] work-result record handoff needs recovery", recordError);
       }
     }
   }
@@ -2158,12 +2008,14 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       repo: input.repo,
     });
   }
-  // The incremental summary owns passive persistence for legacy turns.
-  // Dialogue works already handed their product to the control store above.
+  // Only non-dialogue turns use the incremental summary. Legacy dialogue
+  // uses the control store; native dialogue records its work above and its
+  // actual public output through the reply flow.
   const taskAckIntents = dialogue ? [] : collectTaskAckIntents(producedMessages);
   const sourceRunId = taskAckIntents.length > 0 ? await ownRunId() : undefined;
   const turnResult: TurnRunResult = {
     ...(!nativeDialogue && producedMessages.length ? {nativeMessages: producedMessages} : {}),
+    ...(dialogueWork ? { dialogueWork } : {}),
     turnId: input.turnId,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.regenerate ? { regenerate: true } : {}),
@@ -2231,9 +2083,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(input.burstId ? { burstId: input.burstId } : {}),
   } : undefined);
 
-  if (nativeDialogue) {
-    try { await closeDialogueOffersStep(); }
-    catch (offersError) { console.warn("[Dialogue] offer control close failed", offersError); }
+  if (dialogue) {
     try { await closeDialogueThoughtsStep(); }
     catch (thoughtsError) { console.warn("[Dialogue] thought preview close failed", thoughtsError); }
   }

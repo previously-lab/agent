@@ -38,6 +38,15 @@ export function unrepresentedHistory(
 ): HistoryStreamItem[] {
   const restored = new Set(recoveredTurnIds(messages));
   const users = new Set(messages.filter(message => message.role === "user").map(message => message.id));
+  for (const message of messages) {
+    if (message.role === "assistant") restored.add(message.id);
+    if (message.metadata && typeof message.metadata === "object") {
+      const metadata = message.metadata as Record<string, unknown>;
+      if (typeof metadata.sourceInputId === "string") users.add(metadata.sourceInputId);
+      if (typeof metadata.utteranceId === "string") restored.add(metadata.utteranceId);
+      if (typeof metadata.publicationId === "string") restored.add(metadata.publicationId);
+    }
+  }
   for (const entry of entries) {
     if (entry.kind === "input") {
       users.add(entry.input.clientMessageId);

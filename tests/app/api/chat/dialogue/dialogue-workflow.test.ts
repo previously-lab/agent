@@ -129,4 +129,23 @@ describe("dialogueWorkflow", () => {
     expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });
     expect(result).toMatchObject({ status: "completed", held: true });
   });
+
+  it("runs a direct final without offer admission while preserving publication and record", async () => {
+    const direct = { ...input, direct: true, stage: "final" as const };
+    const result = await dialogueWorkflow(direct);
+    expect(h.admission).not.toHaveBeenCalled();
+    expect(h.sleep).not.toHaveBeenCalled();
+    expect(h.publish).toHaveBeenCalledWith({ input: direct, artifacts: [], text: "可以。" });
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ utterance }));
+    expect(result).toMatchObject({ status: "completed", utterance });
+  });
+
+  it("allows a direct dialogue to stay silent when later input supersedes its work", async () => {
+    h.stream.mockResolvedValue({ text: "", toolCalls: [] });
+    const result = await dialogueWorkflow({ ...input, direct: true, stage: "final" });
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });
+    expect(result).toMatchObject({ status: "completed", held: true });
+    expect(result.error).toBeUndefined();
+  });
 });
