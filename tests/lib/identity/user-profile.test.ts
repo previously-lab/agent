@@ -1,6 +1,53 @@
-import { describe, it, expect } from "vitest";
-import { parseIdentityFromPreviously } from "@/lib/identity/user-profile";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { getUserName, loadUserProfile, parseIdentityFromPreviously } from "@/lib/identity/user-profile";
 import { newPreviouslyTemplate, serializePreviously } from "@/lib/episodic/previously-format";
+
+const source = vi.hoisted(() => ({
+  readUserModel: vi.fn(),
+  findMostRecentPreviously: vi.fn(),
+  readFileLocal: vi.fn(),
+}));
+vi.mock("@/lib/evolution/store", () => ({ readUserModel: source.readUserModel }));
+vi.mock("@/lib/episodic/manager", () => ({ findMostRecentPreviously: source.findMostRecentPreviously }));
+vi.mock("@/lib/tools/local-fs", () => ({ readFileLocal: source.readFileLocal }));
+
+describe("live user identity", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    source.findMostRecentPreviously.mockResolvedValue("## Identity\n\n- Name: Historical name");
+    source.readFileLocal.mockResolvedValue("## Identity\n\n- Name: Historical name");
+  });
+
+  it("reads the current model on each load instead of a frozen snapshot", async () => {
+    source.readUserModel
+      .mockResolvedValueOnce({ card: "## Identity\n\n- Name: Current name" })
+      .mockResolvedValueOnce({ card: "## Identity\n\n- Name: Updated name" });
+    expect(await getUserName()).toBe("Current name");
+    expect(await getUserName()).toBe("Updated name");
+    expect(source.findMostRecentPreviously).not.toHaveBeenCalled();
+    expect(source.readFileLocal).not.toHaveBeenCalled();
+  });
+
+  it("uses the empty default when the live model is absent, even with historical identity", async () => {
+    source.readUserModel.mockResolvedValue(null);
+    expect(await loadUserProfile()).toEqual({ name: "", body: "" });
+    expect(source.findMostRecentPreviously).not.toHaveBeenCalled();
+    expect(source.readFileLocal).not.toHaveBeenCalled();
+  });
+
+  it("logs an unavailable live model and never substitutes historical identity", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      source.readUserModel.mockRejectedValue(new Error("Current model read failed"));
+      expect(await getUserName("You")).toBe("You");
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("no historical fallback"), "Current model read failed");
+      expect(source.findMostRecentPreviously).not.toHaveBeenCalled();
+      expect(source.readFileLocal).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+});
 
 describe("parseIdentityFromPreviously", () => {
   it("parses identity from a v3 previously.md (身份与背景 under 用户侧写)", () => {

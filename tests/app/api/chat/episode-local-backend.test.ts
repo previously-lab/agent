@@ -175,7 +175,6 @@ function hkFor(slice: TimeSlice) {
     analysis: null,
     bridgeReport: null,
     evidenceAttachments: null,
-    previouslyUpdate: null,
     sliceOnDisk: true,
   };
 }

@@ -27,8 +27,10 @@
  *       1. a boundary-class close sits in scope (SLICE_CLOSE_CLASS; the
  *          slice may be unsealed under v0.42 — then this reason simply does
  *          not fire; checkpoint closes NEVER trigger evolution alone);
- *       2. `date > lastEvolution.date` with a non-empty scope (daily);
- *       3. the agenda has due items (opportunistic, §6.2).
+ *       2. any newly persisted turn sits in scope (active-thread change —
+ *          same-day event/task updates must not bypass the user-model pass);
+ *       3. `date > lastEvolution.date` with a non-empty scope (daily);
+ *       4. the agenda has due items (opportunistic, §6.2).
  *     Reasons come from an ENUMERATED set (EVOLUTION_REASONS), never free
  *     strings.
  *   - the gate only decides OFFER — the unit keeps the veto: an idle round
@@ -53,6 +55,7 @@ export const REFLECTION_SCOPE_MAX = 5;
 /** §3.4 — the enumerated evolution-beat reasons (boundary / daily / agenda). */
 export const EVOLUTION_REASONS = [
   "conversation_boundary",
+  "active_thread_change",
   "daily_rollover",
   "agenda_due",
 ] as const;
@@ -198,7 +201,10 @@ export function judgeEvolutionBeat(input: {
   ) {
     reasons.push("conversation_boundary");
   }
-  // 2. Daily rollover: the user clock moved past the last evolution AND
+  // 2. New record material is itself an active-thread change. The date-only
+  //    evolution stamp cannot represent a later same-day event/task update.
+  if (scope.length > 0) reasons.push("active_thread_change");
+  // 3. Daily rollover: the user clock moved past the last evolution AND
   //    there is fresh material. Never-evolved counts as overdue.
   if (
     scope.length > 0 &&
@@ -206,7 +212,7 @@ export function judgeEvolutionBeat(input: {
   ) {
     reasons.push("daily_rollover");
   }
-  // 3. Opportunistic agenda: any activity re-checks due items (§6.2).
+  // 4. Opportunistic agenda: any activity re-checks due items (§6.2).
   if (agendaDue.length > 0) {
     reasons.push("agenda_due");
   }

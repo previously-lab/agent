@@ -9,10 +9,9 @@
  *     oldest 5 slices (design cap); a slice may still be OPEN — `closedBy`
  *     is context, never a scope gate;
  *   - archive beat: a non-empty scope IS the offer (no separate field);
- *   - evolution beat: boundary-class close in scope / daily rollover with a
- *     non-empty scope / due agenda — checkpoint closes never trigger it
- *     alone, an UNSEALED slice never fires the boundary reason, and reasons
- *     come from the enumerated EVOLUTION_REASONS set;
+ *   - evolution beat: boundary-class close / any active-thread change / daily
+ *     rollover with a non-empty scope / due agenda — an UNSEALED slice never
+ *     fires the boundary reason, and reasons come from EVOLUTION_REASONS;
  *   - agenda parsing is tolerant by inheritance (parseAgenda): garbage
  *     content degrades to an empty agendaDue, never to a thrown lap.
  */
@@ -194,28 +193,28 @@ describe("judgeEvolutionBeat — the §3.4 truth table (v0.42: closedBy optional
 
   it("a boundary-class close in scope offers the beat (conversation_boundary)", () => {
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeBoundary, lastEvolutionDate: DATE, agendaDue: [] });
-    expect(r).toEqual({ due: true, reasons: ["conversation_boundary"] });
+    expect(r).toEqual({ due: true, reasons: ["conversation_boundary", "active_thread_change"] });
   });
 
-  it("a CHECKPOINT-only scope does NOT trigger the beat by itself", () => {
+  it("a CHECKPOINT-only scope offers active-thread sync without inventing a boundary", () => {
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: DATE, agendaDue: [] });
-    expect(r).toEqual({ due: false, reasons: [] });
+    expect(r).toEqual({ due: true, reasons: ["active_thread_change"] });
   });
 
-  it("an OPEN slice (no closedBy) never fires the boundary reason — the criterion is unchanged, it simply needs a seal", () => {
+  it("an OPEN slice offers active-thread sync but never fires the boundary reason", () => {
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeOpen, lastEvolutionDate: DATE, agendaDue: [] });
-    expect(r).toEqual({ due: false, reasons: [] });
+    expect(r).toEqual({ due: true, reasons: ["active_thread_change"] });
   });
 
   it("daily rollover: date past lastEvolution with a non-empty scope (daily_rollover)", () => {
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: "2026-10-15", agendaDue: [] });
-    expect(r).toEqual({ due: true, reasons: ["daily_rollover"] });
+    expect(r).toEqual({ due: true, reasons: ["active_thread_change", "daily_rollover"] });
   });
 
-  it("same-day does not re-offer the daily; an EMPTY scope never does either", () => {
+  it("same-day new material still offers active-thread sync; an EMPTY scope offers neither material reason", () => {
     expect(
-      judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: DATE, agendaDue: [] }).due,
-    ).toBe(false);
+      judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: DATE, agendaDue: [] }),
+    ).toEqual({ due: true, reasons: ["active_thread_change"] });
     expect(
       judgeEvolutionBeat({ date: DATE, scope: [], lastEvolutionDate: "2020-01-01", agendaDue: [] }).due,
     ).toBe(false);
@@ -224,7 +223,7 @@ describe("judgeEvolutionBeat — the §3.4 truth table (v0.42: closedBy optional
   it("never-evolved (null lastEvolution) counts as overdue when there is material", () => {
     expect(
       judgeEvolutionBeat({ date: DATE, scope: scopeCheckpoint, lastEvolutionDate: null, agendaDue: [] }),
-    ).toEqual({ due: true, reasons: ["daily_rollover"] });
+    ).toEqual({ due: true, reasons: ["active_thread_change", "daily_rollover"] });
   });
 
   it("a due agenda offers the beat even with an EMPTY scope (agenda_due)", () => {
@@ -236,7 +235,7 @@ describe("judgeEvolutionBeat — the §3.4 truth table (v0.42: closedBy optional
     const r = judgeEvolutionBeat({ date: DATE, scope: scopeBoundary, lastEvolutionDate: "2026-10-15", agendaDue: dueAgenda });
     expect(r).toEqual({
       due: true,
-      reasons: ["conversation_boundary", "daily_rollover", "agenda_due"],
+      reasons: ["conversation_boundary", "active_thread_change", "daily_rollover", "agenda_due"],
     });
     // …and every reason is a member of the enumerated set, never a free string.
     for (const reason of r.reasons) {
@@ -258,7 +257,7 @@ describe("assembleLapPlan — the §3.3 docket", () => {
   it("an owed slice past the cursor offers archive AND evolution in one docket", () => {
     const p = plan({ scope: [scoped("2026-10-15-0930", ["t1"], "idle_gap")], lastEvolutionDate: DATE });
     expect(p.scope).toEqual([{ sliceId: "2026-10-15-0930", turnIds: ["t1"], closedBy: "idle_gap" }]);
-    expect(p.evolutionReasons).toEqual(["conversation_boundary"]);
+    expect(p.evolutionReasons).toEqual(["conversation_boundary", "active_thread_change"]);
     expect(lapHasWork(p)).toBe(true);
     // caller-owned fields ride through untouched
     expect(p.nowIso).toBe(`${DATE}T08:00:00.000Z`);

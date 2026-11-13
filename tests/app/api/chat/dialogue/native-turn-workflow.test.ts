@@ -115,7 +115,7 @@ describe("native thinking work", () => {
     h.finishThinking = null;
     h.housekeeping.mockResolvedValue({
       slice, previouslyContent: "", sliceHeadBlock: "", identityPrompt: "", analysis: null,
-      evidenceAttachments: null, previouslyUpdate: null, sliceOnDisk: true,
+      evidenceAttachments: null, sliceOnDisk: true,
     });
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
   });

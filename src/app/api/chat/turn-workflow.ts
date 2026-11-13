@@ -861,6 +861,8 @@ export function assembleSystemPrompt(opts: {
    * housekeeping; undefined omits the layer entirely.
    */
   userProfileBlock?: string;
+  /** Current-model read failure, shown as a diagnostic instead of stale history. */
+  userModelDiagnostic?: string;
   /** Authoritative task candidates and pending background result events. */
   taskContextBlock?: string;
   /** Explicit per-send reading pointers; originals still need to be read. */
@@ -881,6 +883,7 @@ export function assembleSystemPrompt(opts: {
     assistingBlock,
     craftBlock,
     userProfileBlock,
+    userModelDiagnostic,
     taskContextBlock,
     documentContextBlock,
     screenContextBlock,
@@ -896,6 +899,10 @@ export function assembleSystemPrompt(opts: {
     craftBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
+    "Event, task and research cases are authoritative for fast-changing facts. This recap keeps current thread labels and pointers, not a second copy of their status, dates or decisions; newer case evidence wins.",
+    userModelDiagnostic
+      ? `CURRENT USER MODEL UNAVAILABLE — no historical model was substituted. ${userModelDiagnostic}`
+      : "",
     userProfileBlock ?? "",
     sliceHeadBlock,
     demoNotice,
@@ -1066,6 +1073,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // housekeeping this turn; its block text states the precedence discipline
     // (on conflict the self-description wins). Absent when no profile exists.
     userProfileBlock,
+    userModelDiagnostic: hk.userModelDiagnostic,
     // Authoritative task candidates and pending results, read once this turn.
     taskContextBlock: hk.taskContextBlock,
     documentContextBlock: renderDocumentContext(input.documentContext),
@@ -2034,7 +2042,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ...(input.burstId ? { burstId: input.burstId } : {}),
     ...(hk.evidenceAttachments ? { attachments: hk.evidenceAttachments } : {}),
     ...(input.verifiedImages?.length ? { imageAttachments: input.verifiedImages } : {}),
-    ...(hk.previouslyUpdate ? { previously: hk.previouslyUpdate } : {}),
   };
   // v0.42 §5 [11279] — the failure floor: even a turn whose answer died
   // OWES its user message to the record, so a failed turn still wakes the

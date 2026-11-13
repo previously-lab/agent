@@ -290,7 +290,7 @@ The card half of \`people/user/index.md\` — the agent's complete current under
 3. **Now** — current-state semantic compression: short hooks into what is happening right now, each carrying \`since\`. Expiry is YOURS: items past ${CARD_NOW_EXPIRY_DAYS} days are listed in the task — promote durable substance to Past or drop the hook.
 4. **Horizon** — future-facing open loops: commitments, deadlines, awaited replies. Each carries an explicit \`by: YYYY-MM-DD\`. Horizon items NEVER age-expire; overdue ones are KEPT until fulfilled.
 
-The raw evidence lives in the time slices; the card only summarizes and points at them via refs.
+The raw evidence lives in the time slices; the card only summarizes and points at them via refs. Event, task and research cases are authoritative for fast-changing facts. Now and Horizon keep only the current thread's label and pointers to those cases and their source slices — never a second copy of changing status, dates, decisions or research details.
 
 **LENGTH DISCIPLINE (hard)**: the card is an OVERVIEW, not a warehouse — it is injected into EVERY turn, so it must CONVERGE in length. Fold, compress, and drop hooks as they settle; never let the card grow monotonically. Detail stays in the slices (cite them via refs).
 
@@ -345,8 +345,8 @@ Compare the conversation in the task against the current card. Incorporate anyth
 
 - New stable fact about the user → fold it into the Past profile paragraph (or Identity head if it is a name/address fact).
 - A durable fact that will ALMOST CERTAINLY still be true in 3 years (a date, a decision, a red line) → a Past anchor. Evolving situations do NOT belong in anchors.
-- Current situation that will fade → a Now hook (ONE event per line; the details stay in the slices).
-- A commitment, deadline, or awaited reply → a Horizon line with \`by\` + refs.
+- Current situation that will fade → a Now hook naming the thread and pointing to its event/task/research case and source slice. Do not duplicate the case's fast-changing status, dates, decisions or details.
+- A commitment, deadline, or awaited reply → a Horizon line with \`by\` + refs when the task case does not already own that commitment; otherwise keep only its thread pointer.
 - **Horizon resolution rule**: when the user reports the outcome of an open loop, RESOLVE it — and record the outcome via addNow (or the Past profile if durable). Overdue items are KEPT, never silently dropped.
 - A user correction / explicit preference → update the Past paragraph AND consider the direction side (a durable stated preference is a Portrait entry; a suspected one is a hypothesis).
 - Fragmented or mixed-language card content → rewrite those entries cleanly in the user's language while preserving substance.

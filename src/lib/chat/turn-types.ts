@@ -192,11 +192,12 @@ export interface EvolutionResult {
 export interface HousekeepingResult {
   slice: TimeSlice;
   /**
-   * The CARD half of the folded user model (people/user/index.md, v0.19 §B.7)
-   * — what the user did / is doing / plans. Tolerant read falls back to the
-   * legacy current-previously.md.
+   * The CARD half of the only live folded user model (people/user/index.md)
+   * — current threads and pointers, not a second event/task fact store.
    */
   previouslyContent: string;
+  /** Present when the current model could not be read; never replaced by history. */
+  userModelDiagnostic?: string;
   /**
    * The frozen slice-head snapshot block (L3): slice-start local time, date
    * anchors, continuity stance at slice birth, and the birth-evolution
@@ -530,11 +531,6 @@ export interface TurnRunResult extends TaskAckSource {
    */
   attachments?: Array<{ name: string; dataBase64: string }>;
   imageAttachments?: import("./image-attachments").ImageAttachmentEvidence[];
-  /**
-   * The people/user mid-life snapshot update for an EXISTING slice (a birth
-   * carries its own) — written to previously.md by the summary stream.
-   */
-  previously?: string;
 }
 
 /**

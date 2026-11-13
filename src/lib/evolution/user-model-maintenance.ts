@@ -1,9 +1,10 @@
 import { forkWriteBatch, mergeWriteBatch } from "@/lib/docs/write-batch";
 /** Explicit recovery for an oversized runtime card; never used for the user's own profile.md. */
 import type { CaseReadScope } from "@/lib/episodic/flash/librarian";
-import { fsReadFile, fsWriteFile, type WriteBatch } from "@/lib/episodic/io-helpers";
+import { flushBatch, fsReadFile, fsWriteFile, type WriteBatch } from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
-import { composeUserModel, splitUserModel } from "./store";
+import { withGitHubReadView } from "@/lib/github/read-view";
+import { composeUserModel, readUserModel, splitUserModel, writeUserModelDirection } from "./store";
 import { caseStorageRevision, createDoc, parseCaseDoc, serializeCaseDoc } from "@/lib/docs/case-doc";
 import { casePiecePath } from "@/lib/docs/paths";
 import { documentSize, exceededSize, assertDocumentWrite } from "@/lib/docs/write-limits";
@@ -11,9 +12,43 @@ import { planHistoryArchive } from "@/lib/docs/history-archive";
 import { absentDocumentError } from "@/lib/docs/write-validation";
 import { WriteRefusal } from "@/lib/docs/write-window";
 import { parseCard } from "@/lib/episodic/previously-format";
-import { validateDirectionProposal } from "./direction-agent";
+import { retireExpiredHypotheses, validateDirectionProposal } from "./direction-agent";
+import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 
 export const USER_MODEL_HISTORY_PATH = "memory/config/user-model-history.json";
+
+export async function maintainUserModelHypothesisTtl(
+  currentSliceId?: string,
+  batch?: WriteBatch,
+): Promise<{ retired: string[]; diagnostic?: string }> {
+  return withSliceLock("evolution", () => withGitHubReadView(async () => {
+    // Reflection may be reading an older, immutable history checkpoint. TTL
+    // maintenance needs a live catalog and a guarded write basis of its own.
+    const pending = forkWriteBatch(batch);
+    const model = await readUserModel(pending);
+    if (!model?.direction) return { retired: [] };
+    let sliceIds: string[];
+    try {
+      sliceIds = await enumerateSliceIds();
+    } catch (error) {
+      return {
+        retired: [],
+        diagnostic: `Hypothesis TTL enumeration unavailable; all hypotheses were preserved: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    const aged = retireExpiredHypotheses(
+      model.direction,
+      currentSliceId ? [...sliceIds, currentSliceId] : sliceIds,
+      currentSliceId,
+    );
+    if (aged.retired.length === 0) return { retired: [] };
+    await writeUserModelDirection(aged.doc, pending);
+    if (batch) mergeWriteBatch(batch, pending);
+    else await flushBatch(pending, "Retire expired user-model hypotheses");
+    return { retired: aged.retired };
+  }, { fresh: true }));
+}
+
 export async function reorganizeUserModel(input: {
   card: string; direction: string | null; pieces: { title: string; body: string }[]; evidence: string[]; date: string;
 }, scope: CaseReadScope, batch: WriteBatch): Promise<{ path: string; pieces: string[] }> {

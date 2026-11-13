@@ -1,7 +1,7 @@
 /**
  * Tests for the evolution data layer store (src/lib/evolution/store.ts),
  * v0.19 R4/R5 surface: the folded people/user/index.md user model
- * (compose/split seam, dual-root reads, half-preserving writes), profile.md
+ * (compose/split seam, single-root reads, half-preserving writes), profile.md
  * dual-root reads, the legacy direction doc tolerance, and self/ SOP I/O
  * (full-document reads, new-root-only writes).
  *
@@ -87,7 +87,7 @@ describe("composeUserModel / splitUserModel", () => {
   });
 });
 
-// ── readUserModel — dual-root tolerance ──────────────────────────────────
+// ── readUserModel — one live root, absent ≠ unavailable ───────────────────
 
 describe("readUserModel", () => {
   it("returns null on a fresh deployment (neither root holds anything)", async () => {
@@ -107,18 +107,21 @@ describe("readUserModel", () => {
     expect(model?.full).toContain("---");
   });
 
-  it("composes from the legacy roots on a new-root miss WITHOUT writing back", async () => {
+  it("does not resurrect legacy card or direction documents on a current-model miss", async () => {
     writeOnDisk("memory/episodic/current-previously.md", "# Legacy card\n\nOld card.");
     writeOnDisk("memory/evolution/direction.md", "# Legacy direction\n\nOld direction.");
     const store = await importFresh();
-    const model = await store.readUserModel();
-    expect(model?.card).toBe("# Legacy card\n\nOld card.");
-    expect(model?.direction).toBe("# Legacy direction\n\nOld direction.");
-    expect(model?.full).toBe(
-      `# Legacy card\n\nOld card.${store.USER_MODEL_DIRECTION_SEPARATOR}# Legacy direction\n\nOld direction.`,
-    );
-    // No backfill: the new root must NOT have been created by a read.
+    expect(await store.readUserModel()).toBeNull();
     expect(readOnDisk("memory/people/user/index.md")).toBeNull();
+  });
+
+  it("rejects an unavailable current model instead of silently reading legacy history", async () => {
+    writeOnDisk("memory/episodic/current-previously.md", "# Legacy card\n\nOld card.");
+    writeOnDisk("memory/evolution/direction.md", "# Legacy direction\n\nOld direction.");
+    fs.mkdirSync(path.join(tmpDir, "memory/people/user/index.md"), { recursive: true });
+    const store = await importFresh();
+    await expect(store.readUserModel()).rejects.toThrow("memory/people/user/index.md");
+    await expect(store.readUserModel()).rejects.toThrow("is a directory, not a file");
   });
 
   it("prefers the new root when both roots exist", async () => {
@@ -155,16 +158,12 @@ describe("writeUserModelCard / writeUserModelDirection", () => {
     expect(direction).toBe("# Direction\n\nUpdated.");
   });
 
-  it("a card write on a legacy-only deployment carries the legacy direction into the new root", async () => {
+  it("a card write on a legacy-only deployment does not import historical direction", async () => {
     writeOnDisk("memory/episodic/current-previously.md", "# Legacy card");
     writeOnDisk("memory/evolution/direction.md", "# Legacy direction");
     const store = await importFresh();
     await store.writeUserModelCard("# New card");
-    const written = readOnDisk("memory/people/user/index.md")!;
-    expect(written).toBe(
-      `# New card${store.USER_MODEL_DIRECTION_SEPARATOR}# Legacy direction`,
-    );
-    // Legacy roots are left untouched (read tolerance, not migration).
+    expect(readOnDisk("memory/people/user/index.md")).toBe("# New card");
     expect(readOnDisk("memory/evolution/direction.md")).toBe("# Legacy direction");
   });
 });

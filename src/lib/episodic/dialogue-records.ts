@@ -11,7 +11,7 @@ import { absentDocumentError } from "@/lib/docs/write-validation";
 import { withGitHubReadView, seedGitHubReadHead } from "@/lib/github/read-view";
 import { persistImageAttachments } from "@/lib/tools/attachments";
 import { settleStagedImages } from "@/lib/tools/staged-images";
-import { appendTurn, closeSlice, createSlice, parseSlice, saveSliceSnapshot, tryLoadTodaySlice, writePreviously } from "./manager";
+import { appendTurn, closeSlice, createSlice, parseSlice, saveSliceSnapshot, tryLoadTodaySlice } from "./manager";
 import { slicePartPath } from "./paths";
 import { createBatch, flushBatch, fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
 import { withSliceLock } from "./slice-mutex";
@@ -23,7 +23,7 @@ import { readArchivedDialogueArtifact, verifiedDialogueRecordArtifacts } from ".
 
 export interface DialogueProjectionInput {
   inputs: Array<{ input: DialogueInput; turnId: string; sliceId?: string; images?: ImageAttachmentEvidence[];
-    previously?: string; reflectUserOnly?: boolean }>;
+    reflectUserOnly?: boolean }>;
   result?: DialogueResult;
   work?: import("@/lib/chat/turn-types").DialogueWorkResult;
   utterance?: PublicUtterance;
@@ -161,9 +161,6 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       }
       settled.push(...(user.attachments ?? []));
       landings.push({ inputId: event.inputId, turnId: user.turnId ?? entry.turnId, sliceId: slice.slice_id });
-      if (entry.previously?.trim() && (await readOptional(slicePartPath(slice.slice_id, "previously"), batch)) !== entry.previously) {
-        await writePreviously(slice.slice_id, entry.previously, batch);
-      }
     }
 
     const agentText = new Map<string, string>();

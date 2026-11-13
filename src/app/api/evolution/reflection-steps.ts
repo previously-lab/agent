@@ -352,6 +352,22 @@ export async function loadReflectionWorld(
       /* heads are enhancers — the beat degrades, the lap does not */
     }
 
+    // Hypothesis TTL is independent of whether this lap offers a card/direction
+    // pass. No expired line means no write; unavailable enumeration preserves.
+    try {
+      const { maintainUserModelHypothesisTtl } = await import("@/lib/evolution/user-model-maintenance");
+      const ttl = await maintainUserModelHypothesisTtl(scope.at(-1)?.sliceId);
+      if (ttl.diagnostic) console.warn(`[reflection] ${ttl.diagnostic}`);
+      if (ttl.retired.length > 0) {
+        console.log(`[reflection] retired ${ttl.retired.length} expired hypothesis(es) outside a card pass`);
+      }
+    } catch (error) {
+      console.warn(
+        "[reflection] hypothesis TTL maintenance failed; the current model was not cleared:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     // The agenda — absent file is the empty pad, not an error.
     let agendaContent: string | null = null;
     try {

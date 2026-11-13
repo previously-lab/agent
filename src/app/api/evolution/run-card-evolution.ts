@@ -6,9 +6,9 @@
  * chain is retired). This function is the callable core: given the current
  * model + the content to fold in, it runs the Previously Agent (which edits
  * the card through validated MUTATION tools — never a whole-file rewrite),
- * and writes both the folded live model (people/user/index.md, §B.7 — card
- * and direction halves in ONE document) and the per-slice previously.md
- * snapshot (the FULL index.md as it stands) when the substance moved.
+ * and writes the folded live model (people/user/index.md, §B.7 — card and
+ * direction halves in ONE document) when the substance moved. Historical
+ * per-slice snapshots stay readable but no new ones are produced.
  *
  * There is deliberately NO mechanical post-processing of the agent's output:
  * caps and format are enforced inside the write tools (rejections come back
@@ -38,7 +38,6 @@ import { runPreviouslyAgent, type DirectionEvalInput, type PreviouslySignal } fr
 import { parseCard } from "@/lib/episodic/previously-format";
 import { sameCardSubstance } from "@/lib/episodic/card-session";
 import { diffCardLines, summarizeCardChanges, type CardChangeSummary, type CardMutation } from "@/lib/episodic/card-diff";
-import { writePreviously } from "@/lib/episodic";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
@@ -168,7 +167,7 @@ export async function runCardEvolution(
 ): Promise<RunCardEvolutionResult> {
   input.onProgress?.("reading");
   // The folded user model (people/user/index.md, §B.7) — the card half is
-  // the agent's working copy; tolerant read falls back to the legacy roots.
+  // the agent's working copy. Historical roots are not live fallbacks.
   const model = await readUserModel(input.batch);
   if (model && exceededSize(documentSize(model.full)).length) {
     return { ran: false, changed: false, droppedRecent: 0, note: "User model needs evidence-backed reorganization",
@@ -337,10 +336,8 @@ export async function runCardEvolution(
 
   // The agent's session serialized the final card; substance comparison
   // decides whether anything actually moved (stamps refresh on every pass and
-  // are ignored). Skip BOTH writes on a no-op pass — writing an unchanged card
-  // would produce an empty commit entry for nothing. (The live model IS
-  // people/user/index.md; the per-turn snapshots are written by the turn
-  // pipeline — see steps.ts, §B.7.)
+  // are ignored). Skip the write on a no-op pass — writing an unchanged card
+  // would produce an empty commit entry for nothing.
   const changed = result.updatedCard.trim()
     ? !sameCardSubstance(parseCard(baseCard), parseCard(result.updatedCard))
     : false;
@@ -353,15 +350,6 @@ export async function runCardEvolution(
         error: error instanceof Error ? error.message : String(error), ...(directionOutcome ? { direction: directionOutcome } : {}) };
     }
   }
-  if (changed || directionMoved) {
-    // Per-slice snapshot — previously.md now freezes the FULL people/user/
-    // index.md (card + direction as they stand at this boundary, §B.7).
-    const finalModel = await readUserModel(input.batch).catch(() => null);
-    if (finalModel) {
-      await writePreviously(input.sliceId, finalModel.full, input.batch);
-    }
-  }
-
   // Every proposed SOP gets its own fresh revision comparison. Only an actual
   // guarded write is reported as applied; stale, unavailable, and failed
   // writes remain visible as rejections and never stop the other SOP writes.

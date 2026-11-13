@@ -4,13 +4,11 @@
  * nothing; a PARTIAL pass (step limit without finish) is written back like
  * any other result with the note flagged; a no-change pass writes nothing.
  * Writes land on the folded people/user/index.md (card / direction halves)
- * and self/ SOPs; the per-slice previously.md snapshot freezes the FULL
- * index.md, only when something moved.
+ * and self/ SOPs. No new per-slice previously.md snapshots are produced.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import { runPreviouslyAgent } from "@/lib/episodic/flash/previously-agent";
-import { writePreviously } from "@/lib/episodic";
 import {
   readUserModel,
   readUserProfile,
@@ -18,7 +16,6 @@ import {
   writeUserModelCard,
   writeUserModelDirection,
   writeSelfSopVersioned,
-  composeUserModel,
 } from "@/lib/evolution/store";
 import {
   newCardTemplate,
@@ -29,9 +26,6 @@ import type { ModelConfig } from "@/lib/models/registry";
 
 vi.mock("@/lib/episodic/flash/previously-agent", () => ({
   runPreviouslyAgent: vi.fn(),
-}));
-vi.mock("@/lib/episodic", () => ({
-  writePreviously: vi.fn(),
 }));
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
   enumerateSliceIds: vi.fn(async (): Promise<string[]> => []),
@@ -63,7 +57,6 @@ const readSopMock = vi.mocked(readSelfSopSnapshot);
 const writeCardMock = vi.mocked(writeUserModelCard);
 const writeDirectionMock = vi.mocked(writeUserModelDirection);
 const writeSopMock = vi.mocked(writeSelfSopVersioned);
-const writeSliceMock = vi.mocked(writePreviously);
 const enumerateMock = vi.mocked(enumerateSliceIds);
 
 const MODEL = {
@@ -118,7 +111,6 @@ describe("write-back rules", () => {
     expect(result.error).toContain("reorganizeUserModel");
     expect(runPreviouslyAgentMock).not.toHaveBeenCalled();
     expect(writeCardMock).not.toHaveBeenCalled();
-    expect(writeSliceMock).not.toHaveBeenCalled();
   });
   it("surfaces a proposed oversize card as recoverable feedback without saving a snapshot", async () => {
     runPreviouslyAgentMock.mockResolvedValue({ updatedCard: CHANGED, reasoning: "new evidence", summary: "updated", mutations: [] });
@@ -126,7 +118,6 @@ describe("write-back rules", () => {
     const result = await runCardEvolution(baseInput());
     expect(result.error).toContain("document_full");
     expect(result.changed).toBe(false);
-    expect(writeSliceMock).not.toHaveBeenCalled();
   });
   it("a PARTIAL pass is written back with the note flagged, not treated as an error", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
@@ -144,8 +135,6 @@ describe("write-back rules", () => {
     expect(res.note).toContain("step limit reached without finish");
     expect(res.partial).toBe(true);
     expect(writeCardMock).toHaveBeenCalledWith(CHANGED, undefined);
-    // The snapshot freezes the FULL folded index.md, not just the card.
-    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, BASE, undefined);
     expect(res.summary).toBe("记下了你周五的面试");
   });
 
@@ -162,7 +151,6 @@ describe("write-back rules", () => {
     expect(res.changed).toBe(false);
     expect(res.error).toBe("Previously Agent worker unavailable");
     expect(writeCardMock).not.toHaveBeenCalled();
-    expect(writeSliceMock).not.toHaveBeenCalled();
   });
 
   it("a no-change pass writes nothing (stamps are ignored) — no card write, no snapshot", async () => {
@@ -178,7 +166,6 @@ describe("write-back rules", () => {
     expect(res.note).toBe("nothing new"); // no [partial] flag on a clean pass
     expect(res.partial).toBeUndefined();
     expect(writeCardMock).not.toHaveBeenCalled();
-    expect(writeSliceMock).not.toHaveBeenCalled();
   });
 
   it("forwards onEvolutionLine to the Previously Agent's onLine (live thinking)", async () => {
@@ -268,17 +255,7 @@ describe("write-back rules", () => {
     expect(writeSopMock).not.toHaveBeenCalled();
   });
 
-  it("writes a changed card to the folded model and snapshots the FULL index.md", async () => {
-    // After the card write the folded model reads back with the direction
-    // half carried — the snapshot must freeze the WHOLE document (§B.7).
-    const FULL = composeUserModel(CHANGED, "# Direction\n\nKeep me.");
-    readModelMock
-      .mockResolvedValueOnce({ card: BASE, direction: null, full: BASE })
-      .mockResolvedValueOnce({
-        card: CHANGED,
-        direction: "# Direction\n\nKeep me.",
-        full: FULL,
-      });
+  it("writes a changed card only to the live folded model", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: CHANGED,
       reasoning: "folded new identity fact",
@@ -288,7 +265,7 @@ describe("write-back rules", () => {
     const res = await runCardEvolution(baseInput());
     expect(res.changed).toBe(true);
     expect(writeCardMock).toHaveBeenCalledWith(CHANGED, undefined);
-    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, FULL, undefined);
+    expect(readModelMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -350,8 +327,6 @@ describe("the merged direction half (v1.1)", () => {
       summary: "First direction: concreteness",
     });
     expect(writeDirectionMock).toHaveBeenCalledWith(VALID_DIRECTION, undefined);
-    // The direction move alone triggers the full-model snapshot.
-    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, BASE, undefined);
   });
 
   it("a REJECTED proposal reports outcome rejected with the reason (never a fake no_change) and writes nothing", async () => {

@@ -29,11 +29,15 @@ function slice(overrides: Partial<TimeSlice> = {}): TimeSlice {
 }
 
 describe("deterministicSliceMark", () => {
-  it("builds focus from the first user turn's opening and summary from tags + count", () => {
-    const mark = deterministicSliceMark(slice());
+  it("builds specific navigation from actual user and assistant content, not tags or turn counts", () => {
+    const mark = deterministicSliceMark(slice({ tags: [] }));
     expect(mark.focus).toContain("用户提到：我想到一个问题");
-    expect(mark.focus).not.toContain("\n"); // single line
-    expect(mark.summary).toBe("共 2 轮，涉及 公司注册、地址选择。");
+    expect(mark.focus).not.toContain("\n");
+    expect(mark.summary).toContain("实际办公地点有什么要求吗");
+    expect(mark.summary).toContain("不需要所有权");
+    expect(mark.summary).toContain("[degraded]");
+    expect(mark.summary).not.toContain("共 2 轮");
+    expect(mark.summary).not.toContain("未标记话题");
   });
 
   it("truncates a long opening and appends an ellipsis", () => {
@@ -42,13 +46,15 @@ describe("deterministicSliceMark", () => {
     expect(mark.focus).toBe(`用户提到：${"测".repeat(60)}…`);
   });
 
-  it('falls back to "未标记话题" when the slice has no tags', () => {
-    const mark = deterministicSliceMark(slice({ tags: [] }));
-    expect(mark.summary).toContain("未标记话题");
+  it("uses actual assistant content when there is no user turn", () => {
+    const mark = deterministicSliceMark(slice({ turns: [{ timestamp: "t", role: "agent", content: "确认续租需要业主签字" }] }));
+    expect(mark.focus).toContain("确认续租需要业主签字");
+    expect(mark.summary).toContain("确认续租需要业主签字");
   });
 
-  it("never returns an empty focus when there is no user turn", () => {
-    const mark = deterministicSliceMark(slice({ turns: [{ timestamp: "t", role: "agent", content: "hi" }] }));
-    expect(mark.focus.length).toBeGreaterThan(0);
+  it("returns an explicit degraded signal when no content can produce a directory", () => {
+    const mark = deterministicSliceMark(slice({ turns: [] }));
+    expect(mark.focus).toContain("[degraded]");
+    expect(mark.summary).toContain("[degraded]");
   });
 });

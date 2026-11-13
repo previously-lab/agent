@@ -268,6 +268,33 @@ async function discoverRecords(
     .sort((a, b) => b.localeCompare(a));
 }
 
+function isTimeoutReadError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  return error.name === "TimeoutError" || error.name === "StepTimeoutError" || code === "ETIMEDOUT";
+}
+
+function isTransientRecordReadError(error: unknown): boolean {
+  if (!(error instanceof Error) || isTimeoutReadError(error) || error.name === "AbortError") return false;
+  const withStatus = error as Error & {
+    status?: unknown;
+    code?: unknown;
+    response?: { status?: unknown };
+    cause?: { code?: unknown };
+  };
+  const status = typeof withStatus.status === "number"
+    ? withStatus.status
+    : withStatus.response?.status;
+  if (typeof status === "number") {
+    return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+  }
+  const code = withStatus.code ?? withStatus.cause?.code;
+  if (["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ENETRESET", "ENETUNREACH", "EAI_AGAIN"].includes(String(code))) {
+    return true;
+  }
+  return error instanceof TypeError && /fetch failed|network/i.test(error.message);
+}
+
 async function loadRecord(
   backend: RecallBackend,
   ref: string,
@@ -280,8 +307,25 @@ async function loadRecord(
   const path = recordPath(ref);
   if (!path) return { error: "Only an exact records/YYYY-MM-DD-HHMM ref can be read" };
   throwIfCancelled(signal);
+  let raw: string;
   try {
-    const raw = await backend.readFile(path);
+    let attempt = 0;
+    for (;;) {
+      throwIfCancelled(signal);
+      try {
+        raw = await backend.readFile(path);
+        break;
+      } catch (error) {
+        if (isCancelled(signal) || (error instanceof Error && error.name === "AbortError") || isTimeoutReadError(error)) {
+          throw error;
+        }
+        if (attempt === 0 && isTransientRecordReadError(error)) {
+          attempt += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
     throwIfCancelled(signal);
     const parsed = parseTurns(raw).turns;
     const ambiguous = parsed.filter((turn) => turn.boundary === "ambiguous").length;
@@ -298,7 +342,7 @@ async function loadRecord(
     state.records.set(ref, record);
     return { record };
   } catch (error) {
-    if (isCancelled(signal) || (error instanceof Error && error.name === "AbortError")) throw error;
+    if (isCancelled(signal) || (error instanceof Error && error.name === "AbortError") || isTimeoutReadError(error)) throw error;
     const note = `${ref}: ${clip(error instanceof Error ? error.message : String(error), 240)}`;
     state.errors.push(note);
     state.truncated = true;

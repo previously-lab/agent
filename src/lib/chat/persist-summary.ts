@@ -3,7 +3,7 @@ import { locateSummaryRecords } from "./summary-records";
 import { COMMIT_PREFIX } from "./commit-contract";
 import {
   appendTurn, closeSlice, saveSliceSnapshot, deterministicSliceMark,
-  analyzeTurn, readSlicePart, writeAgentTimeline, readPreviously, writePreviously,
+  analyzeTurn, readSlicePart, writeAgentTimeline,
   type TimeSlice, type WriteBatch, type SlicingSignal,
 } from "@/lib/episodic";
 import { persistEvidenceAttachments, persistImageAttachments } from "@/lib/tools/attachments";
@@ -173,9 +173,6 @@ async function persistSummaryMembersInView(
     }
   }
   const ownSlice = targets.get(payload.own.turnId)!;
-  if (payload.own.previously?.trim() && (await readPreviously(ownSlice.slice_id).catch(() => "")) !== payload.own.previously) {
-    await writePreviously(ownSlice.slice_id, payload.own.previously, batch);
-  }
   for (const slice of touched.values()) await saveSliceSnapshot(slice, batch);
   if (touched.size) body.push("snapshot");
   const records = [...new Set([...targets.values()].map((s) => s.slice_id))].map((sliceId) => ({

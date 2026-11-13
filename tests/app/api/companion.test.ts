@@ -217,10 +217,9 @@ describe("POST /api/companion narration", () => {
     ).toContain("Chinese");
   });
 
-  // H5: the L1 card layer reads the FOLDED user model through readUserModel's
-  // dual-root composition (people/user/index.md first, the legacy card on a
-  // miss) — the legacy path alone would serve a card frozen at the v0.19 move.
-  describe("L1 user-model layer (dual-root)", () => {
+  // H5: the L1 card layer reads only the live folded user model. Legacy
+  // card/direction documents remain historical and never become a fallback.
+  describe("L1 user-model layer (single live root)", () => {
     it("prefers the folded model at people/user/index.md over the legacy card", async () => {
       hoisted.files.set(
         "memory/people/user/index.md",
@@ -238,7 +237,7 @@ describe("POST /api/companion narration", () => {
       expect(call.system).not.toContain("LEGACY_CARD_MARK");
     });
 
-    it("falls back to the legacy card when the new root holds nothing", async () => {
+    it("does not fall back to the legacy card when the live root is absent", async () => {
       hoisted.files.set(
         "memory/episodic/current-previously.md",
         "## Identity\n\n- 自称 Dream\n\nLEGACY_CARD_MARK",
@@ -247,8 +246,8 @@ describe("POST /api/companion narration", () => {
       const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
         system: string;
       };
-      expect(call.system).toContain("LEGACY_CARD_MARK");
-      expect(call.system).toContain("## What I know about the user");
+      expect(call.system).not.toContain("LEGACY_CARD_MARK");
+      expect(call.system).not.toContain("## What I know about the user");
     });
 
     it("omits the card layer entirely when neither root holds a model", async () => {

@@ -13,11 +13,8 @@ import {
  * TWO CALLERS, ONE READ. The brand in the header and the briefing card's
  * eyebrow in the chat page both want it, and each owning its own state and
  * effect would mean `getBriefingIdentity` running twice. That read is not
- * free: `loadUserProfile` walks the memory for the most recent `previously.md`
- * to parse the name out of it, which in GitHub mode is a network walk over a
- * month of day directories. The chat page already carries a comment about
- * exactly this cost from an earlier round of the same bug; this is that fix
- * applied to the second caller.
+ * free: `loadUserProfile` reads the live user model to parse the name, which
+ * in GitHub mode needs a network read. Both callers share that same result.
  *
  * IT CANNOT COME FROM THE SERVER. The locale layout is PRERENDERED at build
  * time, so a name resolved there would be baked into the HTML and stale on

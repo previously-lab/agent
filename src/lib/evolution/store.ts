@@ -17,11 +17,13 @@
  *     compare fresh state before replacing it. Spawn injection is bounded by
  *     the procedural-skill prompt policy, with original-source refs.
  *
- * Dual-root discipline (§D.1): every READ checks the new root first and falls
- * back to the legacy root (current-previously.md / evolution/direction.md /
- * user/profile.md / agent-playbooks/<name>.md); every WRITE lands on the new
- * root only. Missing files degrade to null / empty, never to errors — a fresh
- * deployment has no evolution data yet, and that is a normal state.
+ * The current user model has ONE live root: people/user/index.md. Old
+ * current-previously.md and evolution/direction.md are historical documents,
+ * never a live fallback. The user's own profile.md and capability SOPs keep
+ * their legacy read tolerance; every WRITE lands on the new root only.
+ * Missing files degrade to null / empty, never to errors — a fresh deployment
+ * has no evolution data yet, and that is a normal state. An unavailable current
+ * user model is an error, not absence.
  *
  * The fitness store (events/signals/triggers) is RETIRED (§C.2): selection
  * pressure is now prose self-assessment under self/, and the only evolution
@@ -38,7 +40,6 @@ import {
 import {
   PEOPLE_USER_INDEX_PATH,
   PEOPLE_USER_PROFILE_PATH,
-  LEGACY_USER_CARD_PATH,
   LEGACY_USER_PROFILE_PATH,
   DIRECTION_PATH,
   selfSopPath,
@@ -73,7 +74,7 @@ async function userModelReadingLinks(batch?: WriteBatch): Promise<string> {
  * after a horizontal-rule separator. ONE file (§B.7's 散文合体) — the seam
  * exists so the mutation machinery (card session / direction ops) can keep
  * editing its own half until the boundary run's prose writer (A2) takes over.
- * Injection and snapshots always use the FULL document.
+ * Injection uses the FULL document; historical snapshots also contained it.
  */
 export const USER_MODEL_DIRECTION_SEPARATOR = "\n\n---\n\n";
 
@@ -84,7 +85,7 @@ export interface UserModel {
   card: string;
   /** The direction half (portrait + hypotheses) — null when absent. */
   direction: string | null;
-  /** The whole index.md exactly as stored (or composed from legacy roots). */
+  /** The whole index.md exactly as stored. */
   full: string;
 }
 
@@ -107,37 +108,34 @@ export function splitUserModel(full: string): { card: string; direction: string 
 }
 
 /**
- * Read the folded user model. New root first; on a miss, compose in memory
- * from the legacy roots (the legacy card + the legacy direction doc) WITHOUT
- * writing anything back (§D.1 — no backfill). Returns null when neither root
- * holds anything (a fresh deployment).
+ * Read the only live folded user model. Absence returns null; a transient or
+ * deterministic read failure rejects with the current path and original cause
+ * so no caller can silently substitute a month-old historical document.
  */
 export async function readUserModel(batch?: WriteBatch): Promise<UserModel | null> {
+  let full: string;
   try {
-    const full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch, { fresh: true });
-    if (full.trim()) {
-      const { card, direction } = splitUserModel(full);
-      const readingLinks = await userModelReadingLinks(batch);
-      return { card, direction, full: full.trim(), ...(readingLinks ? { readingLinks } : {}) };
-    }
-  } catch {
-    // new root absent — fall through to the legacy roots
+    full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch, { fresh: true });
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    const reason = error instanceof Error ? error.message : String(error);
+    const unavailable = new Error(
+      `Current user model is unavailable at ${PEOPLE_USER_INDEX_PATH}: ${reason}`,
+      { cause: error },
+    );
+    unavailable.name = "UserModelUnavailableError";
+    throw unavailable;
   }
-  let card = "";
-  try {
-    card = (await fsReadFile(LEGACY_USER_CARD_PATH, batch)).trim();
-  } catch {
-    // no legacy card either
-  }
-  const direction = await readDirection(batch);
-  if (!card && !direction) return null;
-  return { card, direction, full: composeUserModel(card, direction) };
+  if (!full.trim()) return null;
+  const { card, direction } = splitUserModel(full);
+  const readingLinks = await userModelReadingLinks(batch);
+  return { card, direction, full: full.trim(), ...(readingLinks ? { readingLinks } : {}) };
 }
 
 /**
  * Write the CARD half of the folded model (the evolution run's card write).
- * The direction half is preserved: read from the current index.md, else from
- * the legacy direction doc, then recomposed. New-root write only.
+ * The direction half is preserved from the current index.md, then recomposed.
+ * New-root write only.
  */
 export async function writeUserModelCard(
   card: string,

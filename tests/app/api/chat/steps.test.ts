@@ -419,7 +419,6 @@ function hkFor(slice: TimeSlice): HousekeepingResult & EntryReckoning {
     analysis: null,
 
     evidenceAttachments: null,
-    previouslyUpdate: null,
     sliceOnDisk: true,
   };
 }
@@ -1561,13 +1560,26 @@ describe("housekeeping — v0.42 零提交 (被动存盘归总结流)", () => {
     expect(episodic.flushBatch).not.toHaveBeenCalled();
   });
 
-  it("the beat's result carries the evidence/previously riders — and NO seal/birth (the landing judgment is the summary stream's)", async () => {
+  it("the beat carries evidence but no per-slice model snapshot, seal or birth", async () => {
+    evolutionStore.readUserModel.mockResolvedValueOnce({ card: "current card", direction: null, full: "current card" });
     const hk = await housekeeping(makeInput("hi"));
 
     expect(hk).toHaveProperty("evidenceAttachments");
-    expect(hk).toHaveProperty("previouslyUpdate");
+    expect(hk).not.toHaveProperty("previouslyUpdate");
+    expect(episodic.writePreviously).not.toHaveBeenCalled();
+    expect(episodic.findMostRecentPreviously).not.toHaveBeenCalled();
     expect(hk).not.toHaveProperty("sealed");
     expect(hk).not.toHaveProperty("birth");
+  });
+
+  it("surfaces a current-model read failure without reading historical snapshots", async () => {
+    evolutionStore.readUserModel.mockRejectedValueOnce(new Error("GitHub 503: temporarily unavailable"));
+    const hk = await housekeeping(makeInput("hi"));
+
+    expect(hk.previouslyContent).toBe("");
+    expect(hk.userModelDiagnostic).toContain("GitHub 503");
+    expect(episodic.readPreviously).not.toHaveBeenCalled();
+    expect(episodic.findMostRecentPreviously).not.toHaveBeenCalled();
   });
 
   it("a flush rejection configured by a previous test CANNOT leak into the beat — there is no flush to reject (the D-storm is structurally gone)", async () => {

@@ -12,7 +12,7 @@
  * stable-first for prompt caching, event context last:
  *
  *   L0 identityPrompt — bundled CHARTER + "who you're assisting" (stable)
- *   L1 the folded user model (people/user/index.md, dual-root read)
+ *   L1 the live folded user model (people/user/index.md only)
  *   L2 companion playbook (memory/agent-playbooks/companion.md, default on
  *     any read failure)
  *   L3 event context — now (user-local), locale, target sliceId (varies)
@@ -85,14 +85,17 @@ function capPlaybook(content: string): string {
   );
 }
 
-/** L1 — the folded user model (people/user/index.md), through the same
- *  dual-root read the chat turn uses (readUserModel: new root first, the
- *  legacy card + direction composed on a miss, §D.1). A missing/unreadable
- *  model degrades to no card layer — it must not silence the mouth. */
+/** L1 — the only live folded user model (people/user/index.md). Historical
+ *  card/direction files are not fallbacks. An unavailable model is logged and
+ *  degrades to no card layer — it must not silence the mouth. */
 async function readLiveCard(): Promise<string> {
   try {
     return (await readUserModel())?.full ?? "";
-  } catch {
+  } catch (error) {
+    console.warn(
+      "[Companion] current user model unavailable; no historical fallback used:",
+      error instanceof Error ? error.message : error,
+    );
     return "";
   }
 }

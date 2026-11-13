@@ -38,8 +38,12 @@ const h = vi.hoisted(() => ({
   agenda: "",
   lastEvolutionDate: null as string | null,
   skillRead: { status: "missing", ledger: { schemaVersion: 1, entries: [], operations: [] } } as unknown,
+  ttl: { retired: [] as string[], diagnostic: undefined as string | undefined },
 }));
 vi.mock("@/lib/evolution/skill-store", () => ({ readSkillLedger: vi.fn(async () => h.skillRead) }));
+vi.mock("@/lib/evolution/user-model-maintenance", () => ({
+  maintainUserModelHypothesisTtl: vi.fn(async () => h.ttl),
+}));
 
 vi.mock("@/lib/chat/hq-log", () => ({
   readReflectionWorldLog: vi.fn(async () => ({
@@ -104,6 +108,7 @@ beforeEach(() => {
   h.heads = {};
   h.agenda = "";
   h.lastEvolutionDate = null;
+  h.ttl = { retired: [], diagnostic: undefined };
 });
 
 describe("skill review world-read wiring", () => {
@@ -125,6 +130,15 @@ describe("skill review world-read wiring", () => {
     const docket = await loadReflectionWorld("2026-10-22");
     expect(docket.skillReviewDue).toEqual([]);
     expect(docket.skillReviewError).toBe("truncated ledger");
+  });
+});
+
+describe("hypothesis maintenance at the reflection read boundary", () => {
+  it("runs even when no user-model pass is due and no scope exists", async () => {
+    const docket = await loadReflectionWorld("2026-11-13");
+    const maintenance = await import("@/lib/evolution/user-model-maintenance");
+    expect(maintenance.maintainUserModelHypothesisTtl).toHaveBeenCalledWith(undefined);
+    expect(docket.evolutionDue).toBe(false);
   });
 });
 
@@ -248,10 +262,10 @@ describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level le
       turnIds: ["a1b2c3"],
       closedBy: "idle_gap",
     });
-    expect(docket.evolutionReasons).toEqual(["conversation_boundary"]);
+    expect(docket.evolutionReasons).toEqual(["conversation_boundary", "active_thread_change"]);
   });
 
-  it("d2. an OPEN scoped slice (no head mark) simply carries no closedBy — the boundary reason stays silent (daily isolated to today)", async () => {
+  it("d2. an OPEN scoped slice carries no closedBy but same-day new material still offers active-thread sync", async () => {
     h.lastEvolutionDate = "2026-10-20";
     h.summaries = [{ sliceId: "2026-10-20-1836", turnIds: ["a1b2c3"] }];
     // heads empty — the point read returns null. Same-day evolution stamp so
@@ -277,7 +291,8 @@ describe("loadReflectionWorld — the v0.42 §4 scope (C2: union + turn-level le
       sliceId: "2026-10-20-1836",
       turnIds: ["a1b2c3"],
     });
-    expect(docket.evolutionReasons).toEqual([]);
+    expect(docket.evolutionReasons).toEqual(["active_thread_change"]);
+    expect(docket.evolutionDue).toBe(true);
   });
 
   it("e. nothing owed (an empty, readable log) → an empty, CLEAN docket — the shell retires without burning the model", async () => {

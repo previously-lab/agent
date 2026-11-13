@@ -656,7 +656,12 @@ function buildHqTools(
         if (!slice) return `(slice ${sliceId} unreadable — evolve skipped.)`;
         // The round's batch rides the read (v0.37 §5): the direction half may
         // have been queued by an earlier evolveProfile THIS round.
-        const userModel = await readUserModel(batch).catch(() => null);
+        let userModel: Awaited<ReturnType<typeof readUserModel>>;
+        try {
+          userModel = await readUserModel(batch);
+        } catch (error) {
+          return `(current user model unavailable — evolve skipped without using historical fallbacks: ${error instanceof Error ? error.message : String(error)})`;
+        }
         const directionCurrent = userModel?.direction ?? null;
         // HQ owns no turn analysis — the direction half gets the minimal one
         // (the freshest evidence is the closed slice itself, read through the readers).

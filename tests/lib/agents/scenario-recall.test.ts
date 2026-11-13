@@ -653,6 +653,43 @@ describe("record-only scenario recollection", () => {
     expect(result.uncertainty.join(" ")).toContain("record enumeration: tree unavailable");
   });
 
+  it("retries a transient raw read exactly once and then succeeds", async () => {
+    const { backend, readFile } = fixture({ [PATH]: core() });
+    readFile.mockRejectedValueOnce(Object.assign(new Error("GitHub temporarily unavailable"), { status: 503 }));
+    mockModel(async (options) => {
+      await execute(options, "readRecord", { ref: REF });
+      return report("Recovered after one transient failure.", [
+        { ref: REF, turnId: "u1", role: "user", quote: USER_QUOTE },
+      ]);
+    });
+    const result = await runScenarioRecall(inputFor(backend));
+    expect(result.status).toBe("ok");
+    expect(readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a deterministic 404 raw read", async () => {
+    const { backend, readFile } = fixture({ [PATH]: core() });
+    readFile.mockRejectedValueOnce(Object.assign(new Error("File not found"), { status: 404 }));
+    mockModel(async (options) => {
+      const read = await execute<ReadOutput>(options, "readRecord", { ref: REF });
+      expect(read.error).toContain("File not found");
+      return report("The record is unavailable.");
+    });
+    await runScenarioRecall(inputFor(backend));
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates a raw-read timeout without retrying", async () => {
+    const { backend, readFile } = fixture({ [PATH]: core() });
+    readFile.mockRejectedValueOnce(Object.assign(new Error("read timed out"), { name: "TimeoutError" }));
+    mockModel(async (options) => {
+      await expect(execute(options, "readRecord", { ref: REF })).rejects.toThrow("read timed out");
+      return report("unreachable");
+    });
+    await runScenarioRecall(inputFor(backend));
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
   it("returns cancellation before model invocation and cancellation during a raw read", async () => {
     const { backend } = fixture({ [PATH]: core() });
     const first = new AbortController();

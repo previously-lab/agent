@@ -67,7 +67,7 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 1c. Fitness deltas (the analyzer's Task 7, or the bridge report's `fitness` array) are persisted right after the analysis via `appendFitnessEvents` — the store force-zeroes evidence-less deltas structurally. There is NO mutation archive (v0.9.2): accepted writes land in the live documents only; evolution has no direction, so a mutation is never judged against its predecessor and nothing rolls back.
 2. There is NO mechanical card pass: expiry/overdue/caps are the agent's decisions, enforced inside its write tools. Housekeeping computes overdue Horizon items read-only for turn priming and injects the time context (user-local date, Now ages) into the prompt.
 3. The Previously Agent (main model via the shared runner, thinking on at low effort) edits an in-memory copy of the card through per-entry mutation tools (`addNow`, `updatePastProfile`, `resolveHorizon`, …). Over-limit / malformed writes are REJECTED with compression instructions — the agent decides what survives a cap; a loop brake escalates repeated identical rejections (2nd: exact arithmetic; 3rd: force-apply truncated for length violations, skip + finish-now otherwise). A pass that hits the step cap without `finish` returns a PARTIAL card (mutations kept, note flagged) instead of failing. It normally ends with a `finish` call.
-4. The serialized result is written back only when the card's substance changed (stamps ignored) — both the live card and the per-slice snapshot.
+4. The serialized result is written back only when the card's substance changed (stamps ignored) — only the live `people/user/index.md`. Historical per-slice snapshots remain readable; new snapshots are not produced.
 
 ## Core Types
 
@@ -92,7 +92,7 @@ memory/records/
         HHMM/
           core.md               -- original conversation (YAML frontmatter + turns)
           agent.md              -- agent cognition log (+ the [doc-marker] mailbox)
-          previously.md         -- user-card snapshot (Previously Agent evolution)
+          previously.md         -- historical user-card snapshot (read-only; no new files)
           works/                -- immutable full private dialogue work results linked from agent.md
 memory/docs/                    -- the v0.15 document system (see src/lib/docs/CLAUDE.md)
   topic/<名字>.md               -- topic homes (主题之家): one per strand

@@ -64,9 +64,6 @@ import {
   tryLoadTodaySlice,
   writeAgentTimeline,
   readPreviously,
-  writePreviously,
-  findMostRecentPreviously,
-  deterministicSliceMark,
   createBatch,
   flushBatch,
   analyzeTurn,
@@ -583,10 +580,6 @@ export interface EntryReckoning {
    *  persists them through the same fuse semantics (v0.42 review
    *  blocker 1). null when the turn carried none. */
   evidenceAttachments: Array<{ name: string; dataBase64: string }> | null;
-  /** The people/user mid-life snapshot update for an EXISTING slice
-   *  (a birth carries its own) — written to previously.md by the
-   *  summary stream (v0.42 review should-fix 1). null = no change. */
-  previouslyUpdate: string | null;
   /** True when THIS beat's slice was READ from disk (the edge). False for
    *  the UNSAVED context shell minted when no slice exists — the shell
    *  must never reach a flush (the real-machine ghost slice: finalize's
@@ -658,11 +651,10 @@ export async function housekeeping(
   // judges the landing once the WHOLE burst has answered. With no edge
   // the turn answers empty-context and the summary mints the first page.
   let slice: TimeSlice;
-  /** v0.42 — the evidence bytes + the mid-life previously snapshot ride
-   *  the result to the summary stream (the entry beat commits nothing). */
+  /** v0.42 — the evidence bytes ride the result to the summary stream
+   *  (the entry beat commits nothing). */
   let evidenceAttachments: Array<{ name: string; dataBase64: string }> | null =
     null;
-  let previouslyUpdate: string | null = null;
   /** The slice we came from — resolved from disk (the newest closed page
    *  before this one). Drives the continuity brief. */
   let prevSlice: PrevSliceRef | null = null;
@@ -811,34 +803,21 @@ export async function housekeeping(
   // ── Phase: context — load the user profile (previously + identity) ───
   await emitPhase(stream, "context", true);
 
-  // ── 4. people/user read face + per-slice snapshot (v0.19 R4, §B.7) ────
-  // The folded user model (people/user/index.md — card + direction in ONE
-  // document) and the user's own self-description (profile.md) are the ONLY
-  // case injected every turn. Tolerant reads fall back to the legacy roots
-  // (current-previously.md / evolution/direction.md / user/profile.md).
-  const userModel = await readUserModel(batch).catch(() => null);
+  // ── 4. people/user read face ──────────────────────────────────────────
+  // people/user/index.md is the ONLY live user model. Historical slice
+  // snapshots and the retired standalone card/direction documents never fill
+  // in for it. An unavailable current model is surfaced, not treated as absent.
+  let userModel: Awaited<ReturnType<typeof readUserModel>> = null;
+  let userModelDiagnostic: string | undefined;
+  try {
+    userModel = await readUserModel(batch);
+  } catch (error) {
+    userModelDiagnostic = error instanceof Error ? error.message : String(error);
+    console.warn(`[UserModel] ${userModelDiagnostic}`);
+  }
   const userProfile = await readUserProfile(batch).catch(() => null);
   // The card half drives the identity head parse and the L1 injection block.
   const previouslyContent = userModel?.card ?? "";
-
-  // Snapshot semantics (§B.7): the slice's previously.md freezes the FULL
-  // index.md as it stands this turn — readPreviously is thereafter "the user
-  // model as of that slice". Fresh deployments seed from the most recent
-  // legacy snapshot so the chain never breaks. Write only on change.
-  const modelSnapshot =
-    userModel?.full ??
-    (await findMostRecentPreviously(batch).catch(() => null)) ??
-    "";
-  if (modelSnapshot.trim()) {
-    const existingSnap = await readPreviously(slice.slice_id).catch(() => "");
-    if (existingSnap !== modelSnapshot) {
-      // v0.42 — the snapshot ALWAYS rides the result (the batch here
-      // never flushes; the old queued write died with it). The summary
-      // stream writes it into the slice IT judges — continued or new.
-      previouslyUpdate = modelSnapshot;
-      console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id} (rides the summary)`);
-    }
-  }
 
   // ── 5. NO commit in the entry beat (v0.42 §0/§2) — 被动存盘 belongs to
   // the summary stream: the user turn, the ended page's seal (`sealed` on
@@ -905,8 +884,7 @@ export async function housekeeping(
   const identityPrompt = buildAgentIdentityPrompt(profile);
 
   // The direction layer for the main agent's system prompt: the direction
-  // HALF of the folded people/user/index.md (readUserModel already falls
-  // back to the legacy direction.md). The explicit-instruction evolution
+  // HALF of the folded people/user/index.md. The explicit-instruction evolution
   // channel runs post-reply (序 6), so a direction landed this turn is what
   // the NEXT turn reads — within a slice without an evolution the layer is
   // byte-stable. Missing / template / legacy-skeleton docs omit the layer
@@ -970,9 +948,9 @@ export async function housekeeping(
     analysis,
 
     evidenceAttachments,
-    previouslyUpdate,
     sliceOnDisk: !!diskSlice,
 
+    ...(userModelDiagnostic ? { userModelDiagnostic } : {}),
     ...(directionBlock ? { directionBlock } : {}),
     ...(craftBlock ? { craftBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
@@ -1271,8 +1249,7 @@ export async function finalizeTurn(
         // The direction half of the folded model is orientation for the
         // product phase even on an explicit-request run (no direction
         // evaluation and no SOP writes on this channel).
-        const direction =
-          (await readUserModel(batch).catch(() => null))?.direction ?? null;
+        const direction = (await readUserModel(batch))?.direction ?? null;
         evolutionResult = await withSliceLock("evolution", () =>
           runCardEvolution({
             model: input.modelConfig,

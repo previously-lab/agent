@@ -27,8 +27,9 @@
  *     SAME RUN — a confirmed guess never lingers in the pool; refuted →
  *     REMOVED; still unverified 4 slices after its `proposed` pointer →
  *     RETIRED (re-proposable on new evidence) — the TTL is enforced IN CODE
- *     (retireExpiredHypotheses) on every accepted proposal, so an undecided
- *     guess can never settle in as a de-facto conclusion. Every evolution
+ *     (retireExpiredHypotheses) on accepted proposals and independently at the
+ *     reflection read boundary, so an undecided guess cannot settle in merely
+ *     because no card/direction pass ran. Every evolution
  *     run refills the pool up to the cap with guesses about the PERSON —
  *     never predictions about events.
  *

@@ -8,9 +8,9 @@
  * (people/user/index.md, self/<name>/index.md). Keeping the paths in one
  * module keeps every reader/writer byte-identical on where the truth lives.
  *
- * Dual-root discipline (§D.1): READS check the new root first and fall back
- * to the legacy root; WRITES land on the new root only. No backfill, no
- * migration — the next write moves the datum forward.
+ * The live user model is single-root. Legacy profile/SOP reads remain tolerant;
+ * legacy card/direction files are historical, not fallbacks. WRITES land on the
+ * new roots only. No backfill or implicit migration.
  */
 
 /**
@@ -27,9 +27,8 @@ export const PEOPLE_USER_INDEX_PATH = "memory/people/user/index.md";
  */
 export const PEOPLE_USER_PROFILE_PATH = "memory/people/user/profile.md";
 
-/** Legacy roots — READ fallback only, never written (§D.1). The card lived
- *  at current-previously.md, the direction doc at evolution/direction.md,
- *  the self-description at user/profile.md. */
+/** Historical card/direction paths plus the legacy self-description root.
+ *  Card/direction are not live fallbacks; profile.md keeps read tolerance. */
 export const LEGACY_USER_CARD_PATH = "memory/episodic/current-previously.md";
 export const LEGACY_DIRECTION_PATH = "memory/evolution/direction.md";
 export const LEGACY_USER_PROFILE_PATH = "memory/user/profile.md";

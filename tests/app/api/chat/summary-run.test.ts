@@ -401,19 +401,15 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
     }
   });
 
-  it("review-2. a mid-life previously snapshot for an EXISTING slice rides the result → lands in the summary commit", async () => {
+  it("does not write a per-slice user-model snapshot and preserves historical files", async () => {
+    const historicalPath = "memory/records/2026/10/20/1836/previously.md";
+    io.files.set(historicalPath, "历史快照，保持原样");
     io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
-    const outcome = await persistTurnSummary(
-      payload({ own: ownRecord({ previously: "---\ncard: 更新后的用户模型\n---\n" }) }),
-    );
+    const outcome = await persistTurnSummary(payload());
 
     expect(outcome.kind).toBe("committed");
-    expect(io.flushes[0]!.paths).toContain(
-      "memory/records/2026/10/20/1836/previously.md",
-    );
-    expect(io.files.get("memory/records/2026/10/20/1836/previously.md")).toContain(
-      "更新后的用户模型",
-    );
+    expect(io.flushes[0]!.paths).not.toContain(historicalPath);
+    expect(io.files.get(historicalPath)).toBe("历史快照，保持原样");
   });
 
   it("review-1+2. the MINIMAL (degraded) commit carries the riders too — the user evidence is never the thing that gets dropped", async () => {
@@ -427,7 +423,6 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       const outcome = await persistTurnSummary(
         payload({
           own: ownRecord({
-            previously: "快照内容",
             attachments: [{ name: "照片.png", dataBase64: Buffer.from("BYTES").toString("base64") }],
           }),
         }),
@@ -443,7 +438,7 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
       expect(
         io.flushes[0]!.paths.some((p) => p.includes("attachments/a1b2c3-")),
       ).toBe(true);
-      expect(io.files.get("memory/records/2026/10/20/1836/previously.md")).toContain("快照内容");
+      expect(io.files.has("memory/records/2026/10/20/1836/previously.md")).toBe(false);
       expect(io.files.get(CORE_PATH)!).toContain("[attachments:");
     } finally {
       warn.mockRestore();

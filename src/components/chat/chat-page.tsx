@@ -478,9 +478,8 @@ function Inner({
   // eyebrow over the time-travel readout, plus the persona list in demo mode.
   // Resolved through the SHARED hook and passed down, so nothing below it looks
   // the name up again — and so the header's brand shares this one request
-  // rather than making a second. The read walks the memory for the newest
-  // previously.md, which in GitHub mode is a network walk over a month of day
-  // directories; see `use-briefing-identity.ts`.
+  // rather than making a second. The name comes from the live user model;
+  // see `use-briefing-identity.ts`.
   const identity = useBriefingIdentity();
   // The time-travel transition currently playing (if any) — an overlay that
   // covers the stream and doubles as the loading state while older pages are

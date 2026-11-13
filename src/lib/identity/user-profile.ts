@@ -1,9 +1,7 @@
 /**
- * User profile — extracted from previously.md.
- *
- * As of v0.5, the canonical source is the most recent previously.md's
- * "User identity" section. Flash micro-evolution and Pro macro-evolution
- * manage beliefs automatically; there is no separate profile file.
+ * User identity — extracted from the live people/user/index.md model.
+ * Historical previously.md snapshots remain parseable, but never supply
+ * the current display name.
  */
 
 export interface UserProfile {
@@ -122,52 +120,19 @@ export function parseIdentityFromPreviously(previouslyContent: string): UserProf
   return profile.name || profile.body ? profile : null;
 }
 
-// ─── Find previously.md ──────────────────────────────────────────────────
-
-/**
- * Attempt to read a previously.md and extract identity facts.
- * Tries the well-known next-previously.md first (Pro's latest reflection),
- * then falls back to scanning recent slices.
- */
-async function readPreviouslyIdentity(): Promise<UserProfile | null> {
-  // Dynamic import to avoid circular dependency at module load time
-  const { findMostRecentPreviously, readPreviously: readPrev } =
-    await import("@/lib/episodic/manager");
-
-  // Try next-previously.md first (Pro's latest reflection)
-  try {
-    const { readFileLocal: readLocal } = await import("@/lib/tools/local-fs");
-    const nextPrev = await readLocal("memory/episodic/next-previously.md");
-    if (nextPrev.trim()) {
-      const parsed = parseIdentityFromPreviously(nextPrev);
-      if (parsed) return parsed;
-    }
-  } catch {
-    // No next-previously.md
-  }
-
-  // Fall back: scan for the most recent frozen previously.md
-  try {
-    const mostRecent = await findMostRecentPreviously();
-    if (mostRecent) {
-      const parsed = parseIdentityFromPreviously(mostRecent);
-      if (parsed) return parsed;
-    }
-  } catch {
-    // No previously.md available
-  }
-
-  return null;
-}
-
 // ─── Public API ──────────────────────────────────────────────────────────
 
 export async function loadUserProfile(): Promise<UserProfile> {
   try {
-    const fromPreviously = await readPreviouslyIdentity();
-    if (fromPreviously) return fromPreviously;
-  } catch {
-    // previously.md unavailable — return empty default
+    const { readUserModel } = await import("@/lib/evolution/store");
+    const model = await readUserModel();
+    const profile = model ? parseIdentityFromPreviously(model.card) : null;
+    if (profile) return profile;
+  } catch (error) {
+    console.warn(
+      "[UserProfile] current user model unavailable; no historical fallback used:",
+      error instanceof Error ? error.message : error,
+    );
   }
 
   return { name: "", body: "" };
