@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueResult } from "@/lib/dialogue/types";
 import { createHash } from "node:crypto";
-import { legacySlicePartPath, slicePartPath } from "@/lib/episodic/paths";
+import { slicePartPath } from "@/lib/episodic/paths";
 
 vi.mock("@/lib/tools/staged-images", () => ({ settleStagedImages: vi.fn(async () => undefined) }));
 
@@ -211,14 +211,14 @@ describe("dialogue records on a plain local directory", () => {
     expect(fs.existsSync(join(memoryRoot, ".git"))).toBe(false);
   });
 
-  it("T15/T24: recovers a legacy input by identity and writes only the new records root", async () => {
+  it("T15/T24: ignores retired storage and writes only the canonical records root", async () => {
     const { createSlice, serializeSlice, loadSlice } = await import("@/lib/episodic/manager");
     const legacyId = "2026-11-06-0300";
     const legacy = createSlice(accepted.text, "UTC", "u1");
     legacy.slice_id = legacyId;
     legacy.start = stamp;
     legacy.turns[0]!.timestamp = stamp;
-    const legacyPath = legacySlicePartPath(legacyId, "core");
+    const legacyPath = "memory/episodic/slices/2026/11/06/0300/timeline/core.md";
     const absoluteLegacy = join(memoryRoot, legacyPath.replace(/^memory\//, ""));
     fs.mkdirSync(dirname(absoluteLegacy), { recursive: true });
     const raw = serializeSlice(legacy);

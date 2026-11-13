@@ -20,8 +20,8 @@ describe("document storage budgets", () => {
     expect(() => assertDocumentWrite(path, old + "x", old, true)).toThrow();
   });
   it("exempts only real record storage paths", () => {
-    for (const p of ["memory/records/2026/11/03/1200/core.md", "memory/records/2026/11/03/agent.md", "memory/episodic/slices/2026/11/03/1200/timeline/agent.md", "memory/episodic/slices/2026/11/03/previously.md"]) expect(isConversationRecordPath(p)).toBe(true);
-    for (const p of [path, "memory/records/2026/02/31/1200/core.md", "memory/records/2026/11/03/2460/core.md", "memory/records/report.md", "memory/records/2026/11/03/1200/note.md"]) expect(isConversationRecordPath(p)).toBe(false);
+    for (const p of ["memory/records/2026/11/03/1200/core.md", "memory/records/2026/11/03/agent.md"]) expect(isConversationRecordPath(p)).toBe(true);
+    for (const p of [path, "memory/records/2026/02/31/1200/core.md", "memory/records/2026/11/03/2460/core.md", "memory/records/report.md", "memory/records/2026/11/03/1200/note.md", "memory/episodic/slices/2026/11/03/1200/timeline/agent.md", "memory/episodic/slices/2026/11/03/previously.md"]) expect(isConversationRecordPath(p)).toBe(false);
   });
   it("bounds individual and accumulated tails", () => {
     expect(() => assertTailBudget(path, "x".repeat(601), "short")).toThrow("document_full");

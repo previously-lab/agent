@@ -25,11 +25,8 @@ export {
 } from "./manager";
 export {
   RECORDS_ROOT,
-  LEGACY_SLICES_ROOT,
   sliceDir,
   slicePartPath,
-  slicePartPathCandidates,
-  legacySlicePartPath,
   readSlicePart,
   readSlicePartResolved,
 } from "./paths";

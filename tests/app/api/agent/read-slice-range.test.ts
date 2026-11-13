@@ -113,10 +113,10 @@ slice_id: 2026-09-04-2130`);
       .toBe(`ERROR: Unknown range type "bogus" in ${SLICE_ID}.`);
   });
 
-  it("dual-root fallback reads a slice that exists only under the legacy root", async () => {
+  it("does not read a slice that exists only under the retired root", async () => {
     files.delete(NEW_CORE);
     files.set(LEGACY_CORE, CORE_RAW);
-    expect(await read(REF)).toContain("我想换手机");
+    expect(await read(REF)).toBe(`Nothing named "${REF}" exists in memory — and nothing similar.`);
   });
 
   it("a slice under neither root returns the fixed not-found sentence", async () => {

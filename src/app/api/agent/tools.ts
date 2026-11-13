@@ -143,11 +143,11 @@ export const chatTools = {
   recallScenario: tool({
     description:
       "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
-      "a bounded recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
+      "an independent recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
       "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
       "verification=quote_and_source_only: the narrative answer and evidence notes remain interpretations, not verified user facts. " +
       "Read each quote's role, timestamp and adjacent context: an assistant suggestion is not user confirmation, and a user may quote or deny a claim. " +
-      "Ask another focused recallScenario question when more original detail is needed. " +
+      "Ask another focused recallScenario question when more original detail is needed. If coverage.nextCursor is present, repeat the same question/window with that cursor to continue scanning older records. " +
       "For semantic documents, case understandings and other existing prose, use recallRead directly: they are already compressed and this tool cannot read them. " +
       "Incomplete coverage or no evidence is not proof that the user never said something. This tool does not create write authority or task evidence.",
     inputSchema: scenarioRecallRequestSchema,
@@ -160,7 +160,7 @@ export const chatTools = {
   recallRecent: tool({
     description:
       "See what has been happening in memory — the N most recent ENTRIES " +
-      "(ref / title / date / one-line excerpt), never raw files. Record rows contain locators only; use recallScenario for their content. Semantic rows keep their excerpts. Results are newest " +
+      "(ref / title / date / one-line excerpt), never raw files. Record rows expose focus/summary only as labeled navigation metadata; use recallScenario for verified original content. Semantic rows keep their excerpts. Results are newest " +
       "activity first. Use this FIRST whenever the user asks about the past " +
       "and you are not sure WHERE it lives: omit `category` and you get one " +
       "cross-category timeline (conversation slices + cases interleaved by " +
@@ -264,22 +264,20 @@ export const chatTools = {
       "not in any document, then use recallScenario for their content. Keywords AND within a segment (pass synonyms as " +
       "separate calls). Hits return entries whose excerpt is the matching " +
       "snippet, newest activity first, up to `limit` (default 20, hard cap 30) " +
-      "per page; `offset` (default 0) pages deeper — pass the offset the " +
-      "full-page note gives you; order is always newest first — you cannot " +
-      "sort. Scanning touches at most 50 files per call; `since` / `until` " +
+      "per page. Each call scans at most 50 candidate files. When the result gives " +
+      "nextScanCursor/nextOffset, pass them as scanCursor/offset together to continue " +
+      "through hits and then older candidates; a partial scan is not absence. Order is newest first; `since` / `until` " +
       "(YYYY-MM-DD) bound by " +
       "activity date. FIXED result wording: hits open `{n} match(es) for " +
       "\"{query}\":`; ZERO hits on a non-empty scope open `Nothing matches " +
       "\"{query}\". Here are the {n} most recent entries instead:` — that is " +
       "a FALLBACK, not absence, and you must not quote it as 'the user never " +
       "recorded this'; an empty scope opens `There is nothing here yet — no " +
-      "{category} entries exist in this scope.`; a capped scan appends " +
-      "`Showing the newest {limit} of {scanned} scanned — narrow by date or " +
-      "add keywords for the older ones.`; a page with older hits behind it " +
-      "appends `Showing {n} from offset {offset} — pass offset={offset+n} for " +
-      "older ones.`; an offset past the end returns `No more entries — offset " +
+      "{category} entries exist in this scope.`; a continuable scan appends " +
+      "`Scanned {n} candidate file(s); pass scanCursor={next} and offset={nextOffset} " +
+      "together to continue.`; an offset past the end returns `No more entries — offset " +
       "{offset} is past the end; only {total} exist in this scope, newest " +
-      "first.` — an empty page is NOT absence. Record hits return only ref/date locators, never body excerpts or summary claims. " +
+      "first.` — an empty page is NOT absence. Record focus/summary rows are labeled navigation-only and never authorize evidence; raw turn excerpts stay hidden. " +
       "Continue semantic refs with recallRead(ref) and record refs with recallScenario.",
     inputSchema: z.object({
       query: z
@@ -322,9 +320,14 @@ export const chatTools = {
         .min(0)
         .optional()
         .describe(
-          "Skip the newest `offset` hits and return the next page " +
-          "(default 0). Continue with the offset the full-page note gives you.",
+          "Skip hits within the current candidate page (default 0). Pass the returned nextOffset together with nextScanCursor.",
         ),
+      scanCursor: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Candidate-page cursor from nextScanCursor; omit for the newest 50 files. This is independent of hit offset."),
     }),
     contextSchema: toolContextSchema,
     execute: recallSearchExecute,

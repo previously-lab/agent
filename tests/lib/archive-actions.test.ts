@@ -117,11 +117,9 @@ describe("verifyRefs", () => {
     expect(legacy).toMatchObject({ kind: "legacy", alive: true });
   });
 
-  it("a record ref is alive on core.md membership — on EITHER root — and its door date is the id's own", async () => {
-    // The legacy root's core.md lives under timeline/ (paths.ts) — membership
-    // there must answer alive exactly as the new root does.
+  it("a record ref is alive only on canonical core.md membership and its door date is the id's own", async () => {
     mocks.enumerateTreePaths.mockResolvedValue([
-      "memory/episodic/slices/2026/10/05/1430/timeline/core.md",
+      "memory/records/2026/10/05/1430/core.md",
     ]);
     mocks.enumerateSliceIds.mockResolvedValue([
       "2026/10/06/0900",

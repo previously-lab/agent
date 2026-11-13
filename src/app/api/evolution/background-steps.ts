@@ -84,7 +84,6 @@ export async function executeQuestionRun(
 
   // The pass scans/dedups/records markers internally; we scan here only to
   // know WHICH questions are on the agenda (the notification names them).
-  // Dual-root read — the slice's mailbox may predate the records root move.
   const agentMd = await readSlicePart(sliceId, "agent").catch(() => "");
   const processed = extractProcessedMarkerIds(agentMd, RESEARCH_RECORD_PREFIX);
   const questions = extractDocMarkers(agentMd).filter(

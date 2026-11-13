@@ -40,16 +40,14 @@ const fakeDisk = vi.hoisted(() => {
 
 const episodic = vi.hoisted(() => ({
   RECORDS_ROOT: "memory/records",
-  LEGACY_SLICES_ROOT: "memory/episodic/slices",
   createBatch: vi.fn(() => ({ entries: new Map<string, string>() })),
   flushBatch: vi.fn(async (_batch: unknown, _msg: string) => {}),
   sliceIdToFilePath: vi.fn(
     (sliceId: string) => `memory/records/${sliceId.replace(/-/g, "/")}/core.md`,
   ),
   sliceIdToAgentPath: vi.fn((sliceId: string) => `${sliceId}:agent`),
-  slicePartPathCandidates: vi.fn(
-    (sliceId: string, part: string) =>
-      [`memory/records/${sliceId}/${part}.md`, `legacy/${sliceId}/${part}.md`] as [string, string],
+  slicePartPath: vi.fn(
+    (sliceId: string, part: string) => `memory/records/${sliceId}/${part}.md`,
   ),
   tryLoadTodaySlice: vi.fn(),
   createSlice: vi.fn((msg: string, tz: string, turnId?: string, continuesFrom?: string) =>

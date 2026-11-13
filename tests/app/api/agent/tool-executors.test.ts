@@ -192,7 +192,6 @@ describe("recallReadExecute — semantic reads and record mediation", () => {
     "previously:records/2026-08-11-1115",
     "memory/records/2026/08/11/1115/core.md",
     "/memory/records/2026/08/11/1115/previously.md",
-    "memory/episodic/slices/2026/08/11/1115/timeline/core.md",
   ])("record ref %s returns a typed redirect without reading the original", async (ref) => {
     const out = await recallReadExecute({ ref, part: "previously" }, opts());
     expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-08-11-1115" });

@@ -91,15 +91,15 @@ function cacheOptions(n: number): { revalidate: number; tags: string[] } {
 // ─── ttlForPath: the three backends ──────────────────────────────────────
 
 describe("ttlForPath — github", () => {
-  it("caches closed slice files for a day (immutable)", () => {
+  it("caches closed record files for a day (immutable)", () => {
     expect(
-      ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md", "github")
+      ttlForPath("memory/records/2026/01/01/0900/core.md", "github")
     ).toBe(CACHE_TTLS.CLOSED_SLICE_SECONDS);
     expect(
-      ttlForPath("memory/episodic/slices/2026-01/slice-abc/previously.md", "github")
+      ttlForPath("memory/records/2026/01/01/0900/previously.md", "github")
     ).toBe(CACHE_TTLS.CLOSED_SLICE_SECONDS);
     expect(
-      ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md", "github")
+      ttlForPath("memory/records/2026/01/01/0900/core.md", "github")
     ).toBe(86_400);
   });
 
@@ -110,11 +110,8 @@ describe("ttlForPath — github", () => {
     expect(ttlForPath("memory/episodic/timeline/index.json", "github")).toBe(60);
   });
 
-  it("treats the MONTHLY index as mutable, not as a closed slice", () => {
-    // It lives under `slices/`, so it used to inherit the 24-hour rule meant
-    // for immutable closed slices — on a file rewritten every time a slice in
-    // that month opens, closes or flushes.
-    expect(ttlForPath("memory/episodic/slices/2026/08/_index.json", "github")).toBe(60);
+  it("does not give retired monthly indexes the closed-record TTL", () => {
+    expect(ttlForPath("memory/episodic/slices/2026/08/_index.json", "github")).toBe(300);
   });
 
   it("caches the records root as closed slices (Wave A — audit §3.1)", () => {
@@ -148,7 +145,7 @@ describe("ttlForPath — github", () => {
 
   it("normalizes backslashes before classifying", () => {
     expect(
-      ttlForPath("memory\\episodic\\slices\\2026-01\\slice-a\\core.md", "github")
+      ttlForPath("memory\\records\\2026\\01\\01\\0900\\core.md", "github")
     ).toBe(CACHE_TTLS.CLOSED_SLICE_SECONDS);
   });
 });

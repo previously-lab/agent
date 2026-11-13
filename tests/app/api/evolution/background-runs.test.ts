@@ -67,12 +67,8 @@ const episodic = vi.hoisted(() => ({
     if (v === undefined) throw new Error(`missing ${sliceId}:${part}`);
     return v;
   }),
-  slicePartPathCandidates: vi.fn(
-    (sliceId: string, part: string) =>
-      [`memory/records/${sliceId}/${part}.md`, `legacy/${sliceId}/${part}.md`] as [
-        string,
-        string,
-      ],
+  slicePartPath: vi.fn(
+    (sliceId: string, part: string) => `memory/records/${sliceId}/${part}.md`,
   ),
 }));
 vi.mock("@/lib/episodic", () => episodic);

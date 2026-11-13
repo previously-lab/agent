@@ -57,7 +57,7 @@ import { parsePieceFileName } from "@/lib/docs/case-naming";
 import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { parseSliceId, parseTurns, applyRange, reassembleSlice } from "@/lib/episodic/turn-parser";
 import { projectRecordArtifactTranscript } from "@/lib/episodic/record-attribution";
-import { slicePartPathCandidates } from "@/lib/episodic/paths";
+import { slicePartPath } from "@/lib/episodic/paths";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
 import { annotateSliceWithLocalTime, sliceLocalBanner } from "@/lib/episodic/time-localize";
 import { splitParagraphs, segmentSearch, textLines, searchResultToString } from "@/lib/retrieval/doc-segments";
@@ -109,6 +109,12 @@ export interface MemoryEntry {
   updated?: string;
   /** Slices only: derived from the close marker. */
   status?: "active" | "closed";
+  /** Original-record catalog metadata; it cannot authorize original evidence. */
+  navigation?: {
+    kind: "navigation_only";
+    focus: string;
+    summary: string;
+  };
 }
 
 /**
@@ -126,8 +132,13 @@ export type RecallResult =
       offset?: number;
       /** True when offset landed past the end — an empty page, not absence. */
       pastEnd?: boolean;
-      /** Total matching entries in scope (search only: scanned ≠ total). */
+      /** Total matching entries in this scanned candidate page (search only). */
       total?: number;
+      /** Search only: pass both cursors together to continue this exact scan. */
+      nextScanCursor?: number;
+      nextOffset?: number;
+      /** Search only: unreadable candidates in this page, never treated as misses. */
+      readFailures?: number;
       /**
        * recallFind only: the hit was adopted by approximate name matching —
        * this is the stored (true) name the query resolved to.
@@ -183,7 +194,7 @@ export const RECENT_DEFAULT_N = 10;
 export const RECENT_MAX_N = 30;
 export const SEARCH_DEFAULT_LIMIT = 20;
 export const SEARCH_MAX_LIMIT = 30;
-/** Files scanned per search call, newest-first; older candidates report truncated. */
+/** Candidate files per search page; scanCursor continues through the full scope. */
 export const SEARCH_SCAN_CAP = 50;
 /** A slice's "head" for default-scope search: frontmatter + this many body lines. */
 const SLICE_HEAD_LINES = 30;
@@ -309,8 +320,6 @@ interface MemoryTreeIndex {
 }
 
 const RECORDS_CORE_RE = /^memory\/records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\/core\.md$/;
-const LEGACY_CORE_RE =
-  /^memory\/episodic\/slices\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\/timeline\/core\.md$/;
 const CASE_INDEX_RE = /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/index\.md$/;
 const PIECE_NAME_RE = /^\d{4}-\d{2}-\d{2}-[^/]+\.md$/;
 
@@ -340,7 +349,7 @@ export function buildTreeIndex(paths: string[]): MemoryTreeIndex {
     if (path.startsWith("memory/config/") || path === "memory/user/config.json") continue;
     if (path.includes("/attachments/")) continue;
 
-    const recordsMatch = RECORDS_CORE_RE.exec(path) ?? LEGACY_CORE_RE.exec(path);
+    const recordsMatch = RECORDS_CORE_RE.exec(path);
     if (recordsMatch) {
       slices.add(
         `${recordsMatch[1]}-${recordsMatch[2]}-${recordsMatch[3]}-${recordsMatch[4]}`,
@@ -544,12 +553,7 @@ async function readSliceRaw(
   sliceId: string,
   part: "core" | "agent" | "previously",
 ): Promise<string> {
-  const [primary, fallback] = slicePartPathCandidates(sliceId, part);
-  try {
-    return await backend.readFile(primary);
-  } catch {
-    return backend.readFile(fallback);
-  }
+  return backend.readFile(slicePartPath(sliceId, part));
 }
 
 /** Coerce frontmatter scalars — gray-matter parses "A: B" strings as objects. */
@@ -560,12 +564,14 @@ function fmStr(v: unknown): string {
 }
 
 /** The slice's default excerpt: focus; missing → first user turn's first line. */
-function sliceExcerpt(raw: string): { excerpt: string; title: string; closed: boolean } {
+function sliceExcerpt(raw: string): { excerpt: string; title: string; closed: boolean; navigation: NonNullable<MemoryEntry["navigation"]> } {
   let focus = "";
+  let summary = "";
   let closed = false;
   try {
     const { data } = matter(raw);
     focus = fmStr(data.focus);
+    summary = fmStr(data.summary);
     closed = data.status === "closed" || Boolean(fmStr(data.closed_by));
   } catch {
     // unparsable header — degrade to the turn fallback
@@ -583,6 +589,11 @@ function sliceExcerpt(raw: string): { excerpt: string; title: string; closed: bo
     excerpt: truncateExcerpt(excerpt),
     title: focus || firstUserLine ? excerpt.split("。")[0] ?? excerpt : "",
     closed,
+    navigation: {
+      kind: "navigation_only",
+      focus: truncateExcerpt(focus),
+      summary: truncateExcerpt(summary),
+    },
   };
 }
 
@@ -598,7 +609,7 @@ async function buildSliceEntry(
   } catch {
     return null;
   }
-  const { excerpt, title, closed } = sliceExcerpt(raw);
+  const { excerpt, title, closed, navigation } = sliceExcerpt(raw);
   const date = sliceId.slice(0, 10);
   return {
     entry: {
@@ -609,6 +620,7 @@ async function buildSliceEntry(
       date,
       excerpt,
       status: closed ? "closed" : "active",
+      navigation,
     },
     activity: date,
   };
@@ -1058,14 +1070,16 @@ export interface RecallSearchInput {
   until?: string;
   /** Default 20, hard cap 30. */
   limit?: number;
-  /** Page start, default 0 — hits before it are skipped (newest-first paging). */
+  /** Page start within this candidate page's hits, default 0. */
   offset?: number;
+  /** Candidate-page cursor returned as nextScanCursor; independent of hit offset. */
+  scanCursor?: number;
 }
 
 /** One searchable document: where it lives, how to build its entry, its sort date. */
 interface SearchUnit {
   docPath: string;
-  /** Set for slice units — slices read through the dual-root core path. */
+  /** Set for slice units — slices read through the records core path. */
   sliceId?: string;
   activity: string;
   /** Slices in the default scope scan only the bounded head, not the body. */
@@ -1212,7 +1226,7 @@ async function gatherSearchUnits(
         // path (category "records", or includeRecords) scans the FULL body.
         sliceHeadOnly: scanSlicesHeads && !scanSlicesFull,
         build: async (raw) => {
-          const { excerpt, title, closed } = sliceExcerpt(raw);
+          const { excerpt, title, closed, navigation } = sliceExcerpt(raw);
           const category: RecallCategory = input.category === "timeline" ? "timeline" : "records";
           return {
             entry: {
@@ -1223,6 +1237,7 @@ async function gatherSearchUnits(
               date,
               excerpt,
               status: closed ? "closed" : "active",
+              navigation,
             },
             activity: date,
           };
@@ -1264,11 +1279,11 @@ export async function recallSearch(
   );
   if (units.length === 0) return { kind: "empty" };
 
-  // Newest-first: the scan cap discards the OLDEST candidates (v0.36 §3.1).
-  units.sort((a, b) => (a.activity >= b.activity ? -1 : 1));
-  const scanned = Math.min(units.length, SEARCH_SCAN_CAP);
-  const truncatedByScan = units.length > SEARCH_SCAN_CAP;
-  const scanUnits = units.slice(0, SEARCH_SCAN_CAP);
+  units.sort((a, b) => b.activity.localeCompare(a.activity) || b.docPath.localeCompare(a.docPath));
+  const scanCursor = Math.min(units.length, Math.max(0, Math.floor(input.scanCursor ?? 0)));
+  const scanEnd = Math.min(units.length, scanCursor + SEARCH_SCAN_CAP);
+  const scanned = scanEnd - scanCursor;
+  const scanUnits = units.slice(scanCursor, scanEnd);
 
   const hits: MemoryEntry[] = [];
   const scannedUnits = await mapWithConcurrency(
@@ -1305,37 +1320,42 @@ export async function recallSearch(
     }
   }
 
-  if (hits.length === 0) {
+  const hasMoreCandidates = scanEnd < units.length;
+  if (hits.length === 0 && !hasMoreCandidates) {
     if (readFailures === scanned) {
       return { kind: "unavailable", note: "every candidate document failed to read" };
     }
-    // No match but the scope has content → the recent list is the fallback.
     const recent = await recallRecent(backend, { category: input.category, n: RECENT_DEFAULT_N });
     const entries = recent.kind === "entries" ? recent.entries : [];
     return { kind: "fallback", reason: "no_match", entries };
   }
 
-  if (offset >= hits.length) {
+  if (offset >= hits.length && hits.length > 0) {
     return {
       kind: "entries",
       entries: [],
       scanned,
-      truncated: truncatedByScan,
+      truncated: hasMoreCandidates,
       offset,
-      pastEnd: true,
+      pastEnd: !hasMoreCandidates,
       total: hits.length,
+      ...(hasMoreCandidates ? { nextScanCursor: scanEnd, nextOffset: 0 } : {}),
+      ...(readFailures > 0 ? { readFailures } : {}),
     };
   }
   const page = hits.slice(offset, offset + limit);
-  const truncatedByLimit = hits.length > offset + page.length;
+  const hasMoreHits = hits.length > offset + page.length;
+  const nextScanCursor = hasMoreHits ? scanCursor : hasMoreCandidates ? scanEnd : undefined;
+  const nextOffset = hasMoreHits ? offset + page.length : 0;
   return {
     kind: "entries",
     entries: page,
     scanned,
-    truncated: truncatedByScan || truncatedByLimit,
-    // Offset rides the result only when the caller actually paged.
+    truncated: nextScanCursor !== undefined,
     ...(input.offset !== undefined ? { offset } : {}),
     total: hits.length,
+    ...(nextScanCursor !== undefined ? { nextScanCursor, nextOffset } : {}),
+    ...(readFailures > 0 ? { readFailures } : {}),
   };
 }
 
@@ -1839,7 +1859,6 @@ function normalizeChangedPath(path: string): string {
 }
 
 const CHANGED_RECORDS_RE = /^memory\/records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\//;
-const CHANGED_LEGACY_RE = /^memory\/episodic\/slices\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\//;
 const CHANGED_CASE_INDEX_RE =
   /^memory\/(people|events|things|places|orgs|research|hypotheses|tasks|self)\/([^/]+)\/index\.md$/;
 const CHANGED_PIECE_RE =
@@ -1861,8 +1880,7 @@ function classifyChangedPath(
   if (path.startsWith("memory/config/") || path === "memory/user/config.json") return null;
   if (path.includes("/attachments/")) return null;
 
-  const records =
-    CHANGED_RECORDS_RE.exec(path) ?? CHANGED_LEGACY_RE.exec(path);
+  const records = CHANGED_RECORDS_RE.exec(path);
   if (records) {
     return {
       ref: `records/${records[1]}-${records[2]}-${records[3]}-${records[4]}`,
@@ -2190,16 +2208,21 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
       // Paging notes (fixed wording): an offset page with more entries behind
       // it tells the model exactly how to continue; otherwise the legacy
       // truncation note applies (both verbs, offset 0).
-      const note = !result.truncated
-        ? ""
-        : result.offset !== undefined
-          ? `\nShowing ${result.entries.length} from offset ${result.offset} — ` +
-            `pass offset=${result.offset + result.entries.length} for older ones.`
-          : `\nShowing the newest ${meta.limit ?? result.entries.length} of ${result.scanned} scanned — narrow by date or add keywords for the older ones.`;
+      const note = result.nextScanCursor !== undefined
+        ? `\nScanned ${result.scanned} candidate file(s); pass scanCursor=${result.nextScanCursor} and offset=${result.nextOffset ?? 0} together to continue. This partial scan is not absence.`
+        : !result.truncated
+          ? ""
+          : result.offset !== undefined
+            ? `\nShowing ${result.entries.length} from offset ${result.offset} — ` +
+              `pass offset=${result.offset + result.entries.length} for older ones.`
+            : `\nShowing the newest ${meta.limit ?? result.entries.length} of ${result.scanned} scanned — narrow by date or add keywords for the older ones.`;
       const matched = result.matchedName
         ? `\n(matched the near-name "${result.matchedName}" — that is the stored name)`
         : "";
-      return lines ? `${head}\n${lines}${note}${matched}` : `${head}${note}${matched}`;
+      const failures = result.readFailures
+        ? `\n${result.readFailures} candidate file(s) could not be read; those reads are gaps, not misses.`
+        : "";
+      return lines ? `${head}\n${lines}${note}${failures}${matched}` : `${head}${note}${failures}${matched}`;
     }
     case "fallback": {
       const head = `Nothing matches "${meta.query ?? ""}". Here are the ${result.entries.length} most recent entries instead:`;

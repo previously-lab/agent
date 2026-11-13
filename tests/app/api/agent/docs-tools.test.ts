@@ -246,9 +246,8 @@ describe("recallSearchExecute", () => {
     expect(out).toMatch(
       /^Nothing matches "绝对不存在的关键词"\. Here are the \d+ most recent entries instead:/,
     );
-    expect(out).toContain("Original conversation");
+    expect(out).toContain("手机选购闲聊 [navigation only; not evidence]");
     expect(out).not.toContain("我想换手机");
-    expect(out).not.toContain("手机选购闲聊");
   });
 
   it("records bodies are scanned only when asked (scan-surface discipline)", async () => {
@@ -264,9 +263,8 @@ describe("recallSearchExecute", () => {
     );
     expect(withRecords).toMatch(/^1 match\(es\) for "深埋关键词":/);
     expect(withRecords).toContain("records/2026-09-05-0900");
-    expect(withRecords).toContain("Original conversation");
+    expect(withRecords).toContain("别的焦点 [navigation only; not evidence]");
     expect(withRecords).not.toContain("企鹅在很后面的正文里");
-    expect(withRecords).not.toContain("别的焦点");
   });
 });
 

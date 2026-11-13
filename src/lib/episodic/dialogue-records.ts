@@ -12,7 +12,7 @@ import { withGitHubReadView, seedGitHubReadHead } from "@/lib/github/read-view";
 import { persistImageAttachments } from "@/lib/tools/attachments";
 import { settleStagedImages } from "@/lib/tools/staged-images";
 import { appendTurn, closeSlice, createSlice, parseSlice, saveSliceSnapshot, tryLoadTodaySlice, writePreviously } from "./manager";
-import { slicePartPath, slicePartPathCandidates } from "./paths";
+import { slicePartPath } from "./paths";
 import { createBatch, flushBatch, fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
 import { withSliceLock } from "./slice-mutex";
 import { deterministicSliceMark } from "./slice-mark";
@@ -51,11 +51,8 @@ async function readOptional(path: string, batch: WriteBatch): Promise<string | n
 }
 
 async function readCore(sliceId: string, batch: WriteBatch): Promise<TimeSlice | null> {
-  for (const path of slicePartPathCandidates(sliceId, "core")) {
-    const raw = await readOptional(path, batch);
-    if (raw !== null) return parseSlice(raw);
-  }
-  return null;
+  const raw = await readOptional(slicePartPath(sliceId, "core"), batch);
+  return raw === null ? null : parseSlice(raw);
 }
 
 function atMinute(timestamp: string, offset = 0): string {
@@ -172,11 +169,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
     const agentText = new Map<string, string>();
     const readAgent = async (sliceId: string): Promise<string> => {
       if (agentText.has(sliceId)) return agentText.get(sliceId)!;
-      for (const path of slicePartPathCandidates(sliceId, "agent")) {
-        const content = await readOptional(path, batch);
-        if (content !== null) return content;
-      }
-      return "";
+      return await readOptional(slicePartPath(sliceId, "agent"), batch) ?? "";
     };
     const appendAgent = async (sliceId: string, line: string) => {
       const old = await readAgent(sliceId);

@@ -371,8 +371,7 @@ function buildHqTools(
       description:
         "Read one round's COMPLETE record in one call — the conversation (core), the field " +
         "agent's thinking and work for that round (agent), and the user-card snapshot of " +
-        "that moment (previously), returned together under labeled sections. Dual-root — " +
-        "older rounds are found under the legacy root. Sees this round's queued writes " +
+        "that moment (previously), returned together under labeled sections from the canonical records root. Sees this round's queued writes " +
         "(read-your-writes): a round you sealed earlier this round reads back sealed. A " +
         "missing side-part (agent / previously) reads as a note inside the result, not a " +
         "failure — only a missing conversation fails the read.",

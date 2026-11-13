@@ -6,7 +6,7 @@ The episodic memory subsystem records, indexes, and recalls conversation history
 
 All internal sub-agent calls — recall search, the unified turn analyze (tag extraction + semantic hint + intent + slice marking), belief evolution (the Previously Agent), strand consolidation, mark backfill — run on the MAIN model through the shared sub-agent runner (`src/lib/agents/sub-agent-runner.ts`, thinking ON at low effort, shared `SHARED_SUBAGENT_BASE` prompt prefix). Single model: everything runs on the selected model — the old worker tier is gone. The main model handles user-facing chat. The core agent only reads memory; writes to tags/strands happen mechanically in the housekeeping step.
 
-File storage is abstracted behind a local-filesystem vs. GitHub API switch, gated on `GITHUB_TOKEN`. All paths are under `memory/episodic/`.
+File storage is abstracted behind a local-filesystem vs. GitHub API switch, gated on `GITHUB_TOKEN`. Original conversation records live only under `memory/records/`; semantic documents and evolution data use their respective `memory/` subtrees. The retired `memory/episodic/slices/` tree is never enumerated, read, or written at runtime. `scripts/migrate-records.mjs` provides an explicit, dry-run-first offline copy path and blocks conflicting slices instead of merging them.
 
 ## File Map
 
@@ -16,10 +16,10 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 | `index.ts` | Barrel export -- re-exports from `manager.ts` and `slicer.ts` |
 | `manager.ts` | Core CRUD: in-memory active slice, path helpers, gray-matter serialization/parsing, turn append, snapshot saves, monthly index and tag index maintenance, previously.md I/O |
 | `slicer.ts` | Slicing decision engine — slice age cap (30 min from slice start) |
-| `maintenance.ts` | Deprecated v1 module — retained as a stub. Sub-agent calls now live in `flash/recall.ts`, `flash/previously-agent.ts`, and `flash/turn-analyzer.ts`. |
+| `maintenance.ts` | Deprecated v1 module — retained as a stub. Sub-agent calls now live in `flash/previously-agent.ts` and `flash/turn-analyzer.ts`; original-conversation recollection lives in `../agents/scenario-recall.ts`. |
 | `actions.ts` | Server actions (`"use server"`) for UI consumption: `getEpisodicState`, `getTimelineCatalog` (full catalog), `getSlicePageWithContent` (catalog-derived cursor pagination WITH turns — v0.10 unified message flow), `getArrivalState` (resume-vs-briefing gate reusing `slicing.idleGapMinutes`), `getSliceContent` (single-slice detail for /timeline and search jumps), previously/agent-timeline readers. |
 | `turn-parser.ts` | Pure functions to parse core.md into frontmatter + parsed turns, apply range filters, reassemble filtered slices |
-| `flash/recall.ts` | Recall sub-agent colleague (main model via the shared runner) — answers natural-language questions about past conversations, reading slices itself (timeline/strands/summaries/full reads, quota-bounded); every situational claim is anchored to verbatim-quote references |
+| `../agents/scenario-recall.ts` | Independent original-conversation recollection colleague (main model via the shared runner). The main agent reads semantic documents directly; this colleague navigates record focus/summary metadata, searches candidates with continuable cursors, reads bounded original-turn views, and returns only host-verified verbatim evidence. Navigation metadata and unverified narrative never become original evidence. |
 | `flash/turn-analyzer.ts` | The one housekeeping sub-agent call (main model via the shared runner): message tags + semantic hint + intent + (on close) slice marking + fitness scoring (Task 7 — per-slice evidence-anchored deltas per bucket, v1.0 §2.5; this slice's mechanical signals are an input) |
 | `flash/global-timeline.ts` | Global timeline file aggregating all slice summaries |
 | `flash/previously-agent.ts` | Previously Agent (main model via the shared sub-agent runner, thinking ON at low effort) — the evolution loop's MERGED run (v1.1): at a slice boundary it evaluates direction.md FIRST (the optional `directionEval` input; moves are ATOMIC direction mutation ops — addPortraitEntry / addHypothesis / promoteHypothesis / … — on a working copy, per-op validated by `applyDirectionOps` with code-stamped `proposed` pointers; the caller runs the whole-doc gate + the engineering hypothesis TTL and applies via `writeDirection`), then edits the user card under the possibly-new portrait through validated MUTATION tools (never a whole-file rewrite); rejected writes come back with compression instructions, the session loop brake force-lands repeated identical rejections, and a step-limit stop returns a PARTIAL card instead of failing. Also owns `writePlaybook` — the gated (triggered-bucket-only) mutation of a sub-agent's playbook |
@@ -45,7 +45,7 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 1. **Create** — `createSlice()` in `manager.ts` is called when the chat route receives a message with no active slice (or after context loss/close). Derives `slice_id` from the UTC date+time of the first message (e.g. `2026-07-07-1558`), creates an in-memory `TimeSlice` with the first turn.
 2. **Extend** — `appendTurn()` adds subsequent turns to the in-memory slice. `saveSliceSnapshot()` writes the slice to disk as a checkpoint every N turns and on `beforeunload`.
 3. **Close** — Triggered by: slice age cap (30 min from slice start), context loss (page refresh / device switch), or turn count cap (safety net). `closeSlice()` sets `status: "closed"`, writes the MD file, updates `_index.json` and `strands.json`. The cycle repeats with a new slice.
-4. **Recover** — `tryLoadTodaySlice()` scans today's directory (`slices/YYYY/MM/DD/`) and re-hydrates the most recent slice still marked `active` on page refresh.
+4. **Recover** — `tryLoadTodaySlice()` scans today's canonical records directory (`memory/records/YYYY/MM/DD/`) and re-hydrates the most recent slice still marked `active` on page refresh.
 
 ### 2. Turn analyze (per turn, in housekeeping)
 
@@ -85,27 +85,24 @@ All defined in `types.ts` unless noted.
 ## File Layout on Disk
 
 ```
-memory/episodic/
-  slices/
-    YYYY/
-      MM/
-        DD/
-          HHMM/
-            timeline/
-              core.md           -- time slice body (YAML frontmatter + turns)
-              agent.md          -- agent cognition log (+ the [doc-marker] mailbox)
-              works/            -- immutable full private dialogue work results linked from agent.md
-            previously.md       -- user-card snapshot (Previously Agent evolution)
-        _index.json             -- monthly index of all slices in this month
-  strands.json                  -- the strand index: strand (keyword) -> slice paths
-  strands/                      -- LEGACY strand entity files (read-only fallback;
-                                  new homes live in memory/docs/topic/)
-  timeline.md                   -- global timeline (all slice summaries)
+memory/records/
+  YYYY/
+    MM/
+      DD/
+        HHMM/
+          core.md               -- original conversation (YAML frontmatter + turns)
+          agent.md              -- agent cognition log (+ the [doc-marker] mailbox)
+          previously.md         -- user-card snapshot (Previously Agent evolution)
+          works/                -- immutable full private dialogue work results linked from agent.md
 memory/docs/                    -- the v0.15 document system (see src/lib/docs/CLAUDE.md)
   topic/<名字>.md               -- topic homes (主题之家): one per strand
   research/ hypothesis/ task/   -- L3 working documents (scribe + research pass)
   event/ person/ object/ place/ org/  -- L2 entity documents
 ```
+
+`memory/records/` is the sole original-record root. Runtime readers enumerate
+this tree directly; no monthly index, global timeline projection, or retired
+slices-root fallback participates in reads or writes.
 
 The v1.0 evolution data layer (design §2, `src/lib/evolution/`) adds two more
 locations OUTSIDE `memory/episodic/`:

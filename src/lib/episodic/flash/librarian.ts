@@ -1622,8 +1622,6 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
 
   let agentMd: string;
   try {
-    // Dual-root read (v0.19 R2): the mailbox of a slice created before the
-    // root move lives under the legacy slices root.
     agentMd = await readSlicePart(sliceId, "agent", batch);
   } catch {
     return { ran: false, written: [], skipped }; // no agent.md yet — nothing to pick up
@@ -1829,10 +1827,8 @@ Report one entry per marker as instructed.`;
   // agent.md, so the next pass (any stream) never double-writes them.
   if (recordLines.length > 0) {
     try {
-      // Dual-root read (the slice may predate the root move), and the record
-      // append goes back to the root the mailbox was actually read from —
-      // splitting markers (legacy) from records (new) would re-process every
-      // marker on the next pass.
+      // Read and append through the canonical records path so processing marks
+      // stay beside their source markers.
       const resolved = await readSlicePartResolved(sliceId, "agent", batch).catch(() => null);
       const fresh = resolved?.content ?? "";
       const next = fresh.trimEnd()

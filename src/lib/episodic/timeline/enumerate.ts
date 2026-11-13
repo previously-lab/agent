@@ -20,29 +20,20 @@ import { getRepoTree } from "@/lib/tools/readFile";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { fsListFiles } from "../io-helpers";
 import { walkPathsLocal } from "@/lib/tools/local-fs";
-import { RECORDS_ROOT, LEGACY_SLICES_ROOT } from "../paths";
+import { RECORDS_ROOT } from "../paths";
 
 /** A slice relative path segment: "2026/08/11/1115". */
 export const SLICE_PATH_RE = /^(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})$/;
 
-/**
- * Enumerate all slice dirs under BOTH roots (v0.19 R2 dual-root): the new
- * records root and the legacy slices root, merged and deduped — the live
- * enumeration spans the root move.
- */
+/** Enumerate slice directories from the canonical records root only. */
 export async function enumerateSliceIds(): Promise<string[]> {
   const source = resolveDataSource();
-  const ids = new Set<string>();
-  for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT]) {
-    const list =
-      source === "github"
-        ? await enumerateGithubTree(root)
-        : source === "local"
-          ? await enumerateSliceIdsLocal(root)
-          : await enumerateViaList(root);
-    for (const id of list) ids.add(id);
-  }
-  return [...ids];
+  const ids = source === "github"
+    ? await enumerateGithubTree(RECORDS_ROOT)
+    : source === "local"
+      ? await enumerateSliceIdsLocal(RECORDS_ROOT)
+      : await enumerateViaList(RECORDS_ROOT);
+  return [...new Set(ids)];
 }
 
 /**
@@ -123,8 +114,7 @@ async function walkViaList(root: string, maxEntries = 50_000): Promise<string[]>
 
 async function enumerateGithubTree(root: string): Promise<string[]> {
   const { owner, repo } = getRepoConfig();
-  // The cached memory/ tree (Wave A). Both callers' roots (records + legacy
-  // slices) live under memory/, so the cached tree always covers them.
+  // The cached memory/ tree always covers the canonical records root.
   const tree = await getRepoTree(repo, owner);
   if (tree.truncated) {
     // A truncated tree is incomplete; fall back to the per-directory walk

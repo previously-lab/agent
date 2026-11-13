@@ -16,7 +16,7 @@
  * agent's tools.
  */
 import {
-  slicePartPathCandidates,
+  slicePartPath,
   type SlicePart,
 } from "@/lib/episodic";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
@@ -71,8 +71,7 @@ export async function buildRunManifest(): Promise<CaseWriterManifest> {
 }
 
 /**
- * Card-evolution readers for a background run — the same dual-root probes
- * the turn path's buildCardReaders does, but on the env-driven io layer
+ * Card-evolution readers for a background run on the env-driven io layer
  * (a background run carries no TurnInput backend flags).
  *
  * The round's batch rides every read (v0.37 §5 — read-your-writes): a slice
@@ -80,27 +79,21 @@ export async function buildRunManifest(): Promise<CaseWriterManifest> {
  * and any queued write is visible to the card agent.
  */
 export function buildRunCardReaders(batch?: WriteBatch): CardEvolutionReaders {
-  const readDual = async (sliceId: string, part: SlicePart): Promise<string> => {
-    const [primary, fallback] = slicePartPathCandidates(sliceId, part);
-    try {
-      return await fsReadFile(primary, batch);
-    } catch {
-      return fsReadFile(fallback, batch);
-    }
-  };
+  const readRecord = async (sliceId: string, part: SlicePart): Promise<string> =>
+    fsReadFile(slicePartPath(sliceId, part), batch);
   return {
     readSlice: async (sid, range) => {
       if (!parseSliceId(sid)) return `ERROR: Invalid slice ID.`;
-      const raw = await readDual(sid, "core");
+      const raw = await readRecord(sid, "core");
       return renderAttributedRecord(`records/${sid}`, raw, range);
     },
     readAgentTimeline: async (sid) => {
       if (!parseSliceId(sid)) return `(invalid slice: ${sid})`;
-      return readDual(sid, "agent").catch(() => `(agent.md not found: ${sid})`);
+      return readRecord(sid, "agent").catch(() => `(agent.md not found: ${sid})`);
     },
     readPreviously: async (sid) => {
       if (!parseSliceId(sid)) return `(invalid slice: ${sid})`;
-      return readDual(sid, "previously").catch(
+      return readRecord(sid, "previously").catch(
         () => `(previously not found: ${sid})`,
       );
     },

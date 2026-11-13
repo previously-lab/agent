@@ -81,11 +81,10 @@ describe("local arrival without a Git repository", () => {
     expect(fs.existsSync(join(fixtureRoot, "memory", ".git"))).toBe(false);
   });
 
-  it("resumes the legacy repo-local directory without migration or git", async () => {
-    seed(join(fixtureRoot, "memory"), legacyCore, "Legacy local fixture");
+  it("resumes the canonical repo-local directory without migration or git", async () => {
+    seed(join(fixtureRoot, "memory"), newCore, "Canonical local fixture");
     const state = await arrival();
-    expect(state).toMatchObject({ mode: "resume", sliceId, turns: [{ content: "Legacy local fixture" }] });
-    expect(fs.existsSync(join(fixtureRoot, "memory", newCore))).toBe(false);
+    expect(state).toMatchObject({ mode: "resume", sliceId, turns: [{ content: "Canonical local fixture" }] });
   });
 
   it("prefers the new record when both layouts contain the same slice", async () => {
@@ -99,12 +98,12 @@ describe("local arrival without a Git repository", () => {
     const clientHome = join(fixtureRoot, "client-home");
     seed(join(fixtureRoot, "memory"), newCore, "Wrong checkout memory");
     seed(join(clientHome, "memory"), newCore, "Wrong client home memory");
-    seed(selected, legacyCore, "Explicit legacy memory");
+    seed(selected, newCore, "Explicit canonical memory");
     vi.stubEnv("MEMORY_ROOT", selected);
     vi.stubEnv("PREVIOUSLY_HOME", clientHome);
     vi.stubEnv("PREVIOUSLY_MODE", "client");
-    expect(await arrival("alice")).toMatchObject({ mode: "resume", turns: [{ content: "Explicit legacy memory" }] });
-    expect(await arrival("bob")).toMatchObject({ mode: "resume", turns: [{ content: "Explicit legacy memory" }] });
+    expect(await arrival("alice")).toMatchObject({ mode: "resume", turns: [{ content: "Explicit canonical memory" }] });
+    expect(await arrival("bob")).toMatchObject({ mode: "resume", turns: [{ content: "Explicit canonical memory" }] });
   });
 
   it("does not fall back from an empty configured root to checkout, home, or GitHub", async () => {
@@ -121,7 +120,8 @@ describe("local arrival without a Git repository", () => {
     expect(remote.demo).not.toHaveBeenCalled();
   });
 
-  it.each(["records", "episodic/slices"])("does not hide an invalid %s directory as empty memory", async (relative) => {
+  it("does not hide an invalid records directory as empty memory", async () => {
+    const relative = "records";
     const file = join(fixtureRoot, "memory", relative);
     fs.mkdirSync(dirname(file), { recursive: true });
     fs.writeFileSync(file, "Fixture: a file where a directory is required", "utf8");

@@ -93,7 +93,7 @@ const model: ModelConfig = {
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
-const AGENT_MD = "memory/episodic/slices/2026/08/09/1300/timeline/agent.md";
+const AGENT_MD = "memory/records/2026/08/09/1300/agent.md";
 const EXCERPT = { focus: "f", summary: "s", turnsExcerpt: "用户: 深查一下手机话题" };
 const MANIFEST = { truncated: false, tree: { research: ["research/已有调研/index.md"] } };
 

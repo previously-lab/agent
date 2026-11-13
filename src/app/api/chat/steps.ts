@@ -71,12 +71,11 @@ import {
   flushBatch,
   analyzeTurn,
   sliceIdToFilePath,
-  slicePartPathCandidates,
+  slicePartPath,
   readSlicePart,
   parseSlice,
   loadSlice,
   RECORDS_ROOT,
-  LEGACY_SLICES_ROOT,
   type SlicePart,
   type TimeSlice,
   type SlicingSignal,
@@ -359,40 +358,31 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
     if (input.useGithub) return readFile(path, input.repo, input.owner);
     return readFileLocal(path);
   };
-  /** Dual-probe the records root, then the legacy slices root. */
-  const readSliceDual = async (
+  const readRecord = async (
     parsed: { y: string; m: string; d: string; hm: string },
     part: SlicePart,
-  ): Promise<string> => {
-    const [primary, fallback] = slicePartPathCandidates(
-      `${parsed.y}-${parsed.m}-${parsed.d}-${parsed.hm}`,
-      part,
-    );
-    try {
-      return await readRaw(primary);
-    } catch {
-      return readRaw(fallback);
-    }
-  };
+  ): Promise<string> => readRaw(slicePartPath(
+    `${parsed.y}-${parsed.m}-${parsed.d}-${parsed.hm}`,
+    part,
+  ));
   return {
     readSlice: async (sid, range) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `ERROR: Invalid slice ID.`;
-      // Dual-root (v0.19 R2): the cited slice may predate the records root move.
-      const raw = await readSliceDual(parsed, "core");
+      const raw = await readRecord(parsed, "core");
       return renderAttributedRecord(`records/${sid}`, raw, range);
     },
     readAgentTimeline: async (sid) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `(invalid slice: ${sid})`;
-      return readSliceDual(parsed, "agent").catch(
+      return readRecord(parsed, "agent").catch(
         () => `(agent.md not found: ${sid})`,
       );
     },
     readPreviously: async (sid) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `(invalid slice: ${sid})`;
-      return readSliceDual(parsed, "previously").catch(
+      return readRecord(parsed, "previously").catch(
         () => `(previously not found: ${sid})`,
       );
     },
@@ -499,28 +489,23 @@ function toPrevRef(s: TimeSlice): PrevSliceRef {
 // ─── Disk scans (no projections — v0.19 A1) ───────────────────────────────
 
 /**
- * Slice ids (dashed, newest first) living in TODAY's and YESTERDAY's day
- * dirs under BOTH roots — the bounded scan window every disk scan here
- * shares (same discipline as tryLoadTodaySlice: a cross-UTC-midnight
- * conversation lives in yesterday's dir).
+ * Slice ids (dashed, newest first) in today's and yesterday's records dirs.
  */
 async function listRecentDaySliceIds(): Promise<string[]> {
   const now = new Date();
   const ids = new Set<string>();
   for (const d of [now, new Date(now.getTime() - 86_400_000)]) {
-    for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT] as const) {
-      const dayDir = dayDirForDate(root, d);
-      let entries: Awaited<ReturnType<typeof fsListFiles>>;
-      try {
-        entries = await fsListFiles(dayDir);
-      } catch {
-        continue; // missing year/month/day level — nothing there
-      }
-      const rel = dayDir.slice(root.length + 1); // YYYY/MM/DD
-      for (const e of entries) {
-        if (e.type === "dir" && /^\d{4}$/.test(e.name)) {
-          ids.add(`${rel.replace(/\//g, "-")}-${e.name}`);
-        }
+    const dayDir = dayDirForDate(RECORDS_ROOT, d);
+    let entries: Awaited<ReturnType<typeof fsListFiles>>;
+    try {
+      entries = await fsListFiles(dayDir);
+    } catch {
+      continue;
+    }
+    const rel = dayDir.slice(RECORDS_ROOT.length + 1);
+    for (const e of entries) {
+      if (e.type === "dir" && /^\d{4}$/.test(e.name)) {
+        ids.add(`${rel.replace(/\//g, "-")}-${e.name}`);
       }
     }
   }

@@ -3,10 +3,8 @@
  * needs: how many slices exist, and when the last conversation left off.
  *
  * Read path (v0.19 R3b / §A.2.4): LIVE ENUMERATION, no projection. The slice
- * set is enumerated from the tree (`enumerateSliceIds`, dual-root — the new
- * records root plus the legacy slices root, one GitHub Trees call or a local
- * walk), and only the newest few slice files are point-read (`loadSlice`,
- * dual-root via `readSlicePart`). The retired `timeline/index.json` projection
+ * set is enumerated from the canonical records tree (`enumerateSliceIds`), and
+ * only the newest few slice files are point-read (`loadSlice`). The retired `timeline/index.json` projection
  * is never consulted. No cache, no store of its own.
  *
  * One judgement call: the recap follows the NEWEST slice that actually holds

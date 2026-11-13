@@ -17,20 +17,21 @@ export function documentSize(text: string): DocumentSize {
 export function exceededSize(size: DocumentSize, limits = DOCUMENT_LIMITS): (keyof DocumentSize)[] {
   return (Object.keys(limits) as (keyof DocumentSize)[]).filter((key) => size[key] > limits[key]);
 }
-/** Exact storage grammar, including date-only legacy slices; substring matches are unsafe. */
+/** Exact canonical storage grammar, including date-only ids; substring matches are unsafe. */
 export function isConversationRecordPath(path: string): boolean {
   // Uploaded source bytes belong to the record, not the authored-document lane.
-  const attachment = /^(memory\/(?:records|episodic\/slices)\/\d{4}\/\d{2}\/\d{2}(?:\/\d{4})?)\/attachments\/[^/\\]+$/.exec(path);
-  if (attachment) return isConversationRecordPath(`${attachment[1]}/${path.startsWith("memory/episodic/") ? "timeline/" : ""}core.md`);
-  const match = /^(?:memory\/records\/(\d{4})\/(\d{2})\/(\d{2})(?:\/(\d{4}))?\/(?:core|agent|previously)\.md|memory\/episodic\/slices\/(\d{4})\/(\d{2})\/(\d{2})(?:\/(\d{4}))?\/(?:timeline\/(?:core|agent)|previously)\.md)$/.exec(path);
+  const attachment = /^(memory\/records\/\d{4}\/\d{2}\/\d{2}(?:\/\d{4})?)\/attachments\/[^/\\]+$/.exec(path);
+  if (attachment) return isConversationRecordPath(`${attachment[1]}/core.md`);
+  const match = /^memory\/records\/(\d{4})\/(\d{2})\/(\d{2})(?:\/(\d{4}))?\/(?:core|agent|previously)\.md$/.exec(path);
   if (!match) return false;
-  const [year, month, day, time] = match[1] ? match.slice(1, 5) : match.slice(5, 9);
+  const [year, month, day, time] = match.slice(1, 5);
   const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === `${year}-${month}-${day}` &&
     (!time || (Number(time.slice(0, 2)) < 24 && Number(time.slice(2)) < 60));
 }
 export function isAuthoredDocumentPath(path: string): boolean {
-  return path.startsWith("memory/") && /\.md$/i.test(path) && !isConversationRecordPath(path);
+  return path.startsWith("memory/") && !path.startsWith("memory/episodic/") &&
+    /\.md$/i.test(path) && !isConversationRecordPath(path);
 }
 export class DocumentFullRefusal extends WriteRefusal {
   readonly details: { path: string; current: DocumentSize | null; candidate: DocumentSize;

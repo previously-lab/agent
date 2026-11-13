@@ -112,7 +112,7 @@ const model: ModelConfig = {
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
-const AGENT_MD = `memory/episodic/slices/2026/08/09/1300/timeline/agent.md`;
+const AGENT_MD = `memory/records/2026/08/09/1300/agent.md`;
 
 const EXCERPT = {
   focus: "挑手机",

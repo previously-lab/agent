@@ -209,7 +209,7 @@ export async function fsReadFile(
    * a read-modify-append, a conflict self-heal — a cached base is not a
    * performance question but a correctness one: the result is computed from a
    * copy that may be hours old, and everything that landed in between is
-   * silently dropped. The TTL for `memory/episodic/slices/**` is 24 hours, so
+   * silently dropped. The TTL for `memory/records/**` is 24 hours, so
    * "hours old" is literal rather than rhetorical.
    *
    * Nothing else needs it. A read that only DISPLAYS is safe to serve slightly

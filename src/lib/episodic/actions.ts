@@ -7,7 +7,7 @@ import { getUserName } from "@/lib/identity";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { parseSlice, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
-import { readSlicePart, sliceIdToRelPath, slicePartPathCandidates } from "./paths";
+import { readSlicePart, sliceIdToRelPath, slicePartPath } from "./paths";
 import { getRepoTree } from "@/lib/tools/readFile";
 import { withGitHubReadBudget } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
@@ -86,7 +86,7 @@ export interface EpisodicState {
 // `_index.json`): the slice set is ENUMERATED live from the tree (one GitHub
 // Trees call, or a recursive local walk — `timeline/enumerate.ts`), and only
 // the slices inside the requested window get their headers point-read
-// (`sliceEntryFromDisk`, dual-root via `readSlicePart`). The Data Cache's HTTP
+// (`sliceEntryFromDisk` via `readSlicePart`). The Data Cache's HTTP
 // read cache is what absorbs repeat header reads — it is a read cache, not a
 // stored projection.
 
@@ -104,7 +104,7 @@ async function listLiveSliceIds(): Promise<string[]> {
   return rels.map(relPathToSliceId).sort();
 }
 
-/** Point-read one slice's header into a catalog-shaped entry (dual-root). */
+/** Point-read one slice's header into a catalog-shaped entry. */
 async function readLiveEntry(id: string): Promise<TimelineSliceEntry | null> {
   return sliceEntryFromDisk(sliceIdToRelPath(id));
 }
@@ -617,10 +617,8 @@ const FRAME_TURN_CHARS = 280;
 
 /**
  * The previously.md leg's tree-existence guard (Wave B, audit §4.3): on
- * GitHub the cached repo tree answers "does EITHER root hold the file" with
- * zero API calls, so a slice without a previously.md never pays the
- * dual-root probe's misses (which errors-are-never-cached made permanent —
- * re-paid on every open, forever). Unknown tree state (a truncated listing,
+ * GitHub the cached repo tree answers whether the records root holds the file
+ * with zero API calls. Unknown tree state (a truncated listing,
  * a fetch failure) means "probe as before": the reads then answer for
  * themselves. The local and demo backends always probe — a miss there is a
  * local stat or a demo-fs lookup, not an API call.
@@ -631,9 +629,7 @@ async function hasPreviouslyOnDisk(sliceId: string): Promise<boolean> {
   const tree = await getRepoTree(repo, owner).catch(() => null);
   if (!tree || tree.truncated) return true;
   const paths = new Set(tree.entries.map((e) => e.path));
-  return slicePartPathCandidates(sliceId, "previously").some((p) =>
-    paths.has(p),
-  );
+  return paths.has(slicePartPath(sliceId, "previously"));
 }
 
 /** Cut at a word boundary near the limit and strip trailing punctuation so
@@ -669,8 +665,7 @@ export async function getSliceContent(
   if (persona) setDemoPersona(persona);
   const full = options?.full === true;
   try {
-    // core slice body (dual-root: new records root first, legacy slices root
-    // on a miss) + previously.md ride in PARALLEL — they don't depend
+    // Core body and previously.md ride in PARALLEL — they don't depend
     // on each other, and serializing them doubled the card-open latency.
     // The previously leg fires only when the tree-existence guard says the
     // file is there (Wave B); a missing previously.md is normal (not every

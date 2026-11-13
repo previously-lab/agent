@@ -36,7 +36,6 @@ function strArr(v: unknown): string[] {
 export async function sliceEntryFromDisk(relPath: string, batch?: WriteBatch): Promise<TimelineSliceEntry | null> {
   const [y, m, d, hm] = relPath.split("/");
   try {
-    // Dual-root (v0.19 R2): new records root first, legacy slices root on a miss.
     const raw = await readSlicePart(relPath.split("/").join("-"), "core", batch);
     const { data } = matter(raw);
     // parseTurns handles the frontmatter itself — pass the full file.

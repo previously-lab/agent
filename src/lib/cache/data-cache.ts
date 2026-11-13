@@ -146,9 +146,6 @@ export const CACHE_TTLS = {
   UNCACHED: 0,
 } as const;
 
-/** `memory/episodic/slices/YYYY/MM/_index.json` — see `ttlForPath`. */
-const MONTHLY_INDEX = /^memory\/episodic\/slices\/\d{4}\/\d{2}\/_index\.json$/;
-
 /**
  * Which transport the `demo` backend is reading its dataset through. The two
  * are the same repository and the same read-only contract FOR THIS APP, but
@@ -212,26 +209,9 @@ export function ttlForPath(
 
   // ── github: the per-path memory-file classes ──
   const normalized = path.replace(/\\/g, "/");
-  // The MONTHLY index is a RETIRED projection (v0.19 §A.2.4 — nothing writes
-  // `_index.json` anymore; readers live-enumerate the records tree). This
-  // rule remains only for legacy files still on disk: it used to fall
-  // through to the closed-slice rule below, which is up to 24 hours of
-  // staleness on a file the design called mutable, so it is matched FIRST.
-  if (MONTHLY_INDEX.test(normalized)) {
-    return CACHE_TTLS.TIMELINE_INDEX_SECONDS;
-  }
-  // BOTH slice roots (v0.19 R2 dual-root): the legacy `episodic/slices/`
-  // tree AND the current `records/` tree. The records root was missing from
-  // this table until Wave A (audit §3.1) — its files fell through to
-  // MEMORY_DEFAULT, so immutable closed slices were re-fetched every 300s
-  // instead of resting on the 24h staleness bound the closed-slice contract
-  // intends. The active slice's files ARE rewritten mid-turn, but every such
-  // write rides our write path and revalidates the file's tag; the TTL only
-  // ever bounds pushes that bypass us, exactly as on the legacy root.
-  if (
-    normalized.startsWith("memory/episodic/slices/") ||
-    normalized.startsWith("memory/records/")
-  ) {
+  // Active record writes revalidate the file tag; this TTL bounds only pushes
+  // that bypass the application write path.
+  if (normalized.startsWith("memory/records/")) {
     return CACHE_TTLS.CLOSED_SLICE_SECONDS;
   }
   if (normalized === "memory/episodic/timeline/index.json") {

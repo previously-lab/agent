@@ -129,7 +129,7 @@ import {
 } from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
-import { slicePartPathCandidates } from "@/lib/episodic";
+import { slicePartPath } from "@/lib/episodic";
 import { buildDateAnchors } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { loadUserConfig } from "@/lib/config/loader";
@@ -415,6 +415,7 @@ export async function recallSearchExecute(
     until?: string;
     limit?: number;
     offset?: number;
+    scanCursor?: number;
   },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
@@ -443,6 +444,7 @@ export async function recallSearchExecute(
     ...(input.until ? { until: input.until } : {}),
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
+    ...(input.scanCursor !== undefined ? { scanCursor: input.scanCursor } : {}),
   });
   return renderRecallResult(publicRecallResult(result), {
     query: keywords.join(" "),
@@ -761,15 +763,8 @@ async function appendDocMarker(
   let existing = "";
   try {
     // fresh: read-modify-append — a cached base would silently drop markers
-    // other steps landed in between (io-helpers contract). Dual-root (v0.19
-    // R2): the mailbox of a slice created before the root move lives under
-    // the legacy slices root; the append below always writes the new root.
-    const [primary, fallback] = slicePartPathCandidates(ctx.sliceId, "agent");
-    try {
-      existing = await fsReadFile(primary, undefined, { fresh: true });
-    } catch {
-      existing = await fsReadFile(fallback, undefined, { fresh: true });
-    }
+    // other steps landed in between (io-helpers contract).
+    existing = await fsReadFile(slicePartPath(ctx.sliceId, "agent"), undefined, { fresh: true });
   } catch {
     // no agent.md yet — this line opens it
   }

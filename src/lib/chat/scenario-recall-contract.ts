@@ -7,6 +7,8 @@ export const scenarioRecallRequestSchema = z.object({
     .describe("Up to four known original conversation refs. Omit to let recollection locate scenarios. Semantic documents are outside this tool."),
   after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date lower bound, YYYY-MM-DD. Omit when uncertain."),
   before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date upper bound, YYYY-MM-DD. Omit when uncertain."),
+  cursor: z.string().regex(/^records\/\d{4}-\d{2}-\d{2}-\d{4}$/).optional()
+    .describe("Exclusive continuation cursor returned as coverage.nextCursor. Repeat the same question and date window to scan older records; omit for the newest page."),
 }).strict();
 
 export type ScenarioRecallRequest = z.infer<typeof scenarioRecallRequestSchema>;
@@ -32,9 +34,7 @@ export function canonicalConversationRecordRef(value: unknown): string | null {
 
   const current = /(?:^|\/)memory\/records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})(?:\/(?:core|agent|previously))?$/.exec(ref)
     ?? /(?:^|\/)records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})(?:\/(?:core|agent|previously))?$/.exec(ref);
-  const legacy = /(?:^|\/)memory\/episodic\/slices\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})(?:\/timeline(?:\/(?:core|agent|previously))?)?$/.exec(ref);
-  const match = current ?? legacy;
-  return match ? `records/${match[1]}-${match[2]}-${match[3]}-${match[4]}` : null;
+  return current ? `records/${current[1]}-${current[2]}-${current[3]}-${current[4]}` : null;
 }
 
 export function createConversationRecordReadRedirect(value: unknown): ConversationRecordReadRedirect | null {
@@ -52,17 +52,25 @@ export function withoutConversationEntryContent<T extends {
   category: string;
   title: string;
   excerpt: string;
+  navigation?: { kind: "navigation_only"; focus: string; summary: string };
 }>(entry: T): T {
-  return entry.category === "records" || canonicalConversationRecordRef(entry.ref)
-    ? { ...entry, title: "Original conversation", excerpt: "" }
-    : entry;
+  if (entry.category !== "records" && entry.category !== "timeline" && !canonicalConversationRecordRef(entry.ref)) return entry;
+  const focus = entry.navigation?.focus.trim();
+  const summary = entry.navigation?.summary.trim();
+  return {
+    ...entry,
+    title: `${focus || "Original conversation"} [navigation only; not evidence]`,
+    excerpt: summary ? `${summary} [navigation only; not evidence]` : "",
+  };
 }
 
 /** Replace only record rows in the facade's fixed, single-line rendering. */
 export function withoutReplayedConversationEntryContent(value: string): string {
   return value.split("\n").map((line) => {
-    const match = /^- \[([^\]]+)\].*\(ref: (records\/\d{4}-\d{2}-\d{2}-\d{4})\)$/.exec(line);
-    return match ? `- [${match[1]}] Original conversation (ref: ${match[2]})` : line;
+    const match = /^- \[([^\]]+)\] ([\s\S]*) \(ref: (records\/\d{4}-\d{2}-\d{2}-\d{4})\)$/.exec(line);
+    if (!match) return line;
+    const title = match[2]!.split(" — ")[0] || "Original conversation";
+    return `- [${match[1]}] ${title} [navigation only; not evidence] (ref: ${match[3]})`;
   }).join("\n");
 }
 

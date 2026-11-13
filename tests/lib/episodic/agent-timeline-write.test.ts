@@ -5,8 +5,8 @@
  * already inside the turn's slice lock (persistAgentTurn), so the lock must
  * NOT be re-taken there (same-key self-deadlock).
  *
- * io-helpers and slice-mutex are mocked; paths.ts stays real so the dual-root
- * probe order and the write target are exercised.
+ * io-helpers and slice-mutex are mocked; paths.ts stays real so the canonical
+ * read and write target are exercised.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -34,8 +34,6 @@ import { writeAgentTimeline } from "@/lib/episodic/manager";
 
 const SLICE = "2026-08-09-1300";
 const AGENT_PATH = "memory/records/2026/08/09/1300/agent.md";
-const LEGACY_AGENT_PATH =
-  "memory/episodic/slices/2026/08/09/1300/timeline/agent.md";
 
 beforeEach(() => {
   io.fsReadFile.mockReset();
@@ -51,11 +49,8 @@ describe("writeAgentTimeline — locked fresh read-modify-write", () => {
 
     expect(mutex.withSliceLock).toHaveBeenCalledTimes(1);
     expect(mutex.withSliceLock).toHaveBeenCalledWith(SLICE, expect.any(Function));
-    // Both probe reads are fresh; the write target is the new root.
-    expect(io.fsReadFile).toHaveBeenNthCalledWith(1, AGENT_PATH, undefined, {
-      fresh: true,
-    });
-    expect(io.fsReadFile).toHaveBeenNthCalledWith(2, LEGACY_AGENT_PATH, undefined, {
+    expect(io.fsReadFile).toHaveBeenCalledTimes(1);
+    expect(io.fsReadFile).toHaveBeenCalledWith(AGENT_PATH, undefined, {
       fresh: true,
     });
     expect(io.fsWriteFile).toHaveBeenCalledWith(AGENT_PATH, "NEW ENTRY", undefined);
@@ -68,9 +63,9 @@ describe("writeAgentTimeline — locked fresh read-modify-write", () => {
     );
   });
 
-  it("appends onto the existing content (seeded by the legacy root on a new-root miss)", async () => {
+  it("appends onto existing canonical content", async () => {
     io.fsReadFile.mockImplementation(async (path: string) => {
-      if (path === LEGACY_AGENT_PATH) return "old line\n";
+      if (path === AGENT_PATH) return "old line\n";
       throw new Error("not found");
     });
 

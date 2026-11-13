@@ -54,8 +54,8 @@ import {
 } from "@/app/api/companion/tools";
 
 const SLICE_ID = "2026-07-28-0658";
-const SLICE_CORE_PATH =
-  "memory/episodic/slices/2026/07/28/0658/timeline/core.md";
+const SLICE_CORE_PATH = "memory/records/2026/07/28/0658/core.md";
+const RETIRED_CORE_PATH = "memory/episodic/slices/2026/07/28/0658/timeline/core.md";
 
 const SLICE_FIXTURE = `---
 slice_id: 2026-07-28-0658
@@ -173,9 +173,8 @@ describe("companion readTimeline", () => {
     expect(result.timezoneNote).toContain("localStart");
   });
 
-  it("merges both roots so a month straddling the root move reads whole", async () => {
-    // One slice still on the legacy layout, one on the new records root.
-    files.set(SLICE_CORE_PATH, SLICE_FIXTURE);
+  it("ignores retired roots when enumerating a month", async () => {
+    files.set(RETIRED_CORE_PATH, SLICE_FIXTURE);
     files.set(
       "memory/records/2026/07/29/1015/core.md",
       SLICE_FIXTURE.replaceAll("2026-07-28-0658", "2026-07-29-1015")
@@ -188,10 +187,7 @@ describe("companion readTimeline", () => {
       month: 7,
     }, EXEC_OPTS)) as { exists: boolean; slices: Array<{ id: string }> };
     expect(result.exists).toBe(true);
-    expect(result.slices.map((s) => s.id)).toEqual([
-      "2026-07-28-0658",
-      "2026-07-29-1015",
-    ]);
+    expect(result.slices.map((s) => s.id)).toEqual(["2026-07-29-1015"]);
   });
 
   it("degrades to an empty month when nothing exists", async () => {

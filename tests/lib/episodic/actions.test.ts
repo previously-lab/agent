@@ -67,18 +67,8 @@ vi.mock("@/lib/episodic/paths", () => ({
   readSlicePart: mocks.readSlicePart,
   // Faithful to the real converter: "2026-08-11-1001" → "2026/08/11/1001".
   sliceIdToRelPath: (id: string) => id.split("-").slice(0, 4).join("/"),
-  // Faithful dual-root candidates (paths.ts): new root first, legacy on a
-  // miss — the legacy previously.md sits directly in the slice dir while the
-  // other parts live under timeline/.
-  slicePartPathCandidates: (id: string, part: string) => {
-    const rel = id.split("-").slice(0, 4).join("/");
-    return [
-      `memory/records/${rel}/${part}.md`,
-      part === "previously"
-        ? `memory/episodic/slices/${rel}/previously.md`
-        : `memory/episodic/slices/${rel}/timeline/${part}.md`,
-    ];
-  },
+  slicePartPath: (id: string, part: string) =>
+    `memory/records/${id.split("-").slice(0, 4).join("/")}/${part}.md`,
 }));
 
 vi.mock("@/lib/config/loader", () => ({
@@ -561,7 +551,7 @@ describe("getSliceContent", () => {
     });
   }
 
-  it("skips the previously read when neither root holds the file", async () => {
+  it("skips the previously read when the canonical root does not hold the file", async () => {
     seedRead(1);
     seedGithubTree(["memory/records/2026/08/11/1000/core.md"]);
 
@@ -572,11 +562,11 @@ describe("getSliceContent", () => {
     expect(mocks.readPreviously).not.toHaveBeenCalled();
   });
 
-  it("reads previously.md when the tree carries it — on the LEGACY root too", async () => {
+  it("reads previously.md only when the canonical tree carries it", async () => {
     seedRead(1);
     seedGithubTree([
       "memory/records/2026/08/11/1000/core.md",
-      "memory/episodic/slices/2026/08/11/1000/previously.md",
+      "memory/records/2026/08/11/1000/previously.md",
     ]);
 
     const content = await getSliceContent("2026-08-11-1000");

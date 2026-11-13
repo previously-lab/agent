@@ -27,9 +27,8 @@ import {
 import { annotateSliceWithLocalTime } from "@/lib/episodic/time-localize";
 import { projectRecordArtifactTranscript } from "@/lib/episodic/record-attribution";
 import {
-  slicePartPathCandidates,
+  slicePartPath,
   RECORDS_ROOT,
-  LEGACY_SLICES_ROOT,
 } from "@/lib/episodic/paths";
 import { formatLocalTime } from "@/lib/turn-priming";
 
@@ -90,23 +89,14 @@ function domainError(e: unknown): string | null {
     : null;
 }
 
-/**
- * Read a slice's core.md — dual-root (v0.19 R2): the new records root first,
- * the legacy slices root on a miss. Returns null for an invalid slice id;
- * throws when neither root holds the file.
- */
-async function readSliceCoreDual(
+/** Read a core record from the canonical records root. */
+async function readSliceCore(
   ctx: CompanionToolContext,
   sliceId: string,
 ): Promise<string | null> {
   const parsed = parseSliceId(sliceId);
   if (!parsed) return null;
-  const [primary, fallback] = slicePartPathCandidates(sliceId, "core");
-  try {
-    return await readMemoryFile(ctx, primary);
-  } catch {
-    return readMemoryFile(ctx, fallback);
-  }
+  return readMemoryFile(ctx, slicePartPath(sliceId, "core"));
 }
 
 /**
@@ -129,7 +119,7 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
       }),
       execute: async ({ sliceId }: { sliceId: string }) => {
         try {
-          const raw = await readSliceCoreDual(ctx, sliceId);
+          const raw = await readSliceCore(ctx, sliceId);
           if (raw === null) {
             return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
           }
@@ -161,7 +151,7 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
       }),
       execute: async ({ sliceId }: { sliceId: string }) => {
         try {
-          const raw = await readSliceCoreDual(ctx, sliceId);
+          const raw = await readSliceCore(ctx, sliceId);
           if (raw === null) {
             return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
           }
@@ -208,24 +198,15 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
       execute: async ({ year, month }: { year: number; month: number }) => {
         const mm = String(month).padStart(2, "0");
         try {
-          // Live enumeration (v0.19 §A.2.4), dual-root: the day/slice
-          // directories under BOTH roots are the truth — the new records
-          // root and the legacy slices root, merged by id so a month
-          // straddling the root move reads whole.
           const ids = new Set<string>();
-          for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT]) {
-            const monthDir = `${root}/${year}/${mm}`;
-            const days = await listMemoryDir(ctx, monthDir).catch(() => []);
-            for (const d of days) {
-              if (d.type !== "dir" || !/^\d{2}$/.test(d.name)) continue;
-              const sliceDirs = await listMemoryDir(
-                ctx,
-                `${monthDir}/${d.name}`,
-              ).catch(() => []);
-              for (const s of sliceDirs) {
-                if (s.type === "dir" && /^\d{4}$/.test(s.name)) {
-                  ids.add(`${year}-${mm}-${d.name}-${s.name}`);
-                }
+          const monthDir = `${RECORDS_ROOT}/${year}/${mm}`;
+          const days = await listMemoryDir(ctx, monthDir).catch(() => []);
+          for (const d of days) {
+            if (d.type !== "dir" || !/^\d{2}$/.test(d.name)) continue;
+            const sliceDirs = await listMemoryDir(ctx, `${monthDir}/${d.name}`).catch(() => []);
+            for (const s of sliceDirs) {
+              if (s.type === "dir" && /^\d{4}$/.test(s.name)) {
+                ids.add(`${year}-${mm}-${d.name}-${s.name}`);
               }
             }
           }
@@ -233,12 +214,12 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
             return { exists: false, month: `${year}-${mm}`, slices: [] };
           }
 
-          // Point-read each enumerated slice's header (dual-root core.md) —
+          // Point-read each enumerated slice's canonical core.md header —
           // a slice whose file is unreadable is skipped, never faked.
           const entries = (
             await Promise.all(
               [...ids].sort().map(async (id) => {
-                const raw = await readSliceCoreDual(ctx, id).catch(() => null);
+                const raw = await readSliceCore(ctx, id).catch(() => null);
                 if (!raw) return null;
                 const { data } = matter(raw);
                 return {

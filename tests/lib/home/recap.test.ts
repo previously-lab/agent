@@ -142,7 +142,7 @@ describe("getHomeMemoryState", () => {
     expect(state.recap?.timezone).toBe("Asia/Shanghai");
   });
 
-  it("merges the legacy slices root — a legacy-layout newest slice still recaps", async () => {
+  it("ignores a newer slice under the retired slices root", async () => {
     writeOnDisk(
       NEW_ROOT_CORE,
       sliceFixture({
@@ -170,9 +170,9 @@ describe("getHomeMemoryState", () => {
     const { getHomeMemoryState } = await importFresh();
     const state = await getHomeMemoryState();
 
-    expect(state.sliceCount).toBe(2);
-    expect(state.recap?.lastAt).toBe("2026-07-30T20:45:00.000Z");
-    expect(state.recap?.timezone).toBe("Europe/Berlin");
+    expect(state.sliceCount).toBe(1);
+    expect(state.recap?.lastAt).toBe("2026-07-28T06:58:22.811Z");
+    expect(state.recap?.timezone).toBe("UTC");
   });
 
   it("skips a newest slice that holds no turns and recaps the previous one", async () => {

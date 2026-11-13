@@ -161,12 +161,8 @@ const episodic = vi.hoisted(() => ({
       return v;
     },
   ),
-  slicePartPathCandidates: vi.fn(
-    (sliceId: string, part: string) =>
-      [`memory/records/${sliceId}/${part}.md`, `legacy/${sliceId}/${part}.md`] as [
-        string,
-        string,
-      ],
+  slicePartPath: vi.fn(
+    (sliceId: string, part: string) => `memory/records/${sliceId}/${part}.md`,
   ),
 }));
 vi.mock("@/lib/episodic", () => episodic);
@@ -1498,9 +1494,9 @@ describe("the batch-threading mechanical audit (v0.37 §5 — 漏接即红)", ()
     expect(hqSrc.match(/loadSlice\(sliceId, batch\)/g)?.length).toBe(4);
   });
 
-  it("the card readers pass the batch to BOTH dual-root probes", () => {
-    expect(ctxSrc).toContain("fsReadFile(primary, batch)");
-    expect(ctxSrc).toContain("fsReadFile(fallback, batch)");
+  it("the card readers pass the batch to the canonical records read", () => {
+    expect(ctxSrc).toContain("fsReadFile(slicePartPath(sliceId, part), batch)");
+    expect(ctxSrc).not.toContain("slicePartPathCandidates");
   });
 });
 

@@ -521,7 +521,27 @@ describe("recallSearch", () => {
     expect(r).toEqual({ kind: "empty" });
   });
 
-  it("reports the scan cap as truncated and scans newest-first", async () => {
+  it("continues candidate scanning beyond fifty files and finds an older record", async () => {
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 55; i += 1) {
+      const minute = String(i).padStart(4, "0");
+      many[`memory/records/2026/10/01/${minute}/core.md`] = sliceCore(null, i === 0 ? "最旧记录里的企鹅" : "无关内容");
+    }
+    const backend = makeBackend(many);
+    const first = await recallSearch(backend, { category: "records", query: "企鹅" });
+    if (first.kind !== "entries") throw new Error(`expected a continuable empty page, got ${first.kind}`);
+    expect(first).toMatchObject({ entries: [], scanned: 50, nextScanCursor: 50, nextOffset: 0, truncated: true });
+    expect(renderRecallResult(first, { category: "records", query: "企鹅" })).toContain("pass scanCursor=50 and offset=0 together");
+    const second = await recallSearch(backend, {
+      category: "records", query: "企鹅", scanCursor: first.nextScanCursor, offset: first.nextOffset,
+    });
+    if (second.kind !== "entries") throw new Error(`expected the old hit, got ${second.kind}`);
+    expect(second.entries.map((entry) => entry.ref)).toEqual(["records/2026-10-01-0000"]);
+    expect(second.nextScanCursor).toBeUndefined();
+    expect(second.truncated).toBe(false);
+  });
+
+  it("reports the scan page as truncated and scans newest-first", async () => {
     // 51+ candidates: 8 case docs + 2 bare files + 3 slice heads = 13… add a
     // spread of extra cases so the 50-file cap actually fires.
     const many: Record<string, string> = { ...FILES };
@@ -534,7 +554,7 @@ describe("recallSearch", () => {
     expect(r.truncated).toBe(true);
     expect(r.entries.length).toBeLessThanOrEqual(5);
     const text = renderRecallResult(r, { query: "填充", limit: 5 });
-    expect(text).toContain("Showing the newest 5 of 50 scanned");
+    expect(text).toContain("pass scanCursor=0 and offset=5 together to continue");
   });
 
   it("date bounds filter candidates by activity date", async () => {
@@ -559,7 +579,7 @@ describe("recallSearch", () => {
     expect(p2.offset).toBe(1);
     expect(p1.total).toBe(2);
     const text = renderRecallResult(p1, { query: "iPhone" });
-    expect(text).toContain("Showing 1 from offset 0 — pass offset=1 for older ones.");
+    expect(text).toContain("pass scanCursor=0 and offset=1 together to continue");
     // the second page is complete — no continuation note
     expect(p2.truncated).toBe(false);
     expect(renderRecallResult(p2, { query: "iPhone" })).not.toContain(
@@ -827,7 +847,7 @@ describe("fixed rendering", () => {
 // ─── Tree index + head helpers ─────────────────────────────────────────────
 
 describe("buildTreeIndex", () => {
-  it("filters config/, attachments, and the legacy settings file; collects slices and bare files", () => {
+  it("filters config, attachments, retired record roots and the legacy settings file", () => {
     const index = buildTreeIndex([
       "memory/config/settings.json",
       "memory/user/config.json",
@@ -839,7 +859,7 @@ describe("buildTreeIndex", () => {
       "memory/people/user/profile.md",
       "memory/episodic/slices/2026/10/01/0900/timeline/core.md",
     ]);
-    expect(index.slices).toEqual(["2026-10-01-0900", "2026-10-14-1836"]);
+    expect(index.slices).toEqual(["2026-10-14-1836"]);
     expect(index.agendaPath).toBe("memory/self/agenda.md");
     expect(index.profilePath).toBe("memory/people/user/profile.md");
     const allPaths = index.cases.flatMap((c) => [c.indexPath, ...c.pieces]).filter(Boolean);

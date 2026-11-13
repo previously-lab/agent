@@ -5,7 +5,7 @@ import { resolveDataSource, type DataSource } from "@/lib/data-source/resolve";
 import { readFileDemo } from "@/lib/demo/demo-fs";
 import { parseSlice } from "@/lib/episodic/manager";
 import { fsReadFile } from "@/lib/episodic/io-helpers";
-import { slicePartPathCandidates } from "@/lib/episodic/paths";
+import { slicePartPath } from "@/lib/episodic/paths";
 import { withGitHubReadBudget } from "@/lib/github/client";
 import {
   deriveRoomProfile,
@@ -57,15 +57,8 @@ async function readCoreForRoomProfile(
   source: DataSource,
   persona: string,
 ): Promise<string> {
-  const [primary, legacy] = slicePartPathCandidates(sliceId, "core");
-  const read = (path: string): Promise<string> =>
-    source === "demo" ? readFileDemo(path, persona) : fsReadFile(path);
-  try {
-    return await read(primary);
-  } catch (error) {
-    if (!isMissingRecordError(error)) throw error;
-  }
-  return read(legacy);
+  const path = slicePartPath(sliceId, "core");
+  return source === "demo" ? readFileDemo(path, persona) : fsReadFile(path);
 }
 
 /** One record, one logical core read; no catalog, case scan, model or writes. */

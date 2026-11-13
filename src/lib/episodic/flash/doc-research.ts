@@ -175,8 +175,6 @@ export async function runDocResearchPass(
 
   let agentMd: string;
   try {
-    // Dual-root read (v0.19 R2): the mailbox of a slice created before the
-    // root move lives under the legacy slices root.
     agentMd = await readSlicePart(sliceId, "agent", batch);
   } catch {
     return { ran: false, written: [], skipped, productsByQuestion: [] };
@@ -385,10 +383,8 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
   const productsByQuestion = [...products.values()];
   if (productsByQuestion.length > 0) {
     try {
-      // Dual-root read (the slice may predate the root move), and the record
-      // append goes back to the root the mailbox was actually read from —
-      // splitting markers (legacy) from records (new) would re-see every
-      // question on the next pass.
+      // Read and append through the canonical records path so processing marks
+      // stay beside their source questions.
       const resolved = await readSlicePartResolved(sliceId, "agent", batch);
       if (!resolved) throw new Error("Question mailbox could not be read back");
       const fresh = resolved.content;

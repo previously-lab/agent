@@ -48,6 +48,9 @@ function serializedConversation(turns: TimeSlice["turns"]): string {
 
 type ModelHandler = (options: AgentOptions) => Promise<ToolCall[]> | ToolCall[];
 type SearchOutput = {
+  nextCursor?: string;
+  complete: boolean;
+  scanned: number;
   matches: Array<{
     ref: string;
     excerpts: Array<{
@@ -76,7 +79,12 @@ type ReadOutput = {
   next: { startTurn: number; charOffset: number } | null;
   error?: string;
 };
-type ListOutput = { refs: string[]; total: number; truncated: boolean };
+type ListOutput = {
+  refs: string[];
+  entries: Array<{ ref: string; navigation?: { kind: string; focus?: string; summary?: string } }>;
+  total: number;
+  truncated: boolean;
+};
 
 function mockModel(handler: ModelHandler): void {
   native.streamText.mockImplementation(async (options: AgentOptions) => {
@@ -300,31 +308,80 @@ describe("record-only scenario recollection", () => {
     expect(result.uncertainty).toContain("The other record was outside the window.");
   });
 
-  it("enforces the backend read cap and reports bounded coverage instead of absence", async () => {
+  it("offers focus and summary for navigation without authorizing them as evidence", async () => {
+    const { backend } = fixture({ [PATH]: core() });
+    mockModel(async (options) => {
+      const listed = await execute<ListOutput>(options, "listRecords", {});
+      expect(listed.entries[0]).toEqual({
+        ref: REF,
+        navigation: {
+          kind: "navigation_only",
+          focus: "Departure planning",
+          summary: "A generated summary with 99:99 must not become evidence.",
+        },
+      });
+      return report("Directory metadata alone cannot ground this.", [
+        { ref: REF, role: "user", quote: "A generated summary with 99:99 must not become evidence." },
+      ]);
+    });
+    const result = await runScenarioRecall(inputFor(backend));
+    expect(result).toMatchObject({ status: "insufficient_evidence", answer: "", evidence: [] });
+    expect(result.coverage.read).toEqual([]);
+  });
+
+  it("continues beyond the old six-read and twelve-read caps to find the oldest record", async () => {
     const files: Record<string, string> = {};
     for (let day = 1; day <= 13; day += 1) {
       const date = `2026-10-${String(day).padStart(2, "0")}`;
-      files[`memory/records/2026/10/${String(day).padStart(2, "0")}/0900/core.md`] = core("Nothing relevant here");
-      files[`memory/records/2026/10/${String(day).padStart(2, "0")}/0900/core.md`] = files[`memory/records/2026/10/${String(day).padStart(2, "0")}/0900/core.md`]!.replaceAll("2026-10-20", date);
+      const path = `memory/records/2026/10/${String(day).padStart(2, "0")}/0900/core.md`;
+      files[path] = core(day === 1 ? USER_QUOTE : "Nothing relevant here").replaceAll("2026-10-20", date);
     }
+    const oldestRef = "records/2026-10-01-0900";
     const { backend, readFile } = fixture(files);
     mockModel(async (options) => {
-      await execute<SearchOutput>(options, "searchRecords", { query: "unfindable" });
-      await execute<SearchOutput>(options, "searchRecords", { query: "unfindable" });
-      await execute<SearchOutput>(options, "searchRecords", { query: "unfindable" });
-      const capped = await execute<ReadOutput>(options, "readRecord", { ref: "records/2026-10-01-0900" });
-      expect(capped.error).toContain("read cap exhausted");
-      return report("The bounded scan did not recover enough evidence.", [], ["Thirteen candidates exceeded the read budget."]);
+      const first = await execute<SearchOutput>(options, "searchRecords", { query: "08:30" });
+      expect(first).toMatchObject({ scanned: 6, complete: false, nextCursor: "records/2026-10-08-0900" });
+      const second = await execute<SearchOutput>(options, "searchRecords", { query: "08:30", cursor: first.nextCursor });
+      expect(second).toMatchObject({ scanned: 6, complete: false, nextCursor: "records/2026-10-02-0900" });
+      const third = await execute<SearchOutput>(options, "searchRecords", { query: "08:30", cursor: second.nextCursor });
+      expect(third).toMatchObject({ scanned: 1, complete: true });
+      expect(third.matches[0]).toMatchObject({ ref: oldestRef, navigation: { kind: "navigation_only" } });
+      await execute(options, "readRecord", { ref: oldestRef });
+      return report("The oldest record answers the question.", [{ ref: oldestRef, turnId: "u1", role: "user", quote: USER_QUOTE }]);
     });
     const result: ScenarioRecallResult = await runScenarioRecall(inputFor(backend));
-    expect(readFile).toHaveBeenCalledTimes(12);
-    expect(result).toMatchObject({ status: "insufficient_evidence", truncated: true });
-    expect(result.coverage.searched).toHaveLength(12);
-    expect(result.coverage.read).toEqual([]);
-    expect(result.coverage.discovered).toBe(13);
-    expect(result.coverage.omitted).toBe(13);
-    expect(result.uncertainty.join(" ")).toContain("bounded or truncated");
-    expect(result.answer).not.toContain("never happened");
+    expect(readFile).toHaveBeenCalledTimes(13);
+    expect(result).toMatchObject({ status: "ok", truncated: true });
+    expect(result.coverage.searched).toHaveLength(13);
+    expect(result.coverage.read).toEqual([oldestRef]);
+    expect(result.evidence[0]).toMatchObject({ ref: oldestRef, quote: USER_QUOTE });
+  });
+
+  it("resumes an unfinished scan in a later recallScenario run", async () => {
+    const files: Record<string, string> = {};
+    for (let day = 1; day <= 7; day += 1) {
+      const date = `2026-10-${String(day).padStart(2, "0")}`;
+      files[`memory/records/2026/10/${String(day).padStart(2, "0")}/0900/core.md`] = core(day === 1 ? USER_QUOTE : "No match").replaceAll("2026-10-20", date);
+    }
+    const { backend } = fixture(files);
+    mockModel(async (options) => {
+      await execute(options, "searchRecords", { query: "08:30" });
+      return report("This page did not answer the question.");
+    });
+    const first = await runScenarioRecall(inputFor(backend));
+    expect(first.coverage.nextCursor).toBe("records/2026-10-02-0900");
+    expect(first.uncertainty.join(" ")).toContain("cursor=records/2026-10-02-0900");
+
+    mockModel(async (options) => {
+      expect(options.prompt).toContain("Resume searching strictly older than this exclusive record cursor: records/2026-10-02-0900");
+      const found = await execute<SearchOutput>(options, "searchRecords", { query: "08:30" });
+      expect(found.complete).toBe(true);
+      await execute(options, "readRecord", { ref: "records/2026-10-01-0900" });
+      return report("The resumed run found the answer.", [{ ref: "records/2026-10-01-0900", turnId: "u1", role: "user", quote: USER_QUOTE }]);
+    });
+    const resumed = await runScenarioRecall(inputFor(backend, { cursor: first.coverage.nextCursor }));
+    expect(resumed).toMatchObject({ status: "ok" });
+    expect(resumed.evidence[0]).toMatchObject({ ref: "records/2026-10-01-0900", quote: USER_QUOTE });
   });
 
   it("reads production user/agent pairs with shared ids and strips native HTML only from assistant views", async () => {
@@ -490,6 +547,25 @@ describe("record-only scenario recollection", () => {
     expect(raw).toContain(commitment);
   });
 
+  it("searches and cites content beyond the old 200000-character raw prefix", async () => {
+    const commitment = "COMMITMENT BEYOND THE OLD RAW PREFIX";
+    const raw = core(`${"x".repeat(205_000)}${commitment}`);
+    const { backend } = fixture({ [PATH]: raw });
+    mockModel(async (options) => {
+      const found = await execute<SearchOutput>(options, "searchRecords", { query: commitment });
+      const hit = found.matches[0].excerpts[0];
+      expect(hit.matchOffset).toBeGreaterThan(200_000);
+      const targeted = await execute<ReadOutput>(options, "readRecord", {
+        ref: REF, startTurn: hit.turnIndex, charOffset: hit.matchOffset, turnCount: 1,
+      });
+      expect(targeted.turns[0].content).toContain(commitment);
+      return report("The late original text is readable.", [{ ref: REF, turnId: "u1", role: "user", quote: commitment }]);
+    });
+    const result = await runScenarioRecall(inputFor(backend, { refs: [REF] }));
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.evidence[0]).toMatchObject({ quote: commitment });
+  });
+
   it("follows next to a later whole turn beyond the 16000-character initial view", async () => {
     const turns: TimeSlice["turns"] = Array.from({ length: 5 }, (_, index) => ({
       timestamp: `2026-10-20T09:3${index}:00.000Z`,
@@ -522,25 +598,27 @@ describe("record-only scenario recollection", () => {
     expect(raw).toContain("turn-4");
   });
 
-  it("does not let targeted continuation bypass the global tool-call cap", async () => {
-    const raw = core("x".repeat(50_000));
+  it("allows more than twelve targeted continuations while keeping each output page bounded", async () => {
+    const commitment = "LATE COMMITMENT AFTER TWELVE READS";
+    const raw = core(`${"x".repeat(50_000)}${commitment}`);
     const { backend, readFile } = fixture({ [PATH]: raw });
     mockModel(async (options) => {
       let cursor = { startTurn: 0, charOffset: 0 };
-      for (let call = 0; call < 12; call += 1) {
+      let calls = 0;
+      for (;;) {
         const view = await execute<ReadOutput>(options, "readRecord", { ref: REF, ...cursor, turnCount: 1 });
+        calls += 1;
         expect(view.turns[0].content.length).toBeLessThanOrEqual(4_000);
-        expect(view.next).not.toBeNull();
-        cursor = view.next!;
+        if (!view.next) break;
+        cursor = view.next;
       }
-      const capped = await execute<ReadOutput>(options, "readRecord", { ref: REF, ...cursor, turnCount: 1 });
-      expect(capped.error).toContain("Tool call cap exhausted (12)");
-      return report("The worker stopped at its hard bound.", [], ["Continuation remained incomplete."]);
+      expect(calls).toBeGreaterThan(12);
+      return report("The continued read reached the late commitment.", [{ ref: REF, turnId: "u1", role: "user", quote: commitment }]);
     });
     const result = await runScenarioRecall(inputFor(backend, { refs: [REF] }));
     expect(readFile).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ status: "insufficient_evidence", evidence: [], truncated: true });
-    expect(result.uncertainty.join(" ")).toContain("Continuation remained incomplete.");
+    expect(result).toMatchObject({ status: "ok", truncated: true });
+    expect(result.evidence[0]).toMatchObject({ quote: commitment });
   });
 
   it("keeps out-of-window records out of discovered and omitted coverage", async () => {
@@ -598,6 +676,54 @@ describe("record-only scenario recollection", () => {
     ));
     expect(interrupted).toMatchObject({ status: "cancelled", answer: "", evidence: [], truncated: true });
     expect(interrupted.error).toContain("cancelled");
+  });
+
+  it("keeps successful exploration and actionable diagnostics when another record fails", async () => {
+    const backend: RecallBackend = {
+      listMemoryFiles: vi.fn(async () => [PATH, OTHER_PATH]),
+      readFile: vi.fn(async (path: string) => {
+        if (path === OTHER_PATH) throw new Error("permission denied on older record");
+        if (path === PATH) return core();
+        throw new Error(`unexpected read: ${path}`);
+      }),
+    };
+    mockModel(async (options) => {
+      await execute(options, "readRecord", { ref: OTHER_REF });
+      await execute(options, "readRecord", { ref: REF });
+      return report("One record was readable, but its visible text does not answer the question.", [], ["The older read remains a gap."]);
+    });
+    const result = await runScenarioRecall(inputFor(backend));
+    expect(result).toMatchObject({
+      status: "insufficient_evidence",
+      answer: "One record was readable, but its visible text does not answer the question.",
+      evidence: [],
+      coverage: { read: [REF] },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.uncertainty.join(" ")).toContain("permission denied on older record");
+  });
+
+  it("preserves unverified prose and read coverage when the model omits its structured report", async () => {
+    const { backend } = fixture({ [PATH]: core() });
+    native.streamText.mockImplementation(async (options: AgentOptions) => {
+      await execute(options, "readRecord", { ref: REF });
+      return {
+        text: Promise.resolve("Unverified partial recollection"),
+        reasoningText: Promise.resolve(""),
+        toolCalls: Promise.resolve([]),
+        sources: Promise.resolve([]),
+        warnings: Promise.resolve([]),
+      };
+    });
+    const result = await runScenarioRecall(inputFor(backend));
+    expect(result).toMatchObject({
+      status: "insufficient_evidence",
+      answer: "Unverified partial recollection",
+      evidence: [],
+      coverage: { read: [REF] },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.uncertainty.join(" ")).toContain("without a valid structured report");
   });
 
   it("distinguishes model timeout and original-record read failure from an honest miss", async () => {

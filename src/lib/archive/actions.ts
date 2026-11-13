@@ -119,7 +119,7 @@ export interface ArchiveIndexCase {
 
 export interface ArchiveIndex {
   cases: ArchiveIndexCase[];
-  /** Every slice id ("YYYY-MM-DD-HHMM"), both roots merged, deduped. */
+  /** Every canonical records slice id ("YYYY-MM-DD-HHMM"), deduped. */
   sliceIds: string[];
 }
 
@@ -477,14 +477,9 @@ export async function verifyRefs(
     unique.map(async (ref): Promise<VerifiedRef> => {
       const record = parseRecordRef(ref);
       if (record) {
-        // Alive = the slice's core.md is in the tree, on either root — the
-        // existence question the slice store answered by reading it. The
-        // door's date is the id's own (the store derives it from the same
-        // path segments), so no header read is needed at all.
+        // The canonical records tree answers existence without a content read.
         const rel = record.sliceId.split("-").join("/");
-        const alive =
-          pathSet.has(`memory/records/${rel}/core.md`) ||
-          pathSet.has(`memory/episodic/slices/${rel}/timeline/core.md`);
+        const alive = pathSet.has(`memory/records/${rel}/core.md`);
         return {
           ref,
           kind: "record",

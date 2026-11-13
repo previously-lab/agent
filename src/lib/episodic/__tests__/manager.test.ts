@@ -21,11 +21,8 @@ import {
 import {
   sliceDir,
   slicePartPath,
-  slicePartPathCandidates,
-  legacySlicePartPath,
   readSlicePart,
   RECORDS_ROOT,
-  LEGACY_SLICES_ROOT,
 } from "../paths";
 import type { TimeSlice, Turn } from "../types";
 
@@ -298,9 +295,9 @@ describe("sliceIdToFilePath", () => {
   });
 });
 
-// ─── paths.ts dual-root module (v0.19 R2) ────────────────────────────────
+// ─── paths.ts canonical records module ────────────────────────────────────
 
-describe("paths — dual-root constants and builders", () => {
+describe("paths — canonical records builders", () => {
   it("writes target the new flat records layout (no timeline/ level)", () => {
     expect(sliceDir("2026-07-10-1430")).toBe("memory/records/2026/07/10/1430");
     expect(slicePartPath("2026-07-10-1430", "core")).toBe(
@@ -314,25 +311,8 @@ describe("paths — dual-root constants and builders", () => {
     );
   });
 
-  it("maps the legacy layout (timeline/ level; previously at slice root)", () => {
-    expect(legacySlicePartPath("2026-07-10-1430", "core")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/timeline/core.md"
-    );
-    expect(legacySlicePartPath("2026-07-10-1430", "agent")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/timeline/agent.md"
-    );
-    expect(legacySlicePartPath("2026-07-10-1430", "previously")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/previously.md"
-    );
-  });
-
-  it("orders read candidates new-root first, legacy on a miss", () => {
-    expect(slicePartPathCandidates("2026-07-10-1430", "core")).toEqual([
-      "memory/records/2026/07/10/1430/core.md",
-      "memory/episodic/slices/2026/07/10/1430/timeline/core.md",
-    ]);
+  it("uses the canonical records root", () => {
     expect(RECORDS_ROOT).toBe("memory/records");
-    expect(LEGACY_SLICES_ROOT).toBe("memory/episodic/slices");
   });
 });
 
@@ -638,11 +618,11 @@ describe("tryLoadTodaySlice — UTC-day-boundary fallback", () => {
     const y = new Date(now.getTime() - 86_400_000);
     const dirOf = (root: string, d: Date) =>
       `${root}/${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}`;
-    const yesterdayLegacyDir = dirOf(LEGACY_SLICES_ROOT, y);
+    const yesterdayRecordsDir = dirOf(RECORDS_ROOT, y);
 
     vi.mocked(fsListFiles).mockImplementation(async (dir: string) => {
-      if (dir === yesterdayLegacyDir)
-        return [{ name: "2330", path: `${yesterdayLegacyDir}/2330`, type: "dir" as const }];
+      if (dir === yesterdayRecordsDir)
+        return [{ name: "2330", path: `${yesterdayRecordsDir}/2330`, type: "dir" as const }];
       return [];
     });
     vi.mocked(fsReadFile).mockResolvedValue(
@@ -652,13 +632,9 @@ describe("tryLoadTodaySlice — UTC-day-boundary fallback", () => {
     const recovered = await tryLoadTodaySlice();
     expect(recovered).not.toBeNull();
     expect(recovered!.status).toBe("active");
-    // Scan order: today's records root, today's legacy root, then yesterday's
-    // records root, yesterday's legacy root (where the slice lives).
     expect(vi.mocked(fsListFiles).mock.calls.map((c) => c[0])).toEqual([
       dirOf(RECORDS_ROOT, now),
-      dirOf(LEGACY_SLICES_ROOT, now),
-      dirOf(RECORDS_ROOT, y),
-      yesterdayLegacyDir,
+      yesterdayRecordsDir,
     ]);
   });
 
@@ -668,9 +644,9 @@ describe("tryLoadTodaySlice — UTC-day-boundary fallback", () => {
   });
 });
 
-// ─── Dual-root mixed storage: parse equivalence (v0.19 R2) ──────────────
+// ─── Historical frontmatter: parse equivalence ───────────────────────────
 
-describe("dual-root mixed storage — parse equivalence", () => {
+describe("historical frontmatter — parse equivalence", () => {
   const ID = "2024-03-15-1000";
 
   /** The same slice in the legacy on-disk format (status/tags written, no closed_by). */
@@ -688,7 +664,7 @@ describe("dual-root mixed storage — parse equivalence", () => {
 
   beforeEach(() => vi.clearAllMocks());
 
-  it("loadSlice dual-reads: a new-root hit never touches the legacy path", async () => {
+  it("loadSlice reads only the canonical record path", async () => {
     vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
       if (p === slicePartPath(ID, "core")) return newMarkdown();
       throw new Error(`unexpected read: ${p}`);
@@ -700,22 +676,9 @@ describe("dual-root mixed storage — parse equivalence", () => {
     ]);
   });
 
-  it("loadSlice falls back to the legacy root on a new-root miss", async () => {
+  it("parses historical and current frontmatter into an equivalent TimeSlice", async () => {
     vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
-      if (p === legacySlicePartPath(ID, "core")) return legacyMarkdown();
-      throw new Error(`not found: ${p}`);
-    });
-    const slice = await loadSlice(ID);
-    expect(slice).not.toBeNull();
-    expect(vi.mocked(fsReadFile).mock.calls.map((c) => c[0])).toEqual([
-      slicePartPath(ID, "core"),
-      legacySlicePartPath(ID, "core"),
-    ]);
-  });
-
-  it("parses the legacy and new formats into an equivalent TimeSlice", async () => {
-    vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
-      if (p === legacySlicePartPath(ID, "core")) return legacyMarkdown();
+      if (p === slicePartPath(ID, "core")) return legacyMarkdown();
       throw new Error(`not found: ${p}`);
     });
     const fromLegacy = (await loadSlice(ID))!;
@@ -742,7 +705,7 @@ describe("dual-root mixed storage — parse equivalence", () => {
     expect(fromRecords.tags).toEqual([]);
   });
 
-  it("loadSlice returns null when BOTH roots miss", async () => {
+  it("loadSlice returns null when the canonical record is missing", async () => {
     vi.mocked(fsReadFile).mockRejectedValue(new Error("gone"));
     expect(await loadSlice(ID)).toBeNull();
   });

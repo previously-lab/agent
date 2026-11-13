@@ -103,36 +103,28 @@ describe("getRoomProfile", () => {
     expect(result.profile.evidence).toEqual(["user_turns:making"]);
   });
 
-  it("distinguishes a real neutral result from both roots being missing", async () => {
+  it("distinguishes a real neutral result from a missing canonical record", async () => {
     mocks.fsReadFile.mockResolvedValueOnce(core());
     expect(await getRoomProfile(SLICE)).toEqual({
       status: "ready",
       profile: NEUTRAL_ROOM_PROFILE,
     });
 
-    mocks.fsReadFile
-      .mockRejectedValueOnce(missing(PRIMARY))
-      .mockRejectedValueOnce(missing(LEGACY));
+    mocks.fsReadFile.mockRejectedValueOnce(missing(PRIMARY));
     expect(await getRoomProfile(SLICE)).toEqual({
       status: "missing",
       profile: NEUTRAL_ROOM_PROFILE,
     });
-    expect(mocks.fsReadFile).toHaveBeenCalledTimes(3);
+    expect(mocks.fsReadFile).toHaveBeenCalledTimes(2);
     expect(mocks.fsReadFile).toHaveBeenNthCalledWith(2, PRIMARY);
-    expect(mocks.fsReadFile).toHaveBeenNthCalledWith(3, LEGACY);
   });
 
-  it("reads legacy only after an explicit primary miss and accepts its content", async () => {
-    mocks.fsReadFile
-      .mockRejectedValueOnce(missing(PRIMARY))
-      .mockResolvedValueOnce(core("回顾今天并写日记"));
-    expect(await getRoomProfile(SLICE)).toMatchObject({
-      status: "ready",
-      profile: { activity: "reflection" },
-    });
-    expect(mocks.fsReadFile).toHaveBeenCalledTimes(2);
-    expect(mocks.fsReadFile).toHaveBeenNthCalledWith(1, PRIMARY);
-    expect(mocks.fsReadFile).toHaveBeenNthCalledWith(2, LEGACY);
+  it("does not probe the retired root after a canonical miss", async () => {
+    mocks.fsReadFile.mockRejectedValueOnce(missing(PRIMARY));
+    expect(await getRoomProfile(SLICE)).toMatchObject({ status: "missing" });
+    expect(mocks.fsReadFile).toHaveBeenCalledTimes(1);
+    expect(mocks.fsReadFile).toHaveBeenCalledWith(PRIMARY);
+    expect(mocks.fsReadFile).not.toHaveBeenCalledWith(LEGACY);
     expect(mocks.withGitHubReadBudget).toHaveBeenCalledTimes(1);
   });
 

@@ -16,7 +16,6 @@ describe("conversation record reference classification", () => {
     "《records/2026-10-20-0930.md》",
     "memory/records/2026/10/20/0930/core.md",
     "/memory/records/2026/10/20/0930/agent.md",
-    ["memory", "episodic", "slices", "2026", "10", "20", "0930", "timeline", "core.md"].join(String.fromCharCode(92)),
   ])("canonicalizes %s without exposing a read path", (ref) => {
     expect(canonicalConversationRecordRef(ref)).toBe(RECORD_REF);
   });
@@ -24,6 +23,7 @@ describe("conversation record reference classification", () => {
   it("does not classify semantic documents as conversations", () => {
     expect(canonicalConversationRecordRef("research/departure")).toBeNull();
     expect(canonicalConversationRecordRef("people/user/profile")).toBeNull();
+    expect(canonicalConversationRecordRef("memory/episodic/slices/2026/10/20/0930/timeline/core.md")).toBeNull();
   });
 });
 
@@ -80,7 +80,7 @@ describe("native and structured replay mediation", () => {
     expect(JSON.stringify(mediated)).not.toContain(recordSentinel);
     expect(providerText).not.toContain(recordSentinel);
     expect(providerText).toContain(semanticSentinel);
-    expect(providerText).toContain("Original conversation");
+    expect(providerText).toContain("Derived focus [navigation only; not evidence]");
     expect(providerText).toContain("Current live chat stays intact");
     expect(providerText).toContain("Visible assistant answer stays intact");
   });
