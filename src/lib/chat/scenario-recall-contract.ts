@@ -1,15 +1,40 @@
 import { z } from "zod";
 import type { ModelMessage, ToolResultOutput } from "@/lib/deepseek/types";
 
+const recordRef = z.string().regex(/^records\/\d{4}-\d{2}-\d{2}-\d{4}$/);
+
+export const scenarioRecallTargetSchema = z.object({
+  ref: recordRef,
+  turnId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+  role: z.enum(["user", "assistant"]),
+  charOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional()
+    .describe("Optional continuation within this same turn, from coverage.targets[].nextCharOffset."),
+}).strict();
+
+export type ScenarioRecallTarget = z.infer<typeof scenarioRecallTargetSchema>;
+
 export const scenarioRecallRequestSchema = z.object({
   question: z.string().trim().min(1).max(4000).describe("The focused question to recover from earlier conversations, including relevant context and what remains uncertain."),
-  refs: z.array(z.string().regex(/^records\/\d{4}-\d{2}-\d{2}-\d{4}$/)).max(4).optional()
+  refs: z.array(recordRef).max(4).optional()
     .describe("Up to four known original conversation refs. Omit to let recollection locate scenarios. Semantic documents are outside this tool."),
+  targets: z.array(scenarioRecallTargetSchema).max(8).optional()
+    .describe("Known exact original messages. With targets alone, the host reads those messages by ID and role and returns verified original excerpts without a model search."),
+  searchTerms: z.array(z.string().trim().min(1).max(80)).min(1).max(5).optional()
+    .describe("Literal keywords to find in original user messages within the supplied refs only. Requires at least one ref; omit targets and cursor. No model or wider search is used."),
   after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date lower bound, YYYY-MM-DD. Omit when uncertain."),
   before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date upper bound, YYYY-MM-DD. Omit when uncertain."),
-  cursor: z.string().regex(/^records\/\d{4}-\d{2}-\d{2}-\d{4}$/).optional()
+  cursor: recordRef.optional()
     .describe("Exclusive continuation cursor returned as coverage.nextCursor. Repeat the same question and date window to scan older records; omit for the newest page."),
-}).strict();
+}).strict().superRefine((request, context) => {
+  if (request.searchTerms === undefined) return;
+  if (!request.refs?.length || request.targets !== undefined || request.cursor !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["searchTerms"],
+      message: "searchTerms requires one to four refs and cannot be combined with targets or cursor",
+    });
+  }
+});
 
 export type ScenarioRecallRequest = z.infer<typeof scenarioRecallRequestSchema>;
 

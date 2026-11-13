@@ -44,6 +44,7 @@ const h = vi.hoisted(() => ({
       error?: string;
       disposition?: "completed" | "superseded";
       evolved?: boolean;
+      deferredCards?: number;
     }> => {
       h.order.push("handleBrief");
       return { actions: [], note: "idle — nothing substantive" };
@@ -297,6 +298,14 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
     expect(outcome).toEqual({ kind: "retired", rounds: 2 });
     // both slices settled: cursor at the furthest, failed round held nothing
     expect(h.world.cursor).toBe("2026-10-04-0200");
+  });
+
+  it("retires with deferred native cards still owed instead of immediately retrying", async () => {
+    h.world.summaries = [{ sliceId: "2026-10-04-0131", turnIds: ["unsettled-card"] }];
+    h.handleBrief.mockResolvedValue({ actions: [], note: "Deferred until next wake.", deferredCards: 1 });
+    expect(await reflectionRun()).toEqual({ kind: "retired", rounds: 1 });
+    expect(h.handleBrief).toHaveBeenCalledTimes(1);
+    expect(h.world.marks).toEqual([]);
   });
 
   it("conflict + a HEALTHY holder (alive, within the takeover threshold) → 撞车即退, no cancel", async () => {

@@ -49,6 +49,12 @@ import { assertDocumentWrite, assertTailBudget, documentSize, exceededSize, TAIL
 import { isHistoryArchiveFileName, planHistoryArchive } from "@/lib/docs/history-archive";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { confirmedDocumentProducts, stageDocumentProduct } from "../document-products";
+import {
+  cardLinkSourceSchema,
+  isCaseCardCitation,
+  preserveCaseCardCitationsOnSameBody,
+  stageCaseCardCitation,
+} from "../card-evidence";
 import type { DialogueResearchRecord } from "../dialogue-record";
 import type { ModelConfig } from "@/lib/models/registry";
 import { resolveDataSource } from "@/lib/data-source/resolve";
@@ -309,6 +315,8 @@ export interface SliceEvidenceToolOptions {
   batch?: WriteBatch;
   scope?: CaseReadScope;
   reader?: SliceRawReader;
+  /** Receipts are limited to the attributed text actually returned by a page. */
+  onPageRead?: (page: SliceEvidencePage, raw: string) => void;
 }
 
 async function executeSliceEvidenceRead(
@@ -333,6 +341,7 @@ async function executeSliceEvidenceRead(
         rangeKey: JSON.stringify(args.range ?? null),
         start: page.start, end: page.end, totalChars: page.totalChars,
       });
+      options.onPageRead?.(page, raw);
     }
     const continuation = page.nextCursor === null
       ? "COMPLETE: the selected evidence has been returned in full"
@@ -961,7 +970,9 @@ async function applyCaseWriteIntentStaged(
           const raw = await readOptionalCaseFile(candidate, batch, true);
           if (raw === null) continue;
           const existing = parseCaseDoc(raw, { category, caseName, fileName: candidate.split("/").at(-1)! });
-          if (existing.body === doc.body && !existing.tail.length && !existing.preserved) return { path: candidate, created: false, noop: true };
+          if (existing.body === doc.body && existing.tail.every((entry) => isCaseCardCitation(entry.text)) && !existing.preserved) {
+            return { path: candidate, created: false, noop: true };
+          }
         }
         const existingRaw = await readOptionalCaseFile(piecePath, batch, true);
         if (existingRaw !== null) {
@@ -974,7 +985,7 @@ async function applyCaseWriteIntentStaged(
             existing.closed === doc.closed &&
             existing.body === doc.body &&
             existing.preserved === doc.preserved &&
-            JSON.stringify(existing.tail) === JSON.stringify(doc.tail);
+            existing.tail.every((entry) => isCaseCardCitation(entry.text));
           // Reuse an identical historical product without retrofitting its
           // old navigation or claiming the piece was newly written.
           if (same) return { path: piecePath, created: false, noop: true };
@@ -1052,7 +1063,8 @@ async function applyCaseWriteIntentStaged(
         if (JSON.stringify(inventory) !== JSON.stringify(scopedRead.pieceInventory)) {
           throw new CaseWriteRefusal("rewrite_conflict", "case piece inventory changed; read the case again before revising current understanding");
         }
-        const nextInput = { asOf: date, evidence, body: intent.body, basis: currentReadBasis(scopedRead, readScope) };
+        const body = previous ? preserveCaseCardCitationsOnSameBody(previous.body, intent.body) : intent.body;
+        const nextInput = { asOf: date, evidence, body, basis: currentReadBasis(scopedRead, readScope) };
         if (previous && isSameCaseCurrent(previous, nextInput)) {
           return { path: scopedRead.currentPath, created: false, noop: true };
         }
@@ -1251,6 +1263,9 @@ const caseWriterSchema = z.object({
         title: z.string().optional(),
         /** Optional independent current view; may accompany any historical action or skip. */
         currentUnderstanding: currentUnderstandingSchema.optional(),
+        sources: z.array(cardLinkSourceSchema).min(1).max(20).optional().describe(
+          "For a write derived from an eligible user record card, give its sliceId, turnId and exact quote actually returned by readSlice. Omit for unrelated writes.",
+        ),
       }),
     )
     .max(20),
@@ -1293,6 +1308,9 @@ export interface CaseWriterManifest {
 
 export interface LibrarianPassInput {
   sourceTurnIds?: string[];
+  cardTurnIds?: string[];
+  /** Called after the case and its verified source citations enter the parent batch together. */
+  onCardLinked?: (source: z.infer<typeof cardLinkSourceSchema>) => void;
   researchProducts?: readonly DialogueResearchRecord[];
   model: ModelConfig;
   closedSliceId: string;
@@ -1335,6 +1353,20 @@ export async function runLibrarianPass(
   const manifest = input.manifest ?? { truncated: false, tree: {} };
   const skipped: Array<{ name: string; reason: string }> = [];
   const scope = createCaseReadScope();
+  const cardTurnIds = new Set(input.cardTurnIds ?? []);
+  const legacySourceIds = (input.sourceTurnIds ?? []).filter((id) => !cardTurnIds.has(id));
+  const cardSourcesRequired = cardTurnIds.size > 0 && legacySourceIds.length === 0;
+  const cardReads = new Map<string, Array<{ text: string; raw: string }>>();
+  const onPageRead = cardTurnIds.size > 0
+    ? (page: SliceEvidencePage, raw: string) => {
+      for (const span of page.attribution) {
+        if (span.role !== "user" || !span.turnId || !cardTurnIds.has(span.turnId)) continue;
+        const reads = cardReads.get(span.turnId) ?? [];
+        reads.push({ text: page.content.slice(span.start, span.end), raw });
+        cardReads.set(span.turnId, reads);
+      }
+    }
+    : undefined;
   // Manifest + batch are used only to reject an accidental open of an existing
   // case. Every update separately requires a successful read in this scope.
   const existing = new Set([
@@ -1351,12 +1383,17 @@ ${sliceExcerptNotice(excerpt)}
 
 ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
+${cardTurnIds.size ? `## Eligible user record cards
+${JSON.stringify([...cardTurnIds])}
+${cardSourcesRequired ? "Every case write in this pass requires card sources; skip without currentUnderstanding is legal." : "Include card sources when a write draws on one of these user turns. Omit them for independent legacy or derived writes."}
+For each source give sliceId ${closedSliceId}, the specific turnId, and a verbatim quote contained in a readSlice page for that user turn. The host adds the source citation to the case itself. The excerpt, metadata, assistant text, or a quote from a different turn cannot authorize a citation. A card need not lead to a write.` : ""}
+
 ${input.researchProducts?.length ? `## 思考流 final result references\nThese are bounded candidate deltas from the exact result versions shared with 表达流. They are not user words, published speech, or your own read receipts. Read the original sources and target cases before reusing anything; preserve the proposal, uncertainty, and entity scope. No new document is owed just because a work produced a result.\n${JSON.stringify(input.researchProducts)}` : ""}
 
 ## Case manifest (paths are discovery only, never read receipts; readCase every existing target)
 
 ${renderManifest(manifest.tree)}
-${await confirmedDocumentProducts([{ sliceId: closedSliceId, turnIds: input.sourceTurnIds ?? [] }], batch)}
+${await confirmedDocumentProducts([{ sliceId: closedSliceId, turnIds: legacySourceIds }], batch)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
 Report one decision per case as instructed.`;
 
@@ -1368,7 +1405,7 @@ Report one decision per case as instructed.`;
     maxSteps: 50,
     tools: {
       readCase: makeCaseReadTool(batch, scope),
-      readSlice: makeSliceReadTool({ sliceId: closedSliceId, batch, scope }),
+      readSlice: makeSliceReadTool({ sliceId: closedSliceId, batch, scope, onPageRead }),
       caseWriterOutput: tool({
         description: "Report the per-case write decisions.",
         inputSchema: caseWriterSchema,
@@ -1393,6 +1430,10 @@ Report one decision per case as instructed.`;
     if (op.action === "skip" && !op.currentUnderstanding) continue;
     const caseName = sanitizeCaseSegment(op.caseName);
     const identity = `${op.category}/${caseName}`;
+    if (cardSourcesRequired && !op.sources?.length) {
+      skipped.push({ name: identity, reason: "A case write in a native-card-only pass requires an exact user card source read with readSlice" });
+      continue;
+    }
     if (op.action === "open" && existing.has(identity)) {
       skipped.push({ name: identity, reason: "case already exists — readCase it, then updateIndex / appendTail / addPiece / reviseUnderstanding" });
       continue;
@@ -1402,21 +1443,21 @@ Report one decision per case as instructed.`;
       switch (op.action) {
         case "open":
           if (!op.body?.trim()) throw new Error("open requires a body (the index.md body)");
-          primary = { action: "open", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "open", category: op.category, caseName, body: op.sources?.length ? op.body : stampEvidence(op.body, closedSliceId) };
           break;
         case "updateIndex":
           if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new body)");
-          primary = { action: "rewriteIndex", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "rewriteIndex", category: op.category, caseName, body: op.sources?.length ? op.body : stampEvidence(op.body, closedSliceId) };
           break;
         case "appendTail":
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
-          primary = { action: "appendTail", category: op.category, caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
+          primary = { action: "appendTail", category: op.category, caseName, line: op.sources?.length ? op.line : `${op.line.trim()} (refs: ${closedSliceId})` };
           break;
         case "addPiece":
           if (!op.title?.trim() || !op.body?.trim()) {
             throw new Error("addPiece requires a title and a body");
           }
-          primary = { action: "addPiece", category: op.category, caseName, title: sanitizeCaseSegment(op.title), body: stampEvidence(op.body, closedSliceId) };
+          primary = { action: "addPiece", category: op.category, caseName, title: sanitizeCaseSegment(op.title), body: op.sources?.length ? op.body : stampEvidence(op.body, closedSliceId) };
           break;
         case "reviseUnderstanding":
           if (!op.currentUnderstanding) {
@@ -1426,9 +1467,50 @@ Report one decision per case as instructed.`;
         case "skip":
           break;
       }
+      if (op.sources?.length) {
+        const sources = op.sources.map((source) => {
+          const read = source.sliceId === closedSliceId
+            ? cardReads.get(source.turnId)?.find(({ text }) => text.includes(source.quote))
+            : undefined;
+          if (!read) throw new Error("Card source quote was not read in this pass from the named eligible user turn");
+          return { source, raw: read.raw };
+        });
+        const pending = forkWriteBatch(batch);
+        const uniqueSources = new Map<string, (typeof sources)[number]>();
+        for (const { source, raw } of sources) {
+          const key = `${source.sliceId}/${source.turnId}`;
+          if (!uniqueSources.has(key)) uniqueSources.set(key, { source, raw });
+        }
+        const applied = new Set<string>();
+        const cite = async (write: CaseWriteOutcome) => {
+          const beforeCitation = pending.entries.get(write.path);
+          for (const { source, raw } of uniqueSources.values()) {
+            await stageCaseCardCitation(pending, write.path, source, raw, date);
+          }
+          if (!write.noop || beforeCitation !== pending.entries.get(write.path)) applied.add(write.path);
+        };
+        if (primary) await cite(await applyCaseWriteIntent(primary, date, pending, scope));
+        if (op.currentUnderstanding) {
+          const current = await applyCaseCurrentUnderstanding({
+            category: op.category,
+            caseName,
+            current: op.currentUnderstanding,
+            date,
+            batch: pending,
+            scope,
+            refreshRead: primary !== null,
+          });
+          if (!current.noop || primary === null) await cite(current);
+        }
+        if (batch) mergeWriteBatch(batch, pending);
+        else if (applied.size) await flushBatch(pending, `case with record citations ${identity}`);
+        written.push(...[...applied].map((path) => path.replace(/^memory\//, "")));
+        for (const { source } of uniqueSources.values()) input.onCardLinked?.(source);
+        continue;
+      }
       if (primary) {
         const applied = await applyCaseWriteIntent(primary, date, batch, scope);
-        if (batch && input.sourceTurnIds?.length) await stageDocumentProduct(batch, { sliceId: closedSliceId, turnIds: input.sourceTurnIds }, applied.path);
+        if (batch && legacySourceIds.length) await stageDocumentProduct(batch, { sliceId: closedSliceId, turnIds: legacySourceIds }, applied.path);
         if (!applied.noop) written.push(applied.path.replace(/^memory\//, ""));
       }
     } catch (e) {

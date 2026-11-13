@@ -116,6 +116,11 @@ import {
   type RecallReadResult,
 } from "@/lib/memory/facade";
 import {
+  findMemoryPaths, listMemoryDirectory, recallListInputSchema, recallPathFindInputSchema,
+  type DirectoryResult, type RecallListInput, type RecallPathFindInput,
+} from "@/lib/memory/navigation";
+import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
+import {
   DOC_MARKER_PREFIX,
   extractDocMarkers,
   applyCaseWriteIntent,
@@ -294,15 +299,9 @@ async function readRawBackend(
 }
 
 
-// ─── The memory-read facade executors (v0.36) ─────────────────────────────
-//
-// The field agent's read surface is FOUR verbs over one entry shape and one
-// result envelope (see src/lib/memory/facade.ts): recallRecent / recallFind /
-// recallSearch return ENTRIES (ref/title/date/excerpt), never files; recallRead
-// continues reading through an entry's ref. The model never sees the tree.
-// These executors are thin wrappers: they build a backend from the tool
-// context (demo / GitHub / local), call the facade, and render the result with
-// the FIXED per-kind templates (v0.36 §3.2).
+// ─── Memory navigation and reads ─────────────────────────────────────────
+// Directory tools return paths and refs, with no document text. The recall
+// facade handles text search, recent activity, and content reads by ref.
 
 /** Build the facade's read backend from the tool context's storage flags. */
 function createRecallBackend(ctx: ToolContext): RecallBackend {
@@ -382,28 +381,55 @@ export async function recallRecentExecute(
   return renderRecallResult(publicRecallResult(result), { ...(category ? { category } : {}) });
 }
 
-export async function recallFindExecute(
-  input: { category: string; name: string },
+type DirectoryToolResult = DirectoryResult | { kind: "unavailable"; note: string };
+
+/** Inventory only. Model arguments never become a backend path. */
+function directoryPaths(ctx: ToolContext, category?: string): Promise<string[]> {
+  const source = ctx.useGithub ? { kind: "github" as const, owner: ctx.owner, repo: ctx.repo }
+    : ctx.useDemo ? { kind: "demo" as const } : { kind: "local" as const };
+  return loadMemoryNavigationPaths(source, category);
+}
+
+export async function recallListExecute(
+  input: RecallListInput,
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
+): Promise<DirectoryToolResult> {
   "use step";
-  const rawCategory = input.category?.trim();
-  if (!rawCategory || !isRecallCategory(rawCategory)) {
-    return renderRecallResult(
-      { kind: "unavailable", note: `unknown category ${JSON.stringify(input.category)}` },
-      {},
-    );
+  const parsed = recallListInputSchema.safeParse(input);
+  if (!parsed.success) return { kind: "invalid_scope", note: "Expected a public memory directory and valid pagination." };
+  const preflight = listMemoryDirectory([], parsed.data);
+  if (!parsed.data.path || preflight.kind === "invalid_scope") return preflight;
+  try {
+    return listMemoryDirectory(await directoryPaths(ctx, parsed.data.path.split("/")[0]), parsed.data);
+  } catch {
+    return { kind: "unavailable", note: "The memory directory could not be listed completely. Retry later." };
   }
-  const category: RecallCategory = rawCategory;
-  const name = input.name?.trim();
-  if (!name) {
-    return renderRecallResult(
-      { kind: "unavailable", note: "name must not be empty" },
-      { category },
-    );
+}
+
+export async function recallFindExecute(
+  input: RecallPathFindInput,
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<DirectoryToolResult | string> {
+  "use step";
+  const parsed = recallPathFindInputSchema.safeParse(input);
+  if (!parsed.success) return { kind: "invalid_scope", note: "Expected a name or public memory path and valid scope." };
+  const { category, name, under } = parsed.data;
+  try {
+    if (category === "records" || category === "timeline") {
+      if (under !== undefined || parsed.data.offset !== undefined || parsed.data.limit !== undefined) {
+        return { kind: "invalid_scope", note: "Record lookup accepts a date or slice ID, without directory scope or pagination." };
+      }
+      const result = await recallFind(createRecallBackend(ctx), { category, name });
+      return renderRecallResult(publicRecallResult(result), { category, name });
+    }
+    const preflight = findMemoryPaths([], parsed.data);
+    if (preflight.kind === "invalid_scope") return preflight;
+    const path = under || (name.replace(/\/$/, "").includes("/") ? name : undefined);
+    const scope = category ?? path?.split("/")[0];
+    return findMemoryPaths(await directoryPaths(ctx, scope), parsed.data);
+  } catch {
+    return { kind: "unavailable", note: "The memory inventory could not be read completely. Retry later." };
   }
-  const result = await recallFind(createRecallBackend(ctx), { category, name });
-  return renderRecallResult(publicRecallResult(result), { category, name });
 }
 
 export async function recallSearchExecute(

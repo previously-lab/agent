@@ -93,7 +93,7 @@ vi.mock("@/lib/episodic/timeline/store", () => ({
   }),
 }));
 
-import { loadReflectionWorld } from "@/app/api/evolution/reflection-steps";
+import { loadReflectionWorld, maintainReflectionHypothesisTtl } from "@/app/api/evolution/reflection-steps";
 
 beforeEach(() => {
   h.skillRead = { status: "missing", ledger: { schemaVersion: 1, entries: [], operations: [] } };
@@ -133,10 +133,12 @@ describe("skill review world-read wiring", () => {
   });
 });
 
-describe("hypothesis maintenance at the reflection read boundary", () => {
-  it("runs even when no user-model pass is due and no scope exists", async () => {
+describe("hypothesis maintenance outside the pinned world read", () => {
+  it("does not move the commit while reading the world and can run on idle exit", async () => {
     const docket = await loadReflectionWorld("2026-11-13");
     const maintenance = await import("@/lib/evolution/user-model-maintenance");
+    expect(maintenance.maintainUserModelHypothesisTtl).not.toHaveBeenCalled();
+    await maintainReflectionHypothesisTtl();
     expect(maintenance.maintainUserModelHypothesisTtl).toHaveBeenCalledWith(undefined);
     expect(docket.evolutionDue).toBe(false);
   });

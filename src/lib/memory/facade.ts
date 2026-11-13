@@ -1,4 +1,6 @@
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
+import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
+export { nameSimilarity, normalizeRecallName } from "./name-match";
 /**
  * The memory-read facade (v0.36) — the field agent's read vocabulary over the
  * memory tree: five verbs (recallRecent / recallFind / recallSearch /
@@ -61,6 +63,8 @@ import { slicePartPath } from "@/lib/episodic/paths";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
 import { annotateSliceWithLocalTime, sliceLocalBanner } from "@/lib/episodic/time-localize";
 import { splitParagraphs, segmentSearch, textLines, searchResultToString } from "@/lib/retrieval/doc-segments";
+import { extractMarkdownRefs, extractSemanticDocumentLinks } from "@/lib/archive/ref-tokens";
+import { canonicalConversationRecordRef, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
 
 // ─── Categories (the leaf module owns the enum; re-exported here) ─────────
 
@@ -118,8 +122,8 @@ export interface MemoryEntry {
 }
 
 /**
- * The discriminated union — the spine of the design (v0.36 §3.1). "No match,
- * here is the recent" (fallback) and "nothing here" (empty) are different
+ * The discriminated union — the spine of the design (v0.36 §3.1). "No content
+ * match on this page" (fallback) and "nothing here" (empty) are different
  * TYPES, and "cannot read" (unavailable) is strictly separate from "absent".
  */
 export type RecallResult =
@@ -139,13 +143,15 @@ export type RecallResult =
       nextOffset?: number;
       /** Search only: unreadable candidates in this page, never treated as misses. */
       readFailures?: number;
+      /** Search only: name/path leads when this page has no content hits. */
+      pathMatches?: MemoryEntry[];
       /**
        * recallFind only: the hit was adopted by approximate name matching —
        * this is the stored (true) name the query resolved to.
        */
       matchedName?: string;
     }
-  | { kind: "fallback"; reason: "no_match"; entries: MemoryEntry[] }
+  | { kind: "fallback"; reason: "no_match"; entries: MemoryEntry[]; scanned: number; readFailures?: number }
   | { kind: "empty" }
   | { kind: "not_found"; nearMisses: MemoryEntry[] }
   | { kind: "unavailable"; note: string };
@@ -167,6 +173,10 @@ export type RecallReadResult =
       pieceCatalog?: { revision: string; refs: string[] };
       /** Hash of the exact full index bytes rendered by this read. */
       caseRevision?: string;
+      /** Navigation only; confirm the words with recallScenario targets. */
+      cardTargets?: ScenarioRecallTarget[];
+      recordLeads?: string[];
+      relatedCases?: string[];
     }
   | {
       /** outline: true — the document's heading skeleton, not its body. */
@@ -808,103 +818,6 @@ function foldName(s: string): string {
 // and a UNIQUE STRONG candidate is adopted outright (with the true name
 // reported back) instead of returning a miss.
 
-/**
- * Punctuation the NFKC fold does not touch, mapped to a canonical ASCII
- * form: 、。… the dash family, and the CJK quote marks. (NFKC itself already
- * folds the full-width ASCII shapes （），：；！？ to half-width.)
- */
-const CJK_PUNCT_MAP: Record<string, string> = {
-  "、": ",",
-  "。": ".",
-  "…": ".",
-  "—": "-",
-  "–": "-",
-  "―": "-",
-  "‐": "-",
-  "‑": "-",
-  "‒": "-",
-  "−": "-",
-  "「": '"',
-  "」": '"',
-  "『": '"',
-  "』": '"',
-  "“": '"',
-  "”": '"',
-  "‘": "'",
-  "’": "'",
-};
-
-/**
- * The name-normalization both sides go through before comparison: NFKC,
- * case fold, CJK punctuation map, collapse runs of identical punctuation,
- * strip ALL whitespace. Pure and total.
- */
-export function normalizeRecallName(s: string): string {
-  const folded = s.normalize("NFKC").toLowerCase();
-  let out = "";
-  for (const ch of folded) out += CJK_PUNCT_MAP[ch] ?? ch;
-  return out
-    .replace(/([\p{P}\p{S}])\1+/gu, "$1")
-    .replace(/\s+/g, "");
-}
-
-/** Levenshtein beyond this length is skipped — bigram dice covers long names. */
-const NAME_SCORE_LEN_CAP = 64;
-
-/** Char-bigram Dice coefficient — the CJK-friendly similarity signal. */
-function bigramDice(a: string, b: string): number {
-  const grams = (s: string): Map<string, number> => {
-    const m = new Map<string, number>();
-    for (let i = 0; i < s.length - 1; i += 1) {
-      const g = s.slice(i, i + 2);
-      m.set(g, (m.get(g) ?? 0) + 1);
-    }
-    return m;
-  };
-  const ga = grams(a);
-  const gb = grams(b);
-  let overlap = 0;
-  for (const [g, n] of ga) overlap += Math.min(n, gb.get(g) ?? 0);
-  const total = a.length - 1 + (b.length - 1);
-  return total > 0 ? (2 * overlap) / total : 0;
-}
-
-/** 1 − (edit distance / max length), two-row DP, bounded by NAME_SCORE_LEN_CAP. */
-function levenshteinRatio(a: string, b: string): number {
-  const n = a.length;
-  const m = b.length;
-  if (Math.max(n, m) > NAME_SCORE_LEN_CAP) return 0;
-  let prev = Array.from({ length: m + 1 }, (_, j) => j);
-  for (let i = 1; i <= n; i += 1) {
-    const cur: number[] = [i];
-    for (let j = 1; j <= m; j += 1) {
-      cur[j] = Math.min(
-        prev[j]! + 1,
-        cur[j - 1]! + 1,
-        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-    }
-    prev = cur;
-  }
-  return 1 - prev[m]! / Math.max(n, m);
-}
-
-/**
- * Similarity of two ALREADY-normalized names in [0, 1] — the strongest of:
- * substring containment (length-weighted), char-bigram Dice, Levenshtein
- * ratio. Every signal is O(len²) at worst and length-capped.
- */
-export function nameSimilarity(a: string, b: string): number {
-  if (a === b) return 1;
-  let score = 0;
-  if (a.includes(b) || b.includes(a)) {
-    const short = Math.min(a.length, b.length);
-    const long = Math.max(a.length, b.length);
-    score = 0.55 + 0.45 * (short / long);
-  }
-  return Math.max(score, bigramDice(a, b), levenshteinRatio(a, b));
-}
-
 /** Auto-adopt floor: the best candidate must reach this score… */
 const NAME_MATCH_MIN_SCORE = 0.85;
 /** …and lead the runner-up by at least this margin (both "very alike" → ask). */
@@ -1058,7 +971,7 @@ export async function recallFind(
 // ─── Verb ③ recallSearch ──────────────────────────────────────────────────
 
 export interface RecallSearchInput {
-  /** One keyword or several — every keyword must hit (AND within a segment). */
+  /** One keyword or several; matches with more keywords together rank first. */
   query: string | string[];
   /** Omitted = ALL structured documents (cases + self + timeline heads) —
    *  records (raw conversation) are scanned ONLY when this is "records" or
@@ -1085,6 +998,70 @@ interface SearchUnit {
   /** Slices in the default scope scan only the bounded head, not the body. */
   sliceHeadOnly: boolean;
   build(raw: string): Promise<BuiltEntry | null>;
+}
+
+/** The fallback deals only in names of readable semantic entries, never body text. */
+function searchPathEntry(unit: SearchUnit, indexPaths: ReadonlySet<string>): MemoryEntry | null {
+  if (unit.sliceId) return null;
+  const path = unit.docPath;
+  if (path === "memory/self/agenda.md" || path === "memory/people/user/profile.md") {
+    const agenda = path === "memory/self/agenda.md";
+    return {
+      ref: path.slice(7, -3),
+      category: agenda ? "self" : "people",
+      kind: agenda ? "agenda" : "profile", title: agenda ? "agenda" : "profile",
+      date: unit.activity, excerpt: "",
+    };
+  }
+  const owner = owningCaseRef(path);
+  if (!owner || !indexPaths.has(`memory/${owner}/index.md`)) return null;
+  const file = path.slice(path.lastIndexOf("/") + 1);
+  const piece = parsePieceFileName(file);
+  const [treeDir, caseName] = owner.split("/");
+  return {
+    ref: piece ? `${owner}/${file.slice(0, -3)}` : owner,
+    category: facadeCategoryForTreeDir(treeDir!),
+    title: piece?.title ?? caseName!,
+    kind: treeDir === "hypotheses" ? "hypothesis" : piece ? "piece" : treeDir === "self" ? "sop" : "case",
+    date: unit.activity, excerpt: "",
+  };
+}
+
+function searchNameScore(entry: MemoryEntry, keywords: readonly string[]): number {
+  let score = 0;
+  for (const keyword of keywords) {
+    const match = Math.max(navigationNameScore(entry.title, keyword), navigationNameScore(entry.ref, keyword));
+    if (match === 0) return 0;
+    score += match;
+  }
+  return score / keywords.length;
+}
+
+function closestSearchPaths(
+  units: SearchUnit[], index: MemoryTreeIndex, keywords: string[], limit: number,
+): MemoryEntry[] {
+  const indexPaths = new Set(index.cases.flatMap((node) => node.indexPath ? [node.indexPath] : []));
+  const candidates = new Map<string, { entry: MemoryEntry; score: number }>();
+  for (const unit of units) {
+    const entry = searchPathEntry(unit, indexPaths);
+    if (!entry || candidates.has(entry.ref)) continue;
+    const score = searchNameScore(entry, keywords);
+    if (score > 0) candidates.set(entry.ref, { entry, score });
+  }
+  return [...candidates.values()]
+    .sort((a, b) => b.score - a.score || a.entry.ref.localeCompare(b.entry.ref))
+    .slice(0, Math.min(limit, NEAR_MISS_MAX))
+    .map(({ entry }) => entry);
+}
+
+function searchExcerpt(content: string, terms: string[]): string {
+  const text = content.replace(/\s+/g, " ").trim();
+  if (text.length <= EXCERPT_MAX_CHARS) return text;
+  const lowered = text.toLowerCase();
+  const positions = terms.map((term) => lowered.indexOf(term.replace(/\s+/g, " "))).filter((at) => at >= 0);
+  const first = positions.length > 0 ? Math.min(...positions) : 0;
+  const start = Math.max(0, first - 40);
+  return (start > 0 ? "…" : "") + truncateExcerpt(text.slice(start));
 }
 
 async function gatherSearchUnits(
@@ -1283,51 +1260,60 @@ export async function recallSearch(
   const scanCursor = Math.min(units.length, Math.max(0, Math.floor(input.scanCursor ?? 0)));
   const scanEnd = Math.min(units.length, scanCursor + SEARCH_SCAN_CAP);
   const scanned = scanEnd - scanCursor;
+  if (scanned === 0) return { kind: "entries", entries: [], scanned, truncated: false, offset, pastEnd: true };
   const scanUnits = units.slice(scanCursor, scanEnd);
 
-  const hits: MemoryEntry[] = [];
   const scannedUnits = await mapWithConcurrency(
     scanUnits,
     RECALL_READ_CONCURRENCY,
-    async (unit): Promise<{ failed: boolean; entry: MemoryEntry | null }> => {
+    async (unit): Promise<{ failed: true } | { failed: false; entry: MemoryEntry | null; score: number }> => {
       let raw: string;
       try {
         raw = unit.sliceId
           ? await readSliceRaw(backend, unit.sliceId, "core")
           : await backend.readFile(unit.docPath);
       } catch {
-        return { failed: true, entry: null };
+        return { failed: true };
       }
       if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
       else if (unit.sliceId) raw = projectRecordArtifactTranscript(raw);
       if (unit.docPath.endsWith("/_current.md")) raw = parseCaseCurrent(raw).body;
       const segments = splitParagraphs(raw);
-      const found = segmentSearch(segments, keywords, 1, 1);
-      if (found.length === 0) return { failed: false, entry: null };
+      const found = segmentSearch(segments, keywords, 0, 0);
+      if (found.length === 0) return { failed: false, entry: null, score: 0 };
       const built = await unit.build(raw);
-      if (!built) return { failed: false, entry: null };
-      built.entry.excerpt = truncateExcerpt(found[0]!.content);
-      return { failed: false, entry: built.entry };
+      if (!built) return { failed: true };
+      const strongest = found.reduce((best, next) => next.keywords.length > best.keywords.length ? next : best);
+      built.entry.excerpt = searchExcerpt(strongest.content, strongest.keywords);
+      // Rank only within the stable candidate page; dates still decide scan
+      // coverage and break exact ties. Term coverage wins over name proximity.
+      const terms = new Set(found.flatMap((hit) => hit.keywords)).size;
+      const name = unit.sliceId ? 0 : searchNameScore(built.entry, keywords);
+      const score = strongest.keywords.length + terms / (keywords.length + 1) + name / (keywords.length + 1) ** 2;
+      return { failed: false, entry: built.entry, score };
     },
   );
-  let readFailures = 0;
-  const hitRefs = new Set<string>();
-  for (const r of scannedUnits) {
-    if (r.failed) readFailures += 1;
-    else if (r.entry && !hitRefs.has(r.entry.ref)) {
-      hitRefs.add(r.entry.ref);
-      hits.push(r.entry);
-    }
+  const readFailures = scannedUnits.filter((unit) => unit.failed).length;
+  const hitRefs = new Map<string, MemoryEntry>();
+  const ranked = scannedUnits.flatMap((unit) => !unit.failed && unit.entry ? [{ entry: unit.entry, score: unit.score }] : [])
+    .sort((a, b) => b.score - a.score);
+  for (const { entry } of ranked) {
+    if (!hitRefs.has(entry.ref)) hitRefs.set(entry.ref, entry);
   }
+  const hits = [...hitRefs.values()];
 
   const hasMoreCandidates = scanEnd < units.length;
+  const pathMatches = hits.length === 0 && (hasMoreCandidates || readFailures < scanned)
+    ? closestSearchPaths(units, index, keywords, limit)
+    : [];
   if (hits.length === 0 && !hasMoreCandidates) {
     if (readFailures === scanned) {
       return { kind: "unavailable", note: "every candidate document failed to read" };
     }
-    const recent = await recallRecent(backend, { category: input.category, n: RECENT_DEFAULT_N });
-    const entries = recent.kind === "entries" ? recent.entries : [];
-    return { kind: "fallback", reason: "no_match", entries };
+    return {
+      kind: "fallback", reason: "no_match", entries: pathMatches, scanned,
+      ...(readFailures > 0 ? { readFailures } : {}),
+    };
   }
 
   if (offset >= hits.length && hits.length > 0) {
@@ -1354,6 +1340,7 @@ export async function recallSearch(
     truncated: nextScanCursor !== undefined,
     ...(input.offset !== undefined ? { offset } : {}),
     total: hits.length,
+    ...(pathMatches.length > 0 ? { pathMatches } : {}),
     ...(nextScanCursor !== undefined ? { nextScanCursor, nextOffset } : {}),
     ...(readFailures > 0 ? { readFailures } : {}),
   };
@@ -1665,7 +1652,44 @@ export async function recallRead(
   if (result.kind === "content" && input.range && !normalizeCaseRefText(input.ref).startsWith("records/")) {
     return { ...result, content: applySemanticDocumentRange(input.ref, result.content, input.range) };
   }
+  const caseRef = result.kind === "content" ? owningCaseRef(result.path) : null;
+  if (result.kind === "content" && !input.range && !input.outline && caseRef) {
+    const exact = new Map<string, ScenarioRecallTarget>();
+    for (const { link } of extractSemanticDocumentLinks(result.content)) {
+      if (link.ref.startsWith("records/") && link.turnId && link.role) {
+        const target = { ref: link.ref, turnId: link.turnId, role: link.role };
+        exact.set(JSON.stringify(target), target);
+      }
+    }
+    const refs = [...extractMarkdownRefs(result.content),
+      ...(result.currentUnderstanding ? parseCaseCurrent(result.currentUnderstanding.content).evidence : [])];
+    const recordLeads = [...new Set(refs.flatMap((ref) => {
+      const record = canonicalConversationRecordRef(ref);
+      return record ? [record] : [];
+    }))].slice(0, 8);
+    const relatedCases = [...new Set(refs.flatMap((ref) => {
+      const candidate = parseCaseRef(ref);
+      return candidate && candidate.kind !== "legacy"
+        ? [`${candidate.category}/${candidate.caseName}`] : [];
+    }))].filter((ref) => ref !== caseRef).slice(0, 8);
+    result = {
+      ...result,
+      ...(exact.size ? { cardTargets: [...exact.values()].slice(0, 8) } : {}),
+      ...(recordLeads.length ? { recordLeads } : {}),
+      ...(relatedCases.length ? { relatedCases } : {}),
+    };
+  }
   return result;
+}
+
+/** Identify a case document from its resolved path, excluding archive shards. */
+function owningCaseRef(path: string): string | null {
+  if (!path.startsWith("memory/") || isHistoryArchiveFileName(path)) return null;
+  const [category, name, file, ...rest] = path.slice("memory/".length).split("/");
+  if (!name || !file || rest.length) return null;
+  const ref = `${category}/${name}`;
+  if (parseCaseRef(ref)?.kind !== "case") return null;
+  return file === "index.md" || file === "_current.md" || parsePieceFileName(file) ? ref : null;
 }
 
 async function recallReadBody(
@@ -2187,6 +2211,14 @@ function renderEntryLines(entries: MemoryEntry[]): string {
     .join("\n");
 }
 
+function renderSearchPathLeads(entries: MemoryEntry[]): string {
+  return entries.length > 0 ? `\nClosest names or paths (navigation only):\n${renderEntryLines(entries)}` : "";
+}
+
+function renderSearchReadFailures(count?: number): string {
+  return count ? `\n${count} candidate file(s) could not be read; those reads are gaps, not misses.` : "";
+}
+
 /**
  * Render a result with the FIXED template per kind — the model reads these
  * exact sentences, never improvised fallback wording.
@@ -2194,7 +2226,14 @@ function renderEntryLines(entries: MemoryEntry[]): string {
 export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}): string {
   switch (result.kind) {
     case "entries": {
+      const failures = renderSearchReadFailures(result.readFailures);
       if (result.pastEnd) {
+        if (meta.query !== undefined) {
+          return (
+            `No more matches in this scan page — offset ${result.offset ?? 0} is past the end; ` +
+            `only ${result.total ?? 0} matched.${failures}`
+          );
+        }
         return (
           `No more entries — offset ${result.offset ?? 0} is past the end; ` +
           `only ${result.total ?? result.scanned} exist in this scope, newest first.`
@@ -2202,7 +2241,9 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
       }
       const head =
         meta.query !== undefined
-          ? `${result.entries.length} match(es) for "${meta.query}":`
+          ? result.entries.length === 0
+            ? `No content match for "${meta.query}" in this scan page.`
+            : `${result.entries.length} match(es) for "${meta.query}":`
           : `The ${result.entries.length} most recent ${meta.category ?? "memory"} entries:`;
       const lines = renderEntryLines(result.entries);
       // Paging notes (fixed wording): an offset page with more entries behind
@@ -2219,14 +2260,12 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
       const matched = result.matchedName
         ? `\n(matched the near-name "${result.matchedName}" — that is the stored name)`
         : "";
-      const failures = result.readFailures
-        ? `\n${result.readFailures} candidate file(s) could not be read; those reads are gaps, not misses.`
-        : "";
-      return lines ? `${head}\n${lines}${note}${failures}${matched}` : `${head}${note}${failures}${matched}`;
+      return head + (lines ? `\n${lines}` : "") + note + failures + matched + renderSearchPathLeads(result.pathMatches ?? []);
     }
     case "fallback": {
-      const head = `Nothing matches "${meta.query ?? ""}". Here are the ${result.entries.length} most recent entries instead:`;
-      return result.entries.length > 0 ? `${head}\n${renderEntryLines(result.entries)}` : head;
+      const head = `No content match for "${meta.query ?? ""}" in this scan page.`;
+      const paths = renderSearchPathLeads(result.entries) || "\nNo related names or paths found.";
+      return head + renderSearchReadFailures(result.readFailures) + paths;
     }
     case "empty":
       return `There is nothing here yet — no ${meta.category ?? "memory"} entries exist in this scope.`;
@@ -2244,10 +2283,17 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
 /** Render a recallRead outcome. */
 export function renderRecallReadResult(result: RecallReadResult, ref: string): string {
   switch (result.kind) {
-    case "content":
-      return result.matchedRef
+    case "content": {
+      const navigation = (result.cardTargets?.length ||
+        result.recordLeads?.length || result.relatedCases?.length)
+        ? `\n\nSOURCE NAVIGATION ONLY — use relatedCases with recallRead, cardTargets with recallScenario.targets (exact messages), and recordLeads with recallScenario.refs (whole-slice clues). Verify original words before asserting facts.\n${JSON.stringify({
+          cardTargets: result.cardTargets, recordLeads: result.recordLeads, relatedCases: result.relatedCases,
+        })}`
+        : "";
+      return (result.matchedRef
         ? `(matched the near-name "${result.matchedRef}" — read it under that stored name)\n\n${result.content}`
-        : result.content;
+        : result.content) + navigation;
+    }
     case "outline":
       return renderOutlineResult(result);
     case "not_found": {

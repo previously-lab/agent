@@ -20,6 +20,7 @@ import { getGitHubReadHead, memoizeGitHubRead } from "@/lib/github/read-view";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
 import { readLocalFileCommits } from "@/lib/episodic/local-file-log";
 import { readGitHubHistoryPage, readReflectionHistoryChunk, type HistoryScanState } from "./hq-history";
+import { summaryMaterial } from "./reflection-history";
 import type { ReflectionHistoryCheckpoint } from "./commit-contract";
 import {
   parseReflectionRoundMessage,
@@ -274,25 +275,11 @@ function parseSummaryCommit(
 ): SummaryLogEntry[] {
   const sliceId =
     message.slice(SUMMARY_COMMIT_PREFIX.length).split("\n", 1)[0]?.trim() ?? "";
-  const turnIds: string[] = [];
-  for (const line of message.split("\n")) {
-    const m = /^- (?:user turn|reply|cognition|merge|reflection source) (\S+)$/.exec(line.trim());
-    if (m && !turnIds.includes(m[1])) turnIds.push(m[1]);
-  }
-  const locations = new Map<string, string>();
-  for (const line of message.split("\n")) {
-    const m = /^- record (\S+) in (\d{4}-\d{2}-\d{2}-\d{4})$/.exec(line.trim());
-    if (m) locations.set(m[1], m[2]);
-  }
-  const bySlice = new Map<string, string[]>();
-  for (const id of turnIds) {
-    const landing = locations.get(id) ?? sliceId;
-    const group = bySlice.get(landing) ?? [];
-    group.push(id);
-    bySlice.set(landing, group);
-  }
-  if (bySlice.size === 0) bySlice.set(sliceId, []);
-  return [...bySlice].map(([sliceId, turnIds]) => ({ sha, sliceId, turnIds, committedAt, message }));
+  const material = summaryMaterial({ sha, message, committedAt });
+  // The display/history API still returns the header-only row for a summary
+  // with no changed material. A locator-only row creates no scheduled work.
+  return (material.length > 0 ? material : [{ sha, sliceId, turnIds: [] }])
+    .map(({ sliceId, turnIds }) => ({ sha, sliceId, turnIds, committedAt, message }));
 }
 
 /**
@@ -605,7 +592,7 @@ export async function readReflectionWorldLog(continuation?: HistoryScanState): P
   history?: ReflectionHistoryCheckpoint;
   cursor: { sliceId: string | null };
   coverage: ReflectionCoverage;
-  summaries: Array<{ sliceId: string; turnIds: string[] }>;
+  summaries: Array<{ sliceId: string; turnIds: string[]; userTurnIds?: string[] }>;
   lastEvolutionDate: string | null;
 }> {
   const read = await readReflectionHistoryChunk(continuation);

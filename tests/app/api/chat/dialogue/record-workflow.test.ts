@@ -28,6 +28,22 @@ const request: DialogueRecordRequest = {
 };
 
 describe("dialogue record workflow", () => {
+  it("also projects the original user input when a work result exists", async () => {
+    const { buildThinkingProduct } = await import("@/lib/agents/thinking-product");
+    const work = {
+      workId: "input", scopeKey: "fixture", text: "Work output", producerRunId: "wrun_fixture",
+      source: request.source, sourceTurnId: request.sourceTurnId, locale: "en",
+      record: request.environment,
+      product: buildThinkingProduct({ text: "Work output", messages: [], asOf: request.source.acceptedAt,
+        inputScope: { scopeKey: "fixture", workId: "input", inputIds: ["input"], inputText: request.source.text, readScopeId: "input" } }),
+    };
+    h.project.mockResolvedValue(null);
+    await dialogueRecordWorkflow({ ...request, utterance: undefined, work });
+    expect(h.project).toHaveBeenCalledWith(expect.objectContaining({
+      work, inputs: [expect.objectContaining({ turnId: "input", reflectUserOnly: true })],
+    }));
+  });
+
   it("persists actual public output and independently rings its record ranges", async () => {
     h.project.mockResolvedValue({
       sliceId: "2026-11-07-0000", inputIds: ["input"], utteranceIds: ["work:call"],

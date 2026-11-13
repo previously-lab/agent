@@ -8,9 +8,8 @@ import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
  * `"use step"` executor from ./tool-executors — so every tool call is an
  * individually durable, auto-retried workflow step.
  *
- * Tools are conceptual, not filesystem-oriented. The agent sees slices,
- * case documents, and its own agent timelines — never file paths. Each tool
- * constructs its own path internally and only accesses its specific concept.
+ * Tools use public memory references. The directory tools list or match
+ * those references; each content reader owns its storage paths.
  */
 
 import { tool } from "@/lib/deepseek/tools";
@@ -21,6 +20,7 @@ import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { currentViewSchema } from "@/lib/chat/current-view";
 import { ROOM_SNAPSHOT_MAX_DOOR_COUNT } from "@/lib/game/room-snapshot";
 import { RECALL_CATEGORIES } from "@/lib/memory/categories";
+import { recallListInputSchema, recallPathFindInputSchema } from "@/lib/memory/navigation";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
 // (gray-matter → node:*), which the workflow bundler rejects.
@@ -30,6 +30,7 @@ import {
 } from "@/lib/docs/write-window";
 import {
   recallRecentExecute,
+  recallListExecute,
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
@@ -143,6 +144,9 @@ export const chatTools = {
   recallScenario: tool({
     description:
       "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
+      "When recallRead returns cardTargets, pass the relevant targets as-is. With only targets (no refs or cursor), the host reads the exact messages and returns their verified text without launching a recall agent. " +
+      "For older documents with only recordLeads, use up to four of those refs with searchTerms when you know useful literal words. The host searches user speech inside those records only; a literal miss does not rule out the topic. " +
+      "For older documents with only slice refs, pass those refs plus literal searchTerms to get matching original user excerpts without a recall agent. Keyword misses do not establish topical absence. " +
       "an independent recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
       "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
       "verification=quote_and_source_only: the narrative answer and evidence notes remain interpretations, not verified user facts. " +
@@ -161,8 +165,7 @@ export const chatTools = {
     description:
       "See what has been happening in memory — the N most recent ENTRIES " +
       "(ref / title / date / one-line excerpt), never raw files. Record rows expose focus/summary only as labeled navigation metadata; use recallScenario for verified original content. Semantic rows keep their excerpts. Results are newest " +
-      "activity first. Use this FIRST whenever the user asks about the past " +
-      "and you are not sure WHERE it lives: omit `category` and you get one " +
+      "activity first. Use this for questions about recent activity: omit `category` and you get one " +
       "cross-category timeline (conversation slices + cases interleaved by " +
       "activity date). Pass a category to look inside one world — events / " +
       "people / things / tasks / research / places / orgs / self / timeline " +
@@ -216,38 +219,21 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: recallRecentExecute,
   }),
-  // ② Locate ONE named thing — the point-lookup verb.
+  recallList: tool({
+    description:
+      "Browse the public memory directory. Omit path to list the categories, pass a category such as 'people' to list its case directories, or pass a case path to list its immediate documents. " +
+      "Returns one page of navigation entries and nextOffset when there is more. It reads no document text. Use recallRead on a returned ref to read a document; storage paths are not accepted.",
+    inputSchema: recallListInputSchema,
+    contextSchema: toolContextSchema,
+    execute: recallListExecute,
+  }),
+  // ② Locate named documents by their public directory paths.
   recallFind: tool({
     description:
-      "Locate ONE thing in memory by its name. Use this when the user (or a " +
-      "document) NAMES the thing: a case by name (category + the bare case " +
-      "name, e.g. category 'events', name '换手机'), a self document " +
-      "(category 'self': 'search', 'thinkdeep', … or the reserved bare file " +
-      "'agenda'), a slice by id (category 'records' or 'timeline', " +
-      "'2026-10-14-1836' — or a day '2026-10-14' for timeline). Give the " +
-      "name as you remember it — approximate names (a missing space, " +
-      "full/half-width punctuation, letter case) resolve automatically, " +
-      "and an approximate hit tells you the stored name it matched. " +
-      "FIXED result wording: a hit opens `The 1 most recent {category} " +
-      "entries:`; an approximate hit appends `(matched the near-name " +
-      "\"{stored name}\" — that is the stored name)`; a miss opens " +
-      "`Nothing named \"{name}\" exists in {category}. Closest matches: …` " +
-      "(or `…and nothing similar.`) — a miss is NOT proof of absence; " +
-      "check the near matches before telling the user anything is " +
-      "missing. Continue semantic refs with recallRead(ref); continue record refs with recallScenario.",
-    inputSchema: z.object({
-      category: z
-        .enum(RECALL_CATEGORIES)
-        .describe("Which world the named thing lives in."),
-      name: z
-        .string()
-        .min(1)
-        .describe(
-          "Case name / self document name ('agenda' included) / slice id " +
-          "(YYYY-MM-DD-HHMM) or day (YYYY-MM-DD for timeline) — as you " +
-          "remember it; near names resolve automatically.",
-        ),
-    }),
+      "Find public memory names or paths, ranked by match quality. Omit category to find candidates across categories; optionally scope to a category or a directory with under. " +
+      "Directory hits are navigation only and are not document reads. Use recallList on a directory path or recallRead on a document ref. " +
+      "If you already know a record date or slice ID, explicitly select category 'records' or 'timeline' and use recallScenario for original words.",
+    inputSchema: recallPathFindInputSchema,
     contextSchema: toolContextSchema,
     execute: recallFindExecute,
   }),
@@ -255,36 +241,19 @@ export const chatTools = {
   // first, raw conversation only on explicit request.
   recallSearch: tool({
     description:
-      "Keyword-search memory. The DEFAULT scan surface is the organized " +
-      "layer ONLY: case documents, self SOPs + agenda, the user profile, and " +
-      "slice HEADS (focus/summary lines). Raw conversation bodies " +
-      "(category 'records') are scanned ONLY when you pass category " +
-      "'records' or includeRecords:true — reach for the organized layer " +
-      "first; locate original conversations as the second layer when the answer is " +
-      "not in any document, then use recallScenario for their content. Keywords AND within a segment (pass synonyms as " +
-      "separate calls). Hits return entries whose excerpt is the matching " +
-      "snippet, newest activity first, up to `limit` (default 20, hard cap 30) " +
-      "per page. Each call scans at most 50 candidate files. When the result gives " +
-      "nextScanCursor/nextOffset, pass them as scanCursor/offset together to continue " +
-      "through hits and then older candidates; a partial scan is not absence. Order is newest first; `since` / `until` " +
-      "(YYYY-MM-DD) bound by " +
-      "activity date. FIXED result wording: hits open `{n} match(es) for " +
-      "\"{query}\":`; ZERO hits on a non-empty scope open `Nothing matches " +
-      "\"{query}\". Here are the {n} most recent entries instead:` — that is " +
-      "a FALLBACK, not absence, and you must not quote it as 'the user never " +
-      "recorded this'; an empty scope opens `There is nothing here yet — no " +
-      "{category} entries exist in this scope.`; a continuable scan appends " +
-      "`Scanned {n} candidate file(s); pass scanCursor={next} and offset={nextOffset} " +
-      "together to continue.`; an offset past the end returns `No more entries — offset " +
-      "{offset} is past the end; only {total} exist in this scope, newest " +
-      "first.` — an empty page is NOT absence. Record focus/summary rows are labeled navigation-only and never authorize evidence; raw turn excerpts stay hidden. " +
-      "Continue semantic refs with recallRead(ref) and record refs with recallScenario.",
+      "Search memory text by keyword. By default searches semantic documents, self documents, the user profile, and slice navigation heads. " +
+      "Raw conversation is scanned only with category 'records' or includeRecords:true; the resulting record refs are navigation only. Use recallScenario to verify original words. " +
+      "Each call scans at most 50 candidates and ranks the hits within that page by relevance. When given several keywords, it favors passages that match more of them together. " +
+      "If there is no text match in a page, the result may offer separately labeled related names or paths. Those are navigation leads, not content matches or evidence. " +
+      "Continue with both scanCursor and offset when supplied. An empty or partially unreadable page is not proof of absence.",
     inputSchema: z.object({
       query: z
-        .union([z.string(), z.array(z.string())])
+        .union([
+          z.string().trim().min(1).max(256),
+          z.array(z.string().trim().min(1).max(256)).min(1).max(8),
+        ])
         .describe(
-          "One keyword or several — within one segment every keyword must " +
-          "match (case-insensitive).",
+          "One keyword or up to eight (case-insensitive). Results favor passages matching more terms together.",
         ),
       category: z
         .enum(RECALL_CATEGORIES)
@@ -341,6 +310,7 @@ export const chatTools = {
       "resolves — the result opens by telling you which stored name it " +
       "matched. Case refs return the whole document. Original conversation refs, /records aliases, and raw record storage paths " +
       "return a typed recallScenario_required redirect instead of content; call recallScenario with a focused question and the canonical ref. " +
+      "Use the returned source navigation: follow relatedCases with recallRead, pass cardTargets to recallScenario.targets for exact messages, and use recordLeads only as whole-slice clues. " +
       "For a LONG semantic document, first call with `outline: true` " +
       "to get its heading skeleton (levels + line spans), then read only the " +
       "spans you need with `range: { type: \"lines\", start, end }`. FIXED " +
@@ -965,6 +935,7 @@ export function buildChatToolsContext(
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
     recallScenario: ctx,
     recallRecent: ctx,
+    recallList: ctx,
     recallFind: ctx,
     recallSearch: ctx,
     recallRead: ctx,

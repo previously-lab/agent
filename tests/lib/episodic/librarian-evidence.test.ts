@@ -12,6 +12,7 @@ vi.mock("@/lib/models/provider", () => ({
 const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
   failReadPath: null as string | null,
+  failWrite: null as ((path: string, content: string) => boolean) | null,
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
   flushBatch: vi.fn(async (batch: { entries: Map<string, string | null> }) => {
@@ -39,6 +40,7 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
       content: string,
       batch?: { entries: Map<string, string | null> },
     ) => {
+      if (io.failWrite?.(path, content)) throw new Error("injected backend write failure");
       if (batch) {
         batch.entries.set(path, content);
         return { path, created: true };
@@ -66,6 +68,11 @@ import { parseCaseCurrent, caseStorageRevision, renderCaseWithCurrent, caseCurre
 import { parseHistoryArchive } from "@/lib/docs/history-archive";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
+import { encodeDialogueRecordTurn } from "@/lib/episodic/dialogue-record";
+import { flushBatch } from "@/lib/episodic/io-helpers";
+import { slicePartPath } from "@/lib/episodic/paths";
+import { recallRead } from "@/lib/memory/facade";
+import { runScenarioRecall } from "@/lib/agents/scenario-recall";
 
 const model: ModelConfig = {
   id: "deepseek-v4-flash",
@@ -113,6 +120,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   io.files.clear();
   io.failReadPath = null;
+  io.failWrite = null;
 });
 
 type SliceTool = ReturnType<typeof makeSliceReadTool>;
@@ -122,6 +130,263 @@ async function callSliceTool(tool: SliceTool, input: SliceToolInput): Promise<st
   if (!tool.execute) throw new Error("readSlice execute missing");
   return tool.execute(input, { toolCallId: "slice-test", messages: [], context: undefined });
 }
+
+describe("case writer user card citations", () => {
+  const quote = "I replaced the failed battery today.";
+  const turnId = "user-battery";
+  const source = { sliceId: SLICE_ID, turnId, quote };
+  const documentPath = "memory/things/battery/index.md";
+  const citation = `previously:records/${SLICE_ID}?turn=${turnId}&role=user`;
+
+  function seedUserCard() {
+    const meta = encodeDialogueRecordTurn({ kind: "user_input", inputId: turnId, userSeq: 1 });
+    io.files.set(slicePartPath(SLICE_ID, "core"), `## Turn assistant — 2026-08-09T13:00:00Z (agent) [body-escaped v1]\n\n${quote}\n\n## Turn ${turnId} — 2026-08-09T13:01:00Z (user) [dialogue ${meta}] [body-escaped v1]\n\n${quote}`);
+  }
+
+  const report = { action: "open", category: "things", caseName: "battery", body: "Battery replacement confirmed.", sources: [source] };
+
+  function mockCardWriter(cases: unknown[], index: number, caseRef?: string) {
+    ai.streamText.mockImplementation(async (options: RunSubAgentOptions<unknown>) => {
+      const readSlice = options.tools.readSlice;
+      if (!readSlice?.execute) throw new Error("readSlice tool missing");
+      await readSlice.execute({ range: { type: "turns", indices: [index] } }, {
+        toolCallId: "card-source-read", messages: [], context: undefined,
+      });
+      if (caseRef) {
+        const readCase = options.tools.readCase;
+        if (!readCase?.execute) throw new Error("readCase tool missing");
+        await readCase.execute({ ref: caseRef }, {
+          toolCallId: "card-case-read", messages: [], context: undefined,
+        });
+      }
+      return streamWith([{ toolName: "caseWriterOutput", input: { cases, reasoning: "r" } }]);
+    });
+  }
+
+  it("queues an exact user citation in the case itself without a second file", async () => {
+    seedUserCard();
+    mockCardWriter([report], 1);
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({
+      model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+    });
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(["things/battery/index.md"]);
+    expect([...batch.entries.keys()]).toEqual([documentPath]);
+    expect(batch.entries.get(documentPath)).toContain(citation);
+    expect(batch.entries.get(documentPath)).not.toContain(quote);
+    expect(onCardLinked).toHaveBeenCalledExactlyOnceWith(source);
+  });
+
+  it("does not write or settle when the quote was read only from an assistant turn", async () => {
+    seedUserCard();
+    mockCardWriter([report], 0);
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({
+      model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("not read in this pass");
+    expect(batch.entries.size).toBe(0);
+    expect(onCardLinked).not.toHaveBeenCalled();
+  });
+
+  it("requires exact card sources for native-only writes while leaving explicit skip alone", async () => {
+    seedUserCard();
+    io.files.set(documentPath, "---\nopened: '2026-08-09'\n---\n\nExisting case.");
+    mockCardWriter([
+      { ...report, caseName: "new-battery", sources: undefined },
+      { ...report, action: "skip", sources: undefined, currentUnderstanding: { body: "New view.", evidence: [`records/${SLICE_ID}`] } },
+      { ...report, action: "skip", caseName: "ignored", sources: undefined },
+    ], 1, "things/battery");
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({
+      model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped).toEqual([
+      { name: "things/new-battery", reason: expect.stringContaining("requires an exact user card source") },
+      { name: "things/battery", reason: expect.stringContaining("requires an exact user card source") },
+    ]);
+    expect(batch.entries.size).toBe(0);
+    expect(onCardLinked).not.toHaveBeenCalled();
+  });
+
+  it("retains a derived-only document's exact material receipt without citing a user card", async () => {
+    seedUserCard();
+    mockCardWriter([{ ...report, sources: undefined }], 1);
+    const materialId = `${turnId}@research:fixture:1`;
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({
+      model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [materialId], onCardLinked,
+    });
+    expect(result.written).toEqual(["things/battery/index.md"]);
+    const receipts = [...batch.entries].filter(([path]) => path.startsWith("memory/config/document-products/"));
+    expect(receipts).toHaveLength(1);
+    expect(JSON.parse(receipts[0]![1]!)).toMatchObject({ turnIds: [materialId] });
+    expect(batch.entries.get(documentPath)).not.toContain(citation);
+    expect(onCardLinked).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the document if its exact citation cannot be queued", async () => {
+    seedUserCard();
+    mockCardWriter([report], 1);
+    io.failWrite = (path, content) => path === documentPath && content.includes(citation);
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({
+      model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("injected backend write failure");
+    expect(batch.entries.size).toBe(0);
+    expect(onCardLinked).not.toHaveBeenCalled();
+  });
+
+  it("settles a replay of an already cited piece without replacing or duplicating it", async () => {
+    seedUserCard();
+    io.files.set(documentPath, "---\nopened: '2026-08-09'\n---\n\nExisting case.");
+    const piece = { ...report, action: "addPiece", title: "Battery findings" };
+    const file = `memory/things/battery/${DATE}-Battery findings.md`;
+    mockCardWriter([piece], 1, "things/battery");
+    const onCardLinked = vi.fn();
+    const run = async () => {
+      const batch = { entries: new Map<string, string | null>() };
+      const result = await runLibrarianPass({
+        model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+        sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+      });
+      return { result, batch };
+    };
+    const first = await run();
+    expect(first.result.skipped).toEqual([]);
+    expect(first.batch.entries.get(file)).toContain(citation);
+    expect(first.batch.entries.get(documentPath)).not.toContain(citation);
+    await flushBatch(first.batch, "first piece");
+    const second = await run();
+    expect(second.result.skipped).toEqual([]);
+    expect(second.result.written).toEqual([]);
+    expect(second.batch.entries.size).toBe(0);
+    expect(onCardLinked).toHaveBeenCalledTimes(2);
+    expect(io.files.get(file)?.split(citation)).toHaveLength(2);
+  });
+
+  it("settles a replay of an unchanged current view without archiving the citation as a prose change", async () => {
+    seedUserCard();
+    const index = "---\nopened: '2026-08-09'\n---\n\nExisting case.";
+    const currentPath = "memory/things/battery/_current.md";
+    io.files.set(documentPath, index);
+    mockCardWriter([{
+      ...report, action: "reviseUnderstanding",
+      currentUnderstanding: { body: "Battery confirmed working.", evidence: [`records/${SLICE_ID}`] },
+    }], 1, "things/battery");
+    const onCardLinked = vi.fn();
+    const run = async () => {
+      const batch = { entries: new Map<string, string | null>() };
+      const result = await runLibrarianPass({
+        model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+        sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
+      });
+      return { result, batch };
+    };
+    const first = await run();
+    expect(first.result.skipped).toEqual([]);
+    expect([...first.batch.entries.keys()]).toEqual([currentPath]);
+    expect(first.batch.entries.get(currentPath)).toContain(citation);
+    await flushBatch(first.batch, "first current view");
+    const second = await run();
+    expect(second.result.skipped).toEqual([]);
+    expect(second.result.written).toEqual([]);
+    expect(second.batch.entries.size).toBe(0);
+    expect(io.files.get(documentPath)).toBe(index);
+    expect(onCardLinked).toHaveBeenCalledTimes(2);
+  });
+
+  it("recalls only the case's exact user cards, including the older source after revision", async () => {
+    const caseRef = "things/battery";
+    const recordRef = `records/${SLICE_ID}`;
+    const corePath = slicePartPath(SLICE_ID, "core");
+    const secondTurnId = "user-battery-followup";
+    const secondQuote = "The replacement battery is still holding a charge.";
+    const unrelatedQuote = "An unrelated user message in the same slice.";
+    const userTurn = (id: string, time: string, body: string) => {
+      const meta = encodeDialogueRecordTurn({ kind: "user_input", inputId: id, userSeq: 1 });
+      return `## Turn ${id} — 2026-08-09T${time}:00Z (user) [dialogue ${meta}] [body-escaped v1]\n\n${body}`;
+    };
+    io.files.set(corePath, [
+      userTurn(turnId, "13:00", quote),
+      userTurn("unrelated", "13:01", unrelatedQuote),
+      userTurn(secondTurnId, "13:02", secondQuote),
+      `## Turn ${turnId} — 2026-08-09T13:03:00Z (agent) [body-escaped v1]\n\nThe assistant's same-ID reply.`,
+    ].join("\n\n"));
+    const backend = {
+      listMemoryFiles: vi.fn(async () => [...io.files.keys()]),
+      readFile: vi.fn(async (path: string) => {
+        const raw = io.files.get(path);
+        if (raw === undefined) throw new Error(`File not found: ${path}`);
+        return raw;
+      }),
+    };
+    const write = async (materialId: string, index: number, op: unknown, readCase?: string) => {
+      mockCardWriter([op], index, readCase);
+      const batch = { entries: new Map<string, string | null>() };
+      const result = await runLibrarianPass({
+        model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+        sourceTurnIds: [materialId], cardTurnIds: [materialId],
+      });
+      expect(result.skipped).toEqual([]);
+      expect(result.written).toEqual([`${caseRef}/index.md`]);
+      await flushBatch(batch, "fixture");
+    };
+    await write(turnId, 0, report);
+    const original = await recallRead(backend, { ref: caseRef });
+    const originalTarget = { ref: recordRef, turnId, role: "user" };
+    expect(original).toMatchObject({ kind: "content", cardTargets: [originalTarget] });
+    expect(backend.readFile).not.toHaveBeenCalledWith(corePath);
+
+    await write(secondTurnId, 2, {
+      ...report, action: "updateIndex", body: "The replacement is working.",
+      sources: [{ sliceId: SLICE_ID, turnId: secondTurnId, quote: secondQuote }],
+    }, caseRef);
+    const revised = await recallRead(backend, { ref: caseRef });
+    if (revised.kind !== "content") throw new Error("Revised case was not readable");
+    expect(revised.content).toContain("The replacement is working.");
+    expect(revised.content).not.toContain("Battery replacement confirmed.");
+    expect([...io.files.keys()].sort()).toEqual([documentPath, corePath].sort());
+    expect(revised.cardTargets).toHaveLength(2);
+    expect(revised.cardTargets).toEqual(expect.arrayContaining([
+      originalTarget, { ref: recordRef, turnId: secondTurnId, role: "user" },
+    ]));
+    expect(backend.readFile).not.toHaveBeenCalledWith(corePath);
+
+    ai.streamText.mockClear();
+    backend.readFile.mockClear();
+    backend.listMemoryFiles.mockClear();
+    const exact = await runScenarioRecall({
+      backend, targets: revised.cardTargets, question: "What did the user say about the battery?",
+    });
+    expect(exact.status).toBe("ok");
+    expect(exact.evidence).toHaveLength(2);
+    expect(exact.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ...originalTarget, quote }),
+      expect.objectContaining({ ref: recordRef, turnId: secondTurnId, role: "user", quote: secondQuote }),
+    ]));
+    expect(JSON.stringify(exact)).not.toContain(unrelatedQuote);
+    expect(JSON.stringify(exact)).not.toContain("The assistant's same-ID reply.");
+    expect(backend.readFile).toHaveBeenCalledExactlyOnceWith(corePath);
+    expect(backend.listMemoryFiles).not.toHaveBeenCalled();
+    expect(ai.streamText).not.toHaveBeenCalled();
+  });
+});
 
 describe("original slice evidence", () => {
   it("carries source role/id/time when a page starts inside an assistant suggestion", async () => {

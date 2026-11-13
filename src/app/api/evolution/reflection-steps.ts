@@ -86,6 +86,8 @@ export interface ReflectionRound {
   actions: string[];
   /** Set when the round failed (the unit never throws — a failure rides here). */
   error?: string;
+  /** Unsettled native cards stay owed for the next wake. */
+  deferredCards?: number;
   /**
    * The unit's own one-line account of the round (its hqReport note), when
    * non-empty. The settle step decides whether it is staged as `lastNote`
@@ -318,10 +320,10 @@ export async function loadReflectionWorld(
       // and the docket says the log degraded.
       const candidates: SummaryHead[] = [];
       if (!historyCheckpoint && range && range.turnIds.length > 0) {
-        candidates.push({ sliceId: range.sliceId, turnIds: range.turnIds });
+        candidates.push(range);
       }
       candidates.push(...history.summaries);
-      scope = scopeFromSummaries(coverage, candidates);
+      scope = scopeFromSummaries(coverage, candidates, undefined, range?.sliceId);
     } catch {
       /* log unreadable — degraded semantics, never a throw */
       logDegraded = true;
@@ -350,22 +352,6 @@ export async function loadReflectionWorld(
       }
     } catch {
       /* heads are enhancers — the beat degrades, the lap does not */
-    }
-
-    // Hypothesis TTL is independent of whether this lap offers a card/direction
-    // pass. No expired line means no write; unavailable enumeration preserves.
-    try {
-      const { maintainUserModelHypothesisTtl } = await import("@/lib/evolution/user-model-maintenance");
-      const ttl = await maintainUserModelHypothesisTtl(scope.at(-1)?.sliceId);
-      if (ttl.diagnostic) console.warn(`[reflection] ${ttl.diagnostic}`);
-      if (ttl.retired.length > 0) {
-        console.log(`[reflection] retired ${ttl.retired.length} expired hypothesis(es) outside a card pass`);
-      }
-    } catch (error) {
-      console.warn(
-        "[reflection] hypothesis TTL maintenance failed; the current model was not cleared:",
-        error instanceof Error ? error.message : error,
-      );
     }
 
     // The agenda — absent file is the empty pad, not an error.
@@ -427,6 +413,22 @@ export async function loadReflectionWorld(
     return emptyDocket();
   }
   }, { fresh: true });
+}
+
+/** Run after the final round's commit, so maintenance cannot move its write basis. */
+export async function maintainReflectionHypothesisTtl(currentSliceId?: string): Promise<void> {
+  "use step";
+  try {
+    const { maintainUserModelHypothesisTtl } = await import("@/lib/evolution/user-model-maintenance");
+    const ttl = await maintainUserModelHypothesisTtl(currentSliceId);
+    if (ttl.diagnostic) console.warn(`[reflection] ${ttl.diagnostic}`);
+    if (ttl.retired.length > 0) {
+      console.log(`[reflection] retired ${ttl.retired.length} expired hypothesis(es) outside a card pass`);
+    }
+  } catch (error) {
+    console.warn("[reflection] hypothesis TTL maintenance failed:",
+      error instanceof Error ? error.message : error);
+  }
 }
 
 /**
@@ -496,6 +498,7 @@ export async function handleReflectionRound(docket: ReflectionDocket): Promise<R
     ...(outcome.note ? { note: outcome.note } : {}),
     ...(outcome.disposition ? { disposition: outcome.disposition } : {}),
     ...(outcome.evolved ? { evolved: true } : {}),
+    ...(outcome.deferredCards ? { deferredCards: outcome.deferredCards } : {}),
   };
 }
 

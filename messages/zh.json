@@ -163,18 +163,32 @@
       "denied": "已拒绝",
       "interrupted": "已中断",
       "recall": {
+        "recallList": "正在浏览记忆目录…",
         "recallRecent": "正在回忆最近的事…",
         "recallFind": "正在记忆里定位…",
         "recallSearch": "正在搜索记忆…",
         "recallRead": "正在读取记忆…",
         "recallSince": "正在回忆变更…",
         "name": {
+          "recallList": "浏览目录",
           "recallRecent": "回忆最近",
           "recallFind": "定位",
           "recallSearch": "搜索记忆",
           "recallSince": "回忆变更"
         },
         "nameRead": "读取",
+        "summaryDirectory": "目录条目 · 显示 {count} / {total}",
+        "directoryStatus": {
+          "not_found": "目录里没有找到这一层",
+          "invalid_scope": "请输入公开的记忆目录或名称"
+        },
+        "directoryPage": "还有条目（从 offset {offset} 继续）。",
+        "summarySearchMiss": "「{query}」· 这一页没有正文命中",
+        "searchPathLeads": "以下是按名称或路径找到的线索，还没有读取正文：",
+        "searchNoPathLeads": "没有找到相关的名称或路径。",
+        "searchContinuation": "已扫描 {scanned} 个候选；下一页从 scanCursor={scanCursor}、offset={offset} 继续。",
+        "searchFailures": "有 {count} 个候选未能读取，这部分尚未确认。",
+        "searchPastEnd": "这一页共命中 {total} 条，offset {offset} 已越过末尾。",
         "scope": {
           "memory": "全部记忆",
           "events": "事件",
@@ -285,6 +299,7 @@
       "tool_recallScenario": "回忆对话",
       "tool_recallRecent": "回忆最近的事",
       "tool_recallFind": "定位记忆",
+      "tool_recallList": "浏览目录",
       "tool_recallSearch": "搜索记忆",
       "tool_recallRead": "读取记忆",
       "tool_recallSince": "回忆变更",

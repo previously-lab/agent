@@ -57,7 +57,9 @@ export async function dialogueRecordWorkflow(
       turnId: request.sourceTurnId,
       ...(request.environment.sliceId ? { sliceId: request.environment.sliceId } : {}),
       ...(request.environment.images?.length ? { images: request.environment.images } : {}),
-      reflectUserOnly: !request.work,
+      // The original input owes its own reflection even when this projection
+      // also records a derived result. The projector deduplicates each lane.
+      reflectUserOnly: true,
     }],
     ...(request.work ? { work: request.work } : {}),
     ...(request.utterance ? { utterance: request.utterance } : {}),

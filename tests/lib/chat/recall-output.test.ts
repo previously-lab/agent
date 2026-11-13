@@ -81,6 +81,21 @@ describe("parseRecallOutput — recallRecent", () => {
 });
 
 describe("parseRecallOutput — recallFind", () => {
+  it("preserves directory paths, readable refs and the next page from structured navigation", () => {
+    const entries = [
+      { kind: "directory", path: "orgs/AirJelly", ref: "orgs/AirJelly", name: "AirJelly" },
+      { kind: "document", path: "orgs/AirJelly/_current.md", ref: "orgs/AirJelly", name: "_current.md" },
+    ];
+    const response = { kind: "entries", entries, total: 3, nextOffset: 2 };
+    expect(parseRecallOutput("recallList", response)).toEqual({
+      kind: "directory", entries, total: 3, nextOffset: 2,
+    });
+    expect(parseRecallOutput("recallFind", { kind: "invalid_scope" })).toEqual({
+      kind: "directoryMiss", reason: "invalid_scope",
+    });
+    expect(parseRecallOutput("recallRead", response)).toBeNull();
+  });
+
   it("parses a miss with near matches", () => {
     const out =
       'Nothing named "换手机" exists in events. Closest matches: events/换手机号, things/手机.';
@@ -101,6 +116,21 @@ describe("parseRecallOutput — recallFind", () => {
 });
 
 describe("parseRecallOutput — recallSearch", () => {
+  it("keeps ranked path suggestions distinct from text hits and retains search coverage", () => {
+    const out = [
+      'No content match for "AirJelly" in this scan page.',
+      "Scanned 50 candidate file(s); pass scanCursor=50 and offset=0 together to continue. This partial scan is not absence.",
+      "2 candidate file(s) could not be read; those reads are gaps, not misses.",
+      "Closest names or paths (navigation only):",
+      "- [undated] AirJelly (ref: orgs/AirJelly)",
+    ].join("\n");
+    expect(parseRecallOutput("recallSearch", out)).toEqual({
+      kind: "searchMiss", query: "AirJelly",
+      entries: [{ title: "AirJelly", excerpt: "", ref: "orgs/AirJelly" }],
+      coverage: { continuation: { scanned: 50, scanCursor: 50, offset: 0 }, failures: 2 },
+    });
+  });
+
   it("parses a hit page with the query", () => {
     const out =
       '2 match(es) for "手机 电池":\n' +

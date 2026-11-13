@@ -2,13 +2,11 @@
  * Parsers for the memory-read verbs' FIXED result wording
  * (src/lib/memory/facade.ts renderRecallResult / renderRecallReadResult).
  *
- * The tool outputs reaching the UI are plain strings whose sentences are
- * FROZEN — the renderer classifies a result by matching those templates,
- * never by guessing. Anything that matches nothing falls through to
- * `unknown` and is rendered verbatim, so a wording change degrades to the
- * raw view instead of a wrong state.
+ * Navigation tools have a structured response. Legacy recall responses are
+ * classified by their fixed templates; unrecognized text renders verbatim.
  */
 import { unwrapCaseReadEnvelope } from "./case-read-receipt";
+import type { DirectoryEntry } from "@/lib/memory/navigation";
 
 export interface ParsedEntry {
   /** YYYY-MM-DD, or undefined when the entry is undated. */
@@ -36,6 +34,20 @@ export type RecallPageNote =
 
 export type ParsedRecallOutput =
   | {
+      kind: "directory";
+      entries: DirectoryEntry[];
+      total: number;
+      nextOffset?: number;
+    }
+  | { kind: "directoryMiss"; reason: "not_found" | "invalid_scope" }
+  | {
+      kind: "searchMiss";
+      query: string;
+      entries: ParsedEntry[];
+      coverage?: SearchCoverage;
+    }
+  | { kind: "searchPastEnd"; offset: number; total: number; coverage?: SearchCoverage }
+  | {
       /** A hit page: recent-N or search matches, optionally with a paging note. */
       kind: "entries";
       /** The search query (search verb only). */
@@ -46,6 +58,7 @@ export type ParsedRecallOutput =
       note?: RecallPageNote;
       /** Present when a near-name matched — the stored name differs. */
       matchedName?: string;
+      coverage?: SearchCoverage;
     }
   | {
       /** Keyword miss on a non-empty scope — the entries are a FALLBACK, not hits. */
@@ -108,6 +121,11 @@ export type ParsedRecallOutput =
       text: string;
     };
 
+interface SearchCoverage {
+  continuation?: { scanned: number; scanCursor: number; offset: number };
+  failures?: number;
+}
+
 /** One changed entry line of a recallSince result. */
 export interface ParsedChangeEntry {
   change: "added" | "modified" | "removed";
@@ -131,6 +149,13 @@ const RE_FALLBACK_HEAD =
   /^Nothing matches "(.*)"\. Here are the (\d+) most recent entries instead:$/;
 const RE_RECENT_HEAD = /^The (\d+) most recent (.+) entries:$/;
 const RE_SEARCH_HEAD = /^(\d+) match\(es\) for "(.*)":$/;
+const RE_SEARCH_MISS = /^No content match for "(.*)" in this scan page\.$/;
+const RE_SEARCH_PAST_END =
+  /^No more matches in this scan page — offset (\d+) is past the end; only (\d+) matched\.$/;
+const RE_SEARCH_CONTINUATION =
+  /^Scanned (\d+) candidate file\(s\); pass scanCursor=(\d+) and offset=(\d+) together to continue\. This partial scan is not absence\.$/;
+const RE_SEARCH_FAILURES =
+  /^(\d+) candidate file\(s\) could not be read; those reads are gaps, not misses\.$/;
 const RE_ENTRY_LINE = /^- \[([^\]]*)\] ([\s\S]*?) \(ref: (.+)\)$/;
 const RE_NOTE_OFFSET =
   /^Showing (\d+) from offset (\d+) — pass offset=(\d+) for older ones\.$/;
@@ -213,15 +238,40 @@ function parseEntryBody(lines: string[]): {
   return { entries, note, matchedName };
 }
 
-/**
- * Classify a recall verb's string output. `toolName` selects the fallback:
- * anything unrecognized is `content` for recallRead (its happy path is a raw
- * document body) and `unknown` for the list verbs.
- */
+function parseSearchCoverage(lines: string[]): SearchCoverage | undefined {
+  const coverage: SearchCoverage = {};
+  for (const line of lines) {
+    const next = RE_SEARCH_CONTINUATION.exec(line);
+    if (next) coverage.continuation = { scanned: Number(next[1]), scanCursor: Number(next[2]), offset: Number(next[3]) };
+    const failed = RE_SEARCH_FAILURES.exec(line);
+    if (failed) coverage.failures = Number(failed[1]);
+  }
+  return coverage.continuation || coverage.failures ? coverage : undefined;
+}
+
+function isDirectoryEntry(value: unknown): value is DirectoryEntry {
+  if (value === null || typeof value !== "object") return false;
+  const entry = value as Record<string, unknown>;
+  return (entry.kind === "directory" || entry.kind === "document") &&
+    typeof entry.path === "string" && typeof entry.name === "string" &&
+    (entry.ref === undefined || typeof entry.ref === "string");
+}
+
+function parseDirectoryOutput(output: object): ParsedRecallOutput | null {
+  const { kind, entries, total, nextOffset, note } = output as Record<string, unknown>;
+  if (kind === "not_found" || kind === "invalid_scope") return { kind: "directoryMiss", reason: kind };
+  if (kind === "unavailable") return { kind: "readFailure", note: typeof note === "string" ? note : "" };
+  if (kind !== "entries" || !Array.isArray(entries) || !entries.every(isDirectoryEntry) || typeof total !== "number") return null;
+  return { kind: "directory", entries, total, ...(typeof nextOffset === "number" ? { nextOffset } : {}) };
+}
+
 export function parseRecallOutput(
   toolName: string,
   output: unknown,
 ): ParsedRecallOutput | null {
+  if ((toolName === "recallList" || toolName === "recallFind") && output !== null && typeof output === "object") {
+    return parseDirectoryOutput(output);
+  }
   if (typeof output !== "string" || output.length === 0) return null;
   const text = unwrapCaseReadEnvelope(output);
 
@@ -355,6 +405,21 @@ export function parseRecallOutput(
   }
 
   const lines = text.split("\n");
+  const searchMiss = toolName === "recallSearch" ? RE_SEARCH_MISS.exec(lines[0] ?? "") : null;
+  if (searchMiss) {
+    const body = lines.slice(1);
+    const marker = body.indexOf("Closest names or paths (navigation only):");
+    const { entries } = parseEntryBody(marker === -1 ? [] : body.slice(marker + 1));
+    const coverage = parseSearchCoverage(marker === -1 ? body : body.slice(0, marker));
+    return { kind: "searchMiss", query: searchMiss[1], entries, ...(coverage ? { coverage } : {}) };
+  }
+
+  const searchPastEnd = toolName === "recallSearch" ? RE_SEARCH_PAST_END.exec(lines[0] ?? "") : null;
+  if (searchPastEnd) {
+    const coverage = parseSearchCoverage(lines.slice(1));
+    return { kind: "searchPastEnd", offset: Number(searchPastEnd[1]), total: Number(searchPastEnd[2]), ...(coverage ? { coverage } : {}) };
+  }
+
   const fallbackHead = RE_FALLBACK_HEAD.exec(lines[0] ?? "");
   if (fallbackHead) {
     const { entries } = parseEntryBody(lines.slice(1));
@@ -376,12 +441,14 @@ export function parseRecallOutput(
   const searchHead = RE_SEARCH_HEAD.exec(lines[0] ?? "");
   if (searchHead) {
     const { entries, note, matchedName } = parseEntryBody(lines.slice(1));
+    const coverage = parseSearchCoverage(lines.slice(1));
     return {
       kind: "entries",
       query: searchHead[2],
       entries,
       ...(note ? { note } : {}),
       ...(matchedName ? { matchedName } : {}),
+      ...(coverage ? { coverage } : {}),
     };
   }
 

@@ -496,12 +496,69 @@ describe("recallSearch", () => {
     expect(hit!.excerpt).toContain("报价");
   });
 
+  it("ranks stronger content matches before recency without changing pagination", async () => {
+    const files = makeBackend({
+      "memory/research/First/index.md": "---\nopened: 2026-10-01\n---\n\n" +
+        "背景。".repeat(100) + " migration rollout",
+      "memory/research/Second/index.md": "---\nopened: 2026-10-02\n---\n\nmigration\n\nrollout",
+      "memory/research/Third/index.md": "---\nopened: 2026-10-03\n---\n\nrollout",
+    });
+    const input = { category: "research", query: ["migration", "rollout"], limit: 1 } as const;
+    const first = await recallSearch(files, { ...input, query: [...input.query] });
+    if (first.kind !== "entries") throw new Error(`expected matches, got ${first.kind}`);
+    expect(first.entries.map((entry) => entry.ref)).toEqual(["research/First"]);
+    expect(first.entries[0]?.excerpt).toContain("migration rollout");
+    expect(first).toMatchObject({ scanned: 3, total: 3, nextScanCursor: 0, nextOffset: 1 });
+    const second = await recallSearch(files, {
+      ...input, query: [...input.query], scanCursor: first.nextScanCursor, offset: first.nextOffset,
+    });
+    if (second.kind !== "entries") throw new Error(`expected matches, got ${second.kind}`);
+    expect(second.entries.map((entry) => entry.ref)).toEqual(["research/Second"]);
+  });
+
+  it("ranks only matching names on a content miss and does not read unrelated records", async () => {
+    const files = makeBackend({
+      "memory/research/AirJelly/index.md": "---\nopened: 2026-10-01\n---\n\n部署计划",
+      "memory/research/AirJelly Notes/index.md": "---\nopened: 2026-10-02\n---\n\n日常记录",
+      "memory/research/Weekend/index.md": "---\nopened: 2026-10-03\n---\n\n出行计划",
+      "memory/things/AirJelly/index.md": "---\nopened: 2026-10-04\n---\n\n其他分类",
+      "memory/config/AirJelly/index.md": "internal config",
+      "memory/records/2026/10/04/1200/core.md": sliceCore("AirJelly", "原始对话"),
+    });
+    const readFile = vi.fn(files.readFile);
+    const input = { category: "research", query: "AirJelly" } as const;
+    const result = await recallSearch({ ...files, readFile }, input);
+    expect(result).toMatchObject({
+      kind: "fallback", reason: "no_match", scanned: 3,
+      entries: [
+        { ref: "research/AirJelly", excerpt: "" },
+        { ref: "research/AirJelly Notes", excerpt: "" },
+      ],
+    });
+    expect(readFile.mock.calls.map(([path]) => path).sort()).toEqual([
+      "memory/research/AirJelly Notes/index.md",
+      "memory/research/AirJelly/index.md",
+      "memory/research/Weekend/index.md",
+    ]);
+    const rendered = renderRecallResult(result, { query: input.query });
+    expect(rendered).toContain("Closest names or paths (navigation only):");
+    expect(rendered).not.toContain("Weekend");
+
+    const scoped = await recallSearch(files, { ...input, since: "2026-10-02" });
+    expect(scoped).toMatchObject({
+      kind: "fallback", entries: [{ ref: "research/AirJelly Notes" }],
+    });
+    const noMultiTermMatch = await recallSearch(files, { ...input, query: ["AirJelly", "Pineapple"] });
+    expect(noMultiTermMatch).toMatchObject({ kind: "fallback", entries: [] });
+  });
+
   it("scan discipline: records bodies are NOT scanned by default", async () => {
     // 深埋关键词-企鹅 lives only inside a slice body, past the 30-line head:
     // zero hits → fallback, even though the word IS in the record.
     const r = await recallSearch(backend, { query: "深埋关键词" });
     if (r.kind !== "fallback") throw new Error(`expected fallback, got ${r.kind}`);
     expect(r.reason).toBe("no_match");
+    expect(r.entries).toEqual([]);
   });
 
   it("scan discipline: category records scans slice bodies", async () => {
@@ -539,6 +596,42 @@ describe("recallSearch", () => {
     expect(second.entries.map((entry) => entry.ref)).toEqual(["records/2026-10-01-0000"]);
     expect(second.nextScanCursor).toBeUndefined();
     expect(second.truncated).toBe(false);
+  });
+
+  it("keeps path leads separate from an empty partial content page", async () => {
+    const many: Record<string, string> = {
+      "memory/research/AirJelly/index.md": "---\nopened: 2026-10-01\n---\n\n旧案",
+    };
+    for (let i = 0; i < 50; i += 1) {
+      many[`memory/research/Extra${i}/index.md`] = "---\nopened: 2026-10-02\n---\n\n无关内容";
+    }
+    const result = await recallSearch(makeBackend(many), { category: "research", query: "AirJelly" });
+    expect(result).toMatchObject({
+      kind: "entries", entries: [], scanned: 50, truncated: true, nextScanCursor: 50, nextOffset: 0,
+      pathMatches: [{ ref: "research/AirJelly", excerpt: "" }],
+    });
+    const rendered = renderRecallResult(result, { query: "AirJelly" });
+    expect(rendered).toContain('No content match for "AirJelly" in this scan page.');
+    expect(rendered).toContain("This partial scan is not absence.");
+    expect(rendered).toContain("Closest names or paths (navigation only):");
+  });
+
+  it("reports unreadable candidates separately from genuine misses", async () => {
+    const files = makeBackend({ "memory/things/Other/index.md": "unrelated" });
+    const missing = "memory/things/AirJelly/index.md";
+    const both: RecallBackend = {
+      ...files, listMemoryFiles: async () => [...await files.listMemoryFiles(), missing],
+    };
+    const result = await recallSearch(both, { category: "things", query: "AirJelly" });
+    expect(result).toMatchObject({ kind: "fallback", scanned: 2, readFailures: 1 });
+    expect(renderRecallResult(result, { query: "AirJelly" })).toContain(
+      "1 candidate file(s) could not be read; those reads are gaps, not misses.",
+    );
+
+    const unreadable = await recallSearch({ ...files, listMemoryFiles: async () => [missing] }, {
+      category: "things", query: "AirJelly",
+    });
+    expect(unreadable).toMatchObject({ kind: "unavailable" });
   });
 
   it("reports the scan page as truncated and scans newest-first", async () => {
@@ -594,7 +687,7 @@ describe("recallSearch", () => {
     expect(r.pastEnd).toBe(true);
     expect(r.total).toBe(2);
     expect(renderRecallResult(r, { query: "iPhone" })).toBe(
-      "No more entries — offset 2 is past the end; only 2 exist in this scope, newest first.",
+      "No more matches in this scan page — offset 2 is past the end; only 2 matched.",
     );
   });
 });
@@ -602,6 +695,36 @@ describe("recallSearch", () => {
 // ─── Verb ④ recallRead ────────────────────────────────────────────────────
 
 describe("recallRead", () => {
+  it("derives navigation from a case's Markdown without opening records or a separate index", async () => {
+    const index = "memory/research/试点计划/index.md";
+    const document = [
+      "# 试点计划",
+      "",
+      "[用户原话](previously:records/2026-10-14-1836?turn=u1&role=user)",
+      "(refs: 2026-10-15-1800)",
+      "[相关验收](previously:events/试点验收)",
+    ].join("\n");
+    const sidecar = `memory/config/card-links/${createHash("sha256").update("research/试点计划").digest("hex")}/2026-10-16-1800-${"a".repeat(64)}.json`;
+    const store = makeBackend({ [index]: document, [sidecar]: "{}" });
+    const read = vi.spyOn(store, "readFile");
+    const result = await recallRead(store, { ref: "research/试点计划" });
+    expect(result).toMatchObject({
+      kind: "content",
+      content: document,
+      cardTargets: [{ ref: "records/2026-10-14-1836", turnId: "u1", role: "user" }],
+      recordLeads: expect.arrayContaining(["records/2026-10-15-1800"]),
+      relatedCases: ["events/试点验收"],
+    });
+    expect(renderRecallReadResult(result, "research/试点计划")).toContain("SOURCE NAVIGATION ONLY");
+    expect(read.mock.calls.some(([path]) => path === sidecar || path.startsWith("memory/records/"))).toBe(false);
+
+    const range = await recallRead(store, {
+      ref: "research/试点计划", range: { type: "lines", start: 1, end: 1 },
+    });
+    expect(range).toMatchObject({ kind: "content" });
+    expect(renderRecallReadResult(range, "research/试点计划")).not.toContain("records/");
+  });
+
   it("reads a case index by ref", async () => {
     const r = await recallRead(backend, { ref: "research/手机调研" });
     if (r.kind !== "content") throw new Error(`expected content, got ${r.kind}`);
@@ -801,7 +924,7 @@ describe("fixed rendering", () => {
   it("fallback renders the no-match sentence", async () => {
     const r = await recallSearch(backend, { query: "不存在的东西" });
     const text = renderRecallResult(r, { query: "不存在的东西" });
-    expect(text).toMatch(/^Nothing matches "不存在的东西"\. Here are the \d+ most recent entries instead:/);
+    expect(text).toBe('No content match for "不存在的东西" in this scan page.\nNo related names or paths found.');
   });
 
   it("empty renders the nothing-here sentence", async () => {

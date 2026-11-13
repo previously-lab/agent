@@ -43,6 +43,19 @@ describe("reflection material versions and complete-prefix checkpoints", () => {
     expect(summaryMaterial({ ...commit, message: `Summary — ${slice}\n\n- record replay in ${slice}` })).toEqual([]);
   });
 
+  it("keeps only pending native user ids after an exact partial settlement", () => {
+    const work = "turn1@research:work%3A1:1";
+    const native = { ...material(1), message: `Summary — ${slice}\n\n- reflection source turn1\n- reflection source ${work}\n- record ${work} in ${slice}` };
+    const history = projectReflectionHistory([native], sha(1));
+    expect(history.pending).toEqual([{ sha: sha(1), sliceId: slice, turnIds: ["turn1", work], userTurnIds: ["turn1"] }]);
+    expect(settleHistoryCheckpoint(history, [{ sliceId: slice, turnIds: [work] }]).pending)
+      .toEqual([{ sha: sha(1), sliceId: slice, turnIds: ["turn1"], userTurnIds: ["turn1"] }]);
+    const trailer = { observed: [{ sha: sha(1), sliceId: slice, turnIds: ["turn1"] }], history };
+    const handled = round(2, 1, trailer);
+    expect(parseReflectionRoundMessage(handled.message)?.trailer).toEqual(trailer);
+    expect(projectReflectionHistory([handled], sha(2), history).pending).toEqual([{ sha: sha(1), sliceId: slice, turnIds: [work] }]);
+  });
+
   it("checkpoint settlement preserves pending exceptions and the original basis on ref conflicts", () => {
     const history = projectReflectionHistory([material(2, "turn2", [1]), material(1)], sha(2));
     const settled = settleHistoryCheckpoint(history, [{ sliceId: slice, turnIds: ["turn1"] }]);

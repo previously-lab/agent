@@ -68,7 +68,7 @@ export interface ReflectionHistoryCheckpoint {
   basis: string;
   cursor: string | null;
   evolved: string | null;
-  pending: Array<{ sha: string; sliceId: string; turnIds: string[] }>;
+  pending: Array<{ sha: string; sliceId: string; turnIds: string[]; userTurnIds?: string[] }>;
   latestNote?: { note: string; at: string };
 }
 
@@ -81,7 +81,9 @@ function parseHistoryCheckpoint(value: string): ReflectionHistoryCheckpoint | nu
     if (c.version !== 1 || !sha(c.basis) || (c.cursor !== null && !slice(c.cursor)) ||
       (c.evolved !== null && (typeof c.evolved !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(c.evolved))) ||
       !Array.isArray(c.pending) || c.pending.some(m => !sha(m.sha) || !slice(m.sliceId) || !Array.isArray(m.turnIds) ||
-        m.turnIds.length === 0 || m.turnIds.some(t => typeof t !== "string" || !/^\S+$/.test(t)))) return null;
+      m.turnIds.length === 0 || m.turnIds.some(t => typeof t !== "string" || !/^\S+$/.test(t)) ||
+      (m.userTurnIds !== undefined && (!Array.isArray(m.userTurnIds) ||
+        m.userTurnIds.some(t => typeof t !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(t) || !m.turnIds.includes(t)))))) return null;
     if (c.latestNote !== undefined && (!c.latestNote || typeof c.latestNote.note !== "string" || typeof c.latestNote.at !== "string")) return null;
     return c;
   } catch { return null; }

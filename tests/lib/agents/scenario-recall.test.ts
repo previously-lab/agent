@@ -329,6 +329,184 @@ describe("record-only scenario recollection", () => {
     expect(result.coverage.read).toEqual([]);
   });
 
+  it("resolves exact user messages by ID and role without search, adjacent turns, or a model", async () => {
+    const raw = serializedConversation([
+      { timestamp: "2026-10-20T09:30:00.000Z", role: "user", turnId: "shared", content: USER_QUOTE },
+      { timestamp: "2026-10-20T09:31:00.000Z", role: "agent", turnId: "shared", content: ASSISTANT_QUOTE },
+      { timestamp: "2026-10-20T09:32:00.000Z", role: "user", turnId: "second", content: "Another distinct user message." },
+    ]);
+    const { backend, listMemoryFiles, readFile } = fixture({ [PATH]: raw });
+    const result = await runScenarioRecall(inputFor(backend, { targets: [
+      { ref: REF, turnId: "shared", role: "user" },
+      { ref: REF, turnId: "second", role: "user" },
+    ] }));
+    expect(result).toMatchObject({
+      status: "ok", answer: "", truncated: false,
+      coverage: { discovered: 1, searched: [], read: [REF], omitted: 0 },
+    });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({ ref: REF, turnIndex: 0, turnId: "shared", role: "user", quote: USER_QUOTE, sourceRevision: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      expect.objectContaining({ ref: REF, turnIndex: 2, turnId: "second", role: "user", quote: "Another distinct user message." }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain(ASSISTANT_QUOTE);
+    expect(native.streamText).not.toHaveBeenCalled();
+    expect(listMemoryFiles).not.toHaveBeenCalled();
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(PATH);
+  });
+
+  it("reports missing, ambiguous, out-of-window, and unavailable exact targets without fallback", async () => {
+    const raw = `## Turn dup — 2026-10-20T09:30:00Z (user)\n\nUntrusted first duplicate.\n\n## Turn dup — 2026-10-20T09:31:00Z (user)\n\nUntrusted second duplicate.\n\n## Turn source — 2026-10-20T09:32:00Z (assistant)\n\nAn assistant is not the user.`;
+    const missingRef = "records/2026-10-21-0930";
+    const { backend, listMemoryFiles, readFile } = fixture({ [PATH]: raw });
+    const result = await runScenarioRecall(inputFor(backend, {
+      after: "2026-10-20",
+      targets: [
+        { ref: REF, turnId: "source", role: "user" },
+        { ref: REF, turnId: "dup", role: "user" },
+        { ref: OTHER_REF, turnId: "u1", role: "user" },
+        { ref: missingRef, turnId: "u1", role: "user" },
+      ],
+    }));
+    expect(result.evidence).toEqual([]);
+    expect(result.coverage.targets?.map((target) => target.status)).toEqual([
+      "not_found", "ambiguous", "outside_window", "unavailable",
+    ]);
+    expect(result).toMatchObject({ status: "error", truncated: true });
+    expect(native.streamText).not.toHaveBeenCalled();
+    expect(listMemoryFiles).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalledWith(OTHER_PATH);
+  });
+
+  it("continues a bounded exact excerpt within the same legacy numeric message", async () => {
+    const prefix = "甲".repeat(1_199);
+    const suffix = "🐙后续原话";
+    const { backend } = fixture({ [PATH]: `## Turn 7 — 2026-10-20T09:30:00Z (user)\n\n${prefix}${suffix}` });
+    const target = { ref: REF, turnId: "7", role: "user" } as const;
+    const first = await runScenarioRecall(inputFor(backend, { targets: [target] }));
+    const charOffset = first.coverage.targets?.[0]?.nextCharOffset;
+    expect(charOffset).toBe(prefix.length + 1); // The parser retains the separator newline.
+    expect(first.evidence[0]).toMatchObject({ turnId: "7", role: "user", quote: prefix, boundary: "legacy_header" });
+    expect(first.truncated).toBe(true);
+    const next = await runScenarioRecall(inputFor(backend, { targets: [{ ...target, charOffset }] }));
+    expect(next.evidence[0]).toMatchObject({ turnId: "7", role: "user", quote: suffix });
+    expect(next.coverage.targets?.[0]?.nextCharOffset).toBeUndefined();
+    const invalid = await runScenarioRecall(inputFor(backend, { targets: [{ ...target, charOffset: charOffset! + 1 }] }));
+    expect(invalid.coverage.targets?.[0]?.status).toBe("invalid_offset");
+    expect(invalid.evidence).toEqual([]);
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
+  it("does not expose generated assistant HTML or authorize a quote crossing it", async () => {
+    const raw = `## Turn a1 — 2026-10-20T09:30:00Z (assistant)\n\nStart.\n\n\`\`\`html live\n<button>Hidden generated value</button>\n\`\`\`\n\nEnd.`;
+    const { backend } = fixture({ [PATH]: raw });
+    const target = { ref: REF, turnId: "a1", role: "assistant" } as const;
+    const result = await runScenarioRecall(inputFor(backend, { targets: [target] }));
+    expect(result.evidence[0]?.quote).toBe("Start.");
+    expect(JSON.stringify(result)).not.toContain("Hidden generated value");
+    expect(JSON.stringify(result)).not.toContain("Interactive visual omitted");
+    const next = await runScenarioRecall(inputFor(backend, {
+      targets: [{ ...target, charOffset: result.coverage.targets?.[0]?.nextCharOffset }],
+    }));
+    expect(next.evidence[0]?.quote).toBe("End.");
+  });
+
+  it("keeps exact evidence when optional broad exploration fails", async () => {
+    const { backend } = fixture({ [PATH]: core(), [OTHER_PATH]: core("Other record.") });
+    native.streamText.mockImplementation(async (options: AgentOptions) => {
+      expect(options.prompt).toContain(USER_QUOTE);
+      throw new Error("fixture model unavailable");
+    });
+    const result = await runScenarioRecall(inputFor(backend, {
+      refs: [OTHER_REF],
+      cursor: REF,
+      targets: [{ ref: REF, turnId: "u1", role: "user" }],
+    }));
+    expect(result).toMatchObject({ status: "error", answer: "", evidence: [{ quote: USER_QUOTE }], coverage: { nextCursor: REF } });
+  });
+
+  it("finds literal terms deep in supplied original user messages without searching other records", async () => {
+    const phrase = "AirJelly v2.0 (alpha)";
+    const user = `Original start ${"甲".repeat(1_000)} I verified ${phrase} this morning. ${"乙".repeat(1_000)} original end`;
+    const raw = core(user, `An assistant also mentioned ${phrase} and never becomes user evidence.`)
+      .replace("Departure planning", "Metadata term only");
+    const { backend, listMemoryFiles, readFile } = fixture({ [PATH]: raw, [OTHER_PATH]: core(phrase) });
+    const result = await runScenarioRecall(inputFor(backend, {
+      refs: [REF, REF],
+      searchTerms: [" airjelly v2.0 (ALPHA) ", "Metadata term only", ".*"],
+    }));
+    expect(result).toMatchObject({
+      status: "ok", answer: "", truncated: false,
+      coverage: { searched: [REF], read: [REF], keywordSearch: {
+        terms: ["airjelly v2.0 (ALPHA)", "Metadata term only", ".*"],
+        records: [{ ref: REF, status: "matched", matchedTurns: 1 }], omittedMatches: 0,
+      } },
+    });
+    expect(result.evidence).toEqual([expect.objectContaining({
+      ref: REF, turnId: "u1", role: "user", turnIndex: 0, sourceRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })]);
+    expect(result.evidence[0]!.quote).toContain(phrase);
+    expect(user).toContain(result.evidence[0]!.quote);
+    expect(result.evidence[0]!.quote.length).toBeLessThan(500);
+    expect(JSON.stringify(result.evidence)).not.toContain("An assistant");
+    expect(native.streamText).not.toHaveBeenCalled();
+    expect(listMemoryFiles).not.toHaveBeenCalled();
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(PATH);
+  });
+
+  it("separates a user keyword miss, an unavailable record and the date window without treating them as absence", async () => {
+    const { backend, listMemoryFiles, readFile } = fixture({
+      [PATH]: core("No matching user message", "needle in assistant text").replace("Departure planning", "needle in metadata"),
+      [OTHER_PATH]: core("needle outside the date window"),
+    });
+    const missingRef = "records/2026-10-21-0930";
+    const result = await runScenarioRecall(inputFor(backend, {
+      refs: [REF, OTHER_REF, missingRef], searchTerms: ["needle"], after: "2026-10-20",
+    }));
+    expect(result).toMatchObject({
+      status: "insufficient_evidence", answer: "", evidence: [], truncated: true,
+      coverage: { searched: [REF], read: [], keywordSearch: {
+        records: [
+          { ref: REF, status: "no_match", matchedTurns: 0 },
+          { ref: OTHER_REF, status: "outside_window", matchedTurns: 0 },
+          { ref: missingRef, status: "unavailable", matchedTurns: 0 },
+        ], omittedMatches: 0,
+      } },
+    });
+    expect(result.uncertainty.join(" ")).toContain("does not rule out");
+    expect(native.streamText).not.toHaveBeenCalled();
+    expect(listMemoryFiles).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalledWith(OTHER_PATH);
+  });
+
+  it("counts all matching user messages even when the excerpt output is capped", async () => {
+    const raw = serializedConversation(Array.from({ length: 10 }, (_, index) => ({
+      timestamp: `2026-10-20T09:${30 + index}:00.000Z`, role: "user" as const, turnId: `user-${index}`,
+      content: `Needle belongs to source message ${index}.`,
+    })));
+    const { backend } = fixture({ [PATH]: raw });
+    const result = await runScenarioRecall(inputFor(backend, { refs: [REF], searchTerms: ["needle"] }));
+    expect(result).toMatchObject({ status: "ok", truncated: true, coverage: { keywordSearch: {
+      records: [{ status: "matched", matchedTurns: 10 }], omittedMatches: 2,
+    } } });
+    expect(result.evidence).toHaveLength(8);
+    expect(new Set(result.evidence.map((evidence) => evidence.turnId)).size).toBe(8);
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { refs: [], searchTerms: ["needle"] },
+    { refs: [REF], searchTerms: ["  "] },
+    { refs: [REF], searchTerms: ["a".repeat(81)] },
+    { refs: [REF], searchTerms: ["a", "b", "c", "d", "e", "f"] },
+    { refs: [REF], searchTerms: ["needle"], targets: [{ ref: REF, turnId: "u1", role: "user" as const }] },
+    { refs: [REF], searchTerms: ["needle"], cursor: REF },
+  ])("refuses invalid bounded keyword requests before opening a record: %j", async (input) => {
+    const { backend, readFile } = fixture({ [PATH]: core() });
+    expect(await runScenarioRecall(inputFor(backend, input))).toMatchObject({ status: "error", evidence: [] });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
   it("continues beyond the old six-read and twelve-read caps to find the oldest record", async () => {
     const files: Record<string, string> = {};
     for (let day = 1; day <= 13; day += 1) {

@@ -115,6 +115,9 @@ vi.mock("@/lib/episodic/slice-mutex", () => ({
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
   enumerateTreePaths: vi.fn(async (root: string) => [...io.files.keys()].filter((path) => path.startsWith(`${root}/`))),
 }));
+vi.mock("@/lib/memory/navigation-inventory", () => ({
+  loadMemoryNavigationPaths: vi.fn(async () => [...io.files.keys()]),
+}));
 
 const episodic = vi.hoisted(() => ({
   loadSlice: vi.fn(),
@@ -212,13 +215,16 @@ import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-cont
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { parseReflectionRoundMessage, type ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
+import { fsReadFile } from "@/lib/episodic/io-helpers";
+import type { DirectoryResult } from "@/lib/memory/navigation";
+import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
 
 const runSubAgentMock = vi.mocked(runSubAgent);
 type RunnerOpts = Parameters<typeof runSubAgent>[0];
 
-async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<string> {
+async function callTool<Result = string>(opts: RunnerOpts, name: string, args: unknown): Promise<Result> {
   const t = opts.tools[name] as unknown as {
-    execute: (a: unknown, o: unknown) => Promise<string>;
+    execute: (a: unknown, o: unknown) => Promise<Result>;
   };
   return t.execute(args, { toolCallId: "test", messages: [] });
 }
@@ -494,6 +500,126 @@ describe("HQ evidence, task and learning integration", () => {
 });
 
 describe("handleBrief (v0.21 §5)", () => {
+  it("settles only linked or explicitly skipped native cards in a mixed round", async () => {
+    const history: ReflectionHistoryCheckpoint = { version: 1, basis: "1".repeat(40), cursor: null, evolved: null, pending: [
+      { sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["a1b2c3", "skip-card", "missed-card", "old-reply"],
+        userTurnIds: ["a1b2c3", "skip-card", "missed-card"] },
+    ] };
+    const source = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    const skip = { sliceId: SLICE_ID, turnId: "skip-card", quote: "知道了" };
+    const missed = { sliceId: SLICE_ID, turnId: "missed-card", quote: "另一个主题。" };
+    const raw = `${RAW_USER_RECORD}\n## Turn skip-card — 2026-08-09T13:00:30.000Z (user)\n知道了\n` +
+      "\n## Turn missed-card — 2026-08-09T13:01:00.000Z (user)\n另一个主题。\n";
+    runSubAgentMock.mockImplementation(async (opts) => {
+      expect(await callTool(opts, "skipArchiveTurn", { source: skip, reason: "acknowledgment" })).toContain("REJECTED");
+      await readEvidence(opts, raw);
+      expect(await callTool(opts, "writeCase", {
+        action: "open", category: "events", caseName: "unrelated", body: "Wrong source.",
+        sources: [source, { ...missed, quote: source.quote }],
+      })).toContain("REJECTED");
+      expect(await callTool(opts, "skipArchiveTurn", { source: missed, reason: "Try to skip the filing failure" })).toContain("filing attempt failed");
+      expect(await callTool(opts, "writeCase", {
+        action: "open", category: "events", caseName: "phone", body: "考虑换手机。", sources: [source],
+      })).toContain("OK");
+      expect(await callTool(opts, "skipArchiveTurn", { source: skip, reason: "acknowledgment" })).toContain("OK");
+      return { ok: true, report: { actions: ["events/phone"], note: "partial" }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [history.pending[0]], history });
+    expect(outcome.deferredCards).toBe(1);
+    expect(io.files.has("memory/events/unrelated/index.md")).toBe(false);
+    const document = io.files.get("memory/events/phone/index.md");
+    expect(document).toContain(`previously:records/${SLICE_ID}?turn=${source.turnId}&role=user`);
+    expect(document).not.toContain(`turn=${skip.turnId}`);
+    expect(document).not.toContain(`turn=${missed.turnId}`);
+    expect([...io.files.keys()].some((path) => path.startsWith("memory/config/card-links/"))).toBe(false);
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    const trailer = parseReflectionRoundMessage(vi.mocked(commitReflectionRound).mock.calls[0][1])?.trailer;
+    const turnIds = ["a1b2c3", "skip-card", "old-reply"];
+    expect(trailer?.seen).toEqual([{ sliceId: SLICE_ID, turnIds }]);
+    expect(trailer?.observed).toEqual([{ sha: "2".repeat(40), sliceId: SLICE_ID, turnIds }]);
+    expect(trailer?.history?.pending).toEqual([{
+      sha: "2".repeat(40), sliceId: SLICE_ID, turnIds: ["missed-card"], userTurnIds: ["missed-card"],
+    }]);
+  });
+
+  it("links a native card to an existing case only after both exact reads", async () => {
+    const source = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    const casePath = "memory/events/phone/index.md";
+    const initialBody = "Already tracked consideration.";
+    io.files.set(casePath, initialBody);
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      expect(await callTool(opts, "linkCard", { ref: "events/phone", source })).toContain("Call readCase");
+      await callTool(opts, "readCase", { ref: "events/phone" });
+      expect(await callTool(opts, "linkCard", { ref: "events/phone", source })).toContain("OK");
+      await callTool(opts, "readCase", { ref: "events/phone" });
+      expect(await callTool(opts, "linkCard", { ref: "events/phone", source })).toContain("OK");
+      return { ok: true, report: { actions: [casePath], note: "Added a source citation." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ ...DOCKET.scope[0], userTurnIds: [source.turnId] }] });
+    expect(outcome.deferredCards).toBeUndefined();
+    expect(outcome.actions).toEqual(["events/phone/index.md"]);
+    const document = io.files.get(casePath)!;
+    expect(document).toContain(initialBody);
+    expect(document).not.toContain(source.quote);
+    expect(document.split(`previously:records/${SLICE_ID}?turn=${source.turnId}&role=user`)).toHaveLength(2);
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    const trailer = parseReflectionRoundMessage(vi.mocked(commitReflectionRound).mock.calls[0][1])?.trailer;
+    expect(trailer?.seen).toEqual([{ sliceId: SLICE_ID, turnIds: [source.turnId] }]);
+  });
+
+  it("requires sources for native-only case writes and does not run the legacy scribe", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      expect(await callTool(opts, "writeCase", {
+        action: "open", category: "events", caseName: "source-less", body: "No exact source.",
+      })).toContain("Native-only filing requires exact user card sources");
+      await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
+      return { ok: true, report: { actions: [], note: "No case changes." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ ...DOCKET.scope[0], userTurnIds: ["a1b2c3"] }] });
+    expect(outcome.deferredCards).toBe(1);
+    expect(io.files.has("memory/events/source-less/index.md")).toBe(false);
+    expect(passes.runLibrarianPass.mock.calls[0][0].cardTurnIds).toEqual(["a1b2c3"]);
+    expect(passes.runScribePass).not.toHaveBeenCalled();
+  });
+
+  it("gives the legacy scribe only non-card material when a slice contains both kinds", async () => {
+    episodic.loadSlice.mockResolvedValue({ slice_id: SLICE_ID, status: "open", turns: [
+      { timestamp: "t0", role: "user", content: "Native message to file separately", turnId: "a1b2c3" },
+      { timestamp: "t1", role: "user", content: "Legacy message to archive", turnId: "legacy-user" },
+    ] });
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
+      return { ok: true, report: { actions: [], note: "The native card stays pending." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ sliceId: SLICE_ID,
+      turnIds: ["a1b2c3", "legacy-user"], userTurnIds: ["a1b2c3"],
+    }] });
+    expect(outcome.deferredCards).toBe(1);
+    const scribe = passes.runScribePass.mock.calls[0][0];
+    expect(scribe.sourceTurnIds).toEqual(["legacy-user"]);
+    expect(scribe.excerpt.turnsExcerpt).toContain("Legacy message to archive");
+    expect(scribe.excerpt.turnsExcerpt).not.toContain("Native message to file separately");
+  });
+
+  it("leaves native cards owed when the link and case batch fails to persist", async () => {
+    const source = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(commitReflectionRound).mockRejectedValueOnce(new Error("unavailable"));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      expect(await callTool(opts, "writeCase", {
+        action: "open", category: "events", caseName: "phone", body: "考虑换手机。", sources: [source],
+      })).toContain("OK");
+      return { ok: true, report: { actions: ["events/phone"], note: "queued" }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ ...DOCKET.scope[0], userTurnIds: [source.turnId] }] });
+    expect(outcome).toMatchObject({ actions: [], deferredCards: 1, error: expect.stringContaining("did not persist") });
+    expect(io.files.has("memory/events/phone/index.md")).toBe(false);
+    expect([...io.files.keys()].some((path) => path.startsWith("memory/config/card-links/"))).toBe(false);
+  });
+
   it("reads at the docket basis and checkpoints only the material it observed, even after a ref conflict", async () => {
     const basis = "1".repeat(40);
     const history: ReflectionHistoryCheckpoint = { version: 1, basis, cursor: null, evolved: null, pending: [
@@ -1011,7 +1137,7 @@ describe("handleBrief (v0.21 §5)", () => {
       researchProducts: DialogueResearchRecord[];
       excerpt: { turnsExcerpt: string };
     };
-    expect(writerInput.sourceTurnIds).toEqual(["a1b2c3"]);
+    expect(writerInput.sourceTurnIds).toEqual([dialogueResearchMaterialId(v1)]);
     expect(writerInput.researchProducts.map((record) => [record.resultId, record.productRevision])).toEqual([["result-a", 1]]);
     expect(writerInput.excerpt.turnsExcerpt).toContain("想换手机");
   });
@@ -1473,6 +1599,63 @@ describe("read-your-writes — the round's batch rides every read (v0.37 §5)", 
 
     const outcome = await handleBrief(DOCKET);
 
+    expect(outcome.error).toBeUndefined();
+  });
+
+  it("browses and finds semantic memory paths without opening content, including queued changes", async () => {
+    io.files.set("memory/research/Pixel Lantern/index.md", "Unopened research body");
+    io.files.set("memory/tasks/Pixel Lantern launch/index.md", "Unopened task body");
+    io.files.set("memory/people/user/index.md", "Unopened overview");
+    io.files.set("memory/people/user/profile.md", "Unopened profile");
+    io.files.set("memory/config/settings.json", "Unopened configuration");
+    io.files.set("memory/records/2026/08/09/1300/core.md", "Unopened transcript");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const initialReads = vi.mocked(fsReadFile).mock.calls.length;
+      const initialListings = vi.mocked(loadMemoryNavigationPaths).mock.calls.length;
+      const first = await callTool<DirectoryResult>(opts, "recallFind", { name: "Pixel Lantern" });
+      expect(first).toMatchObject({ kind: "entries", entries: expect.arrayContaining([
+        expect.objectContaining({ path: "research/Pixel Lantern" }),
+        expect.objectContaining({ path: "tasks/Pixel Lantern launch" }),
+      ]) });
+
+      // Navigation shares the tree snapshot, but reflects the round's own edits.
+      io.batchRef.current!.entries.set("memory/research/Pixel Lantern/index.md", null);
+      io.batchRef.current!.entries.set("memory/research/New case/index.md", "Queued document");
+      const next = await callTool<DirectoryResult>(opts, "recallList", { path: "research" });
+      expect(next).toMatchObject({
+        kind: "entries",
+        entries: [expect.objectContaining({ kind: "directory", path: "research/New case" })],
+      });
+      const denied = await callTool<DirectoryResult>(opts, "recallList", { path: "config" });
+      expect(denied).toMatchObject({ kind: "invalid_scope" });
+      const user = await callTool<DirectoryResult>(opts, "recallList", { path: "people/user" });
+      expect(user).toMatchObject({
+        kind: "entries",
+        entries: [expect.objectContaining({ kind: "document", path: "people/user/index.md", ref: "people/user" })],
+      });
+      expect(vi.mocked(fsReadFile).mock.calls).toHaveLength(initialReads);
+      expect(vi.mocked(loadMemoryNavigationPaths).mock.calls.slice(initialListings)).toEqual([[{ kind: "local" }]]);
+      return { ok: true, report: { actions: [], note: "navigated" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+    expect(outcome.error).toBeUndefined();
+  });
+
+  it("reports a failed directory listing as unavailable and allows retrying", async () => {
+    vi.mocked(loadMemoryNavigationPaths).mockRejectedValueOnce(new Error("private storage detail"));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const failure = await callTool(opts, "recallList", {});
+      expect(failure).toMatchObject({ kind: "unavailable" });
+      expect(JSON.stringify(failure)).not.toContain("private storage detail");
+      const retry = await callTool<DirectoryResult>(opts, "recallList", {});
+      expect(retry).toMatchObject({ kind: "entries", entries: expect.arrayContaining([
+        expect.objectContaining({ kind: "directory", path: "people" }),
+      ]) });
+      return { ok: true, report: { actions: [], note: "retried" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
     expect(outcome.error).toBeUndefined();
   });
 });

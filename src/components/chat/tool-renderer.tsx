@@ -38,6 +38,7 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
       return <ScenarioRecallRenderer input={input} output={output} state={renderState} streamingText={streamingText} />;
     case "recallRecent":
     case "recallFind":
+    case "recallList":
     case "recallSearch":
     case "recallRead":
     case "recallSince":

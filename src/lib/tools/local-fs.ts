@@ -21,7 +21,7 @@ import {
   ttlForPath,
   type ReadOptions,
 } from "@/lib/cache/data-cache";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, lstatSync, readdirSync, statSync, rmSync } from "fs";
 import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 import { join, dirname } from "path";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
@@ -63,13 +63,23 @@ async function simulateLatency(op: string, path: string): Promise<void> {
 export async function walkPathsLocal(
   root: string,
   maxEntries = 50_000,
+  options?: { maxDepth: number; requireRealRoot: boolean },
 ): Promise<string[]> {
   await simulateLatency("walk", root);
   const base = resolveLocalDataPath(root);
+  if (options?.requireRealRoot) {
+    try {
+      if (!lstatSync(base).isDirectory()) throw new Error("Not a real directory");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
   const out: string[] = [];
-  const stack: Array<{ abs: string; rel: string }> = [{ abs: base, rel: root }];
+  const stack: Array<{ abs: string; rel: string; depth: number }> = [{ abs: base, rel: root, depth: 0 }];
+  let visited = 0;
   while (stack.length && out.length < maxEntries) {
-    const { abs, rel } = stack.pop()!;
+    const { abs, rel, depth } = stack.pop()!;
     let entries;
     try {
       entries = readdirSync(abs, { withFileTypes: true });
@@ -81,9 +91,12 @@ export async function walkPathsLocal(
       throw error;
     }
     for (const e of entries) {
+      if (options && ++visited > maxEntries) throw new Error("Directory walk limit reached");
       const childRel = `${rel}/${e.name}`;
-      if (e.isDirectory()) stack.push({ abs: join(abs, e.name), rel: childRel });
-      else out.push(childRel);
+      if (e.isDirectory() && (options === undefined || depth + 1 < options.maxDepth)) {
+        stack.push({ abs: join(abs, e.name), rel: childRel, depth: depth + 1 });
+      }
+      else if (e.isFile()) out.push(childRel);
     }
   }
   return out;

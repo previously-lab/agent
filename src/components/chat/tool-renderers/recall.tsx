@@ -77,6 +77,24 @@ function summarize(
   const first = (entries: ParsedEntry[]) =>
     entries[0] ? entries[0].title : "";
   switch (parsed?.kind) {
+    case "directory":
+      return {
+        text: t("recall.summaryDirectory", { count: parsed.entries.length, total: parsed.total }),
+        tone: parsed.entries.length > 0 ? "hit" : "muted",
+        icon: <ListTree className="h-3.5 w-3.5" />,
+      };
+    case "directoryMiss":
+      return {
+        text: t(`recall.directoryStatus.${parsed.reason}`),
+        tone: "miss",
+        icon: <SearchX className="h-3.5 w-3.5" />,
+      };
+    case "searchMiss":
+      return {
+        text: t("recall.summarySearchMiss", { query: parsed.query }),
+        tone: "miss",
+        icon: <SearchX className="h-3.5 w-3.5" />,
+      };
     case "entries": {
       const count = parsed.entries.length;
       if (parsed.query !== undefined) {
@@ -133,6 +151,7 @@ function summarize(
         icon: <Inbox className="h-3.5 w-3.5" />,
       };
     case "pastEnd":
+    case "searchPastEnd":
       return {
         text: t("recall.summaryPastEnd", { total: parsed.total }),
         tone: "muted",
@@ -208,16 +227,7 @@ function EntryList({ entries }: { entries: ParsedEntry[] }) {
   );
 }
 
-/**
- * The v0.36 memory-read verbs (recallRecent / recallFind / recallSearch /
- * recallRead) — one renderer for the whole family, keyed on the result
- * envelope's FIXED wording (src/lib/chat/recall-output.ts). The collapsed
- * row is always a one-line verb + scope + count + first-hit summary; the
- * expanded card keeps the five states visually distinct — a hit list, an
- * amber miss with near matches, a red read failure, a muted empty scope,
- * and an info line for paging — never flattening "miss" / "failure" /
- * "empty" into one "nothing".
- */
+/** Shared result card for directory navigation, search and memory reads. */
 export function RecallToolRenderer({
   toolName,
   input,
@@ -293,7 +303,61 @@ function buildExpanded(
   t: Translator,
   readTarget?: ToolDocumentTarget | null,
 ): React.ReactNode {
+  const coverage = "coverage" in parsed && parsed.coverage;
+  const coverageNotes = coverage && (
+    <div className="space-y-1 text-[11px] leading-snug text-muted-foreground">
+      {coverage.continuation && <p>{t("recall.searchContinuation", coverage.continuation)}</p>}
+      {coverage.failures !== undefined && <p>{t("recall.searchFailures", { count: coverage.failures })}</p>}
+    </div>
+  );
   switch (parsed.kind) {
+    case "directory":
+      return (
+        <div className="space-y-2">
+          <ul className="space-y-1">
+            {parsed.entries.map((entry) => {
+              const target = entry.ref && recallEntryDocumentTarget(entry.ref, entry.path);
+              return (
+                <li key={entry.path} className="text-xs text-foreground/90">
+                  {target ? (
+                    <DocumentOpenButton
+                      documentRef={target.ref}
+                      location={{ edition: entry.name === "_current.md" ? "current" : "original" }}
+                      className="break-all rounded-md text-left underline decoration-border/60 underline-offset-4 focus-visible:outline-2"
+                    >
+                      {entry.path}{entry.kind === "directory" ? "/" : ""}
+                    </DocumentOpenButton>
+                  ) : <code className="break-all">{entry.path}{entry.kind === "directory" ? "/" : ""}</code>}
+                </li>
+              );
+            })}
+          </ul>
+          {parsed.nextOffset !== undefined && (
+            <p className="text-[11px] text-muted-foreground">{t("recall.directoryPage", { offset: parsed.nextOffset })}</p>
+          )}
+        </div>
+      );
+    case "directoryMiss":
+      return null;
+    case "searchMiss":
+      return (
+        <div className="space-y-2">
+          {coverageNotes}
+          {parsed.entries.length > 0 ? (
+            <>
+              <p className="text-xs text-muted-foreground">{t("recall.searchPathLeads")}</p>
+              <EntryList entries={parsed.entries} />
+            </>
+          ) : <p className="text-xs text-muted-foreground">{t("recall.searchNoPathLeads")}</p>}
+        </div>
+      );
+    case "searchPastEnd":
+      return (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">{t("recall.searchPastEnd", { offset: parsed.offset, total: parsed.total })}</p>
+          {coverageNotes}
+        </div>
+      );
     case "entries":
     case "fallback":
       return (
@@ -304,6 +368,7 @@ function buildExpanded(
             </p>
           )}
           <EntryList entries={parsed.entries} />
+          {coverageNotes}
           {parsed.kind === "entries" && parsed.note?.kind === "offset" && (
             <p className="border-t border-border/50 pt-1.5 text-[11px] leading-snug text-muted-foreground">
               {t("recall.pageOffset", { offset: parsed.note.nextOffset })}

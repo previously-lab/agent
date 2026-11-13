@@ -3,6 +3,7 @@ import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contrac
 import type { DialogueResult } from "@/lib/dialogue/types";
 import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
 import type { ImageAttachmentEvidence, ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
+import type { ReflectionWakeRange } from "@/app/api/evolution/reflection-contract";
 import { COMMIT_PREFIX } from "@/lib/chat/commit-contract";
 import { judgeSliceLanding, type SliceLandingConfig } from "@/lib/chat/slice-landing";
 import { locateSummaryRecords } from "@/lib/chat/summary-records";
@@ -40,8 +41,8 @@ export interface DialogueProjectionReceipt {
   inputIds: string[];
   utteranceIds: string[];
   inputLandings: Array<{ inputId: string; turnId: string; sliceId: string }>;
-  /** Legacy user turns or exact internal result material ids, never publications. */
-  reflection: Array<{ sliceId: string; turnIds: string[] }>;
+  /** Original inputs and exact internal results to wake, never publications. */
+  reflection: ReflectionWakeRange[];
   commitSha: string | null;
 }
 
@@ -88,7 +89,8 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
     const touched = new Set<string>();
     const settled: ImageAttachmentSnapshot[] = [];
     const landings: DialogueProjectionReceipt["inputLandings"] = [];
-    const reflection = new Map<string, Set<string>>();
+    const reflection = new Map<string, ReflectionWakeRange>();
+    const newlyRecorded = new Map<string, ReflectionWakeRange>();
     let edge: TimeSlice | null | undefined;
 
     const attach = (slice: TimeSlice): TimeSlice => {
@@ -172,16 +174,25 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       const old = await readAgent(sliceId);
       agentText.set(sliceId, `${old.trimEnd()}${old.trimEnd() ? "\n\n" : ""}${line}\n`);
     };
+    const addMaterial = (ranges: Map<string, ReflectionWakeRange>, sliceId: string, materialId: string, isUserInput: boolean) => {
+      const range = ranges.get(sliceId) ?? { sliceId, turnIds: [] };
+      if (!range.turnIds.includes(materialId)) range.turnIds.push(materialId);
+      if (isUserInput && !range.userTurnIds?.includes(materialId)) (range.userTurnIds ??= []).push(materialId);
+      ranges.set(sliceId, range);
+    };
     const owe = async (landing: DialogueProjectionReceipt["inputLandings"][number], result?: DialogueResult) => {
       const materialId = result ? dialogueResearchMaterialId({ sourceTurnId: landing.turnId,
         resultId: result.resultId, productRevision: result.productRevision }) : landing.turnId;
       const marker = `${REFLECT_PREFIX}${JSON.stringify({ inputId: landing.inputId, turnId: landing.turnId,
         ...(result ? { resultId: result.resultId, productRevision: result.productRevision, materialId } : {}) })}`;
-      if (!(await readAgent(landing.sliceId)).split("\n").includes(marker)) await appendAgent(landing.sliceId, marker);
-      const set = reflection.get(landing.sliceId) ?? new Set<string>();
-      set.add(materialId);
-      reflection.set(landing.sliceId, set);
+      // Replays may re-ring a lost wake, but cannot add another Summary
+      // material version when only work or publication bytes change.
+      addMaterial(reflection, landing.sliceId, materialId, !result);
+      if ((await readAgent(landing.sliceId)).split("\n").includes(marker)) return;
+      await appendAgent(landing.sliceId, marker);
+      addMaterial(newlyRecorded, landing.sliceId, materialId, !result);
     };
+    for (const entry of entries) if (entry.reflectUserOnly) await owe(landings.find((landing) => landing.inputId === entry.input.inputId)!);
     const work = input.work;
     const result = input.result ?? (work ? {
       resultId: `${work.workId}:1`, productRevision: 1, workId: work.workId,
@@ -218,7 +229,6 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       if (!old) await appendAgent(landing.sliceId, encodeDialogueResearchRecord(record));
       await owe(landing, result);
     }
-    for (const entry of entries) if (entry.reflectUserOnly) await owe(landings.find((landing) => landing.inputId === entry.input.inputId)!);
 
     const utteranceIds: string[] = [];
     if (input.utterance) {
@@ -257,7 +267,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
 
     for (const sliceId of touched) await saveSliceSnapshot(slices.get(sliceId)!, batch);
     for (const [sliceId, text] of agentText) await fsWriteFile(slicePartPath(sliceId, "agent"), text, batch);
-    const ranges = [...reflection].map(([sliceId, ids]) => ({ sliceId, turnIds: [...ids] }));
+    const ranges = [...newlyRecorded.values()];
     const sliceId = landings[0].sliceId;
     const message = ranges.length ? COMMIT_PREFIX.summary(sliceId) + "\n\n" + ranges.flatMap((range) =>
       range.turnIds.flatMap((id) => [`- reflection source ${id}`, `- record ${id} in ${range.sliceId}`])).join("\n")
@@ -265,6 +275,6 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
     const commitSha = batch.entries.size ? await flushBatch(batch, message) : located.commitSha ?? null;
     await settleStagedImages(settled).catch((error) => console.warn("[Dialogue] image cleanup needs retry", error));
     return { sliceId, inputIds: landings.map((entry) => entry.inputId), utteranceIds, inputLandings: landings,
-      reflection: ranges, commitSha: commitSha ?? null };
+      reflection: [...reflection.values()], commitSha: commitSha ?? null };
   }, { fresh: true }));
 }

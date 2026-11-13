@@ -211,6 +211,38 @@ describe("dialogue records on a plain local directory", () => {
     expect(fs.existsSync(join(memoryRoot, ".git"))).toBe(false);
   });
 
+  it("queues the original input and later work separately through the real summary log and docket", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { readReflectionWorldLog, readSummaryLog } = await import("@/lib/chat/hq-log");
+    const { scopeFromSummaries } = await import("@/app/api/evolution/reflection-plan");
+    const { buildThinkingProduct } = await import("@/lib/agents/thinking-product");
+    const { dialogueResearchMaterialId } = await import("@/lib/episodic/dialogue-record");
+    const native = payload();
+    const input = { ...native, inputs: [{ ...native.inputs[0], reflectUserOnly: true }] };
+    const sliceId = input.inputs[0].sliceId;
+    const userMaterial = { sliceId, turnIds: ["u1"], userTurnIds: ["u1"] };
+    expect((await projectDialogueRecords(input))?.reflection).toEqual([userMaterial]);
+    const userHistory = await readReflectionWorldLog();
+    expect(userHistory.available).toBe(true);
+    expect(scopeFromSummaries(null, userHistory.summaries)).toEqual([userMaterial]);
+
+    const product = buildThinkingProduct({ text: "Later investigation.", messages: [], asOf: stamp,
+      inputScope: { scopeKey: "fixture", workId: "u1", inputIds: ["u1"], inputText: accepted.text, readScopeId: "u1" } });
+    const result: DialogueResult = { resultId: "work-u1", productRevision: 1, workId: "u1", inputIds: ["u1"],
+      producerRunId: "mock-run", sliceId, availableAt: stamp, product, claims: [], blocks: [] };
+    const workId = dialogueResearchMaterialId({ sourceTurnId: "u1", resultId: result.resultId, productRevision: 1 });
+    const wake = [{ sliceId, turnIds: ["u1", workId], userTurnIds: ["u1"] }];
+    expect((await projectDialogueRecords({ ...input, result }))?.reflection).toEqual(wake);
+    expect((await projectDialogueRecords({ ...input, result }))?.reflection).toEqual(wake);
+
+    const history = await readReflectionWorldLog();
+    expect(history.history?.pending).toHaveLength(2);
+    expect(scopeFromSummaries(null, history.summaries)).toEqual([{
+      sliceId, turnIds: [workId, "u1"], userTurnIds: ["u1"],
+    }]);
+    expect((await readSummaryLog()).entries.map(({ turnIds }) => turnIds)).toEqual([[workId], ["u1"]]);
+  });
+
   it("T15/T24: ignores retired storage and writes only the canonical records root", async () => {
     const { createSlice, serializeSlice, loadSlice } = await import("@/lib/episodic/manager");
     const legacyId = "2026-11-06-0300";

@@ -133,6 +133,15 @@ describe("scopeFromSummaries — §3.5/§4's scope assembly (range ∪ log, cove
     expect(scope.map((s) => s.sliceId)).toEqual(ids.slice(0, 5));
   });
 
+  it("reserves one bounded slot for the opening native card behind older pending slices", () => {
+    const older = Array.from({ length: 5 }, (_, index) =>
+      summary(`2026-10-15-0${index}00`, ["old"]));
+    const fresh = { sliceId: "2026-10-16-0800", turnIds: ["fresh"], userTurnIds: ["fresh"] };
+    const scope = scopeFromSummaries(NOTHING_COVERED, [...older, fresh], undefined, fresh.sliceId);
+    expect(scope.map((item) => item.sliceId)).toEqual([...older.slice(0, 4).map((item) => item.sliceId), fresh.sliceId]);
+    expect(scope.at(-1)).toEqual(fresh);
+  });
+
   it("the water level subtracts: a covered slice drops out; a PARTIALLY covered slice keeps only its unprocessed turns (同片第二轮)", () => {
     const cov = coverage([["2026-10-19-1800", ["t1"]]]);
     const scope = scopeFromSummaries(cov, [

@@ -163,18 +163,32 @@
       "denied": "Denied",
       "interrupted": "interrupted",
       "recall": {
+        "recallList": "Browsing memory directories…",
         "recallRecent": "Recalling recent memory…",
         "recallFind": "Locating in memory…",
         "recallSearch": "Searching memory…",
         "recallRead": "Reading from memory…",
         "recallSince": "Recalling what changed…",
         "name": {
+          "recallList": "Browse memory",
           "recallRecent": "Recalled recent",
           "recallFind": "Located",
           "recallSearch": "Searched memory",
           "recallSince": "Recalled changes"
         },
         "nameRead": "Read",
+        "summaryDirectory": "Directory entries · {count} of {total} shown",
+        "directoryStatus": {
+          "not_found": "Directory not found",
+          "invalid_scope": "Enter a public memory directory or name"
+        },
+        "directoryPage": "More entries at offset {offset}.",
+        "summarySearchMiss": "“{query}” · no content match on this page",
+        "searchPathLeads": "Related names or paths to explore. Their contents have yet to be checked:",
+        "searchNoPathLeads": "No related names or paths found.",
+        "searchContinuation": "Scanned {scanned} candidates; continue with scanCursor={scanCursor} and offset={offset}.",
+        "searchFailures": "Could not read {count} candidates; their contents are unverified.",
+        "searchPastEnd": "This scan page had {total} matches; offset {offset} is past the end.",
         "scope": {
           "memory": "all memory",
           "events": "events",
@@ -285,6 +299,7 @@
       "tool_recallScenario": "Recall conversation",
       "tool_recallRecent": "Recall recent memory",
       "tool_recallFind": "Find memory",
+      "tool_recallList": "Browse memory",
       "tool_recallSearch": "Search memory",
       "tool_recallRead": "Read memory",
       "tool_recallSince": "Recall changes",

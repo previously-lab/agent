@@ -65,6 +65,7 @@ import {
   closeReflectionStream,
   handleReflectionRound,
   loadReflectionWorld,
+  maintainReflectionHypothesisTtl,
   markHQRunStarted,
   markReflectionRunIdleExit,
   readReflectionClock,
@@ -173,6 +174,7 @@ export async function reflectionRun(
       historyScan = undefined;
       openingRange = undefined;
       if (!lapHasWork(docket)) {
+        await maintainReflectionHypothesisTtl();
         await markReflectionRunIdleExit({ rounds });
         dispose();
         return { kind: "retired", rounds };
@@ -183,11 +185,15 @@ export async function reflectionRun(
       // Budget check at the lap boundary (never inside a round): the round
       // cap or a slow lap both retire the run on its own terms — the wall
       // would only crash it — and the next bell continues the backlog.
+      // Unsettled native cards likewise await another wake, rather than
+      // immediately repeating the same failed or incomplete archive work.
       const lapMs = (await readReflectionClock()) - lapStartedAt;
       if (
+        (round.deferredCards ?? 0) > 0 ||
         rounds >= REFLECTION_MAX_ROUNDS_PER_RUN ||
         lapMs >= REFLECTION_LAP_YIELD_MS
       ) {
+        await maintainReflectionHypothesisTtl(docket.scope.at(-1)?.sliceId);
         await markReflectionRunIdleExit({ rounds });
         dispose();
         return { kind: "retired", rounds };

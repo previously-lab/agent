@@ -1,6 +1,5 @@
 /**
- * The memory-read facade executors (v0.36) — recallRecent / recallFind /
- * recallSearch / recallRead over an in-memory local fs, including the
+ * Memory browsing and reading over an in-memory local fs, including the
  * semantic doc_rework read tracking (recordDocRead) and mediated record refs.
  *
  * rework-signal itself is REAL; only its two sinks are mocked (the fitness
@@ -31,10 +30,13 @@ const io = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/tools/local-fs", () => ({
-  readFileLocal: async (p: string) => {
+  readFileLocal: vi.fn(async (p: string) => {
     if (!io.files.has(p)) throw new Error(`File not found: "${p}"`);
     return io.files.get(p)!;
-  },
+  }),
+  walkPathsLocal: vi.fn(async (root: string) =>
+    [...io.files.keys()].filter((path) => path.startsWith(`${root}/`)),
+  ),
   listFilesLocal: async (p: string) => {
     if (!io.dirs.has(p)) throw new Error(`Directory not found: "${p}"`);
     return io.dirs.get(p)!.map((name) => ({
@@ -87,6 +89,7 @@ vi.mock("@/lib/episodic/manager", async (importOriginal) => {
 
 import {
   recallRecentExecute,
+  recallListExecute,
   recallFindExecute,
   recallSearchExecute,
   recallReadExecute,
@@ -98,6 +101,7 @@ import {
   readFileViaTree as githubReadFileViaTree,
   getRepoTree as githubGetRepoTree,
 } from "@/lib/tools/readFile";
+import { readFileLocal, walkPathsLocal } from "@/lib/tools/local-fs";
 
 function makeCtx(sliceId: string): ToolContext {
   return {
@@ -171,6 +175,8 @@ beforeEach(() => {
   recall.run.mockReset();
   io.files.clear();
   io.dirs.clear();
+  vi.mocked(readFileLocal).mockClear();
+  vi.mocked(walkPathsLocal).mockClear();
   sinks.appendSignal.mockClear();
   sinks.writeAgentTimeline.mockClear();
   seedDirs();
@@ -207,24 +213,75 @@ describe("recallRecentExecute", () => {
   });
 });
 
-describe("recallFindExecute", () => {
-  it("finds a case by name and renders the single-entry template", async () => {
-    const out = await recallFindExecute(
-      { category: "research", name: "手机调研" },
-      opts(makeCtx("2026-09-10-1000")),
-    );
-    expect(out).toMatch(/^The 1 most recent research entries:/);
-    expect(out).toContain("research/手机调研");
+describe("recallListExecute", () => {
+  it("lists the public root without a storage request", async () => {
+    const out = await recallListExecute({}, opts(makeCtx("2026-09-10-1000")));
+    expect(out).toMatchObject({
+      kind: "entries",
+      entries: expect.arrayContaining([{ kind: "directory", path: "research", name: "research" }]),
+    });
+    expect(walkPathsLocal).not.toHaveBeenCalled();
+    expect(readFileLocal).not.toHaveBeenCalled();
   });
 
-  it("a miss renders the fixed not-found sentence with near misses", async () => {
+  it("lists case documents using metadata only and returns refs that recallRead understands", async () => {
+    const context = opts(makeCtx("2026-09-10-1000"));
+    const out = await recallListExecute({ path: "research/手机调研" }, context);
+    expect(out).toEqual({
+      kind: "entries",
+      total: 1,
+      entries: [{ kind: "document", path: "research/手机调研/index.md", name: "index.md", ref: "research/手机调研" }],
+    });
+    expect(walkPathsLocal).toHaveBeenCalledOnce();
+    expect(vi.mocked(walkPathsLocal).mock.calls[0]?.[0]).toBe("memory/research");
+    expect(readFileLocal).not.toHaveBeenCalled();
+    expect(await recallReadExecute({ ref: "research/手机调研" }, context)).toContain("倾向小屏旗舰");
+  });
+
+  it("rejects storage paths and non-public directories", async () => {
+    const context = opts(makeCtx("2026-09-10-1000"));
+    for (const path of ["memory/research", "records", "config", "research/手机调研/attachments"]) {
+      expect(await recallListExecute({ path }, context)).toMatchObject({ kind: "invalid_scope" });
+    }
+    expect(walkPathsLocal).not.toHaveBeenCalled();
+    expect(readFileLocal).not.toHaveBeenCalled();
+  });
+});
+
+describe("recallFindExecute", () => {
+  it("finds a case without a category or any content reads", async () => {
     const out = await recallFindExecute(
-      { category: "research", name: "手机" },
+      { name: "手机调研" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(out).toMatch(
-      /^Nothing named "手机" exists in research\. Closest matches: research\/手机调研\./,
+    expect(out).toMatchObject({
+      kind: "entries", total: 1, entries: [{ path: "research/手机调研", ref: "research/手机调研", score: 1 }],
+    });
+    expect(readFileLocal).not.toHaveBeenCalled();
+  });
+
+  it("returns similar names only from the specified public category", async () => {
+    io.files.set("memory/people/手机/index.md", "无关内容");
+    const out = await recallFindExecute(
+      { name: "手机", under: "research" },
+      opts(makeCtx("2026-09-10-1000")),
     );
+    expect(out).toMatchObject({
+      kind: "entries", total: 1, entries: [{ path: "research/手机调研", score: expect.any(Number) }],
+    });
+    expect(walkPathsLocal).toHaveBeenCalledOnce();
+    expect(vi.mocked(walkPathsLocal).mock.calls[0]?.[0]).toBe("memory/research");
+    expect(readFileLocal).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit slice lookup separate from public path discovery", async () => {
+    const context = opts(makeCtx("2026-09-10-1000"));
+    expect(await recallFindExecute({ name: "records/2026-09-04-2130" }, context)).toMatchObject({ kind: "invalid_scope" });
+    expect(readFileLocal).not.toHaveBeenCalled();
+    const out = await recallFindExecute({ category: "records", name: "2026-09-04" }, context);
+    expect(out).toContain("records/2026-09-04-2130");
+    expect(out).toContain("[navigation only; not evidence]");
+    expect(out).not.toContain("我想换手机");
   });
 });
 
@@ -238,16 +295,27 @@ describe("recallSearchExecute", () => {
     expect(out).toContain("research/手机调研");
   });
 
-  it("zero hits on a non-empty scope render the fixed fallback sentence", async () => {
+  it("reports an unmatched keyword without padding with recent documents or records", async () => {
     const out = await recallSearchExecute(
       { query: "绝对不存在的关键词" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(out).toMatch(
-      /^Nothing matches "绝对不存在的关键词"\. Here are the \d+ most recent entries instead:/,
+    expect(out).toBe(
+      'No content match for "绝对不存在的关键词" in this scan page.\nNo related names or paths found.',
     );
-    expect(out).toContain("手机选购闲聊 [navigation only; not evidence]");
-    expect(out).not.toContain("我想换手机");
+  });
+
+  it("labels a name-only match separately and puts the closer name first", async () => {
+    io.dirs.set("memory/research", ["手机调研", "Lantern", "Lantern Project"]);
+    io.dirs.set("memory/research/Lantern", ["index.md"]);
+    io.dirs.set("memory/research/Lantern Project", ["index.md"]);
+    io.files.set("memory/research/Lantern/index.md", "Case overview");
+    io.files.set("memory/research/Lantern Project/index.md", "Project overview");
+    const out = await recallSearchExecute({ query: "Lantern" }, opts(makeCtx("2026-09-10-1000")));
+    expect(out).toMatch(/^No content match for "Lantern" in this scan page\./);
+    expect(out).toContain("Closest names or paths (navigation only):");
+    expect(out).toMatch(/research\/Lantern\b[^\n]*\n[^\n]*research\/Lantern Project/);
+    expect(out).not.toMatch(/手机调研|Case overview|Project overview/);
   });
 
   it("records bodies are scanned only when asked (scan-surface discipline)", async () => {
@@ -256,7 +324,7 @@ describe("recallSearchExecute", () => {
       { query: "深埋关键词" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(scoped).toMatch(/^Nothing matches "深埋关键词"/);
+    expect(scoped).toMatch(/^No content match for "深埋关键词"/);
     const withRecords = await recallSearchExecute(
       { query: "深埋关键词", includeRecords: true },
       opts(makeCtx("2026-09-10-1000")),
@@ -609,6 +677,22 @@ describe("GitHub backend routing (cached reads)", () => {
       recentTurns: [],
     };
   }
+
+  it("browses only the cached GitHub tree and excludes non-public paths", async () => {
+    io.files.set("memory/config/private.json", "configuration");
+    io.files.set("memory/research/手机调研/attachments/private.md", "attachment");
+    const context = opts(makeGithubCtx("2026-09-10-1000"));
+    expect(await recallListExecute({ path: "research/手机调研" }, context)).toMatchObject({
+      kind: "entries", total: 1, entries: [{ path: "research/手机调研/index.md" }],
+    });
+    expect(await recallFindExecute({ name: "private" }, context)).toEqual({
+      kind: "entries", total: 0, entries: [],
+    });
+    expect(githubGetRepoTree).toHaveBeenCalledTimes(2);
+    expect(githubReadFileViaTree).not.toHaveBeenCalled();
+    expect(githubReadFile).not.toHaveBeenCalled();
+    expect(readFileLocal).not.toHaveBeenCalled();
+  });
 
   it("recallRecent reads slice files via readFileViaTree, never the direct read", async () => {
     const out = await recallRecentExecute({}, opts(makeGithubCtx("2026-09-10-1000")));

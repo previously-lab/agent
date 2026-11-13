@@ -67,10 +67,7 @@ export type EvolutionReason = (typeof EVOLUTION_REASONS)[number];
  * accumulate; the seal (when it happened) is context for the docket and the
  * boundary evolution reason, never a scope gate.
  */
-export interface ScopedSlice {
-  sliceId: string;
-  /** The turn ids the summary stream persisted (the owed record). */
-  turnIds: string[];
+export interface ScopedSlice extends SummaryHead {
   /** The slice's close cause, when sealed (absent = still open). */
   closedBy?: SlicingSignal;
 }
@@ -82,6 +79,8 @@ export interface ScopedSlice {
 export interface SummaryHead {
   sliceId: string;
   turnIds: string[];
+  /** Native original inputs, a subset of turnIds; work results stay separate. */
+  userTurnIds?: string[];
 }
 
 /**
@@ -147,12 +146,15 @@ export interface ScopeCoverage {
  * turns drop out, so a range repeating covered turns eats nothing twice and
  * a lost bell's turns ride the union in). Grouped per slice with turn ids
  * deduped, slices ascending, oldest `max` (default REFLECTION_SCOPE_MAX).
+ * An opening wake can reserve one slot for its pending native card so a
+ * persistent older backlog cannot keep a newly received card out of scope.
  * Never mutates the input.
  */
 export function scopeFromSummaries(
   coverage: ScopeCoverage | null,
   summaries: SummaryHead[],
   max: number = REFLECTION_SCOPE_MAX,
+  wakeSliceId?: string,
 ): ScopedSlice[] {
   const owedCount = (sliceId: string, turnIds: string[]): string[] => {
     const cov = coverage?.covered.get(sliceId);
@@ -162,21 +164,25 @@ export function scopeFromSummaries(
     if (effective) return turnIds.filter((t) => !effective.includes(t));
     return turnIds;
   };
-  const bySlice = new Map<string, string[]>();
+  const bySlice = new Map<string, { turnIds: Set<string>; userTurnIds: Set<string> }>();
   for (const s of summaries) {
     const owed = owedCount(s.sliceId, s.turnIds);
     if (owed.length === 0) continue;
-    const list = bySlice.get(s.sliceId);
-    if (list) {
-      for (const t of owed) if (!list.includes(t)) list.push(t);
-    } else {
-      bySlice.set(s.sliceId, [...owed]);
-    }
+    const group = bySlice.get(s.sliceId) ?? { turnIds: new Set<string>(), userTurnIds: new Set<string>() };
+    for (const id of owed) group.turnIds.add(id);
+    for (const id of s.userTurnIds ?? []) if (owed.includes(id)) group.userTurnIds.add(id);
+    bySlice.set(s.sliceId, group);
   }
-  return [...bySlice.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    .slice(0, max)
-    .map(([sliceId, turnIds]) => ({ sliceId, turnIds }));
+  const ordered = [...bySlice.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const selected = ordered.slice(0, max);
+  if (max > 0 && wakeSliceId && !selected.some(([id]) => id === wakeSliceId)) {
+    const waking = ordered.find(([id, group]) => id === wakeSliceId && group.userTurnIds.size > 0);
+    if (waking) selected.splice(max - 1, 1, waking);
+  }
+  return selected.map(([sliceId, group]) => ({ sliceId, turnIds: [...group.turnIds],
+      ...(group.userTurnIds.size ? { userTurnIds: [...group.userTurnIds] } : {}),
+    }));
 }
 
 /**

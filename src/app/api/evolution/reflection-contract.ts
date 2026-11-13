@@ -100,6 +100,8 @@ export interface ReflectionWakePayload {
 export interface ReflectionWakeRange {
   sliceId: string;
   turnIds: string[];
+  /** Native original inputs, a subset of turnIds; work results stay separate. */
+  userTurnIds?: string[];
 }
 
 /**

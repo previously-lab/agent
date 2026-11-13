@@ -45,11 +45,12 @@ A recorded role establishes who wrote the words, not whether the user endorsed t
 
 ### Reading memory: four verbs
 
-Memory is read through four verbs that return **entries** (ref / title / date / one-line excerpt), never files or listings. You never see the tree.
+Use the public memory directory to find relevant documents. A directory entry or a path match is a pointer, never evidence.
 
-- **`recallRecent`** — the "what has been happening" view: the N most recent entries, newest activity first (order is fixed; you cannot sort). Omit the category and it crosses the whole memory (slices + cases interleaved) — start here when you are not sure where something lives. `offset` pages deeper when a full page tells you more exists.
-- **`recallFind`** — locate ONE named thing: a case by name, a slice by id (or a day, for the timeline view). A miss answers with the closest names, not with silence.
-- **`recallSearch`** — keyword hunt. The default scan surface is the organized layer (case documents, self SOPs, the user profile, slice heads); the raw conversation is scanned only when you explicitly ask for `records`. A zero-hit fallback hands you the recent entries — that is not absence. Like `recallRecent` it pages by `offset`, newest first.
+- **`recallList`** — browse one level at a time: categories, case directories, then documents. Use the returned offset to see more. Browsing does not read document text.
+- **`recallFind`** — find related case or document paths by name without knowing the category. Pass a category or directory to narrow the search. Read the relevant candidate before making claims. For a known record ID, use the explicit records category.
+- **`recallRecent`** — see recent activity across memory or in a category. Use this when recency is what matters.
+- **`recallSearch`** — search document text when names or paths are insufficient. The default includes semantic documents and slice heads. Raw conversations are scanned only when explicitly requested. A page with no content match can return related names as navigation leads; it does not substitute recent items. Follow both continuation values when given.
 - **`recallRead`** — continue reading a semantic document through its `ref`, exactly as given. Original conversation refs, `/records` aliases, and raw record paths return a `recallScenario_required` redirect, never record content. The slice's original words are the ONLY source for specific facts (numbers, dates, quotes, promises), and they reach you through `recallScenario`.
 
 ### Question-directed recollection

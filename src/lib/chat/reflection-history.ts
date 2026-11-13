@@ -7,30 +7,42 @@ export interface HistoryCommit {
   parents?: string[];
 }
 
-export interface SummaryMaterial {
-  sha: string;
-  sliceId: string;
-  turnIds: string[];
-}
+export type SummaryMaterial = ReflectionHistoryCheckpoint["pending"][number];
 
 /** Locator lines describe where records live; only changed material creates work. */
 export function summaryMaterial(commit: HistoryCommit): SummaryMaterial[] {
   const prefix = /^Summary — (\d{4}-\d{2}-\d{2}-\d{4})(?:\r?\n|$)/.exec(commit.message);
   if (!prefix) return [];
+  const lines = commit.message.split("\n");
   const locations = new Map<string, string>();
-  for (const line of commit.message.split("\n")) {
+  for (const line of lines) {
     const match = /^- record (\S+) in (\d{4}-\d{2}-\d{2}-\d{4})$/.exec(line.trim());
     if (match) locations.set(match[1], match[2]);
   }
-  const grouped = new Map<string, Set<string>>();
-  for (const line of commit.message.split("\n")) {
-    const match = /^- (?:user turn|reply|cognition|merge) (\S+)$/.exec(line.trim());
+  const grouped = new Map<string, { turnIds: Set<string>; userTurnIds: Set<string> }>();
+  for (const line of lines) {
+    const match = /^- (user turn|reply|cognition|merge|reflection source) (\S+)$/.exec(line.trim());
     if (!match) continue;
-    const sliceId = locations.get(match[1]) ?? prefix[1];
-    if (!grouped.has(sliceId)) grouped.set(sliceId, new Set());
-    grouped.get(sliceId)!.add(match[1]);
+    const [, kind, turnId] = match;
+    const sliceId = locations.get(turnId) ?? prefix[1];
+    const group = grouped.get(sliceId) ?? { turnIds: new Set<string>(), userTurnIds: new Set<string>() };
+    group.turnIds.add(turnId);
+    // A native source uses either a bare original turn id or an exact
+    // research material id. The latter must never settle the former.
+    if (kind === "reflection source" && /^[A-Za-z0-9_-]{1,128}$/.test(turnId)) group.userTurnIds.add(turnId);
+    grouped.set(sliceId, group);
   }
-  return [...grouped].map(([sliceId, turns]) => ({ sha: commit.sha, sliceId, turnIds: [...turns] }));
+  return [...grouped].map(([sliceId, group]) => ({
+    sha: commit.sha, sliceId, turnIds: [...group.turnIds],
+    ...(group.userTurnIds.size ? { userTurnIds: [...group.userTurnIds] } : {}),
+  }));
+}
+
+/** Keep the per-input classification scoped to the remaining material. */
+function withRemainingTurns(material: SummaryMaterial, turnIds: string[]): SummaryMaterial {
+  const { sha, sliceId } = material;
+  const userTurnIds = material.userTurnIds?.filter((id) => turnIds.includes(id));
+  return { sha, sliceId, turnIds, ...(userTurnIds?.length ? { userTurnIds } : {}) };
 }
 
 /**
@@ -104,7 +116,9 @@ export function projectReflectionHistory(
       }
     }
   }
-  return { version: 1, basis, cursor, evolved, pending: [...pending.values()].filter(m => m.turnIds.length > 0), ...(latestNote ? { latestNote } : {}) };
+  return { version: 1, basis, cursor, evolved,
+    pending: [...pending.values()].filter(m => m.turnIds.length > 0).map(m => withRemainingTurns(m, m.turnIds)),
+    ...(latestNote ? { latestNote } : {}) };
 }
 
 /** Build the next prefix snapshot from this round's ORIGINAL read basis. */
@@ -119,6 +133,7 @@ export function settleHistoryCheckpoint(
     ...history,
     cursor,
     evolved: evolvedDate && (!history.evolved || evolvedDate > history.evolved) ? evolvedDate : history.evolved,
-    pending: history.pending.map(m => ({ ...m, turnIds: m.turnIds.filter(t => !processed.get(m.sliceId)?.has(t)) })).filter(m => m.turnIds.length > 0),
+    pending: history.pending.map(m => withRemainingTurns(m, m.turnIds.filter(t => !processed.get(m.sliceId)?.has(t))))
+      .filter(m => m.turnIds.length > 0),
   };
 }

@@ -98,12 +98,14 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("mode");
   });
 
-  it("exposes the four memory-read verbs with context entries (v0.36)", () => {
+  it("exposes the memory browsing and reading tools with context entries", () => {
     for (const name of [
       "recallRecent",
+      "recallList",
       "recallFind",
       "recallSearch",
       "recallRead",
+      "recallScenario",
     ] as const) {
       expect(chatTools).toHaveProperty(name);
       expect(buildChatToolsContext(ctx)[name]).toBe(ctx);
@@ -133,6 +135,7 @@ describe("chat tool surface", () => {
 
   it("the retired read tools are gone from the chat surface", () => {
     for (const name of [
+      "readFile",
       "listTree",
       "readDoc",
       "readSlice",
@@ -150,7 +153,7 @@ describe("chat tool surface", () => {
     }
   });
 
-  it("recallRecent: optional category/n/before/after; recallFind: category + name", async () => {
+  it("recallRecent accepts category, count, and date bounds", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
     const recent = chatTools.recallRecent.inputSchema as unknown as {
       shape: Record<string, unknown>;
@@ -159,11 +162,20 @@ describe("chat tool surface", () => {
     expect(recent.shape).toHaveProperty("n");
     expect(recent.shape).toHaveProperty("before");
     expect(recent.shape).toHaveProperty("after");
-    const find = chatTools.recallFind.inputSchema as unknown as {
-      shape: Record<string, unknown>;
-    };
-    expect(find.shape).toHaveProperty("category");
-    expect(find.shape).toHaveProperty("name");
+  });
+
+  it("recallList and recallFind accept only their scoped navigation inputs", () => {
+    type NavigationSchema = { safeParse(input: unknown): { success: boolean } };
+    const list = chatTools.recallList.inputSchema as unknown as NavigationSchema;
+    const find = chatTools.recallFind.inputSchema as unknown as NavigationSchema;
+    expect(list.safeParse({}).success).toBe(true);
+    expect(list.safeParse({ path: "people", offset: 3, limit: 2 }).success).toBe(true);
+    expect(list.safeParse({ path: "people", recursive: true }).success).toBe(false);
+    expect(find.safeParse({ name: "Lantern" }).success).toBe(true);
+    expect(find.safeParse({ name: "Lantern", category: "hypotheses", under: "hypotheses", limit: 2 }).success).toBe(true);
+    expect(find.safeParse({ name: "Lantern", category: "config" }).success).toBe(false);
+    expect(find.safeParse({ name: "Lantern", includeContents: true }).success).toBe(false);
+    expect(find.safeParse({ category: "people" }).success).toBe(false);
   });
 
   it("the field writeCase description carries the memory-is-git contract sentence (single source, v0.37 §2.3)", async () => {

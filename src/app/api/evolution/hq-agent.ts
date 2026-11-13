@@ -1,7 +1,11 @@
 import { stageDocumentProduct } from "@/lib/episodic/document-products";
+import { cardLinkSourceSchema, stageCaseCardCitation, validateCardSource } from "@/lib/episodic/card-evidence";
 import { dialogueSourceTurnId, readDialogueResearchRecords, selectDialogueResearchProducts } from "@/lib/episodic/dialogue-record";
 import { reorganizeUserModel } from "@/lib/evolution/user-model-maintenance";
-import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
+import { DOCUMENT_BUDGET_RULE, isAuthoredDocumentPath } from "@/lib/docs/write-limits";
+import { forkWriteBatch, mergeWriteBatch } from "@/lib/docs/write-batch";
+import { parseCaseRef } from "@/lib/docs/case-refs";
+import { caseStorageRevision } from "@/lib/docs/case-doc";
 /**
  * The HQ agent (v0.21 §2/§4/§5; v0.34 R2 — the docket-driven round) — ONE
  * agent + a tool set, no mouth.
@@ -36,6 +40,7 @@ import { parseSliceId } from "@/lib/episodic/turn-parser";
 import {
   commitReflectionRound,
   createBatch,
+  fsReadFile,
   fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
@@ -81,6 +86,17 @@ import type { SkillEntry } from "@/lib/evolution/skill-policy";
 import { buildReflectionLearningTools, createReflectionReadState } from "./reflection-learning-tools";
 import { buildReflectionTaskTools } from "./reflection-task-tools";
 import { RECORD_ATTRIBUTION_RULE, renderAttributedRecord } from "@/lib/episodic/record-attribution";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getRepoConfig } from "@/lib/capabilities";
+import { PEOPLE_USER_PROFILE_PATH } from "@/lib/evolution/paths";
+import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
+import {
+  findMemoryPaths,
+  listMemoryDirectory,
+  recallListInputSchema,
+  recallPathFindInputSchema,
+  type DirectoryResult,
+} from "@/lib/memory/navigation";
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
@@ -138,6 +154,8 @@ export interface HqOutcome {
    * stamps `lastEvolution` with the round's date. Absent = no pass ran.
    */
   evolved?: boolean;
+  /** Native user turns still owed after this lap; retry on the next wake. */
+  deferredCards?: number;
   /** Present when the run itself failed (never thrown — HQ never throws). */
   error?: string;
 }
@@ -167,8 +185,10 @@ const HQ_ROLE = `You are the reflection unit — the archival and evolution unit
 
 The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the turn(s) named as this round's material (their slice may still be open), what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
 - A docket is a plan, not a fact. It names slices and beats; it does not carry their content.
-- BEFORE writing anything, verify against the raw records: readRound / readCase / survey. Never write from the docket alone.
+- BEFORE writing anything, verify against the raw records with readRound. Read an existing target with readCase before updating it. Never write from the docket alone.
+- Use recallFind to locate an existing case by name or path across categories; use recallList to browse one level when you do not know the name. Directory results and survey are pointers, never read receipts.
 - This round's material is the turn(s) named below — a slice may still be open; you owe the TURNS, not a seal. The cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
+- For each listed native user card, read the exact user message. Cite its exact words in writeCase sources when filing it, or use linkCard after reading the existing case if only a source citation is needed. After createTask/updateTask, readCase the task and linkCard its source. A single message can be cited in several cases. If you actually read a card and decide it warrants no case link, call skipArchiveTurn with its exact quote and a short reason. Do not skip a failed read or write; leave that card owed. hqReport itself does not settle a card.
 
 Store RESULTS ONLY:
 - An idle round is a legal, often correct outcome — when the records show nothing substantive to store, write NOTHING and say why in your report. There is no ledger; do not record that you ran.
@@ -332,6 +352,8 @@ function renderSurvey(tree: Record<string, string[]>): string {
   );
 }
 
+type CardSource = z.infer<typeof cardLinkSourceSchema>;
+
 function buildHqTools(
   date: string,
   model: ModelConfig,
@@ -339,8 +361,26 @@ function buildHqTools(
   flags: { evolutionRan: boolean },
   mutateTask: BatchTaskMutation,
   sourceScope: ScopedSlice[],
+  cardSettlement: {
+    linked: (source: CardSource) => void;
+    skipped: (source: CardSource) => void;
+    rejectLink: (source: CardSource) => void;
+    linkFailed: (source: CardSource) => boolean;
+  },
 ) {
   const readState = createReflectionReadState();
+  const nativeOnly = sourceScope.some(({ turnIds }) => turnIds.length > 0)
+    && sourceScope.every(({ turnIds, userTurnIds }) => turnIds.every((id) => userTurnIds?.includes(id)));
+  function requireCardRaw(source: CardSource): string {
+    const scoped = sourceScope.find(({ sliceId }) => sliceId === source.sliceId);
+    if (!scoped?.userTurnIds?.includes(source.turnId) || !scoped.turnIds.includes(source.turnId)) {
+      throw new Error("Source is not a native user card owed in this round");
+    }
+    const raw = readState.rawRecords.get(source.sliceId);
+    if (raw === undefined) throw new Error(`Call readRound ${source.sliceId} before filing this card`);
+    validateCardSource(source, raw);
+    return raw;
+  }
   const currentManifest = async () => {
     const manifest = await buildRunManifest();
     const read = await readTaskLedger({ batch, fresh: true });
@@ -351,16 +391,57 @@ function buildHqTools(
     }
     return manifest;
   };
+  // Model-supplied scope is applied to this inventory only, never to storage.
+  // Share one backing tree per round, and overlay pending writes on each call.
+  let navigationSnapshot: Promise<string[]> | undefined;
+  function getNavigationSnapshot() {
+    const kind = resolveDataSource();
+    return loadMemoryNavigationPaths(kind === "github" ? { kind, ...getRepoConfig() } : { kind });
+  }
+  async function navigate(
+    project: (paths: readonly string[]) => DirectoryResult,
+  ): Promise<DirectoryResult | { kind: "unavailable"; note: string }> {
+    navigationSnapshot ??= getNavigationSnapshot().catch((error: unknown) => {
+      navigationSnapshot = undefined;
+      throw error;
+    });
+    let paths: Set<string>;
+    try {
+      paths = new Set(await navigationSnapshot);
+    } catch {
+      return { kind: "unavailable", note: "Memory directory could not be listed; this is not a missing path." };
+    }
+    for (const [path, content] of batch.entries) {
+      if (content === null) paths.delete(path);
+      else paths.add(path);
+    }
+    // Reflection has no recallRead; its reader only accepts cases and pieces.
+    paths.delete(AGENDA_PATH);
+    paths.delete(PEOPLE_USER_PROFILE_PATH);
+    return project([...paths]);
+  }
   return {
     ...buildReflectionLearningTools(batch, readState),
     ...buildReflectionTaskTools({ date, batch, rawRecords: readState.rawRecords, mutateTask }),
+    recallList: tool({
+      description:
+        "Browse the semantic memory directories. Omit path for categories, then open a returned category or case path for its immediate children. Follow nextOffset for more. Paths are navigation, not evidence; use readCase with a returned case or piece ref before writing.",
+      inputSchema: recallListInputSchema,
+      execute: async (input) => navigate((paths) => listMemoryDirectory(paths, input)),
+    }),
+    recallFind: tool({
+      description:
+        "Find existing memory directories and documents by name or semantic path, ranked by relevance. Omit category to search across categories; optionally narrow with under. Follow nextOffset for more. This does not search document contents or provide read receipts.",
+      inputSchema: recallPathFindInputSchema,
+      execute: async (input) => navigate((paths) => findMemoryPaths(paths, input)),
+    }),
     survey: tool({
       description:
         "Survey what lives in memory — a compact index by world (category): how many " +
         "cases / documents / rounds, the newest few with their dates, the latest activity. " +
         "NEVER a raw file or directory tree, and system files (config/, attachment bytes) " +
-        "are never exposed. Your discovery surface — call it FIRST when the brief does not " +
-        "name exact cases. The survey is a snapshot of the round's START: cases queued " +
+        "are never exposed. Use it for a broad activity overview, and recallFind/recallList " +
+        "to locate or browse cases. The survey is a snapshot of the round's START: cases queued " +
         "(written or deleted) this round may not appear in it — readCase sees the queue, " +
         "the survey does not.",
       inputSchema: z.object({}),
@@ -415,6 +496,52 @@ function buildHqTools(
     readCase: makeCaseReadTool(batch, readState.scope),
     readSlice: makeCrossSliceReadTool({ batch, scope: readState.scope }),
 
+    linkCard: tool({
+      description: "Append a short citation to the exact user message in an existing canonical case. Read the message with readRound and the case with readCase first; source.quote must match the user's original words. The document update is queued until this round commits.",
+      inputSchema: z.object({ ref: z.string().min(1), source: cardLinkSourceSchema }).strict(),
+      execute: async ({ ref, source }) => {
+        try {
+          const raw = requireCardRaw(source);
+          const parsed = parseCaseRef(ref);
+          if (!parsed || parsed.kind !== "case" || ref !== `${parsed.category}/${parsed.caseName}`) {
+            throw new Error("Expected a canonical case ref, e.g. events/pilot");
+          }
+          const read = readState.scope.getIndexRead(parsed.category, parsed.caseName);
+          if (!read) throw new Error(`Call readCase ${ref} before linking this card`);
+          const pending = forkWriteBatch(batch);
+          const current = await fsReadFile(read.path, pending, { fresh: true });
+          if (caseStorageRevision(current) !== read.revision) {
+            throw new Error(`Case ${ref} changed since it was read; re-read it before linking`);
+          }
+          await stageCaseCardCitation(pending, read.path, source, raw, date);
+          mergeWriteBatch(batch, pending);
+          cardSettlement.linked(source);
+          return `OK — case source citation checked: ${ref}; any update is queued until this round commits`;
+        } catch (error) {
+          cardSettlement.rejectLink(source);
+          return `REJECTED: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    }),
+
+    skipArchiveTurn: tool({
+      description: "Explicitly settle one owed native user card as needing no case link. First read its raw user message with readRound. Give an exact quote and a reason; failed, unread, or uncertain cards should remain owed instead.",
+      inputSchema: z.object({ source: cardLinkSourceSchema, reason: z.string().trim().min(1).max(300) }).strict(),
+      execute: async ({ source, reason }) => {
+        try {
+          if (!reason.trim()) throw new Error("A no-link reason is required");
+          requireCardRaw(source);
+          if (cardSettlement.linkFailed(source)) {
+            throw new Error("A filing attempt failed for this card; retry filing it or leave it owed");
+          }
+          cardSettlement.skipped(source);
+          return "OK — card checked; no case link warranted";
+        } catch (error) {
+          return `REJECTED: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    }),
+
     markOrphan: tool({
       description:
         "Seal one round that is still ACTIVE past the date window — an orphan: the " +
@@ -458,6 +585,7 @@ function buildHqTools(
         "addPiece: a focused dated piece (title + body), atomically linked from the index. Read relevant existing pieces first; their listed titles are not evidence. Open a new case's overview first, then read it and addPiece with the distinct full piece body. reviseUnderstanding: replace only _current.md with body and evidence refs actually read in this run; unchanged prose only refreshes metadata, while changed prose preserves its previous version. Read the full target case before any update; survey is not a receipt. " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
+        "When filing an owed native user card, provide sources with its sliceId, turnId and exact raw user quote from readRound. A native-only docket requires sources for every case write; a write without sources never settles a native card. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
         DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE + " reorganize: evidence-backed shrink of an over-budget index after a full read; preserves the complete source in immutable history shards. " +
         `\n\n${MEMORY_IS_GIT_RULE}`,
@@ -486,6 +614,7 @@ function buildHqTools(
         line: z.string().optional(),
         title: z.string().optional(),
         evidence: z.array(z.string().min(1)).min(1).max(20).optional(),
+        sources: z.array(cardLinkSourceSchema).min(1).max(20).optional(),
         expectedUpdated: z
           .string()
           .optional()
@@ -495,12 +624,17 @@ function buildHqTools(
           ),
       }),
       execute: async (args) => {
+        const reject = (reason: string) => {
+          for (const source of args.sources ?? []) cardSettlement.rejectLink(source);
+          return `REJECTED: ${reason}`;
+        };
+        if (nativeOnly && !args.sources?.length) return reject("Native-only filing requires exact user card sources from readRound");
         // people/user/index.md is the USER MODEL — pure prose maintained by
         // the merged card pass (evolveProfile), every byte of it injected
         // into each turn. Routing it through the case machinery would stamp
         // case frontmatter into that prose; refuse mechanically instead.
         if (args.category === "people" && args.caseName === "user") {
-          return "REJECTED: people/user is the user model, not a case — use evolveProfile (other people/* cases stay legal).";
+          return reject("people/user is the user model, not a case — use evolveProfile (other people/* cases stay legal).");
         }
         // The runtime category check lives in applyCaseWriteIntent
         // (isCaseCategory throws on an unknown category) — one enforcement point.
@@ -511,24 +645,24 @@ function buildHqTools(
         const category = (args.category ?? "research") as CaseCategory;
         const base = { category, caseName: sanitizeCaseSegment(args.caseName) };
         if (category === "self" && ["search", "thinkdeep"].includes(base.caseName)) {
-          return "REJECTED: capability SOPs use readSelfSop/writeSelfSop; generic case writes cannot bypass their revision and evidence gates";
+          return reject("capability SOPs use readSelfSop/writeSelfSop; generic case writes cannot bypass their revision and evidence gates");
         }
         if (category === "tasks" && args.action === "open") {
-          return "REJECTED: createTask records a genuine raw user commitment and materializes its task document atomically; use an existing ledger ref for later narrative updates";
+          return reject("createTask records a genuine raw user commitment and materializes its task document atomically; use an existing ledger ref for later narrative updates");
         }
-        if (args.action === "open" && !readState.hasReadEvidence()) return "REJECTED: readRound/readCase evidence before opening a document; a docket or survey is not evidence";
+        if (args.action === "open" && !readState.hasReadEvidence()) return reject("readRound/readCase evidence before opening a document; a docket or survey is not evidence");
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "reorganize":
-            if (!args.body || !args.evidence?.length) return "REJECTED: reorganize requires a shorter body and evidence read in this run; the source is preserved byte-for-byte";
+            if (!args.body || !args.evidence?.length) return reject("reorganize requires a shorter body and evidence read in this run; the source is preserved byte-for-byte");
             intent = { action: "reorganize", ...base, body: args.body, evidence: args.evidence };
             break;
           case "open":
-            if (!args.body) return "REJECTED: open requires body";
+            if (!args.body) return reject("open requires body");
             intent = { action: "open", ...base, body: args.body };
             break;
           case "rewriteIndex":
-            if (!args.body) return "REJECTED: rewriteIndex requires body";
+            if (!args.body) return reject("rewriteIndex requires body");
             intent = {
               action: "rewriteIndex",
               ...base,
@@ -539,27 +673,37 @@ function buildHqTools(
             };
             break;
           case "appendTail":
-            if (!args.line) return "REJECTED: appendTail requires line";
+            if (!args.line) return reject("appendTail requires line");
             intent = { action: "appendTail", ...base, line: args.line };
             break;
           case "addPiece":
-            if (!args.title || !args.body) return "REJECTED: addPiece requires title and body";
+            if (!args.title || !args.body) return reject("addPiece requires title and body");
             intent = { action: "addPiece", ...base, title: sanitizeCaseSegment(args.title), body: args.body };
             break;
           case "reviseUnderstanding":
-            if (!args.body || !args.evidence?.length) return "REJECTED: reviseUnderstanding requires body and evidence read in this run";
+            if (!args.body || !args.evidence?.length) return reject("reviseUnderstanding requires body and evidence read in this run");
             intent = { action: "reviseUnderstanding", ...base, body: args.body, evidence: args.evidence };
             break;
         }
         try {
-          const applied = await applyCaseWriteIntent(intent, date, batch, readState.scope);
-          for (const source of sourceScope) if (readState.scope.hasEvidence(`records/${source.sliceId}`)) await stageDocumentProduct(batch, source, applied.path);
+          const sources = (args.sources ?? []).map((source) => ({ source, raw: requireCardRaw(source) }));
+          const pending = forkWriteBatch(batch);
+          const applied = await applyCaseWriteIntent(intent, date, pending, readState.scope);
+          for (const { source, raw } of sources) await stageCaseCardCitation(pending, applied.path, source, raw, date);
+          for (const source of sourceScope) {
+            const turnIds = source.turnIds.filter((id) => !source.userTurnIds?.includes(id));
+            if (readState.scope.hasEvidence(`records/${source.sliceId}`)) {
+              await stageDocumentProduct(pending, { sliceId: source.sliceId, turnIds }, applied.path);
+            }
+          }
+          mergeWriteBatch(batch, pending);
+          for (const { source } of sources) cardSettlement.linked(source);
           // Queued, NOT committed — the round's single end-of-round flush is
           // the commit. "written" is claimed only after a commit succeeds
           // (v0.37 §7-1): the honest word here is 「已记录，随本轮一次落盘」.
           return `OK — 已记录，随本轮一次落盘: ${applied.path}${applied.created ? " (created)" : ""}${applied.warnings?.length ? `\n${applied.warnings.join("\n")}` : ""}`;
         } catch (e) {
-          return `REJECTED: ${e instanceof Error ? e.message : String(e)}`;
+          return reject(e instanceof Error ? e.message : String(e));
         }
       },
     }),
@@ -582,9 +726,11 @@ function buildHqTools(
           slice = null;
         }
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
-        const materialIds = sourceScope.find((source) => source.sliceId === sliceId)?.turnIds ?? [];
+        const scoped = sourceScope.find((source) => source.sliceId === sliceId);
+        const materialIds = scoped?.turnIds ?? [];
         if (!materialIds.length) return "No owed source turns in this round; read the slice explicitly for context instead of deriving its documents again.";
         const sourceTurnIds = [...new Set(materialIds.map(dialogueSourceTurnId))];
+        const cardTurnIds = scoped?.userTurnIds?.filter((id) => materialIds.includes(id)) ?? [];
         const excerpt = buildSliceExcerpt(slice, sourceTurnIds);
         const researchProducts = selectDialogueResearchProducts(
           readDialogueResearchRecords(await readSlicePart(sliceId, "agent", batch).catch(() => "")),
@@ -593,7 +739,8 @@ function buildHqTools(
         const result = await runLibrarianPass({
           model,
           closedSliceId: sliceId,
-          sourceTurnIds,
+          sourceTurnIds: materialIds,
+          ...(cardTurnIds.length ? { cardTurnIds, onCardLinked: cardSettlement.linked } : {}),
           ...(researchProducts.length ? { researchProducts } : {}),
           excerpt,
           manifest: await currentManifest(),
@@ -602,14 +749,15 @@ function buildHqTools(
         });
         // The same slice's mailbox: sediment/task markers the field dropped
         // land as cases here — this is the scribe pass's production caller.
-        const scribe = await runScribePass({
+        const scribeMaterialIds = materialIds.filter((id) => !cardTurnIds.includes(id));
+        const scribe = scribeMaterialIds.length ? await runScribePass({
           model,
           sliceId,
-          excerpt,
-          sourceTurnIds,
+          excerpt: cardTurnIds.length ? buildSliceExcerpt(slice, [...new Set(scribeMaterialIds.map(dialogueSourceTurnId))]) : excerpt,
+          sourceTurnIds: scribeMaterialIds,
           date,
           batch,
-        });
+        }) : { written: [], skipped: [] };
         return (
           // Queued, not committed — "written" is claimed only after the
           // round's flush lands (v0.37 §7-1).
@@ -799,11 +947,26 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     }
   }
   const { date, cursor, scope, evolutionDue, evolutionReasons, agendaDue } = input;
+  const cards = new Map(scope.map(({ sliceId, turnIds, userTurnIds }) =>
+    [sliceId, new Set(turnIds.filter((turnId) => userTurnIds?.includes(turnId)))]));
+  const nativeCardCount = [...cards.values()].reduce((sum, ids) => sum + ids.size, 0);
+  const allCardsDeferred = nativeCardCount > 0 ? { deferredCards: nativeCardCount } : {};
+  const cardDispositions = new Map<string, "linked" | "skipped" | "failed">();
+  const dispositionKey = ({ sliceId, turnId }: Pick<CardSource, "sliceId" | "turnId">) => `${sliceId}/${turnId}`;
+  const setCardDisposition = (source: CardSource, disposition: "linked" | "skipped" | "failed") => {
+    if (cards.get(source.sliceId)?.has(source.turnId)) cardDispositions.set(dispositionKey(source), disposition);
+  };
+  const cardSettlement = {
+    linked: (source: CardSource) => setCardDisposition(source, "linked"),
+    skipped: (source: CardSource) => setCardDisposition(source, "skipped"),
+    rejectLink: (source: CardSource) => setCardDisposition(source, "failed"),
+    linkFailed: (source: CardSource) => cardDispositions.get(dispositionKey(source)) === "failed",
+  };
 
   const model = backgroundModel();
   if (!model) {
     console.warn("[HQ] no default model configured — idle");
-    return { actions: [], note: "", error: "no default model configured" };
+    return { actions: [], note: "", error: "no default model configured", ...allCardsDeferred };
   }
 
   // The round's user prompt is built from the DOCKET (§5.3): the material
@@ -815,7 +978,8 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
           .map(
             (s) =>
               `- ${s.sliceId}: turns ${s.turnIds.join(", ")}` +
-              (s.closedBy ? ` (closed by ${s.closedBy})` : " (still open)"),
+              (s.closedBy ? ` (closed by ${s.closedBy})` : " (still open)") +
+              (cards.get(s.sliceId)?.size ? `; native user cards requiring exact disposition: ${[...cards.get(s.sliceId)!].join(", ")}` : ""),
           )
           .join("\n")
       : "(none — no turn is owed this lap)";
@@ -855,7 +1019,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       const { owner, repo } = (await import("@/lib/capabilities")).getRepoConfig();
       batch.baseHeadSha = (await (await import("@/lib/github/read-view")).getGitHubReadHead(repo, owner)).headSha;
     } catch (error) {
-      return { actions: [], note: "", error: `cannot establish the reflection write basis: ${error instanceof Error ? error.message : String(error)}` };
+      return { actions: [], note: "", error: `cannot establish the reflection write basis: ${error instanceof Error ? error.message : String(error)}`, ...allCardsDeferred };
     }
   }
   const flags = { evolutionRan: false };
@@ -867,7 +1031,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,
-    tools: buildHqTools(date, model, batch, flags, mutateTask, scope),
+    tools: buildHqTools(date, model, batch, flags, mutateTask, scope, cardSettlement),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
@@ -919,19 +1083,22 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   const rep = result.ok && result.report ? result.report : null;
   const roundFailed = rep === null;
   const superseded = rep?.disposition === "superseded";
-  // The TURN-level water level (v0.42 §4 — the work unit is a turn): one
-  // seen mark per SCOPED slice, its owed turn ids. The scope is already
-  // coverage-filtered by the world read, so these marks are exactly what
-  // this round processed — a later lap (or a rangeless unit) subtracts
-  // them from whatever the summary log still owes.
-  const seenMarks =
-    scope.length > 0
-      ? scope.map((s) => ({ sliceId: s.sliceId, turnIds: s.turnIds }))
-      : undefined;
+  // A clean round keeps the legacy/derived material contract. Native user
+  // cards require exact evidence and a successful link or explicit no-op.
+  // The same subset advances every durable coverage field.
+  const settledScope = scope.flatMap(({ sliceId, turnIds }) => {
+    const ids = turnIds.filter((turnId) => {
+      if (!cards.get(sliceId)?.has(turnId)) return true;
+      const disposition = cardDispositions.get(dispositionKey({ sliceId, turnId }));
+      return disposition === "linked" || disposition === "skipped";
+    });
+    return ids.length ? [{ sliceId, turnIds: ids }] : [];
+  });
+  const deferredCards = nativeCardCount - [...cardDispositions.values()].filter((disposition) => disposition !== "failed").length;
   const note = rep && queuedPaths.length > 0 ? rep.note : undefined;
   const observed = input.history?.pending.flatMap(m => {
-    const turnIds = m.turnIds.filter(t => scope.some(s => s.sliceId === m.sliceId && s.turnIds.includes(t)));
-    return turnIds.length ? [{ ...m, turnIds }] : [];
+    const turnIds = m.turnIds.filter(t => settledScope.some(s => s.sliceId === m.sliceId && s.turnIds.includes(t)));
+    return turnIds.length ? [{ sha: m.sha, sliceId: m.sliceId, turnIds }] : [];
   });
   const message = buildReflectionRoundMessage({
     date,
@@ -941,10 +1108,10 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       ? {}
       : {
           trailer: {
-            ...(!superseded && seenMarks ? { seen: seenMarks } : {}),
+            ...(!superseded && settledScope.length ? { seen: settledScope } : {}),
             ...(!superseded && input.history ? {
               observed: observed ?? [],
-              history: settleHistoryCheckpoint(input.history, scope, flags.evolutionRan ? date : undefined),
+              history: settleHistoryCheckpoint(input.history, settledScope, flags.evolutionRan ? date : undefined),
             } : {}),
             ...(flags.evolutionRan ? { evolved: { date } } : {}),
             ...(superseded ? { superseded: true as const } : {}),
@@ -997,7 +1164,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       : flushError;
     // No `evolved` stamp either: the pass ran, but its product died with
     // the same flush — nothing this round produced survives.
-    return { actions: [], note: "", error };
+    return { actions: [], note: "", error, ...allCardsDeferred };
   }
 
   if (roundFailed || !rep) {
@@ -1014,14 +1181,17 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       actions: landed,
       note: "",
       error,
+      ...allCardsDeferred,
       // an evolution pass that ran before the cut still counts (§4.2)
       ...(flags.evolutionRan ? { evolved: true } : {}),
     };
   }
-  console.log(`[HQ] round done: ${rep.actions.length} action(s)`);
+  const committedActions = queuedPaths.filter(isAuthoredDocumentPath).map((p) => p.replace(/^memory\//, ""));
+  console.log(`[HQ] round done: ${committedActions.length} document write(s)`);
   return {
-    actions: rep.actions,
+    actions: committedActions,
     note: rep.note,
+    ...(!superseded && deferredCards > 0 ? { deferredCards } : {}),
     // 修订 C: verbatim passthrough — absent means "completed".
     ...(rep.disposition !== undefined
       ? { disposition: rep.disposition }
@@ -1066,13 +1236,14 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
         return {
           actions: [],
           note: "",
+          ...allCardsDeferred,
           error:
             `${msg}; degraded flush also failed (${flushDetail}) — queued writes did not persist: ${queuedPaths.join(", ")}. ` +
             `The round is failed: the cursor does not move and this material is redone on a later lap.`,
         };
       }
     }
-    return { actions: landed, note: "", error: msg };
+    return { actions: landed, note: "", error: msg, ...allCardsDeferred };
   }
   });
   }, { fresh: true });
