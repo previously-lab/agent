@@ -391,6 +391,49 @@ describe("recallRecent", () => {
     expect(r.truncated).toBe(true);
   });
 
+  it("reads only records that can reach the requested recent page", async () => {
+    const read = vi.spyOn(backend, "readFile");
+    await recallRecent(backend, { category: "records", n: 1 });
+    expect(read.mock.calls.filter(([path]) => /^memory\/records\/.*\/core\.md$/.test(path))).toHaveLength(1);
+    read.mockClear();
+    await recallRecent(backend, { n: 1 });
+    // The newest entry across categories is a case, so the page needs no record.
+    expect(read.mock.calls.filter(([path]) => /^memory\/records\/.*\/core\.md$/.test(path))).toHaveLength(0);
+  });
+
+  it("pages physical records across partial timeline shards and only reads on-page gaps", async () => {
+    const latest = "2026-11-19-1516";
+    const morning = "2026-11-19-0900";
+    const garden = "2026-10-08-1300";
+    const phone = "2026-09-04-2130";
+    const shard = "memory/timeline/2026-11.md";
+    const corePath = (id: string) => `memory/records/${id.replaceAll("-", "/")}/core.md`;
+    const partial = makeBackend({
+      [shard]: `- [Deleted](previously:records/2026-11-20-1200) — stale\n- [Newest](previously:records/${latest}) — compact navigation`,
+      [corePath(latest)]: "unused",
+      [corePath(morning)]: sliceCore("Morning", "morning text"),
+      [corePath(garden)]: sliceCore("Garden", "garden text"),
+      [corePath(phone)]: sliceCore("Phone", "phone text"),
+    });
+    const read = vi.spyOn(partial, "readFile");
+    const first = await recallRecent(partial, { category: "records", n: 2 });
+    expect(entriesOf(first).map(e => [e.ref, e.title])).toEqual([
+      [`records/${latest}`, "Newest"], [`records/${morning}`, "Morning"],
+    ]);
+    expect(entriesOf(first)[0]!.navigation?.kind).toBe("navigation_only");
+    expect(renderRecallResult(first)).toContain("pass offset=2");
+    expect(read.mock.calls.map(([path]) => path)).toEqual([shard, corePath(morning)]);
+    read.mockClear();
+    const last = await recallRecent(partial, { category: "timeline", n: 2, offset: 2 });
+    expect(entriesOf(last).map(e => e.ref)).toEqual([`records/${garden}`, `records/${phone}`]);
+    expect(last).toMatchObject({ scanned: 4, truncated: false });
+    expect(read.mock.calls.map(([path]) => path)).not.toContain(shard);
+    read.mockClear();
+    expect(await recallRecent(partial, { category: "records", n: 2, offset: 4 }))
+      .toMatchObject({ entries: [], pastEnd: true, scanned: 4, truncated: false });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("offset pages deeper — no overlap, no skips, fixed page wording", async () => {
     // 3 slices in records, newest first: 10-14, 10-09, 10-08.
     const p1 = await recallRecent(backend, { category: "records", n: 1, offset: 0 });
@@ -482,6 +525,137 @@ describe("recallFind", () => {
 // ─── Verb ③ recallSearch ──────────────────────────────────────────────────
 
 describe("recallSearch", () => {
+  it("attributes at most two returned body passages to their original bytes without extra reads", async () => {
+    const paths = ["Gamma", "Beta", "Alpha"].map(name => `memory/things/${name}/index.md`);
+    const raw = "---\r\nupdated: 2026-11-19\r\n---\r\n\r\n# Heading\r\n\r\nPrior context.\r\n\r\nThe actual needle stays here.\r\n\r\nFollowing context.\r\n";
+    const backend = makeBackend(Object.fromEntries(paths.map(p => [p, raw])));
+    const reads = vi.spyOn(backend, "readFile");
+    const result = await recallSearch(backend, { query: "needle", includeSemanticPassages: true });
+    if (result.kind !== "entries") throw new Error("Missing search hits");
+    expect(result.passages?.map(p => p.ref)).toEqual(result.entries.slice(0, 2).map(e => e.ref));
+    for (const passage of result.passages ?? []) {
+      expect(passage).toMatchObject({ edition: "current", revision: caseStorageRevision(raw) });
+      expect(raw).toContain(passage.excerpt);
+      expect(passage.excerpt).toContain("Prior context.\r\n\r\nThe actual needle stays here.\r\n\r\nFollowing context.");
+      expect(passage.excerpt).not.toContain("updated:");
+    }
+    expect(reads).toHaveBeenCalledTimes(paths.length);
+    const next = await recallSearch(backend, { query: "needle", offset: 2, includeSemanticPassages: true });
+    expect(next).toMatchObject({ passages: [{ ref: result.entries[2]!.ref }] });
+  });
+
+  it("returns the observed outcome and its limits across headings in a short case", async () => {
+    const body = "The beacon test was proposed.\n\n## Measurement\nIt emitted twice.\n\n## Unknown\nArrival order was not observable.";
+    const raw = "---\nopened: 2026-11-08\n---\n\n" + body;
+    const result = await recallSearch(makeBackend({ "memory/things/Beacon/index.md": raw }),
+      { query: "beacon", includeSemanticPassages: true });
+    expect(result).toMatchObject({ passages: [{ excerpt: body, revision: caseStorageRevision(raw) }] });
+  });
+
+  it("keeps record, private, hidden, and current-view hits out of verified body passages", async () => {
+    const backend = makeBackend({
+      "memory/things/A/index.md": "---\nprivate: needle\n---\n\n# needle\n\n<!-- open\nneedle\n-->\n\nplain",
+      "memory/things/A/_current.md": "CURRENT BODY\n\nneedle",
+      "memory/things/B/index.md": "~~~js\nneedle\n~~~\n\nclear",
+      "memory/people/user/index.md": "private needle",
+      "memory/self/agenda.md": "private needle",
+      "memory/records/2026/11/19/1200/core.md": sliceCore("needle", "original needle"),
+    });
+    const result = await recallSearch(backend, { query: "needle", includeRecords: true, includeSemanticPassages: true });
+    expect(result.kind).toBe("entries");
+    expect(result).not.toHaveProperty("passages");
+  });
+
+  it("keeps metadata and hidden comments out of ordinary matches, excerpts and read receipts", async () => {
+    const body = [
+      "---", "opened: '2026-11-12'", "internal: hiddenneedle", "---",
+      "# Section <!--", "hiddenneedle hiddensecret", "-->",
+      "Visible needle at the margin.<!-- hiddensecret -->Visible sequel.",
+      "", "<!-- unclosed hiddenneedle",
+    ].join("\r\n");
+    const backend = makeBackend({ "memory/things/Report/index.md": body });
+    for (const includeSemanticPassages of [false, true]) {
+      const hidden = await recallSearch(backend, { query: "hiddenneedle", includeSemanticPassages });
+      expect(hidden).toMatchObject({ kind: "fallback", entries: [] });
+      const visible = await recallSearch(backend, { query: "margin", includeSemanticPassages });
+      expect(visible).toMatchObject({ entries: [{ ref: "things/Report", excerpt: "Visible needle at the margin." }] });
+      if (includeSemanticPassages) expect(visible).toMatchObject({ passages: [{ excerpt: "Visible needle at the margin." }] });
+      expect(JSON.stringify(visible)).not.toMatch(/hiddenneedle|hiddensecret|internal:|<!--/);
+    }
+  });
+
+  it("labels the preserved index separately from a current understanding, clipping around a late literal match", async () => {
+    const raw = "x".repeat(1800) + "\nThe old needle was yellow.\n" + "y".repeat(1000);
+    const backend = makeBackend({ "memory/things/Box/index.md": raw, "memory/things/Box/_current.md": "Different text." });
+    const result = await recallSearch(backend, { query: "needle", includeSemanticPassages: true });
+    if (result.kind !== "entries") throw new Error("Missing search hit");
+    const passage = result.passages?.[0];
+    expect(passage).toMatchObject({ ref: "things/Box", edition: "original", revision: caseStorageRevision(raw) });
+    expect(passage!.excerpt.length).toBeLessThanOrEqual(840);
+    expect(passage!.excerpt).toContain("The old needle was yellow.");
+    expect(raw).toContain(passage!.excerpt);
+  });
+
+  it("offers bounded turn pointers only from the returned public passage sources and their visible links", async () => {
+    const link = (id: string, slice = "2026-11-08-1325") => `[原话](previously:records/${slice}?turn=${id}&role=user)`;
+    const files: Record<string, string> = {};
+    for (const name of ["Alpha", "Bravo", "Charlie"]) {
+      files[`memory/things/${name}/index.md`] = [
+        `---\ninternal: '${link("hidden-header")}'\n---`,
+        `Sighting (refs: 2026-11-08-1325) ${link(name + "-direct")}`,
+        "# Notes", "<!-- " + link("hidden-comment") + " -->", "```md\n" + link("hidden-code") + "\n```",
+        link("unrelated", "2026-11-09-1335"), link(name + "-near"), link(name + "-another"), link(name + "-last"),
+        "[bad](previously:records/2026-11-08-2400?turn=bad&role=user)",
+      ].join("\n\n");
+    }
+    files["memory/people/user/index.md"] = "Sighting." + link("private-user");
+    files["memory/self/agenda.md"] = "Sighting." + link("private-agenda");
+    const backend = makeBackend(files);
+    const reads = vi.spyOn(backend, "readFile");
+    const input = { query: "Sighting", includeSemanticPassages: true, turnLinks: "both" as const };
+    const result = await recallSearch(backend, input);
+    if (result.kind !== "entries") throw new Error("Expected public passages");
+    const sources = result.passages!.map(passage => passage.ref);
+    expect(sources).toHaveLength(2);
+    expect(result.turnNavigation?.map(group => group.sourceRef)).toEqual(sources);
+    for (const group of result.turnNavigation!) {
+      const name = group.sourceRef.split("/")[1];
+      expect(group.cardTargets.map(target => target.turnId)).toEqual([name + "-direct", name + "-near", name + "-another"]);
+    }
+    expect(result.passages!.every(p => !("cardTargets" in p))).toBe(true);
+    expect(reads).toHaveBeenCalledTimes(Object.keys(files).length);
+    expect(await recallSearch(backend, { ...input, includeSemanticPassages: false })).not.toHaveProperty("turnNavigation");
+  });
+  it("keeps semantic matches ahead of record leads across candidate and hit pages", async () => {
+    const files: Record<string, string> = {
+      "memory/events/Counter/index.md": "---\nopened: 2026-11-01\n---\n\nA clickable counter.",
+    };
+    for (let minute = 0; minute <= 50; minute++) {
+      const time = `08${String(minute).padStart(2, "0")}`;
+      const body = minute === 49 ? "counter click hover private match" : minute === 50 || minute === 0 ? "counter" : "other";
+      files[`memory/records/2026/11/15/${time}/core.md`] = sliceCore("Original", body);
+    }
+    const store = makeBackend(files);
+    const query = ["counter", "hover"];
+    const first = await recallSearch(store, { query, includeRecords: true, limit: 2 });
+    expect(first).toMatchObject({
+      kind: "entries", entries: [{ ref: "events/Counter" }, { ref: "records/2026-11-15-0849" }],
+      nextScanCursor: 0, nextOffset: 2, scanned: 50,
+    });
+    const rendered = renderRecallResult(first, { query: query.join(" ") });
+    expect(rendered).toContain("A clickable counter.");
+    expect(rendered).toContain("Original record leads");
+    expect(rendered).not.toContain("private match");
+    const second = await recallSearch(store, { query, includeRecords: true, limit: 2, scanCursor: 0, offset: 2 });
+    expect(second).toMatchObject({ entries: [{ ref: "records/2026-11-15-0850" }], nextScanCursor: 50, nextOffset: 0 });
+    const last = await recallSearch(store, { query, includeRecords: true, limit: 2, scanCursor: 50, offset: 0 });
+    expect(last).toMatchObject({ entries: [{ ref: "records/2026-11-15-0800" }], truncated: false });
+
+    const records = await recallSearch(store, { query, category: "records", limit: 2 });
+    expect(entriesOf(records).map(entry => entry.ref)).toEqual(["records/2026-11-15-0849", "records/2026-11-15-0850"]);
+    expect(renderRecallResult(records, { query: query.join(" ") })).not.toContain("Document excerpts");
+  });
+
   it("finds structured documents by keyword (kind: entries)", async () => {
     const r = await recallSearch(backend, { query: "小屏旗舰" });
     const entries = entriesOf(r);
@@ -658,6 +832,89 @@ describe("recallSearch", () => {
     // heads match instead.
     expect(entries.every((e) => e.date >= "2026-10-01")).toBe(true);
     expect(entries.some((e) => e.kind === "slice")).toBe(true);
+  });
+
+  it("finds a later-filed account using a citation to a conversation on the user's local day", async () => {
+    const root = "memory/things/记忆工具面";
+    const topic = "回复多流";
+    const day = "2026-11-08";
+    const ref = "records/2026-11-07-1800"; // 02:00 on Nov 8 in Shanghai.
+    const header = "---\nopened: '2026-11-15'\n---\n";
+    const link = `[原话](previously:${ref}?turn=abc&role=user)`;
+    const related = `${root}/2026-11-15-测试结论.md`;
+    const records = "memory/records/2026/11/07/1800/core.md";
+    const backend = makeBackend({
+      [`${root}/index.md`]: header,
+      [related]: header + topic + "：已见回执，界面展示未知。\n—— 尾部 ——\n2026-11-15：" + link,
+      [`${root}/2026-11-15-引用戳.md`]: header + topic + " (refs: 2026-11-07-1800)",
+      [`${root}/2026-11-08-回复多流.md`]: header + topic + " 发生在 2026-11-08。\n" +
+        `<!-- ${link} -->\n\r\n\`\`\`md\r\n${link}\r\n\`\`\`\r\n` +
+        "[示例](https://example.org/records/2026-11-07-1800)",
+      [records]: topic,
+    });
+    const reads = vi.spyOn(backend, "readFile");
+    const input = { query: topic, since: day, until: day, timezone: "Asia/Shanghai", dateBasis: "conversation" as const };
+    const result = await recallSearch(backend, { ...input, includeSemanticPassages: true });
+    expect(result).toMatchObject({ kind: "entries", entries: [
+      { date: "2026-11-15", citedSliceStartDay: day }, { date: "2026-11-15", citedSliceStartDay: day },
+    ] });
+    expect(entriesOf(result).map(e => e.ref)).toContain("things/记忆工具面/2026-11-15-测试结论");
+    expect(renderRecallResult(result, { query: topic })).toContain("[cited slice opened 2026-11-08 local]");
+    expect(reads).not.toHaveBeenCalledWith(records);
+    expect(await recallSearch(backend, { ...input, timezone: "UTC" })).toMatchObject({ kind: "fallback", entries: [] });
+    expect(entriesOf(await recallSearch(backend, { ...input, includeRecords: true })).map(e => e.ref)).toContain(ref);
+    expect(entriesOf(await recallSearch(backend, { ...input, dateBasis: "activity" })).map(e => e.ref))
+      .toEqual(["things/记忆工具面/2026-11-08-回复多流"]);
+  });
+
+  it("checks named candidates first by slice date without pre-reading unrelated indexes and current views", async () => {
+    const root = "memory/things/Case";
+    const accounts = [`${root}/2026-11-15-Receipt.md`, `${root}/2026-11-14-Receipt.md`];
+    const files: Record<string, string> = {
+      [`${root}/index.md`]: "Old case.",
+      [accounts[0]!]: "Receipt intermediate. (refs: 2026-11-08-1300)",
+      [accounts[1]!]: "Receipt final. (refs: 2026-11-08-1400)",
+    };
+    for (let i = 0; i < 65; i++) {
+      files[`memory/things/Case${i}/index.md`] = "Unrelated.";
+      files[`memory/things/Case${i}/_current.md`] = "Current.";
+    }
+    const backend = makeBackend(files);
+    const reads = vi.spyOn(backend, "readFile");
+    const input = { query: "receipt", since: "2026-11-08", until: "2026-11-08", dateBasis: "conversation" as const, limit: 1 };
+    expect(await recallSearch(backend, input)).toMatchObject({ kind: "entries", scanned: 2,
+      entries: [{ ref: "things/Case/2026-11-15-Receipt" }], nextScanCursor: 0, nextOffset: 1 });
+    expect(reads.mock.calls.map(([path]) => path).sort()).toEqual([...accounts].sort());
+    expect(await recallSearch(backend, { ...input, scanCursor: 0, offset: 1 })).toMatchObject({ scanned: 2,
+      entries: [{ ref: "things/Case/2026-11-14-Receipt" }], nextScanCursor: 2, nextOffset: 0 });
+    reads.mockClear();
+    expect(await recallSearch(backend, { ...input, scanCursor: 2 })).toMatchObject({ entries: [], scanned: 50, nextScanCursor: 52 });
+    expect(reads).toHaveBeenCalledTimes(50);
+  });
+
+  it("labels a cross-midnight citation by the slice opening day even when the cited turn came later", async () => {
+    const backend = makeBackend({
+      "memory/things/Night/index.md": "Midnight turn, recorded at 00:02 on Nov 9. " +
+        "[turn](previously:records/2026-11-08-1558?turn=abcd&role=user)",
+    });
+    const input = { query: "Midnight", timezone: "Asia/Shanghai", dateBasis: "conversation" as const };
+    const opened = await recallSearch(backend, { ...input, since: "2026-11-08", until: "2026-11-08" });
+    expect(renderRecallResult(opened, { query: "Midnight" })).toContain("[cited slice opened 2026-11-08 local]");
+    const next = await recallSearch(backend, { ...input, since: "2026-11-09", until: "2026-11-09" });
+    expect(next).toMatchObject({ kind: "fallback", entries: [] });
+  });
+
+  it("continues within the call when named candidates lack the requested slice or complete term coverage", async () => {
+    const backend = makeBackend({
+      "memory/things/Beacon Signal/index.md": "Beacon signal seen. (refs: 2026-11-09-1200)",
+      "memory/things/Beacon Signal Notes/index.md": "Beacon visible. (refs: 2026-11-08-1200)",
+      "memory/things/Observation/index.md": "Beacon signal seen. (refs: 2026-11-08-1200)",
+    });
+    const result = await recallSearch(backend, {
+      query: ["Beacon", "Signal"], since: "2026-11-08", until: "2026-11-08", dateBasis: "conversation",
+    });
+    expect(result).toMatchObject({ scanned: 3,
+      entries: [{ ref: "things/Observation" }, { ref: "things/Beacon Signal Notes" }], truncated: false });
   });
 
   it("offset pages the hits — no overlap, no skips, fixed page wording", async () => {

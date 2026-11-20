@@ -191,4 +191,32 @@ describe("scribe document organization", () => {
     expect((await applyCaseWriteIntent(intent, date)).noop).toBe(true);
     expect(h.files.get(index)).toBe(after);
   });
+
+  it("normalizes a full read-back document during rewrite without replaying its tail", async () => {
+    const now = new Date().toISOString();
+    h.files.set(index, `---\nopened: '2026-10-01'\nupdated: '${now}'\nbody_updated: '${now}'\n---\n旧的开题记录。\n`);
+    await applyCaseWriteIntent({ action: "appendTail", category: "research", caseName: "工作灯", line: "[原话](previously:records/2026-10-02-1200?turn=u1&role=user)" }, date);
+    const readBack = h.files.get(index)!;
+    await applyCaseWriteIntent({
+      action: "rewriteIndex", category: "research", caseName: "工作灯",
+      body: readBack.replace("旧的开题记录。", "新的开题记录。"),
+    }, date);
+    const raw = h.files.get(index)!;
+    const parsed = parseCaseDoc(raw, { category: "research", caseName: "工作灯", fileName: "index.md" });
+    expect(parsed.body).toBe("新的开题记录。");
+    expect(parsed.tail).toHaveLength(1);
+    expect(raw.match(/—— 尾部 ——/g)).toHaveLength(1);
+    expect(raw.match(/原话/g)).toHaveLength(1);
+  });
+
+  it("keeps new tail content out of a body rewrite instead of merging a semantic duplicate", async () => {
+    const now = new Date().toISOString();
+    const current = `---\nopened: '2026-10-01'\nupdated: '${now}'\nbody_updated: '${now}'\n---\n旧正文。\n\n—— 尾部 ——\n2026-10-02：[原话](previously:records/2026-10-02-1200?turn=u1&role=user)\n`;
+    h.files.set(index, current);
+    await expect(applyCaseWriteIntent({
+      action: "rewriteIndex", category: "research", caseName: "工作灯",
+      body: current.replace("旧正文。", "新正文。") + `${date}：[原话，但换了一个标题](previously:records/2026-10-02-1200?turn=u1&role=user)\n`,
+    }, date)).rejects.toThrow(/appendTail/);
+    expect(h.files.get(index)).toBe(current);
+  });
 });

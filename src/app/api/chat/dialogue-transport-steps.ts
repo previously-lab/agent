@@ -16,9 +16,15 @@ import {
   type DialogueRunInput,
   type DialogueTypedArtifact,
   type PreparedDialogueOffer,
+  type DialogueOfferContext,
+  type DialogueThoughtStartedEvent,
+  type DialogueWakeEvent,
+  type DialogueDeliveryEvent,
 } from "@/lib/dialogue/transport";
+import type { DialogueRuntimeEvent } from "@/lib/dialogue/coordination";
 import { listDialogueOffers, readDialogueAdmission, type DialogueAdmission } from "@/lib/dialogue/workflow-offers";
 import type { DialogueOfferEvent } from "@/lib/dialogue/transport";
+import { parseWorkUpdateEvent, type WorkUpdateEvent } from "@/lib/dialogue/work-contract";
 
 export async function dialogueOwnRunIdStep(): Promise<string> {
   "use step";
@@ -47,6 +53,76 @@ export async function publishDialogueOfferControlsStep(results: unknown[]): Prom
     writer.releaseLock();
   }
   return offers.length;
+}
+
+/** The full input rides a Workflow event, never a size-limited run attribute. */
+export async function publishThoughtStartedStep(context: DialogueOfferContext): Promise<void> {
+  "use step";
+  const event: DialogueThoughtStartedEvent = {
+    type: "thought_started",
+    runId: context.parentRunId,
+    sourceInputId: context.sourceInputId,
+    workId: context.workId,
+    input: context.source,
+    record: context.record,
+    acceptedAt: context.source.acceptedAt,
+  };
+  const writer = getWritable<DialogueThoughtStartedEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  try { await writer.write(event); } finally { writer.releaseLock(); }
+}
+
+export async function publishWorkUpdateStep(update: WorkUpdateEvent): Promise<void> {
+  "use step";
+  if (!parseWorkUpdateEvent(update)) throw new Error("Invalid work update");
+  const writer = getWritable<WorkUpdateEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  try { await writer.write(update); } finally { writer.releaseLock(); }
+}
+
+export async function recordDialogueWakeStep(event: DialogueWakeEvent): Promise<void> {
+  "use step";
+  const writer = getWritable<DialogueWakeEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  try { await writer.write(event); } finally { writer.releaseLock(); }
+}
+
+export async function publishThoughtDeliveryStep(event: DialogueDeliveryEvent): Promise<void> {
+  "use step";
+  const writer = getWritable<DialogueDeliveryEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  try { await writer.write(event); } finally { writer.releaseLock(); }
+}
+
+/** Runtime events live in the dialogue run's own stream, not in a control store. */
+export async function writeDialogueRuntimeEventStep(event: DialogueRuntimeEvent): Promise<void> {
+  "use step";
+  const writer = getWritable().getWriter();
+  try {
+    await writer.write({
+      type: `data-dialogue-${event.type}`,
+      id: `${event.type}:${sha256(JSON.stringify(event)).slice(0, 32)}`,
+      data: event,
+    });
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+/** A lap is not the end of the logical dialogue stream. */
+export async function completeDialogueLapStep(offerId: string, error?: string): Promise<void> {
+  "use step";
+  const writer = getWritable().getWriter();
+  try {
+    await writer.write({
+      type: "data-turn-status",
+      id: `lap:${sha256(offerId).slice(0, 32)}`,
+      data: { status: error ? "error" : "done", turnId: offerId, offerId, updatedAt: new Date().toISOString(), ...(error ? { error } : {}) },
+    });
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+export async function closeDialogueRunStreamStep(): Promise<void> {
+  "use step";
+  await getWritable().close();
 }
 
 /** Reconcile before fallback so an uncertain control write cannot double offer. */
@@ -189,11 +265,13 @@ export async function publishDialogueResultStep(args: {
   if (input.stage === "checkpoint" &&
       checkpointSuperseded(input, await listDialogueOffers(input.context.parentRunId))) return undefined;
   const utterance: PublicUtterance = {
-    utteranceId: input.offerId,
+    utteranceId: input.publicationId && (input.publicationSourceResults?.length ?? 0) > 1
+      ? sha256(input.publicationId) : input.offerId,
     publicSeq: input.publicSeq,
     committedAt: new Date().toISOString(),
-    inputIds: [input.context.sourceInputId],
-    sourceResults: [],
+    inputIds: input.publicationInputIds ?? [input.context.sourceInputId],
+    sourceResults: input.publicationSourceResults ?? [{ resultId: input.offerId, productRevision: 1, claimIds: [] }],
+    phase: input.stage === "checkpoint" ? "commentary" : "final_answer",
     blocks: [
       { kind: "markdown", blockId: `reply:${sha256(input.offerId).slice(0, 32)}`, text },
       ...artifacts.map(({ blockId, artifact }) => ({ kind: "artifact_ref" as const, blockId, artifact })),

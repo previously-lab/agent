@@ -110,6 +110,7 @@ export async function POST(request: Request): Promise<Response> {
     text: work.text,
     ...(event ? { event } : {}),
     context: {
+      scopeKey: work.scopeKey,
       parentRunId: thoughtRunId,
       workId,
       sourceInputId: work.source.inputId,

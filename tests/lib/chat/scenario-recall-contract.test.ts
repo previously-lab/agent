@@ -4,6 +4,7 @@ import {
   mediateReplayedRecordReads,
 } from "@/lib/chat/scenario-recall-contract";
 import { fromNativeAssistant, toNativeMessages } from "@/lib/deepseek/messages";
+import { createThinkingReadReceipt, wrapThinkingRead } from "@/lib/agents/thinking-read-receipt";
 import type { ModelMessage } from "@/lib/deepseek/types";
 
 const RECORD_REF = "records/2026-10-20-0930";
@@ -28,6 +29,34 @@ describe("conversation record reference classification", () => {
 });
 
 describe("native and structured replay mediation", () => {
+  it.each(["structured", "native"] as const)("omits orphaned or conflicting %s original read returns, even without a usable call ref", shape => {
+    const marker = "PRIVATE_REPLAY_SENTINEL";
+    const payloads = [
+      { kind: "public_record_v1", scopeId: "work", toolCallId: "orphan", ref: RECORD_REF, text: marker },
+      wrapThinkingRead(createThinkingReadReceipt("work", "orphan", [{ ref: RECORD_REF, sourceKind: "original_turn",
+        asOf: "2026-10-20T09:30:00.000Z", revision: null, coverage: "failed" }]), marker),
+    ];
+    for (const payload of payloads) {
+      const tool: ModelMessage = shape === "structured"
+        ? { role: "tool", content: [{ type: "tool-result", toolCallId: "orphan", toolName: "recallRead", output: { type: "json", value: payload } }] }
+        : { role: "tool", content: typeof payload === "string" ? payload : JSON.stringify(payload), deepseek: {
+          role: "tool", tool_call_id: "orphan", content: typeof payload === "string" ? payload : JSON.stringify(payload),
+        } };
+      const conflicting: ModelMessage = { role: "assistant", content: [{ type: "tool-call", toolCallId: "orphan", toolName: "webFetch", input: {} }] };
+      for (const history of [[tool], [conflicting, tool]]) {
+        const request = JSON.stringify(toNativeMessages(mediateReplayedRecordReads(history)));
+        expect(request).not.toContain(marker);
+        expect(request).toContain(RECORD_REF);
+        expect(request).toContain("recallScenario_required");
+      }
+    }
+    const raw: ModelMessage = shape === "native"
+      ? { role: "tool", content: marker, deepseek: { role: "tool", tool_call_id: "orphan", content: marker } }
+      : { role: "tool", content: [{ type: "tool-result", toolCallId: "orphan", toolName: "recallRead", output: { type: "text", value: marker } }] };
+    const request = JSON.stringify(toNativeMessages(mediateReplayedRecordReads([raw])));
+    expect(request).not.toContain(marker);
+    expect(request).toContain("unattributed_tool_result");
+  });
   it("removes old raw record reads from the actual provider conversion path", () => {
     const sentinel = "RAW_RECORD_SENTINEL_NEVER_REPLAY";
     const assistant = fromNativeAssistant({

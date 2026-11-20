@@ -8,6 +8,8 @@ export interface DialogueLaunch {
   /** Native offer transport; omitted on legacy store-backed runs. */
   transport?: "workflow-v2";
   sourceInputId?: string;
+  /** This native work's accepted instant, rendered by the host before entering the workflow VM. */
+  acceptedTime?: import("@/lib/turn-priming").LocalTimeInfo;
 }
 
 export interface DialogueWorkRecord extends DialogueWork {

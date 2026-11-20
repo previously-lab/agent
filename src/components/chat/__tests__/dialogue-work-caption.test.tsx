@@ -18,6 +18,7 @@ import {
 const stream = vi.hoisted(() => ({
   current: undefined as DialogueWorkStreamView | undefined,
   translations: undefined as Record<string, string> | undefined,
+  use: vi.fn(),
 }));
 vi.mock("next-intl", () => ({
   useTranslations: (namespace: string) => {
@@ -36,17 +37,19 @@ vi.mock("../markdown", () => ({
 }));
 vi.mock("../dialogue-work-stream", async importOriginal => {
   const actual = await importOriginal<typeof import("../dialogue-work-stream")>();
-  return { ...actual, useDialogueWorkStream: () => stream.current ?? actual.emptyDialogueWorkStream };
+  return { ...actual, useDialogueWorkStream: stream.use };
 });
 
 let DialogueWorkCaption: typeof import("../dialogue-work-caption").DialogueWorkCaption;
 let dialogueWorkCaptionStatus: typeof import("../dialogue-work-caption").dialogueWorkCaptionStatus;
 beforeAll(async () => {
+  stream.use.mockImplementation(() => stream.current ?? emptyDialogueWorkStream);
   ({ DialogueWorkCaption, dialogueWorkCaptionStatus } = await import("../dialogue-work-caption"));
 });
 afterEach(() => {
   stream.current = undefined;
   stream.translations = undefined;
+  stream.use.mockClear();
 });
 
 const work: DialogueWorkView = {
@@ -161,6 +164,9 @@ describe("dialogue work caption status and rendering", () => {
       tools: [
         { id: "finish", name: "finishThinking", status: "running" },
         { id: "offer", name: "offerReply", status: "completed" },
+        { id: "checkpoint", name: "workCheckpoint", status: "completed" },
+        { id: "complete", name: "completeWork", status: "completed" },
+        { id: "related", name: "readWorkSnapshot", status: "completed" },
         { id: "unknown", name: "untranslatedInternalTool", status: "failed" },
       ],
     };
@@ -169,6 +175,9 @@ describe("dialogue work caption status and rendering", () => {
     }));
     expect(html).toContain(`title="${messages.tool_finishThinking}">${messages.tool_finishThinking}</span>`);
     expect(html).toContain(`title="${messages.tool_offerReply}">${messages.tool_offerReply}</span>`);
+    for (const label of [messages.tool_workCheckpoint, messages.tool_completeWork, messages.tool_readWorkSnapshot]) {
+      expect(html).toContain(`title="${label}">${label}</span>`);
+    }
     expect(html).toContain(`title="${messages.tool_unknown}">${messages.tool_unknown}</span>`);
     expect(html).toContain(`<span class="shrink-0 whitespace-nowrap">${messages.tool_stopped}</span>`);
     expect(html).toContain(`<span class="shrink-0 whitespace-nowrap">${messages.tool_completed}</span>`);
@@ -238,5 +247,12 @@ describe("dialogue work caption status and rendering", () => {
     expect(html).toContain("chat.dialogue.showThoughts");
     expect(html).not.toContain("chat.dialogue.workDetails");
     stream.current = undefined;
+  });
+
+  it("does not subscribe a known terminal thought run", () => {
+    renderToStaticMarkup(React.createElement(DialogueWorkCaption, {
+      work: { ...work, status: "completed", thoughtsUrl: "/api/chat/run-1/thoughts" }, persona: "user",
+    }));
+    expect(stream.use).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }), "user", false, 0);
   });
 });

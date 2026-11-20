@@ -460,7 +460,9 @@ export async function handleReflectionRound(docket: ReflectionDocket): Promise<R
     ...(docket.scope.length === 1 ? { sliceId: docket.scope[0].sliceId } : {}),
   });
   const { handleBrief } = await import("./hq-agent");
-  const outcome = await handleBrief(docket);
+  // Scheduled and cross-slice rounds use the durable run identity across retries.
+  const workflowRunId = docket.scope.length === 1 ? undefined : getWorkflowMetadata().workflowRunId;
+  const outcome = await handleBrief(docket, workflowRunId);
   // The round's beat: landed writes ("wrote research/X"), a deliberate
   // no-write ("idle — nothing to write" — a veto that produced no write is
   // mechanically an empty round, its short reason riding the note), or the

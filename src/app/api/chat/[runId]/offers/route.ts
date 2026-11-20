@@ -5,8 +5,9 @@ import { workPreviewCursor } from "@/lib/dialogue/work-preview";
 import { listDialogueOffers } from "@/lib/dialogue/workflow-offers";
 import {
   DIALOGUE_OFFERS_NAMESPACE,
-  parseDialogueOfferEvent,
+  parseDialogueControlEvent,
   type DialogueOfferEvent,
+  type DialogueWakeEvent,
   type DialogueOffersDoneEvent,
 } from "@/lib/dialogue/transport";
 
@@ -44,7 +45,7 @@ export async function GET(
       let reader: ReadableStreamDefaultReader<unknown> | undefined;
       const emitted = new Set<string>();
       let finalOfferSeen = false;
-      const write = (event: DialogueOfferEvent | DialogueOffersDoneEvent) => {
+      const write = (event: DialogueOfferEvent | DialogueWakeEvent | DialogueOffersDoneEvent) => {
         if (!closed) controller.enqueue(encoder.encode(`id: ${cursor}\ndata: ${JSON.stringify(event)}\n\n`));
       };
       const abort = () => {
@@ -84,19 +85,35 @@ export async function GET(
           const next = outcome.result;
           if (next.done) break;
           cursor++;
-          const offer = parseDialogueOfferEvent(next.value);
-          if (!offer || emitted.has(offer.offerId)) continue;
-          emitted.add(offer.offerId);
-          if (offer.stage !== "checkpoint") finalOfferSeen = true;
-          write(offer);
+          const event = parseDialogueControlEvent(next.value);
+          if (event?.type === "dialogue_wake") {
+            const id = `wake:${event.triggerKey}:${event.runId}`;
+            if (emitted.has(id)) continue;
+            emitted.add(id);
+            write(event);
+            continue;
+          }
+          if (event?.type !== "offer" || emitted.has(event.offerId)) continue;
+          emitted.add(event.offerId);
+          if (event.stage !== "checkpoint") finalOfferSeen = true;
+          write(event);
         }
         if (!closed) {
           let status = terminalStatus(await run.status);
           let error: string | undefined;
+          let deliveryStatus: DialogueOffersDoneEvent["deliveryStatus"];
           if (status === "completed") {
             try {
-              const result = await run.returnValue as { error?: unknown } | undefined;
-              if (!finalOfferSeen && typeof result?.error === "string" && result.error) {
+              const result = await run.returnValue as {
+                error?: unknown;
+                dialogueDelivery?: { status?: string; candidateId?: string };
+              } | undefined;
+              if (result?.dialogueDelivery?.status === "failed") {
+                status = "failed";
+                error = "The thought result could not be publicly delivered.";
+              } else if (result?.dialogueDelivery?.status === "delivered" && result.dialogueDelivery.candidateId) {
+                deliveryStatus = "delivered";
+              } else if (!finalOfferSeen && typeof result?.error === "string" && result.error) {
                 // A resumed reader may have passed the final offer already.
                 const priorFinal = initialCursor > 0 &&
                   (await listDialogueOffers(parentRunId)).some((offer) => offer.stage !== "checkpoint");
@@ -105,7 +122,10 @@ export async function GET(
                   error = "The thinking run ended without a final reply.";
                 }
               }
-            } catch { /* Terminal status remains sufficient. */ }
+            } catch {
+              // Workflow completion alone cannot settle a business failure.
+              deliveryStatus = "unverified";
+            }
           } else if (status === "failed" || status === "cancelled") {
             error = status === "cancelled" ? "The reply was cancelled." : "The thinking run failed before completing its offers.";
           }
@@ -114,6 +134,7 @@ export async function GET(
             parentRunId,
             status,
             cursor,
+            ...(deliveryStatus ? { deliveryStatus } : {}),
             ...(status === "running" ? { retryAfterMs: RETRY_MS } : {}),
             ...(error ? { error } : {}),
           });
@@ -123,6 +144,7 @@ export async function GET(
           const status = terminalStatus(await run.status.catch(() => "running"));
           write({
             type: "done", parentRunId, status, cursor,
+            ...(status === "completed" ? { deliveryStatus: "unverified" } : {}),
             ...(status === "running" ? { retryAfterMs: RETRY_MS } : {}),
           });
         }

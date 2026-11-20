@@ -137,7 +137,7 @@ describe("thinkDeep skill consumer", () => {
       { context: { ...ctx, baseSystemPrompt: inherited }, toolCallId: "reason-with-skills" });
     expect(result).toMatchObject({ status: "completed", answer: "Mocked reasoning result." });
     expect(h.stream).toHaveBeenCalledTimes(1);
-    const options = h.stream.mock.calls[0][0] as { system: string; role: string; tools?: unknown; prompt: string };
+    const options = h.stream.mock.calls[0][0] as { system: string; role: string; tools?: unknown; prompt: string; sessionId: string };
     const expected = renderRoleSkillGuidance({ role: "thinkdeep", ledger, legacySop: { content: h.sop, ref: "self/thinkdeep/index.md" } });
     expect(expected.text.length).toBeLessThanOrEqual(SKILL_LEGACY_ROLE_PROMPT_MAX_CHARS);
     expect(expected.omissions.length).toBeGreaterThan(0);
@@ -150,6 +150,7 @@ describe("thinkDeep skill consumer", () => {
       if (options.system.includes(`BEGIN-THINK-${rule.id.slice(-1)}`)) expect(options.system).toContain(rule.instruction);
     }
     expect(options.role).toBe("think");
+    expect(options.sessionId).toBe(ctx.sliceId);
     expect(options.tools).toBeUndefined();
     expect(options.prompt).toContain("Compare two explanations");
     assertReadOnly();

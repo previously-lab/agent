@@ -5,6 +5,7 @@ import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { tool } from "@/lib/deepseek/tools";
 import type { PrepareStepFunction } from "@/lib/deepseek/types";
 import { parseTurns, type ParsedTurn } from "@/lib/episodic/turn-parser";
+import { formatLocalTime } from "@/lib/turn-priming";
 import { conversationRole, RECORD_ATTRIBUTION_RULE } from "@/lib/episodic/record-attribution";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
 import {
@@ -13,7 +14,7 @@ import {
 } from "@/lib/markdown/native-reply-semantics";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { RecallBackend } from "@/lib/memory/facade";
-import { scenarioRecallRequestSchema, type ScenarioRecallRequest, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
+import { scenarioRecallRequestSchema, singleRecordForVerification, type ScenarioRecallRequest, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
 
 const RECORD_REF_RE = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/;
@@ -46,6 +47,8 @@ export interface ScenarioRecallEvidence {
   turnId?: string;
   role: ScenarioRecallRole;
   timestamp?: string;
+  /** The same recorded instant in the user's validated IANA timezone. */
+  localTimestamp?: string;
   quote: string;
   /** Exact record bytes observed by the thinking work; never a latest-state promise. */
   sourceRevision?: string;
@@ -63,8 +66,12 @@ export interface ScenarioRecallCoverage {
   notes: string[];
   /** Exclusive record-ref cursor for a later search of the same scope. */
   nextCursor?: string;
+  /** Effective inclusive date bounds when the continuation covers a narrower search. */
+  nextCursorWindow?: { after?: string; before?: string };
   /** Exact pointers resolve independently; a failed pointer never means absence. */
   targets?: ScenarioRecallTargetCoverage[];
+  /** Directory leads whose wider contents were not searched after resolving exact messages. */
+  unsearchedRefs?: string[];
   /** Literal matches in the supplied records, not a claim of topical coverage. */
   keywordSearch?: {
     terms: string[];
@@ -102,6 +109,10 @@ export interface ScenarioRecallResult {
 }
 
 export interface ScenarioRecallInput extends ScenarioRecallRequest {
+  /** Host-proven full public read from this thinking work. Never a model argument. */
+  priorFullRecord?: { ref: string; revision: string };
+  preferExactTargets?: boolean;
+  sessionId?: string;
   backend: RecallBackend;
   model?: ModelConfig;
   timezone?: string;
@@ -116,6 +127,7 @@ type RecordTurn = ParsedTurn & {
 };
 
 type LoadedRecord = {
+  timezone?: string;
   ref: string;
   raw: string;
   turns: RecordTurn[];
@@ -124,6 +136,8 @@ type LoadedRecord = {
   revision?: string;
 };
 
+type RecordLoad = { record?: LoadedRecord; error?: string };
+
 type VisibleOriginal = {
   ref: string;
   turn: RecordTurn;
@@ -131,16 +145,19 @@ type VisibleOriginal = {
 };
 
 type ReadState = {
+  timezone?: string;
   discovered: Set<string>;
   searched: string[];
   records: Map<string, LoadedRecord>;
+  pendingReads: Map<string, Promise<RecordLoad>>;
+  missingRecords: Map<string, string>;
   visible: VisibleOriginal[];
   readViews: Set<string>;
   errors: string[];
   notes: string[];
   truncated: boolean;
-  listed: boolean;
   nextCursor?: string;
+  nextCursorWindow?: ScenarioRecallCoverage["nextCursorWindow"];
   trackRevision: boolean;
   targets: ScenarioRecallTargetCoverage[];
 };
@@ -163,7 +180,7 @@ const RECALL_ROLE = `You are the record-only recollection colleague. Recover wha
 
 Method:
 - If known record refs are supplied, read those first. Otherwise use searchRecords for navigation metadata and keyword hits, or listRecords to enumerate a time window, then readRecord on the strongest candidates.
-- Search pages are continuable, not a coverage ceiling. When nextCursor is returned and the question remains unanswered, repeat the same search with that cursor. If this run ends with coverage.nextCursor, tell the main agent to call recallScenario again with that cursor and the same question/window. Stop as soon as the question is answered.
+- Stop when the verified material answers the question, even if older pages remain. Continue a search only for a specific unresolved claim that the next page could settle. If the requested source is unavailable, report that gap; a second read of the same missing path cannot verify it.
 - Only the supplied record tools exist. Never request cases, research, self documents, user cards, attachments, agent cognition, external search, or another recall agent.
 - Condition every part of the answer on the question. Do not produce a generic biography, a transcript dump, or an unrequested summary of everything read.
 - Focus, summaries and search snippets are navigation-only discovery aids, never verified facts. Before returning an exact quote, read the original record containing its user/assistant turn.
@@ -263,9 +280,9 @@ function validateInput(input: ScenarioRecallInput): string | null {
   if (input.searchTerms !== undefined &&
       !scenarioRecallRequestSchema.safeParse({
         question: input.question, refs: input.refs, targets: input.targets,
-        searchTerms: input.searchTerms, after: input.after, before: input.before, cursor: input.cursor,
+        searchTerms: input.searchTerms, after: input.after, before: input.before, cursor: input.cursor, searchOtherRecords: input.searchOtherRecords,
       }).success) {
-    return "searchTerms requires 1–5 nonempty terms of at most 80 characters, one to four refs, and no targets or cursor";
+    return "searchTerms requires 1–5 nonempty terms of at most 80 characters, one to four refs, and no targets, cursor, or wider search";
   }
   for (const [key, value] of [["after", input.after], ["before", input.before]] as const) {
     if (value !== undefined && (typeof value !== "string" || !DATE_RE.test(value))) {
@@ -282,9 +299,9 @@ async function discoverRecords(
   after?: string,
   before?: string,
   signal?: AbortSignal,
-): Promise<string[]> {
+): Promise<void> {
   throwIfCancelled(signal);
-  const paths = await backend.listMemoryFiles();
+  const paths = await backend.listMemoryFiles({ category: "records", after, before });
   throwIfCancelled(signal);
   for (const path of paths) {
     if (typeof path !== "string") continue;
@@ -294,10 +311,6 @@ async function discoverRecords(
       if (inWindow(ref, after, before)) state.discovered.add(ref);
     }
   }
-  state.listed = true;
-  return [...state.discovered]
-    .filter((ref) => inWindow(ref, after, before))
-    .sort((a, b) => b.localeCompare(a));
 }
 
 function isTimeoutReadError(error: unknown): boolean {
@@ -327,15 +340,43 @@ function isTransientRecordReadError(error: unknown): boolean {
   return error instanceof TypeError && /fetch failed|network/i.test(error.message);
 }
 
+function missingOriginalFile(error: unknown, path: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const detail = error as Error & { status?: number; response?: { status?: number }; code?: string };
+  const status = detail.status ?? detail.response?.status;
+  if (status !== undefined && status !== 404) return false;
+  if (detail.code !== undefined) return detail.code === "ENOENT";
+  // The local, demo and GitHub readers identify the missing file by path.
+  // A bare repository/blob 404 does not establish the absence of this file.
+  return detail.message === `File not found: "${path}"` || detail.message === `File not found: ${path}` ||
+    (status === 404 && detail.message === "File not found");
+}
+
 async function loadRecord(
   backend: RecallBackend,
   ref: string,
   state: ReadState,
   signal?: AbortSignal,
-): Promise<{ record?: LoadedRecord; error?: string }> {
+): Promise<RecordLoad> {
   throwIfCancelled(signal);
   const cached = state.records.get(ref);
   if (cached) return { record: cached };
+  const missing = state.missingRecords.get(ref);
+  if (missing) return { error: missing };
+  const pending = state.pendingReads.get(ref);
+  if (pending) return pending;
+  const reading = readRecordFromStorage(backend, ref, state, signal)
+    .finally(() => state.pendingReads.delete(ref));
+  state.pendingReads.set(ref, reading);
+  return reading;
+}
+
+async function readRecordFromStorage(
+  backend: RecallBackend,
+  ref: string,
+  state: ReadState,
+  signal?: AbortSignal,
+): Promise<RecordLoad> {
   const path = recordPath(ref);
   if (!path) return { error: "Only an exact records/YYYY-MM-DD-HHMM ref can be read" };
   throwIfCancelled(signal);
@@ -350,6 +391,13 @@ async function loadRecord(
       } catch (error) {
         if (isCancelled(signal) || (error instanceof Error && error.name === "AbortError") || isTimeoutReadError(error)) {
           throw error;
+        }
+        if (missingOriginalFile(error, path)) {
+          const detail = `Original record ${ref} is unavailable: ${clip(error instanceof Error ? error.message : String(error), 240)}`;
+          state.missingRecords.set(ref, detail);
+          state.notes.push(detail);
+          state.truncated = true;
+          return { error: detail };
         }
         if (attempt === 0 && isTransientRecordReadError(error)) {
           attempt += 1;
@@ -370,7 +418,7 @@ async function loadRecord(
       const role = roleOf(turn);
       return role ? [{ ...turn, role, semanticContent: projectNativeReplySemantics(turn.content, role) }] : [];
     });
-    const record: LoadedRecord = { ref, raw, turns, ambiguousTurns, navigation: navigationOf(raw),
+    const record: LoadedRecord = { ref, raw, turns, ambiguousTurns, timezone: state.timezone, navigation: navigationOf(raw),
       ...(state.trackRevision ? { revision: caseStorageRevision(raw) } : {}) };
     state.records.set(ref, record);
     return { record };
@@ -379,7 +427,8 @@ async function loadRecord(
     const note = `${ref}: ${clip(error instanceof Error ? error.message : String(error), 240)}`;
     state.errors.push(note);
     state.truncated = true;
-    return { error: `Could not read original record ${note}` };
+    const unavailable = `Could not read original record ${note}`;
+    return { error: unavailable };
   }
 }
 
@@ -412,6 +461,18 @@ function visibleOriginalFragments(turn: RecordTurn, start: number, end: number):
     if (semanticOffset >= end) break;
   }
   return fragments;
+}
+
+function evidenceTime(timestamp: string | undefined, timezone?: string): Pick<ScenarioRecallEvidence, "timestamp" | "localTimestamp"> {
+  if (!timestamp) return {};
+  const zone = timezone?.trim();
+  if (!zone || !Number.isFinite(Date.parse(timestamp))) return { timestamp };
+  const rendered = formatLocalTime(timestamp, zone);
+  // The formatter falls back to UTC for an unknown zone. Only label a time
+  // as user-local when the requested zone actually rendered.
+  return rendered.zone === zone
+    ? { timestamp, localTimestamp: `${rendered.local} (${zone})` }
+    : { timestamp };
 }
 
 function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): RenderedRecord {
@@ -452,7 +513,7 @@ function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): Render
       turnIndex: turn.index,
       boundary: turn.boundary,
       role: turn.role,
-      timestamp: turn.timestamp,
+      ...evidenceTime(turn.timestamp, record.timezone),
       ...(turn.attachments?.length ? { attachments: { kind: "attachment_metadata_not_speech", items: turn.attachments } } : {}),
       charOffset: offset,
       endOffset,
@@ -542,7 +603,7 @@ async function readExactTarget(
 function recordExcerpt(record: LoadedRecord, turn: RecordTurn, quote: string, before: string, after: string, note: string): ScenarioRecallEvidence {
   return {
     ref: record.ref, turnId: turn.turnId, role: turn.role, turnIndex: turn.index,
-    boundary: turn.boundary, source: "original_turn", timestamp: turn.timestamp,
+    boundary: turn.boundary, source: "original_turn", ...evidenceTime(turn.timestamp, record.timezone),
     sourceRevision: record.revision, quote, context: { before, after }, note,
   };
 }
@@ -601,7 +662,7 @@ async function searchKnownUserMessages(
   if (omittedMatches) uncertainty.push(`${omittedMatches} matching user message(s) exceeded the excerpt cap.`);
   for (const note of state.notes) uncertainty.push(note);
   for (const record of records) if (record.detail) uncertainty.push(`${record.ref}: ${record.detail}`);
-  const failed = records.every(({ status }) => status === "unavailable");
+  const failed = state.errors.length > 0 && records.every(({ status }) => status === "unavailable");
   return {
     status: evidence.length > 0 ? "ok" : failed ? "error" : "insufficient_evidence",
     verification: "quote_and_source_only",
@@ -666,7 +727,7 @@ function verifyEvidence(report: RecallReport, state: ReadState): {
       boundary: turn.boundary,
       ...(turn.turnId ? { turnId: turn.turnId } : {}),
       role: turn.role,
-      ...(turn.timestamp ? { timestamp: turn.timestamp } : {}),
+      ...evidenceTime(turn.timestamp, state.timezone),
       quote,
       ...(sourceRevision ? { sourceRevision } : {}),
       context: {
@@ -687,6 +748,7 @@ function finishCoverage(state: ReadState): ScenarioRecallCoverage {
     omitted: Math.max(0, state.discovered.size - state.readViews.size),
     notes: [...new Set(state.notes)].slice(0, 8).map((note) => clip(note, 300)),
     ...(state.nextCursor ? { nextCursor: state.nextCursor } : {}),
+    ...(state.nextCursor && state.nextCursorWindow ? { nextCursorWindow: state.nextCursorWindow } : {}),
     ...(state.targets.length > 0 ? { targets: [...state.targets] } : {}),
   };
 }
@@ -705,37 +767,50 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
   const deadlineSignal = AbortSignal.timeout(timeoutMs);
   const signal = input.signal ? AbortSignal.any([input.signal, deadlineSignal]) : deadlineSignal;
   const state: ReadState = {
-    trackRevision: input.trackRevision === true || targets.length > 0 || input.searchTerms !== undefined,
+    timezone: input.timezone,
+    trackRevision: input.trackRevision === true || !!input.priorFullRecord || targets.length > 0 || input.searchTerms !== undefined,
     nextCursor: input.cursor,
     discovered: new Set(knownRefs.filter((ref) => inWindow(ref, input.after, input.before))),
     searched: [],
     records: new Map(),
+    pendingReads: new Map(),
+    missingRecords: new Map(),
     visible: [],
     readViews: new Set(),
     errors: [],
     notes: [],
     truncated: false,
-    listed: false,
     targets: [],
   };
-  const candidates = async (after?: string, before?: string): Promise<string[]> => {
+  // Keep the window separate from the cursor. A complete outer inventory also
+  // covers any smaller request; a narrow inventory cannot answer a wider one.
+  const inventories = new Map<string, Promise<void>>();
+  const outerWindow = `${input.after ?? ""}/${input.before ?? ""}`;
+  const candidates = async (after?: string, before?: string) => {
     throwIfCancelled(signal);
-    if (!state.listed) {
-      try {
-        await discoverRecords(input.backend, state, input.after, input.before, signal);
-      } catch (error) {
+    if (input.after && (!after || after < input.after)) after = input.after;
+    if (input.before && (!before || before > input.before)) before = input.before;
+    if (after && before && after > before) return { refs: [] as string[], after, before };
+    const window = `${after ?? ""}/${before ?? ""}`;
+    let inventory = inventories.get(window) ?? inventories.get(outerWindow);
+    if (!inventory) {
+      inventory = discoverRecords(input.backend, state, after, before, signal).catch(error => {
+        inventories.delete(window);
         state.errors.push(`record enumeration: ${clip(error instanceof Error ? error.message : String(error), 240)}`);
         state.truncated = true;
         throw error;
-      }
+      });
+      inventories.set(window, inventory);
     }
-    return [...state.discovered]
-      .filter((ref) => inWindow(ref, input.after, input.before) && inWindow(ref, after, before))
+    await inventory;
+    const refs = [...state.discovered]
+      .filter((ref) => inWindow(ref, after, before))
       .sort((a, b) => b.localeCompare(a));
+    return { refs, after, before };
   };
   const tools = {
     listRecords: tool({
-      description: "Enumerate original conversation refs with focus/summary navigation metadata. Metadata selects candidates but is not evidence. Dates are inclusive UTC slice-date bounds; follow nextOffset for more.",
+      description: "List original conversation refs and their focus/summary within inclusive UTC slice-date bounds. Use nextOffset if another page is needed to find a source. These entries are navigation only.",
       inputSchema: z.object({
         after: z.string().regex(DATE_RE).optional(),
         before: z.string().regex(DATE_RE).optional(),
@@ -743,7 +818,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       }).strict(),
       execute: async ({ after, before, offset = 0 }: { after?: string; before?: string; offset?: number }) => {
         throwIfCancelled(signal);
-        const refs = await candidates(after, before);
+        const { refs } = await candidates(after, before);
         const page = refs.slice(offset, offset + MAX_LIST_RESULTS);
         const entries = [];
         for (const ref of page) {
@@ -764,7 +839,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       },
     }),
     searchRecords: tool({
-      description: "Scan one page of original records newest-first. Follow nextCursor with the same query/window until the answer is found or complete=true. Navigation metadata and excerpts locate candidates; only readRecord can authorize evidence.",
+      description: "Scan one page of original records newest-first. A cursor permits further coverage if a material question remains. Navigation metadata and excerpts locate candidates; only readRecord can authorize evidence.",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(300),
         after: z.string().regex(DATE_RE).optional(),
@@ -773,11 +848,13 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       }).strict(),
       execute: async ({ query, after, before, cursor }: { query: string; after?: string; before?: string; cursor?: string }) => {
         throwIfCancelled(signal);
-        const refs = await candidates(after, before);
+        const scope = await candidates(after, before);
+        const refs = scope.refs;
         const startCursor = cursor ?? input.cursor;
         const remainingRefs = startCursor ? refs.filter((ref) => ref < startCursor) : refs;
         const needle = query.toLocaleLowerCase();
         const entries: Array<Record<string, unknown>> = [];
+        const unreadableRefs: string[] = [];
         let newReads = 0;
         let scanned = 0;
         let lastScanned: string | undefined;
@@ -788,7 +865,10 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
           scanned += 1;
           lastScanned = ref;
           if (!wasCached) newReads += 1;
-          if (!loaded.record) continue;
+          if (!loaded.record) {
+            unreadableRefs.push(ref);
+            continue;
+          }
           if (!state.searched.includes(ref)) state.searched.push(ref);
           const matchingTurns = loaded.record.turns.flatMap((turn) => {
             const matchOffset = turn.semanticContent.toLocaleLowerCase().indexOf(needle);
@@ -820,6 +900,8 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
         const remaining = Math.max(0, remainingRefs.length - scanned);
         const nextCursor = remaining > 0 && lastScanned ? lastScanned : undefined;
         state.nextCursor = nextCursor;
+        state.nextCursorWindow = nextCursor && (scope.after !== input.after || scope.before !== input.before)
+          ? { after: scope.after, before: scope.before } : undefined;
         return {
           query,
           matches: entries,
@@ -827,14 +909,17 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
           remaining,
           nextCursor,
           complete: nextCursor === undefined,
-          note: nextCursor
-            ? `Partial scan only. Repeat with cursor=${nextCursor} and the same query/window. Navigation metadata and excerpts are not evidence; call readRecord before citing.`
-            : "This scope was scanned to completion. Navigation metadata and excerpts are not evidence; call readRecord before citing.",
+          ...(unreadableRefs.length ? { unreadableRefs } : {}),
+          note: unreadableRefs.length
+            ? "Some candidate records could not be read. A missing match in this page does not establish absence."
+            : nextCursor
+            ? `Partial scan. If older records could resolve a remaining question, reuse cursor=${nextCursor} with the same query/window. Only readRecord verifies a citation.`
+            : "No older candidates remain in this scope. Navigation metadata and excerpts are not evidence; call readRecord before citing.",
         };
       },
     }),
     readRecord: tool({
-      description: "Read a bounded ORIGINAL core record view. startTurn is a 0-based source ordinal; charOffset is within that turn's semantic surface; turnCount max 8. Follow next to continue. Only returned fragments are citable.",
+      description: "Read a bounded ORIGINAL core record view. startTurn is a 0-based source ordinal; charOffset is within that turn's semantic surface; turnCount max 8. Use next when more of the source is needed. Only returned fragments are citable.",
       inputSchema: z.object({
         ref: z.string().trim().min(1).max(256),
         startTurn: z.number().int().min(0).max(100_000).optional(),
@@ -890,21 +975,42 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       const terms = [...new Set(input.searchTerms.map((term) => term.trim()))];
       return await searchKnownUserMessages(input, knownRefs, terms, state, signal);
     }
+    let verifiesWholeRecord = false;
+    if (input.priorFullRecord && singleRecordForVerification(input) === input.priorFullRecord.ref) {
+      const { record } = await loadRecord(input.backend, input.priorFullRecord.ref, state, signal);
+      if (record?.revision === input.priorFullRecord.revision && !record.ambiguousTurns.length &&
+          record.turns.length > 0 && record.turns.length <= MAX_EVIDENCE &&
+          new Set(record.turns.map(t => `${t.role}/${t.turnId}`)).size === record.turns.length &&
+          record.turns.every(t => t.turnId && !t.attachments?.length && t.semanticContent === t.content &&
+            t.content.trim() && t.content.length <= MAX_QUOTE_CHARS)) {
+        for (const turn of record.turns) targets.push({ ref: record.ref, turnId: turn.turnId!, role: turn.role });
+        verifiesWholeRecord = true;
+      }
+    }
     for (const target of targets) {
       const evidence = await readExactTarget(input, target, state, signal);
       if (evidence) exactEvidence.push(evidence);
     }
     throwIfCancelled(signal);
-    if (targets.length > 0 && knownRefs.length === 0 && !input.cursor) {
+    const exactFirst = input.preferExactTargets && exactEvidence.length === targets.length;
+    if (targets.length && !input.cursor && !input.searchOtherRecords && (knownRefs.length === 0 || exactFirst || verifiesWholeRecord)) {
       const diagnostics = state.targets.flatMap((target) => target.detail
         ? [`${target.ref} turn ${target.turnId} (${target.role}): ${target.detail}`] : []);
+      const coverage = finishCoverage(state);
+      const unsearched = verifiesWholeRecord ? [] : knownRefs.filter(ref => inWindow(ref, input.after, input.before));
+      if (verifiesWholeRecord) {
+        coverage.notes.push("Verified all public messages in the one named record at its previously read revision. Other conversations were not searched; use searchOtherRecords for wider recollection.");
+      } else if (knownRefs.length) {
+        coverage.unsearchedRefs = unsearched;
+        coverage.notes.push("Only the specified messages were verified. Use these refs without targets if this question still needs wider conversation context.");
+      }
       return {
         status: exactEvidence.length > 0 ? "ok" : state.errors.length > 0 ? "error" : "insufficient_evidence",
         verification: "quote_and_source_only",
         answer: "",
         evidence: exactEvidence,
-        coverage: finishCoverage(state),
-        truncated: state.truncated,
+        coverage,
+        truncated: state.truncated || unsearched.length > 0,
         uncertainty: diagnostics,
         ...(exactEvidence.length === 0 && state.errors.length > 0 ? { error: "Exact original messages could not be read" } : {}),
       };
@@ -913,9 +1019,10 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
     const prompt = `Main agent's focused question:\n${question}\n\n${knownRefs.length ? `Known original record refs (read these first): ${knownRefs.join(", ")}` : "No known record refs: locate candidates with searchRecords or listRecords."}\nUTC slice-date window: ${input.after ?? "unbounded"} through ${input.before ?? "unbounded"}.\n${input.cursor ? `Resume searching strictly older than this exclusive record cursor: ${input.cursor}.` : "Start with the newest records."}\n${input.timezone ? `User timezone context: ${input.timezone}. Do not reinterpret record refs as local wall-clock timestamps.` : ""}${resolved}\n\nAnswer only what this question asks. Finish with scenarioRecallReport; if the evidence is insufficient, say so rather than inventing a memory.`;
     const result = await runSubAgent<RecallReport>({
       model: input.model,
+      sessionId: input.sessionId,
       role: "recall",
       system: RECALL_SYSTEM,
-      prompt,
+      prompt: input.searchOtherRecords ? prompt + "\nThe supplied refs are starting points. Search other relevant conversations to address the requested wider scope." : prompt,
       tools,
       toolChoice: "auto",
       reportToolName: "scenarioRecallReport",
@@ -951,6 +1058,10 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
         ...(state.errors.length === 0 && state.readViews.size === 0 ? { error: diagnostic } : {}),
       };
     }
+    if (inventories.size > 0 && !inventories.has(outerWindow)) {
+      state.truncated = true;
+      state.notes.push(`Record discovery covered narrower UTC date windows (${[...inventories.keys()].join(", ")}); records outside them were not enumerated.`);
+    }
     const verified = verifyEvidence(result.report, state);
     const evidence = [...exactEvidence, ...verified.evidence.filter((item) => !exactEvidence.some((exact) =>
       exact.ref === item.ref && exact.turnIndex === item.turnIndex && exact.quote === item.quote))];
@@ -964,7 +1075,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
     if (overflow > 0) uncertainty.push(`${overflow} evidence item(s) exceeded the output cap`);
     for (const note of state.notes.slice(0, 6)) uncertainty.push(note);
     for (const error of state.errors.slice(0, 8)) uncertainty.push(`Read failure: ${error}`);
-    if (state.nextCursor) uncertainty.push(`Continue the same question and window with cursor=${state.nextCursor}; this page is not a coverage ceiling`);
+    if (state.nextCursor) uncertainty.push(`Older records remain outside this scan. Optional further coverage of the same question and window: cursor=${state.nextCursor}`);
     if (state.truncated) uncertainty.push("Coverage was bounded or truncated; absence is not established");
     if (state.readViews.size === 0) uncertainty.push("No original turn was returned by a successful readRecord view");
     let answer = result.report.answer.trim();

@@ -15,11 +15,11 @@ import { stableTaskOperationId } from "@/lib/chat/task-identity";
 
 const MAX_LEGACY_RECONCILE = 100;
 
-function evidenceError(rawRecords: Map<string, string>, evidence: TaskEvidence): string | null {
+function evidenceError(rawRecords: Map<string, string>, evidence: TaskEvidence, cardText?: string): string | null {
   const raw = rawRecords.get(evidence.sliceId);
-  if (raw === undefined) return `readRound ${evidence.sliceId} before using its user evidence`;
-  const turn = parseTurns(raw).turns.find((item) => item.turnId === evidence.turnId && item.role === "user");
-  if (!turn || !evidence.statement.trim() || !turn.content.includes(evidence.statement)) {
+  if (raw === undefined && cardText === undefined) return `readRound ${evidence.sliceId} before using its user evidence`;
+  const text = raw === undefined ? cardText : parseTurns(raw).turns.find((item) => item.turnId === evidence.turnId && item.role === "user")?.content;
+  if (!text || !evidence.statement.trim() || !text.includes(evidence.statement)) {
     return "task evidence must quote the identified RAW USER turn; agent prose and summaries do not authorize lifecycle changes";
   }
   return null;
@@ -35,6 +35,7 @@ export function buildReflectionTaskTools(input: {
   date: string;
   batch: WriteBatch;
   rawRecords: Map<string, string>;
+  readCardText?: (sliceId: string, turnId: string) => string | undefined;
   mutateTask: BatchTaskMutation;
 }) {
   const { date, batch, rawRecords, mutateTask } = input;
@@ -97,10 +98,10 @@ export function buildReflectionTaskTools(input: {
       }),
     }),
     createTask: tool({
-      description: "Create a user commitment, never an agent suggestion. userEvidence must quote a RAW USER turn already returned by readRound. The stable task ref, document and ledger queue in the same round commit; query existing refs first.",
+      description: "Create a user commitment. userEvidence must quote a supplied original user card or a raw user turn returned by readRound. The stable task ref, document and ledger queue in the same round commit; query existing refs first.",
       inputSchema: createTaskToolSchema.extend({ userEvidence: taskEvidenceSchema }).strict(),
       execute: ({ userEvidence, ...task }) => serial(async () => {
-        const error = evidenceError(rawRecords, userEvidence);
+        const error = evidenceError(rawRecords, userEvidence, input.readCardText?.(userEvidence.sliceId, userEvidence.turnId));
         if (error) return `REJECTED: ${error}`;
         return withTaskDocument(task.ref, userEvidence, task.summary, () => mutateTask({
           type: "create", operationId: stableTaskOperationId("hq:create-task", [task.ref, JSON.stringify(userEvidence)]),
@@ -109,10 +110,10 @@ export function buildReflectionTaskTools(input: {
       }),
     }),
     updateTask: tool({
-      description: "Apply explicit user feedback from a RAW USER turn already read with readRound. Use the fresh ledger revision; never infer completed/cancelled from historical research prose. A terminal-state correction needs reopen:true and new direct user evidence.",
+      description: "Apply explicit user feedback from a supplied original user card or a RAW USER turn read with readRound. Use the fresh ledger revision; never infer completed/cancelled from historical research prose. A terminal-state correction needs reopen:true and new direct user evidence.",
       inputSchema: updateTaskToolSchema.extend({ userEvidence: taskEvidenceSchema }).strict(),
       execute: ({ userEvidence, ...update }) => serial(async () => {
-        const error = evidenceError(rawRecords, userEvidence);
+        const error = evidenceError(rawRecords, userEvidence, input.readCardText?.(userEvidence.sliceId, userEvidence.turnId));
         if (error) return `REJECTED: ${error}`;
         return withTaskDocument(update.ref, userEvidence, update.changes.summary, () => mutateTask({
           type: "update", ...update,

@@ -105,6 +105,7 @@ export interface TurnAnalysis {
 }
 
 export interface AnalyzeTurnInput {
+  sessionId?: string;
   /** The model to run this analysis on (the turn's MAIN model, via the runner). */
   model: ModelConfig;
   userMessage: string;
@@ -268,6 +269,7 @@ function emptyAnalysis(): TurnAnalysis {
 
 export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis> {
   const result = await runSubAgent({
+    sessionId: input.sessionId,
     role: "recall",
     model: input.model,
     system: ANALYZER_SYSTEM,

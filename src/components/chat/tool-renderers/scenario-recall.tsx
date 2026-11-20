@@ -29,6 +29,7 @@ export function ScenarioRecallRenderer({ input, output, state, streamingText }: 
   const readError = typeof result.error === "string" && result.error.trim() ? result.error : null;
   const summary = pending
     ? streamingText || (typeof question === "string" ? question : zh ? "正在回想相关对话…" : "Recollecting the conversation…")
+    : result.status === "deferred" ? (zh ? "先看本轮的案卷内容" : "Using the case reading first")
     : readError ?? (evidence.length > 0
       ? zh ? `${evidence.length} 段原文依据` : `${evidence.length} verified excerpt(s)`
       : zh ? "尚无足够的原文依据" : "Insufficient original evidence");

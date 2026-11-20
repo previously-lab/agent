@@ -37,6 +37,7 @@ const input: DialogueRunInput = {
   publicSeq: 1,
   text: "internal result",
   context: {
+    scopeKey: "scope",
     parentRunId: "wrun_01JTESTPARENT0000000000000",
     workId: "work", sourceInputId: "input", sourceTurnId: "input",
     source: {

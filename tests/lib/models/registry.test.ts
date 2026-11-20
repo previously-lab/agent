@@ -38,4 +38,11 @@ describe("fixed DeepSeek model", () => {
     expect(JSON.stringify(getModel("deepseek-flash"))).not.toContain("local-fixture-secret");
     expect(getModel("deepseek-flash")).not.toHaveProperty("apiKey");
   });
+
+  it("recognizes a complete compatible Chat route without exposing its key", () => {
+    vi.stubEnv("CHAT_API_HOST", "https://opencode.ai/inference/go/openai/v1");
+    vi.stubEnv("CHAT_API_KEY", "alternate-secret");
+    expect(getAvailableModels()).toHaveLength(1);
+    expect(JSON.stringify(getAvailableModels())).not.toContain("alternate-secret");
+  });
 });

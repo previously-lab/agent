@@ -1,18 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DialogueOfferContext } from "@/lib/dialogue/transport";
+import type { DialogueOfferContext, DialogueRunInput } from "@/lib/dialogue/transport";
 import type { ModelMessage } from "@/lib/deepseek/types";
 
-const h = vi.hoisted(() => ({ start: vi.fn() }));
-vi.mock("workflow/api", () => ({ start: h.start, getRun: vi.fn() }));
-vi.mock("@/app/api/chat/dialogue-workflow", () => ({ dialogueWorkflow: vi.fn() }));
+const h = vi.hoisted(() => ({
+  publish: vi.fn(async () => 1),
+  ensure: vi.fn(async (_scope: string) => ({ runId: "wrun_ORCHESTRATOR", reused: false })),
+}));
+vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: vi.fn() }));
+vi.mock("@/app/api/chat/dialogue-transport-steps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/api/chat/dialogue-transport-steps")>()),
+  publishDialogueOfferControlsStep: h.publish,
+}));
+vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
+  ensureDialogueOrchestratorStep: h.ensure,
+}));
 
 import { offerDialogueEventExecute, offerReplyExecute, type ToolContext } from "@/app/api/agent/tool-executors";
 import { prepareDialogueOfferStep } from "@/app/api/chat/dialogue-transport-steps";
 import { DIALOGUE_OFFER_RESULT } from "@/lib/dialogue/transport";
-import { buildDialoguePrompt } from "@/lib/dialogue/dialogue-prompt";
 import { createThinkingReadReceipt, wrapThinkingRead } from "@/lib/agents/thinking-read-receipt";
 
 const context: DialogueOfferContext = {
+  scopeKey: "scope-1",
   parentRunId: "wrun_01JTESTPARENT0000000000000",
   workId: "work-1",
   sourceInputId: "input-1",
@@ -41,33 +50,36 @@ function ctx(): ToolContext {
 describe("offerReply native handoff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.start.mockResolvedValue({ runId: "wrun_01JTESTCHILD00000000000000" });
+    h.ensure.mockResolvedValue({ runId: "wrun_ORCHESTRATOR", reused: false });
   });
 
-  it("starts one child with stable identity and never waits for its result", async () => {
+  it("writes the durable offer before waking the orchestrator", async () => {
     const html = "<!doctype html>\n<html><body>Calculator</body></html>\n";
     const text = `可以。\n\n\`\`\`html live\n${html}\`\`\`\n`;
     const result = await offerReplyExecute({ text }, { context: ctx(), toolCallId: "call-1", messages: [] });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true, kind: DIALOGUE_OFFER_RESULT, offerId: "work-1:call-1",
-      runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input-1",
+      runId: "wrun_ORCHESTRATOR", parentRunId: context.parentRunId,
+      sourceInputId: "input-1", workId: "work-1", publicSeq: 1,
     });
-    const [, args, options] = h.start.mock.calls[0]!;
-    expect(args[0].text).toBe(text);
-    expect(args[0].offerId).toBe("work-1:call-1");
-    expect(options).toMatchObject({ region: "hkg1", attributes: { role: "dialogue", offer: "work-1:call-1" } });
-    expect(h.start).toHaveBeenCalledOnce();
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "scope-1", parentRunId: "wrun_01JTESTPARENT0000000000000",
+      sourceInputId: "input-1", workId: "work-1",
+    }));
+    expect(h.publish.mock.invocationCallOrder[0]).toBeLessThan(h.ensure.mock.invocationCallOrder[0]);
   });
 
-  it("assigns distinct public slots to parallel offers in provider order", async () => {
+  it("assigns distinct work-local slots to parallel offers in provider order", async () => {
     const messages = [{ role: "assistant" as const, content: [
       { type: "tool-call" as const, toolCallId: "call-1", toolName: "offerReply", input: { text: "one" } },
       { type: "tool-call" as const, toolCallId: "call-2", toolName: "offerReply", input: { text: "two" } },
     ] }];
-    await offerReplyExecute({ text: "two" }, { context: ctx(), toolCallId: "call-2", messages });
-    expect(h.start.mock.calls[0]![1][0].publicSeq).toBe(2);
+    const result = await offerReplyExecute({ text: "two" }, { context: ctx(), toolCallId: "call-2", messages });
+    expect(result).toMatchObject({ ok: true, publicSeq: 2 });
   });
-  it("admits a sixth distinct checkpoint, carries all five priors into dialogue context, and preserves dedupe", async () => {
+
+  it("admits a sixth distinct checkpoint and preserves dedupe", async () => {
     const texts = ["first finding", "second finding", "third finding", "fourth finding", "fifth finding"];
     const messages: ModelMessage[] = texts.flatMap((text, index) => {
       const toolCallId = `call-${index + 1}`;
@@ -89,12 +101,8 @@ describe("offerReply native handoff", () => {
       { stage: "checkpoint", text: sixth },
       { context: ctx(), toolCallId: "call-6", messages },
     );
-    expect(result).toMatchObject({ ok: true, offerId: "work-1:call-6" });
-    const startedInput = h.start.mock.calls[0]![1][0];
-    expect(startedInput.priorCheckpoints.map((entry: { text: string }) => entry.text)).toEqual(texts);
-    const prompt = JSON.parse(buildDialoguePrompt(startedInput, [], startedInput.text));
-    expect(prompt.priorCheckpoints).toEqual(texts);
-    expect(prompt.event).toEqual({ kind: "offer_reply", notes: sixth });
+    expect(result).toMatchObject({ ok: true, offerId: "work-1:call-6", publicSeq: 6 });
+    expect(h.ensure).toHaveBeenCalledOnce();
 
     const duplicate = await offerReplyExecute(
       { stage: "checkpoint", text: sixth },
@@ -105,7 +113,7 @@ describe("offerReply native handoff", () => {
       ] }] },
     );
     expect(duplicate).toMatchObject({ ok: false, reason: "This checkpoint was already offered." });
-    expect(h.start).toHaveBeenCalledOnce();
+    expect(h.ensure).toHaveBeenCalledOnce();
   });
 
   it("keeps raw HTML unchanged in typed data and out of the dialogue prompt", async () => {
@@ -113,7 +121,11 @@ describe("offerReply native handoff", () => {
     const offered = `结果如下。\n\n\`\`\`html live\n${html}\`\`\`\n`;
     const started = await offerReplyExecute({ text: offered }, { context: ctx(), toolCallId: "call-1", messages: [] });
     if (!started.ok) throw new Error("offer failed");
-    const input = h.start.mock.calls[0]![1][0];
+    const accepted = h.ensure.mock.calls[0]!;
+    expect(accepted[0]).toMatchObject({ scope: "scope-1", triggerKey: "work-1:call-1" });
+    const input: DialogueRunInput = {
+      offerId: "work-1:call-1", publicSeq: 1, text: offered, context, stage: "final", direct: true,
+    };
     const prepared = await prepareDialogueOfferStep(input, "wrun_01JTESTCHILD00000000000000");
     expect(prepared.artifacts).toHaveLength(1);
     expect(prepared.artifacts[0]!.body).toBe(html);
@@ -129,28 +141,25 @@ describe("offerReply native handoff", () => {
 describe("offerDialogueEventExecute host event handoff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.start.mockResolvedValue({ runId: "wrun_01JTESTCHILD00000000000000" });
+    h.ensure.mockResolvedValue({ runId: "wrun_ORCHESTRATOR", reused: false });
   });
 
-  it("starts the dialogue with empty text, the typed event and a stable work-scoped offer id, without waiting", async () => {
+  it("persists empty text, the typed event and a stable work-scoped id", async () => {
     const event = { kind: "read_completed", sourceKind: "semantic_document", evidenceCount: 2 } as const;
     const result = await offerDialogueEventExecute(
       { event, stage: "checkpoint" },
       { context: ctx(), toolCallId: "host-read-checkpoint", messages: [] },
     );
-    expect(result).toEqual({
+    expect(result).toEqual(expect.objectContaining({
       ok: true, kind: DIALOGUE_OFFER_RESULT, offerId: "work-1:host-read-checkpoint",
-      runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input-1",
+      runId: "wrun_ORCHESTRATOR", sourceInputId: "input-1",
       stage: "checkpoint", publicSeq: 1, eventKind: "read_completed",
-    });
-    const [, args, options] = h.start.mock.calls[0]!;
-    expect(args[0].text).toBe("");
-    expect(args[0].event).toEqual(event);
-    expect(args[0].offerId).toBe("work-1:host-read-checkpoint");
-    expect(args[0].stage).toBe("checkpoint");
-    expect(options).toMatchObject({ region: "hkg1", attributes: { role: "dialogue", offer: "work-1:host-read-checkpoint" } });
-    // Admission only: one start, never a completion wait on the child run.
-    expect(h.start).toHaveBeenCalledOnce();
+    }));
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.ensure).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "scope-1", parentRunId: "wrun_01JTESTPARENT0000000000000",
+      sourceInputId: "input-1", workId: "work-1",
+    }));
   });
 
   it("does not reserve a public slot for a tool read", async () => {
@@ -167,5 +176,4 @@ describe("offerDialogueEventExecute host event handoff", () => {
       { context: ctx(), toolCallId: "call-2", messages });
     expect(offer).toMatchObject({ ok: true, stage: "checkpoint", publicSeq: 1 });
   });
-
 });

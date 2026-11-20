@@ -567,8 +567,7 @@ export function migrateToV3(content: string, currentSliceId?: string): string {
 // ─── User card format (v5) ──────────────────────────────────────────────────
 
 /**
- * v5 "user card" — the compact successor to the v3 dimension archive, with the
- * user's TIME AXIS made explicit as Past / Now / Horizon:
+ * v5 "user card" — the compact background model:
  *
  *   1. Identity  — structured head (machine-parsed): Name / Address them as /
  *      Pronouns / Alias.
@@ -578,13 +577,14 @@ export function migrateToV3(content: string, currentSliceId?: string): string {
  *      certainly still be true in 3 years.
  *   3. Now       — current-state semantic compression pool (rename of the v4
  *      Recent section): hooks, not narratives; 7-day mechanical expiry.
- *   4. Horizon   — future-facing open loops: commitments / deadlines / awaited
- *      replies, each with a `by:` date. NOT age-expiring — items resolve only
- *      by being fulfilled; overdue items are kept and flagged, never silently
- *      dropped.
  *
- * The card is a PURE dynamic semantic memory pool — what the user did, is
- * doing, will do. It carries NO rules and NO analysis: patterns/tendencies
+ * Legacy Horizon sections remain supported by this storage parser/serializer,
+ * but the Previously Agent no longer exposes Horizon mutations. Commitments,
+ * deadlines, awaited replies and lifecycle state belong to the authoritative
+ * task ledger and tasks/ cases, not to newly written card content.
+ *
+ * The card is a PURE dynamic semantic memory pool — what the user did and is
+ * doing. It carries NO rules and NO analysis: patterns/tendencies
  * about the user live in the evolution direction's Portrait and guesses in its
  * Hypotheses (memory/evolution/direction.md, see src/lib/evolution/). The old
  * Self-model section (5.) is GONE from the writer — serializeCard never emits

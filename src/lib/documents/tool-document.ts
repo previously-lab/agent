@@ -1,4 +1,5 @@
 import { parseCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { isPublicRecordRead } from "@/lib/chat/scenario-recall-contract";
 import {
   deriveWriteCaseStatus,
   parseRecallOutput,
@@ -51,6 +52,7 @@ export function writeCaseDocumentTarget(output: unknown): ToolDocumentTarget | n
 }
 
 export function recallReadDocumentTarget(input: unknown, output: unknown): ToolDocumentTarget | null {
+  if (isPublicRecordRead(output)) return parseRecallOutput("recallRead", output)?.kind === "content" ? target(output.ref) : null;
   if (typeof output !== "string") return null;
   const parsed = parseRecallOutput("recallRead", output);
   if (parsed?.kind !== "content" && parsed?.kind !== "outline") return null;

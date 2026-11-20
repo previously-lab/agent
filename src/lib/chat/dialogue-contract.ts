@@ -78,6 +78,8 @@ export interface PublicUtterance {
   inputIds: string[];
   sourceResults: DialogueResultUse[];
   blocks: ContentBlockV1[];
+  /** Public speech act; absent on records written before phased dialogue. */
+  phase?: "commentary" | "final_answer";
 }
 
 export type DialogueEvent =

@@ -1,5 +1,6 @@
 /** Final-storage budgets. Characters are Unicode code points, never UTF-16 units. */
 import { WriteRefusal } from "./write-window";
+import { isArchivedCaseStoragePath } from "./paths";
 
 export interface DocumentSize { characters: number; bytes: number; lines: number }
 export const DOCUMENT_LIMITS: DocumentSize = { characters: 12_000, bytes: 48 * 1024, lines: 400 };
@@ -31,6 +32,7 @@ export function isConversationRecordPath(path: string): boolean {
 }
 export function isAuthoredDocumentPath(path: string): boolean {
   return path.startsWith("memory/") && !path.startsWith("memory/episodic/") &&
+    !path.startsWith("memory/timeline/") && !isArchivedCaseStoragePath(path) &&
     /\.md$/i.test(path) && !isConversationRecordPath(path);
 }
 export class DocumentFullRefusal extends WriteRefusal {

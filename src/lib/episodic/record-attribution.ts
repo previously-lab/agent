@@ -17,6 +17,21 @@ export function conversationRole(role: string): "user" | "assistant" | null {
   return null;
 }
 
+/** An explicit core read exposes utterances. Private or unattributed intervals,
+ * frontmatter and encoded header metadata never become model-facing bytes. */
+export function publicRecordTranscript(raw: string): string {
+  const turns = parseTurns(raw).turns.flatMap(turn => {
+    const role = conversationRole(turn.role);
+    if (turn.boundary === "ambiguous" || !role || (turn.sourceRole && conversationRole(turn.sourceRole) !== role)) return [];
+    return [{
+      ...turn,
+      header: `## Turn ${turn.turnId ?? "?"} — ${turn.timestamp} (${role}) [body-escaped v1]`,
+      content: projectNativeReplySemantics(turn.content, role),
+    }];
+  });
+  return reassembleSlice("", turns).trimStart() || "(No public conversation turns in this record.)";
+}
+
 /** Scan each assistant body separately: an unclosed fence in an earlier
  * turn must not swallow the next turn's record fence during model reads. */
 export function projectRecordArtifactTranscript(raw: string): string {

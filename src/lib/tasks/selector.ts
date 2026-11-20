@@ -12,6 +12,7 @@ export type TaskCandidateReason =
   | "due"
   | "check_due"
   | "due_soon"
+  | "confirmation"
   | "relevance"
   | "review";
 
@@ -42,8 +43,9 @@ function reasonRank(reasons: TaskCandidateReason[]): number {
   if (reasons.includes("due")) return 1;
   if (reasons.includes("check_due")) return 2;
   if (reasons.includes("due_soon")) return 3;
-  if (reasons.includes("relevance")) return 4;
-  return 5;
+  if (reasons.includes("confirmation")) return 4;
+  if (reasons.includes("relevance")) return 5;
+  return 6;
 }
 
 function matches(task: TaskEntry, relevance: string | undefined): boolean {
@@ -67,7 +69,9 @@ function followedAtCurrentRevisionToday(
 function compareCandidates(a: TaskCandidate, b: TaskCandidate): number {
   const rank = reasonRank(a.reasons) - reasonRank(b.reasons);
   if (rank !== 0) return rank;
-  if (a.reasons.includes("review") && b.reasons.includes("review")) {
+  const aRotates = a.reasons.includes("review") || a.reasons.includes("confirmation");
+  const bRotates = b.reasons.includes("review") || b.reasons.includes("confirmation");
+  if (aRotates && bRotates) {
     const aFollowup =
       a.task.lastFollowup?.revision === a.task.revision
         ? a.task.lastFollowup.on
@@ -110,9 +114,16 @@ export function selectTaskCandidates(
     if (
       task.status === "completed" ||
       task.status === "cancelled" ||
-      task.status === "needs_review" ||
       followedAtCurrentRevisionToday(task, input.todayLocal)
     ) {
+      continue;
+    }
+
+    // Unknown lifecycle is a standing confirmation request, not an overdue
+    // open task: old dates must not be presented as active commitments until
+    // the user confirms them. A saved same-day follow-up suppresses repeats.
+    if (task.status === "needs_review") {
+      eligible.push({ task, reasons: ["confirmation"] });
       continue;
     }
 

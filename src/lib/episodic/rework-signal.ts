@@ -7,10 +7,10 @@
  *
  * What this module still produces:
  *
- *   - "doc_rework" — the document-side probe (§4.4): the main agent reads a
- *     document with readDoc, then opens with readSlice one of the slices THAT
- *     document referenced: the document was not credited for the fact it
- *     carried.
+ *   - "source_reference" — a legacy conversation read a document and
+ *     recovered an excerpt from a record mentioned in it. Existing
+ *     "doc_rework" lines remain historical observations. Native dialogue
+ *     records its observations during projection, using work-scoped receipts.
  *   - "interaction_regenerate" / "interaction_interrupt" — the user's own
  *     hands on the UI (regenerate = the previous reply was rejected;
  *     interrupt = cut off mid-stream).
@@ -22,12 +22,8 @@
  * writeAgentTimeline) plus a server-log line for run-log reconciliation
  * (§D.4 附 3: the fitness instruments' home is the run log, not disk state).
  *
- * The per-conversation record is module-level per-process state — the same
- * pattern manager.ts already uses for the active slice. Workflow steps in one
- * process share the module, so the doc read recorded by readDocExecute is
- * visible to a later readSliceExecute. The map is FIFO-bounded:
- * conversations are short-lived and an unbounded map would leak across the
- * process lifetime.
+ * Legacy steps in the same process share the most recent document reads for
+ * each conversation. A process change may omit this best-effort observation.
  *
  * Every write is best-effort (failures are swallowed with a console.warn —
  * instrumentation must never fail a tool).
@@ -43,12 +39,8 @@ const SLICE_ID_GLOBAL = /\b\d{4}-\d{2}-\d{2}-\d{4}\b/g;
 const MAX_EXTRACTED_SLICE_IDS = 100;
 
 /**
- * Extract the slice ids a document references (design §4.1: documents cite
- * slices by id). Used by the doc_rework probe (§4.4): if the main agent
- * reads a document and then opens one of the slices THAT document pointed
- * at, the document was not credited for that fact — an implicit demerit
- * recorded against the memory-quality bucket. (Moved here from the retired
- * docs-query module — this probe is its only consumer.)
+ * Identify record navigation mentioned in a document, including legacy
+ * documents that cite slice ids as plain text.
  */
 export function extractSliceIds(text: string): string[] {
   const found = new Set<string>();
@@ -61,9 +53,7 @@ export function extractSliceIds(text: string): string[] {
 
 /**
  * The documents the main agent opened this conversation, each with the slice
- * ids its text references (extracted by the readDoc executor via this
- * module's extractSliceIds). When a later readSlice opens one of THOSE
- * slices, the document was not credited for the fact it carried.
+ * ids mentioned in each document.
  */
 const docReads = new Map<string, Map<string, Set<string>>>();
 
@@ -97,9 +87,8 @@ export function recordDocRead(
 
 /**
  * Classify a main-agent readSlice against the documents read earlier in this
- * conversation: if the opened slice is one a read document pointed at, the
- * document was not credited for that fact. Returns the document's file name
- * (the identity of the demerit's target), or null when no read document
+ * conversation. Returns the name of a document that mentions the recovered
+ * slice, or null when no read document
  * referenced this slice. Pure read of the module record — the side-effecting
  * counterpart is logDocReworkSignal.
  */
@@ -117,7 +106,7 @@ export function checkDocRework(
 }
 
 /**
- * Emit a doc_rework signal: one compact audit line in the current slice's
+ * Emit a source-reference observation in the current legacy slice's
  * agent.md plus a server-log line. The append goes through
  * writeAgentTimeline, whose batch-less path is slice-locked and fresh-read.
  * Best-effort — each failure is warned and swallowed; this function never
@@ -131,19 +120,18 @@ export async function logDocReworkSignal(
   const ts = new Date().toISOString();
   const detail =
     `main agent read slice ${readSliceId} that document ` +
-    `"${docFileName}" references — the document was not credited ` +
-    "for the fact it carried";
+    `"${docFileName}" references`;
 
-  console.log(`[ReworkSignal] doc_rework ${conversationSliceId} — ${detail}`);
+  console.log(`[SourceReference] ${conversationSliceId} — ${detail}`);
 
   try {
     await writeAgentTimeline(
       conversationSliceId,
-      `- **doc_rework** ${ts} — ${detail}.`,
+      `- **source_reference** ${ts} — ${detail}.`,
     );
   } catch (e) {
     console.warn(
-      "[ReworkSignal] agent.md append failed:",
+      "[SourceReference] agent.md append failed:",
       e instanceof Error ? e.message : e,
     );
   }

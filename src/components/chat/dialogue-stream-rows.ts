@@ -84,6 +84,28 @@ function publicationIdOf(message: UIMessage): string | undefined {
   return undefined;
 }
 
+/** Append one published utterance without replacing earlier public speech. */
+export function applyDialoguePublication(
+  messages: readonly UIMessage[],
+  utterance: PublicUtterance,
+  work?: { workId: string; inputId: string },
+): UIMessage[] {
+  const id = `dialogue-publication:${utterance.utteranceId}`;
+  if (messages.some(message => message.id === id || publicationIdOf(message) === utterance.utteranceId)) return [...messages];
+  const message: UIMessage = {
+    id,
+    role: "assistant",
+    parts: [{ type: "data-dialogue-publication", id: utterance.utteranceId, data: utterance }],
+    metadata: {
+      acceptedAt: utterance.committedAt,
+      publicationId: utterance.utteranceId,
+      workStatus: "completed",
+      ...(work ? { workId: work.workId, sourceInputId: work.inputId } : {}),
+    } satisfies DialogueMessageMetadata,
+  };
+  return [...messages, message];
+}
+
 /** Only this function moves a public run into the hot history. The local seat
  * identity and work metadata survive the stream's own message id/metadata. */
 export function applyDialoguePublicMessage(messages: readonly UIMessage[], assistantId: string, publicMessage: UIMessage,
@@ -111,8 +133,12 @@ export function applyDialoguePublicMessage(messages: readonly UIMessage[], assis
 }
 
 export function resetDialogueAssistant(messages: readonly UIMessage[], assistantId: string, acceptedAt = new Date().toISOString()): UIMessage[] {
+  const target = messages.find(message => message.id === assistantId && message.role === "assistant");
+  const workId = target ? dialogueMetadata(target).workId : undefined;
+  const retained = messages.filter(message =>
+    !workId || message.id === assistantId || !publicationIdOf(message) || dialogueMetadata(message).workId !== workId);
   let changed = false;
-  const next = messages.map(message => {
+  const next = retained.map(message => {
     if (message.id !== assistantId || message.role !== "assistant") return message;
     changed = true;
     return { ...message, parts: [], metadata: {
@@ -236,7 +262,7 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
       items.push({ kind: "live", key: `dialogue-input:${message.id}`, message, timeIso, startedAt: timeIso, isStreaming: false });
       continue;
     }
-    if (message.role !== "assistant") continue;
+    if (message.role !== "assistant" || (publicationIdOf(message) && !metadata.thoughtRunId)) continue;
     const work = workForMessage(message, latestUser, userSeq);
     const key = `dialogue-work:${message.id}`;
     const replying = metadata.workStatus === "running" && Boolean(metadata.dialogueRunId);
@@ -255,6 +281,31 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
     items.push({ kind: "live", key, timeIso, startedAt: timeIso, isStreaming: streaming, message });
     workSeats.set(key, { work, replying, ...(replies ? { replies } : {}) });
     latestUser = undefined;
+  }
+  for (const message of messages) {
+    const metadata = dialogueMetadata(message);
+    if (message.role !== "assistant" || !publicationIdOf(message) || metadata.thoughtRunId) continue;
+    const publication = publicationFromMessage(message);
+    if (!publication) continue;
+    const seats = [...workSeats.values()];
+    const byWork = publication.utterance.inputIds.length === 1
+      ? seats.find(seat => seat.work.workId === metadata.workId &&
+        publication.utterance.inputIds.includes(seat.work.inputId))
+      : undefined;
+    const byInput = publication.utterance.inputIds.length === 1
+      ? seats.find(seat => seat.work.inputId === publication.utterance.inputIds[0])
+      : undefined;
+    const target = byWork ?? byInput;
+    const reply = { kind: "utterance" as const, id: publication.utterance.utteranceId,
+      utterance: publication.utterance, artifactBodies: publication.artifactBodies };
+    if (target) {
+      target.replies = [...(target.replies ?? []), reply];
+      continue;
+    }
+    const key = `dialogue-utterance:${publication.utterance.utteranceId}`;
+    utterances.set(key, { publications: [{ utterance: publication.utterance, artifactBodies: publication.artifactBodies }] });
+    const timeIso = publication.utterance.committedAt;
+    items.push({ kind: "live", key, timeIso, startedAt: timeIso, isStreaming: false, message });
   }
   return { items, utterances, workSeats };
 }
@@ -325,7 +376,6 @@ export function dialogueHistoryMessages(turns: readonly Turn[]): UIMessage[] {
 export function mergeDialogueHistory(messages: readonly UIMessage[], turns: readonly Turn[]): UIMessage[] {
   const users = new Set<string>();
   const publications = new Set<string>();
-  const answeredInputs = new Set<string>();
   for (const message of messages) {
     const metadata = dialogueMetadata(message);
     if (message.role === "user") {
@@ -335,15 +385,13 @@ export function mergeDialogueHistory(messages: readonly UIMessage[], turns: read
       publications.add(message.id);
       const publicationId = publicationIdOf(message);
       if (publicationId) publications.add(publicationId);
-      if (metadata.sourceInputId) answeredInputs.add(metadata.sourceInputId);
     }
   }
   const fresh = dialogueHistoryMessages(turns).filter(message => {
     const metadata = dialogueMetadata(message);
     if (message.role === "user") return !users.has(message.id) && (!metadata.sourceInputId || !users.has(metadata.sourceInputId));
     const publicationId = publicationIdOf(message);
-    return !publications.has(message.id) && (!publicationId || !publications.has(publicationId)) &&
-      (!metadata.sourceInputId || !answeredInputs.has(metadata.sourceInputId));
+    return !publications.has(message.id) && (!publicationId || !publications.has(publicationId));
   });
   return fresh.length ? [...fresh, ...messages] : [...messages];
 }

@@ -52,7 +52,8 @@ try {
   // Compile the production runtime itself. Only credential lookup is replaced;
   // fake fetch above can never reach an actual model endpoint.
   await cp(join(projectRoot, "src/lib/deepseek"), join(directory, "deepseek"), { recursive: true });
-  await writeFile(join(directory, "deepseek/credentials.ts"), 'export function deepseekApiKey() { return "non-billable-fixture"; }\n');
+  await cp(join(projectRoot, "src/lib/version"), join(directory, "version"), { recursive: true });
+  await writeFile(join(directory, "deepseek/credentials.ts"), 'export function deepseekApiKey() { return "non-billable-fixture"; }\nexport function compatibleChatRoute() { return undefined; }\n');
   await mkdir(join(directory, "ledger"));
   process.env.FIXTURE_DIR = join(directory, "ledger");
   process.env.WORKFLOW_TARGET_WORLD = "local";

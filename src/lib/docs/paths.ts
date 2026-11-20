@@ -45,6 +45,20 @@ export function isCaseCategory(segment: string): segment is CaseCategory {
 // ─── Roots ─────────────────────────────────────────────────────────────────
 
 export const MEMORY_ROOT_DIR = "memory";
+/** Inactive cases keep their semantic home and gain this suffix in place. */
+export const ARCHIVED_CASE_SUFFIX = "-archived";
+export function isArchivedCaseName(caseName: string): boolean {
+  return caseName.endsWith(ARCHIVED_CASE_SUFFIX);
+}
+export function archiveCaseDirPath(category: CaseCategory, caseName: string): string {
+  assertCaseName(caseName);
+  return `${MEMORY_ROOT_DIR}/${category}/${caseName}${ARCHIVED_CASE_SUFFIX}`;
+}
+export function isArchivedCaseStoragePath(path: string): boolean {
+  if (path.startsWith("memory/_archive/")) return true;
+  const [, category, caseName] = path.split("/");
+  return isCaseCategory(category) && isArchivedCaseName(caseName ?? "");
+}
 
 /**
  * Legacy roots, checked AFTER the new root on reads (§D.1 双根). Only

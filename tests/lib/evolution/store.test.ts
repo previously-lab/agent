@@ -85,6 +85,18 @@ describe("composeUserModel / splitUserModel", () => {
       direction: null,
     });
   });
+
+  it("drops exact duplicate bullets while preserving distinct entries and headings", async () => {
+    const store = await importFresh();
+    const full = store.composeUserModel(
+      "# Card\n- same fact — refs: one\n- same fact — refs: one\n- another fact",
+      "# Direction\n## Traits\n* same pattern — refs: two\n* same pattern — refs: two",
+    );
+    expect(full.match(/same fact/g)).toHaveLength(1);
+    expect(full.match(/same pattern/g)).toHaveLength(1);
+    expect(full).toContain("another fact");
+    expect(full).toContain("## Traits");
+  });
 });
 
 // ── readUserModel — one live root, absent ≠ unavailable ───────────────────

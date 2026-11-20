@@ -213,6 +213,8 @@ import { handleBrief } from "@/app/api/evolution/hq-agent";
 import { dialogueResearchMaterialId, encodeDialogueResearchRecord, type DialogueResearchRecord } from "@/lib/episodic/dialogue-record";
 import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
+import { runAgent, zeroUsage } from "@/lib/deepseek/runner";
+import { isStepCount } from "@/lib/deepseek/tools";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { parseReflectionRoundMessage, type ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
 import { fsReadFile } from "@/lib/episodic/io-helpers";
@@ -262,7 +264,7 @@ it("offers reachable user-model recovery after evolveProfile feedback, with real
     expect(await callTool(opts, "reorganizeUserModel", input)).toContain("Queued user-model reorganization");
     return { ok: true, report: { actions: [], note: "" }, text: "" };
   });
-  await handleBrief(DOCKET);
+  expect((await handleBrief(DOCKET)).evolved).toBeUndefined();
   expect(io.files.get(path)).toBe(card.trim());
   expect([...io.files.keys()].some((name) => name.includes("history-v1-index"))).toBe(true);
 });
@@ -293,6 +295,223 @@ beforeEach(() => {
 });
 
 describe("HQ evidence, task and learning integration", () => {
+  it("places only the owed original user card beside a mixed research docket and settles it without a full-round read", async () => {
+    const source = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    const resultId = source.turnId + "@research:checked:1";
+    const raw = RAW_USER_RECORD +
+      "\n## Turn sibling — 2026-08-09T13:01:00.000Z (user)\nUnrelated user words.\n" +
+      "\n## Turn reply — 2026-08-09T13:02:00.000Z (agent)\nAssistant-only material.\n";
+    io.files.set(`${SLICE_ID}:core`, raw);
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(opts.prompt).toContain('"role":"user","content":"想换手机"');
+      expect(opts.prompt).not.toMatch(/Unrelated user words|Assistant-only material/);
+      expect(opts.prompt).toContain(resultId);
+      expect(opts.prompt).toContain("evolution beat is DUE");
+      expect(await callTool(opts, "skipArchiveTurn", { source: { ...source, quote: "Unrelated user words." }, reason: "wrong message" })).toContain("REJECTED");
+      expect(await callTool(opts, "skipArchiveTurn", { source, reason: "Already recorded" })).toContain("OK");
+      expect(episodic.readSlicePart.mock.calls.map(([, part]) => part)).toEqual(["core", "agent"]);
+      expect(opts.prepareStep).toBeUndefined(); // Unreadable research stays on the full docket.
+      return { ok: true, report: { actions: [], note: "Filed the card." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, evolutionDue: true, scope: [{
+      sliceId: SLICE_ID, turnIds: [source.turnId, resultId], userTurnIds: [source.turnId],
+    }] });
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.deferredCards ?? 0).toBe(0);
+  });
+
+  const checked: DialogueResearchRecord = {
+    kind: "research_result", resultId: "checked", productRevision: 1, workId: "w",
+    inputIds: ["a1b2c3"], sourceTurnId: "a1b2c3", asOf: "2026-08-09T13:00:00.000Z",
+    sourceRevision: null, status: "complete", artifacts: [],
+  };
+  const cardAndResearch = { ...DOCKET, evolutionDue: true, scope: [{
+    sliceId: SLICE_ID, turnIds: [checked.sourceTurnId, dialogueResearchMaterialId(checked)], userTurnIds: [checked.sourceTurnId],
+  }] };
+
+  it("closes an explicitly complete card docket only after exact card and due profile receipts", async () => {
+    const source = { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" };
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    runSubAgentMock.mockImplementation(async opts => {
+      const menu = async () => (await opts.prepareStep!({ stepNumber: 0, steps: [], messages: [] }))?.activeTools;
+      expect(await menu()).toEqual(["assessCard"]);
+      expect(await callTool(opts, "assessCard", { source: { ...source, quote: "missing" }, decision: "no_further_work", reason: "x" })).toContain("REJECTED");
+      expect(await menu()).toEqual(["assessCard"]);
+      expect(await callTool(opts, "assessCard", { source, decision: "no_further_work", reason: "Already known." })).toContain("OK");
+      expect(await menu()).toEqual(["evolveProfile"]);
+      expect(await callTool(opts, "evolveProfile", { sliceId: "2026-08-08-1200", focus: "Unrelated." })).toContain("this docket");
+      expect(await menu()).toEqual(["evolveProfile"]);
+      expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "User's interests" })).toContain("changed:");
+      expect(await menu()).toEqual(["hqReport"]);
+      return { ok: true, report: { actions: [], note: "Reviewed." }, text: "" };
+    });
+    const result = await handleBrief(cardAndResearch);
+    expect(result.error).toBeUndefined();
+    expect(result.deferredCards).toBeUndefined();
+    expect(result.evolved).toBe(true);
+  });
+
+  it("reopens full reflection for a failed profile pass even when the original needs no more work", async () => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, error: "document_full" });
+    runSubAgentMock.mockImplementation(async opts => {
+      await callTool(opts, "assessCard", { source: { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" }, decision: "no_further_work", reason: "Known." });
+      expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "Review." })).toContain("document_full");
+      expect((await opts.prepareStep!({ stepNumber: 2, steps: [], messages: [] }))?.activeTools).toContain("reorganizeUserModel");
+      return { ok: true, report: { actions: [], note: "Profile needs repair." }, text: "" };
+    });
+    expect((await handleBrief(cardAndResearch)).evolved).toBeUndefined();
+  });
+
+  it("keeps the second card owed when it introduces a separate task", async () => {
+    const followUp = { sliceId: SLICE_ID, turnId: "newtask", quote: "我明天去续护照。" };
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD + "\n## Turn newtask — 2026-08-09T13:01:00.000Z (user)\n我明天去续护照。\n");
+    runSubAgentMock.mockImplementation(async opts => {
+      const menu = async () => (await opts.prepareStep!({ stepNumber: 0, steps: [], messages: [] }))?.activeTools;
+      await callTool(opts, "assessCard", { source: { ...followUp, turnId: checked.sourceTurnId, quote: "想换手机" }, decision: "no_further_work", reason: "Already known." });
+      expect(await menu()).toEqual(["assessCard"]);
+      await callTool(opts, "assessCard", { source: followUp, decision: "needs_work", reason: "Passport renewal commitment." });
+      expect(await callTool(opts, "assessCard", { source: followUp, decision: "no_further_work", reason: "Conflicting assessment." })).toContain("unfinished work");
+      expect(await menu()).toEqual(expect.arrayContaining(["queryTasks", "createTask", "linkCard", "hqReport"]));
+      return { ok: true, report: { actions: [], note: "Task unresolved." }, text: "" };
+    });
+    const turnIds = [checked.sourceTurnId, followUp.turnId];
+    const result = await handleBrief({ ...DOCKET, scope: [{ sliceId: SLICE_ID, userTurnIds: turnIds, turnIds }] });
+    expect(result.deferredCards).toBe(1);
+  });
+
+  it("records that a partial profile pass ran and lets HQ persist a concrete unresolved repair", async () => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    passes.runCardEvolution.mockResolvedValue({ ran: true, changed: false, partial: true });
+    runSubAgentMock.mockImplementation(async opts => {
+      await callTool(opts, "assessCard", { source: { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" }, decision: "no_further_work", reason: "Known." });
+      expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "Review." })).toContain("ended before its report");
+      const next = await opts.prepareStep!({ stepNumber: 2, steps: [], messages: [] });
+      expect(next?.activeTools).toContain("setAgenda");
+      expect(next?.system).toContain("unfinished repair");
+      await callTool(opts, "setAgenda", { content: `- [due: 2026-08-10] 核实换手机的条件（据片 ${SLICE_ID}）` });
+      return { ok: true, report: { actions: [], note: "Open condition scheduled." }, text: "" };
+    });
+    const result = await handleBrief(cardAndResearch);
+    expect(result.evolved).toBe(true);
+    expect(io.files.get("memory/self/agenda.md")).toContain("[due: 2026-08-10]");
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    expect(parseReflectionRoundMessage(vi.mocked(commitReflectionRound).mock.calls[0][1])?.trailer?.evolved?.date).toBe(DATE);
+  });
+
+  it.each([
+    ["incomplete", [{ ...checked, status: "incomplete" as const }]],
+    ["different revision", [{ ...checked, productRevision: 2 }]],
+    ["conflicting duplicate", [checked, checked]],
+    ["unread underlying input", [{ ...checked, inputIds: [checked.sourceTurnId, "unread"] }]],
+    ["research document", [{ ...checked, artifacts: [{ artifactId: "result-doc", sourceOwnerId: "w", revision: 1,
+      sha256: "1".repeat(64), kind: "document", mediaType: "text/plain", byteSize: 14 }] }]],
+    ["proposed finding", [{ ...checked, delta: { readerQuestion: "why?", newInformation: "learned", targetRefs: [], claims: [] } }]],
+  ] satisfies Array<[string, DialogueResearchRecord[]]>)("retains the full research docket for %s", async (_reason, records) => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, records.map(encodeDialogueResearchRecord).join("\n"));
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(opts.prepareStep).toBeUndefined();
+      expect(opts.tools.archiveRound).toBeDefined();
+      return { ok: true, report: { actions: [], note: "Deferred." }, text: "" };
+    });
+    expect((await handleBrief(cardAndResearch)).deferredCards).toBe(1);
+  });
+
+  it("keeps independent agenda and degraded review state on the full surface even with verified cards", async () => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(opts.prepareStep).toBeUndefined();
+      return { ok: true, report: { actions: [], note: "Deferred." }, text: "" };
+    });
+    await handleBrief({ ...cardAndResearch, agendaDue: [{ due: DATE, text: "Check a different case." }] });
+    await handleBrief({ ...cardAndResearch, skillReviewError: "unreadable" });
+  });
+
+  it("files a new fact from its original while using the focused tools", async () => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    runSubAgentMock.mockImplementation(async opts => {
+      const menu = async () => (await opts.prepareStep!({ stepNumber: 0, steps: [], messages: [] }))?.activeTools;
+      expect(await menu()).not.toContain("recallFind");
+      const source = { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" };
+      await callTool(opts, "assessCard", { source, decision: "needs_work", reason: "The user newly says they want a different phone." });
+      expect(await menu()).toContain("writeCase");
+      expect(await callTool(opts, "writeCase", { action: "open", category: "things", caseName: "手机", body: "用户开始考虑换手机。", sources: [source] })).toContain("OK");
+      expect(await menu()).toContain("hqReport");
+      return { ok: true, report: { actions: [], note: "Filed." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...cardAndResearch, evolutionDue: false });
+    expect(outcome.deferredCards).toBeUndefined();
+    expect(outcome.actions).toContain("things/手机/index.md");
+    expect(io.files.get("memory/things/手机/index.md")).toContain("turn=a1b2c3");
+  });
+
+  it("keeps the failed-round checkpoint even after the focused card and profile produced receipts", async () => {
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+    io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(opts.prepareStep).toBeDefined();
+      const source = { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" };
+      await callTool(opts, "assessCard", { source, decision: "needs_work", reason: "New phone interest." });
+      expect(await callTool(opts, "writeCase", { action: "open", category: "things", caseName: "手机", body: "换手机。", sources: [source] })).toContain("OK");
+      await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "New phone interest." });
+      return { ok: false, error: "timed out before report", text: "" };
+    });
+    const outcome = await handleBrief({ ...cardAndResearch, history: {
+      version: 1, basis: "1".repeat(40), cursor: null, evolved: null, pending: [{ ...cardAndResearch.scope[0], sha: "2".repeat(40) }],
+    } });
+    expect(outcome.error).toContain("timed out");
+    expect(outcome.actions).toContain("things/手机/index.md");
+    const message = vi.mocked(commitReflectionRound).mock.calls[0][1];
+    expect(message).not.toMatch(/^(?:seen|observed|evolved|history):/m);
+  });
+
+  it("keeps ambiguous cards owed and grants no slice-wide authority from a supplied card", async () => {
+    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD +
+      "\n## Turn dup — 2026-08-09T13:01:00.000Z (user)\nFirst disputed message.\n" +
+      "\n## Turn dup — 2026-08-09T13:02:00.000Z (user)\nSecond disputed message.\n");
+    const valid = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(opts.prompt).not.toContain("First disputed message.");
+      expect(await callTool(opts, "skipArchiveTurn", { source: { ...valid, turnId: "dup", quote: "First disputed message." },
+        reason: "duplicate" })).toContain("REJECTED");
+      expect(await callTool(opts, "writeCase", { action: "open", category: "events", caseName: "unrelated", body: "no source" }))
+        .toContain("REJECTED");
+      expect(await callTool(opts, "writeCase", { action: "open", category: "events", caseName: "phone", body: "考虑换手机。", sources: [valid] }))
+        .toContain("OK");
+      return { ok: true, report: { actions: [], note: "One original card filed." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ sliceId: SLICE_ID,
+      turnIds: ["a1b2c3", "dup", "legacy-turn"], userTurnIds: ["a1b2c3", "dup"] }] });
+    expect(outcome.deferredCards).toBe(1);
+    expect(io.files.get("memory/events/phone/index.md")).toContain("turn=a1b2c3");
+  });
+
+  it("accepts task evidence from the supplied card but not a different turn in its slice", async () => {
+    io.files.set(`${SLICE_ID}:core`, "## Turn owned — 2026-08-09T13:00:00.000Z (user)\n我明天去续护照。\n" +
+      "\n## Turn unrelated — 2026-08-09T13:01:00.000Z (user)\n我明天去领照片。\n");
+    runSubAgentMock.mockImplementation(async opts => {
+      const task = { ref: "tasks/续护照", summary: "续护照" };
+      expect(await callTool(opts, "createTask", { ...task, userEvidence: {
+        sliceId: SLICE_ID, turnId: "unrelated", statement: "我明天去领照片。",
+      } })).toContain("readRound");
+      const created = await callTool(opts, "createTask", { ...task, userEvidence: {
+        sliceId: SLICE_ID, turnId: "owned", statement: "我明天去续护照。",
+      } });
+      expect(JSON.parse(created)).toMatchObject({ outcome: "applied", queued: true });
+      return { ok: true, report: { actions: [], note: "Task staged." }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ sliceId: SLICE_ID, turnIds: ["owned"], userTurnIds: ["owned"] }] });
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.deferredCards).toBe(1); // Task creation alone is not a card link.
+  });
+
   it("offers a due skill independently and persists only a host offer receipt when no later evidence exists", async () => {
     const { skillReviewOfferId, assembleLapPlan, lapHasWork } = await import("@/app/api/evolution/reflection-plan");
     const entry = {
@@ -689,6 +908,19 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(opts.reportToolName).toBe("hqReport");
     expect(opts.maxSteps).toBe(50);
     expect(opts.timeoutMs).toBe(REFLECTION_ROUND_TIMEOUT_MS);
+
+    let requests = 0;
+    const result = await runAgent({ tools: opts.tools, stopWhen: isStepCount(opts.maxSteps!) }, async () => {
+      requests++;
+      const args = requests === 1 ? { note: "missing actions" } : { actions: [], note: "Idle." };
+      const calls = [{ id: `report-${requests}`, type: "function" as const,
+        function: { name: "hqReport", arguments: JSON.stringify(args) } }];
+      return { message: { role: "assistant", content: "", tool_calls: calls },
+        toolCalls: calls, finishReason: "tool_calls", usage: zeroUsage() };
+    });
+    expect(result.steps[0].toolCalls[0].invalid).toBe(true);
+    expect(result.steps[1].toolCalls[0].input).toEqual({ actions: [], note: "Idle." });
+    expect(requests).toBe(2);
   });
 
   it("a substantive write lands through the real case machinery", async () => {

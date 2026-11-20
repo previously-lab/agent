@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { isValidCaseName, parsePieceFileName } from "@/lib/docs/case-naming";
-import { CASE_CATEGORIES, isCaseCategory } from "@/lib/docs/paths";
+import { CASE_CATEGORIES, isArchivedCaseName, isCaseCategory } from "@/lib/docs/paths";
 import { navigationNameScore } from "./name-match";
 
 const PAGE_MAX = 30;
@@ -85,7 +85,7 @@ function project(paths: readonly string[]): Map<string, DirectoryEntry> {
       entries.set("self/agenda.md", documentEntry("self/agenda.md", "self/agenda", "agenda.md"));
       continue;
     }
-    if (!caseName || !file || !validSegment(caseName) || !isValidCaseName(caseName) ||
+    if (!caseName || !file || isArchivedCaseName(caseName) || !validSegment(caseName) || !isValidCaseName(caseName) ||
         !validSegment(file) || HISTORY_SHARD.test(file)) continue;
     const casePath = `${category}/${caseName}`;
     const path = `${casePath}/${file}`;

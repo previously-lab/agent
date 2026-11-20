@@ -9,11 +9,12 @@ const status = {
 
 test.afterEach(async () => clearEpisodic());
 
-test("finished activity does not reattach, and a hidden open panel performs no polling", async ({ page }) => {
+test("activity is event-driven without status polling, including while visible", async ({ page }) => {
   await seedSlices([makeSlice("2026-02-01T09:00:00Z", { tag: "OLD" })]);
   let statusReads = 0;
   let logReads = 0;
   let streams = 0;
+  await page.clock.install();
   await page.route("**/api/chat", (route) => route.abort());
   await page.route("**/api/evolution/hq-status", (route) => { statusReads += 1; return route.fulfill({ json: status }); });
   await page.route("**/api/evolution/hq-log", (route) => { logReads += 1; return route.fulfill({ json: { asOf: status.asOf, log: { state: "unavailable", reason: "fixture" } } }); });
@@ -26,9 +27,9 @@ test("finished activity does not reattach, and a hidden open panel performs no p
   await page.locator("[data-companion-pod]").click();
   await expect(page.locator("[data-companion-pod-panel]")).toBeVisible();
   await expect.poll(() => logReads).toBeGreaterThan(0);
-  await page.clock.install();
-  await page.clock.fastForward(16000);
-  expect(streams).toBe(1);
+  const visibleReads = { statusReads, logReads, streams };
+  await page.clock.fastForward(31000);
+  expect({ statusReads, logReads, streams }).toEqual(visibleReads);
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));

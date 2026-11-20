@@ -60,11 +60,12 @@ Use only admitted claims from available results. Preserve uncertainty, attributi
 {"sends":[{"text":"short markdown","sources":[{"resultId":"...","productRevision":1,"claimId":"...","mode":"finding"}],"blockIds":[]}],"decisions":[]}
 Use no more than four complete segments. Each claim can be sent only once. Omitted results remain available for future events.`;
 
-export async function composeExpression(snapshot: ExpressionSnapshot, callId: string): Promise<ExpressionPlan> {
+export async function composeExpression(snapshot: ExpressionSnapshot, callId: string, sessionId?: string): Promise<ExpressionPlan> {
   if (!snapshot.results.some((result) => result.claims.some((claim) => claim.allowedPublicMode !== "none"))) return { sends: [], decisions: [] };
   const controller = new AbortController();
   let chars = 0;
   const response = await requestDeepSeek({
+    sessionId,
     callId, messages: [{ role: "system", content: INSTRUCTIONS }, { role: "user", content: buildExpressionContext(snapshot) }],
     thinking: false, reasoningEffort: "low", temperature: 0.2, timeoutMs: 18_000, maxRetries: 0,
   }, (event) => {

@@ -7,6 +7,7 @@
  * reconnect inside a native fence safe.
  */
 import { parseNativeSections } from "@/lib/markdown/native-sections";
+import { isPublicRecordRead } from "@/lib/chat/scenario-recall-contract";
 
 export type WorkPreviewTerminalStatus = "completed" | "failed" | "cancelled";
 export type WorkPreviewStatus = "waiting" | "live" | WorkPreviewTerminalStatus;
@@ -149,13 +150,17 @@ function outputValue(output: unknown): unknown {
 /** Read only contract fields that establish a lightweight public outcome.
  * Unknown shapes deliberately produce no outcome rather than a guess. */
 function toolResultProjection(toolName: string, rawOutput: unknown): ToolResultProjection {
-  const output = outputValue(rawOutput);
+  const value = outputValue(rawOutput);
+  const output = toolName === "recallRead" && isPublicRecordRead(value) ? value.text : value;
   if (toolName === "webFetch" || toolName === "recallRead") {
     if (typeof output !== "string") return {};
     if (output.startsWith("ERROR:") || output.startsWith("This could not be read right now (")) {
       return { failed: true };
     }
-    if (toolName === "recallRead" && output.startsWith("Nothing named \"")) return { outcome: "empty", resultCount: 0 };
+    if (toolName === "recallRead" && (output.startsWith("Nothing named \"") ||
+        (isPublicRecordRead(value) && output.startsWith("No public turns matched the requested keywords in ")))) {
+      return { outcome: "empty", resultCount: 0 };
+    }
     if (toolName === "webFetch" && !output.trim()) return { outcome: "empty", resultCount: 0 };
     return {};
   }

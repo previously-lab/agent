@@ -42,6 +42,8 @@ export interface Tool<Input = unknown, Output = unknown, Context = unknown> {
   description?: string;
   inputSchema: z.ZodType<Input>;
   contextSchema?: z.ZodType<Context>;
+  /** Optional provider-facing rendering of an executed result. Its canonical output remains available to receipts and tools. */
+  toModelOutput?(output: unknown, toolCallId: string): string | undefined;
   execute?(input: Input, options: ToolExecutionOptions<Context>): Output | PromiseLike<Output>;
 }
 export type ToolSet = Record<string, Tool>;
@@ -89,6 +91,8 @@ export interface AgentOptions<Tools extends ToolSet = ToolSet> {
   thinking?: boolean; reasoningEffort?: ReasoningEffort;
   temperature?: number; timeout?: number; abortSignal?: AbortSignal;
   maxRetries?: number;
+  /** Stable provider session identity; never a credential or workflow run secret. */
+  sessionId?: string;
   onChunk?: (event: { chunk: ModelCallStreamPart }) => void | Promise<void>;
   onError?: (event: { error: unknown }) => void | Promise<void>;
   onStepEnd?: (step: StepResult<Tools>) => void | Promise<void>;
@@ -101,6 +105,8 @@ export interface ModelRequest {
   messages: NativeMessage[]; tools?: SerializedTool[]; toolChoice?: ToolChoice;
   thinking: boolean; reasoningEffort: ReasoningEffort; temperature?: number;
   callId: string; timeoutMs?: number; maxRetries?: number;
+  /** Stable provider session identity, never an API credential. */
+  sessionId?: string;
 }
 export interface ModelResponse {
   message: NativeMessage; toolCalls: NativeToolCall[]; finishReason: string;

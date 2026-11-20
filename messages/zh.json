@@ -211,6 +211,7 @@
         "summaryEmpty": "{scope} · 这里还没有内容",
         "summaryPastEnd": "没有更多条目了（共 {total} 条）",
         "summaryReadFailure": "现在读不到 · 这是读取失败",
+        "caseReadPending": "先看本轮的案卷内容",
         "summaryRead": "{reference}",
         "summaryOutline": "标题骨架 · {reference}",
         "outlineEmpty": "没有标题骨架 — 直接按行号范围读。",
@@ -318,6 +319,9 @@
       "tool_viewImage": "查看图片",
       "tool_thinkDeep": "深度思考",
       "tool_finishThinking": "结束思考",
+      "tool_workCheckpoint": "汇报进展",
+      "tool_completeWork": "交付结果",
+      "tool_readWorkSnapshot": "查看相关工作",
       "tool_offerReply": "提供回复",
       "tool_unknown": "工具",
       "activity_webSearch": "正在搜索「{subject}」…",
@@ -678,7 +682,17 @@
       "keyReplace": "替换 API key",
       "keySave": "保存密钥",
       "keySaving": "保存中…",
-      "keyRemove": "移除密钥"
+      "keyRemove": "移除密钥",
+      "chatHeading": "兼容 Chat API（可选）",
+      "chatDesc": "配置后，Agent 的模型调用走这个 OpenAI 兼容 Host 和独立 Key；DeepSeek 搜索等原生能力仍使用上面的 DeepSeek Key。",
+      "chatConfigured": "兼容 Chat API 已配置",
+      "chatMissing": "未配置兼容 Chat API——Agent 默认使用 DeepSeek",
+      "chatHostLabel": "Chat Host（Base URL）",
+      "chatKeyLabel": "Chat API Key",
+      "chatKeyPlaceholder": "该兼容服务的独立 Key",
+      "chatModelLabel": "Chat 模型 ID",
+      "chatSave": "保存兼容通道",
+      "chatRemove": "移除兼容通道"
     }
   },
   "conversationPanel": {

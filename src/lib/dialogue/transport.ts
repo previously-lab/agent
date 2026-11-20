@@ -6,6 +6,8 @@ import type {
 } from "@/lib/chat/dialogue-contract";
 import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
 import type { SliceLandingConfig } from "@/lib/chat/slice-landing";
+import { parseWorkUpdateEvent } from "./work-contract";
+import type { WorkRelation, WorkResponseMode, WorkUpdateEvent } from "./work-contract";
 
 export const DIALOGUE_TRANSPORT = "workflow-v2" as const;
 export const DIALOGUE_THOUGHTS_NAMESPACE = "dialogue-thinking-v2";
@@ -85,6 +87,7 @@ export interface DialogueRecordEnvironment {
 
 /** Server-owned context carried through the tool boundary by value. */
 export interface DialogueOfferContext {
+  scopeKey: string;
   parentRunId: string;
   workId: string;
   sourceInputId: string;
@@ -95,6 +98,8 @@ export interface DialogueOfferContext {
   record: DialogueRecordEnvironment;
 }
 
+export type DialogueActorEvent = DialogueSemanticEvent | { kind: "work_update"; notes: string };
+
 export interface DialogueRunInput {
   offerId: string;
   publicSeq: number;
@@ -102,11 +107,23 @@ export interface DialogueRunInput {
   direct?: boolean;
   /** Model/host prose result; empty for host semantic event offers. */
   text: string;
-  /** Host semantic input; when present it is the machine-labeled event. */
-  event?: DialogueSemanticEvent;
+  /** Per-input expression contract selected by the thinking role. */
+  responseMode?: WorkResponseMode;
+  /** Current work update or host semantic input, never a public reply draft. */
+  event?: DialogueActorEvent;
   context: DialogueOfferContext;
   stage?: DialogueOfferStage;
   priorCheckpoints?: DialogueCheckpoint[];
+  /** A merged utterance may answer more than the primary input. */
+  publicationId?: string;
+  publicationInputIds?: string[];
+  publicationSourceResults?: PublicUtterance["sourceResults"];
+  /** Workflow-native snapshot used by the independent dialogue orchestrator. */
+  orchestration?: {
+    works: Array<{ workId: string; inputId: string; status: string }>;
+    offers: DialogueOfferEvent[];
+    publications: PublicUtterance[];
+  };
 }
 
 export type OfferReplyResult =
@@ -116,9 +133,17 @@ export type OfferReplyResult =
       offerId: string;
       runId: string;
       sourceInputId: string;
+      parentRunId?: string;
+      locale?: string;
+      workId?: string;
+      aggregateInputIds?: string[];
       stage?: DialogueOfferStage;
       publicSeq?: number;
       eventKind?: DialogueEventKind;
+      /** Durable offer payload, not a control-store record. */
+      text?: string;
+      event?: DialogueSemanticEvent;
+      record?: DialogueRecordEnvironment;
     }
   | { ok: false; kind: typeof DIALOGUE_OFFER_RESULT; offerId: string; reason: string };
 
@@ -127,9 +152,93 @@ export interface DialogueOfferEvent {
   offerId: string;
   runId: string;
   sourceInputId: string;
+  parentRunId?: string;
+  locale?: string;
+  workId?: string;
+  aggregateInputIds?: string[];
   stage?: DialogueOfferStage;
   publicSeq?: number;
   eventKind?: DialogueEventKind;
+  text?: string;
+  event?: DialogueSemanticEvent;
+  record?: DialogueRecordEnvironment;
+  /** Advisory only: never permits reassignment of the candidate's input. */
+  relation?: WorkRelation;
+  dependsOnInputIds?: string[];
+  responseMode?: WorkResponseMode;
+}
+
+export interface DialogueThoughtStartedEvent {
+  type: "thought_started";
+  runId: string;
+  sourceInputId: string;
+  workId: string;
+  input: DialogueInput;
+  record: DialogueRecordEnvironment;
+  acceptedAt: string;
+}
+
+/** Written to the thought run's stream after an API-based dialogue wake. */
+export interface DialogueWakeEvent {
+  type: "dialogue_wake";
+  runId: string;
+  parentRunId: string;
+  sourceInputId: string;
+  workId: string;
+  sessionId: string;
+  triggerKey: string;
+  candidateKeys: string[];
+  wakeAt: string;
+  reused: boolean;
+}
+
+export interface DialogueDeliveryEvent {
+  type: "thought_delivery_finished";
+  runId: string;
+  sourceInputId: string;
+  candidateId: string;
+  status: "delivered" | "failed";
+  finishedAt: string;
+}
+
+export type DialogueControlEvent = DialogueOfferEvent | WorkUpdateEvent | DialogueThoughtStartedEvent | DialogueWakeEvent | DialogueDeliveryEvent;
+
+export function parseDialogueControlEvent(value: unknown): DialogueControlEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const event = value as Record<string, unknown>;
+  if (event.type === "work_checkpoint" || event.type === "work_completed") {
+    // Offer parsing below is retained only for previously persisted runs.
+    return parseWorkUpdateEvent(value);
+  }
+  if (event.type === "offer") return parseDialogueOfferEvent(value);
+  if (event.type === "thought_started") {
+    if (typeof event.runId !== "string" || !/^wrun_[A-Za-z0-9]+$/.test(event.runId) ||
+        typeof event.sourceInputId !== "string" || !event.sourceInputId ||
+        typeof event.workId !== "string" || !event.workId ||
+        !event.input || typeof event.input !== "object" ||
+        !event.record || typeof event.record !== "object" ||
+        typeof event.acceptedAt !== "string" || !Number.isFinite(Date.parse(event.acceptedAt))) return null;
+    return event as unknown as DialogueThoughtStartedEvent;
+  }
+  if (event.type === "dialogue_wake") {
+    if (typeof event.runId !== "string" || !/^wrun_[A-Za-z0-9]+$/.test(event.runId) ||
+        typeof event.parentRunId !== "string" || !/^wrun_[A-Za-z0-9]+$/.test(event.parentRunId) ||
+        typeof event.sourceInputId !== "string" || !event.sourceInputId ||
+        typeof event.workId !== "string" || !event.workId || typeof event.sessionId !== "string" || !event.sessionId ||
+        typeof event.triggerKey !== "string" || !event.triggerKey || !Array.isArray(event.candidateKeys) ||
+        event.candidateKeys.some(key => typeof key !== "string") ||
+        typeof event.wakeAt !== "string" || !Number.isFinite(Date.parse(event.wakeAt)) || typeof event.reused !== "boolean") return null;
+    return event as unknown as DialogueWakeEvent;
+  }
+  if (event.type === "thought_delivery_finished") {
+    if (typeof event.runId !== "string" || !/^wrun_[A-Za-z0-9]+$/.test(event.runId) ||
+        typeof event.sourceInputId !== "string" || !event.sourceInputId ||
+        typeof event.candidateId !== "string" || !event.candidateId ||
+        (event.status !== "delivered" && event.status !== "failed") ||
+        typeof event.finishedAt !== "string" || !Number.isFinite(Date.parse(event.finishedAt))) return null;
+    return event as unknown as DialogueDeliveryEvent;
+  }
+  return null;
 }
 
 export interface DialogueOffersDoneEvent {
@@ -138,6 +247,7 @@ export interface DialogueOffersDoneEvent {
   status: "running" | "completed" | "failed" | "cancelled";
   cursor: number;
   retryAfterMs?: number;
+  deliveryStatus?: "delivered" | "unverified";
   error?: string;
 }
 
@@ -201,6 +311,23 @@ function offerControlFields(value: Record<string, unknown>): Pick<DialogueOfferE
   };
 }
 
+function offerPayloadFields(value: Record<string, unknown>): Pick<DialogueOfferEvent, "parentRunId" | "locale" | "workId" | "aggregateInputIds" | "text" | "event" | "record"> {
+  const semantic = value.event === undefined ? undefined : dialogueSemanticEventSchema.safeParse(value.event);
+  const aggregateInputIds = Array.isArray(value.aggregateInputIds)
+    ? value.aggregateInputIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
+  return {
+    ...(typeof value.parentRunId === "string" && /^wrun_[A-Za-z0-9]+$/.test(value.parentRunId) ? { parentRunId: value.parentRunId } : {}),
+    ...(typeof value.locale === "string" && value.locale ? { locale: value.locale } : {}),
+    ...(typeof value.workId === "string" && value.workId ? { workId: value.workId } : {}),
+    ...(aggregateInputIds.length ? { aggregateInputIds } : {}),
+    ...(typeof value.text === "string" ? { text: value.text } : {}),
+    ...(semantic?.success ? { event: semantic.data } : {}),
+    ...(value.record && typeof value.record === "object" && !Array.isArray(value.record)
+      ? { record: value.record as DialogueRecordEnvironment }
+      : {}),
+  };
+}
+
 export function parseOfferReplyResult(value: unknown): Extract<OfferReplyResult, { ok: true }> | null {
   if (!value || typeof value !== "object") return null;
   const result = value as Record<string, unknown>;
@@ -215,6 +342,7 @@ export function parseOfferReplyResult(value: unknown): Extract<OfferReplyResult,
     runId: result.runId,
     sourceInputId: result.sourceInputId,
     ...offerControlFields(result),
+    ...offerPayloadFields(result),
   };
 }
 
@@ -225,7 +353,7 @@ export function parseDialogueOfferEvent(value: unknown): DialogueOfferEvent | nu
     || typeof event.runId !== "string" || !/^wrun_[A-Za-z0-9]+$/.test(event.runId)
     || typeof event.sourceInputId !== "string" || !event.sourceInputId) return null;
   return { type: "offer", offerId: event.offerId, runId: event.runId, sourceInputId: event.sourceInputId,
-    ...offerControlFields(event) };
+    ...offerControlFields(event), ...offerPayloadFields(event) };
 }
 export function offerEventFromResult(result: Extract<OfferReplyResult, { ok: true }>): DialogueOfferEvent {
   return {
@@ -234,5 +362,6 @@ export function offerEventFromResult(result: Extract<OfferReplyResult, { ok: tru
     runId: result.runId,
     sourceInputId: result.sourceInputId,
     ...offerControlFields(result),
+    ...offerPayloadFields(result),
   };
 }

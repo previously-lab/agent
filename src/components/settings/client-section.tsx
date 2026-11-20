@@ -18,8 +18,18 @@ interface ClientStatus {
 interface ClientConfig {
   home: string | null;
   exists: boolean;
-  byok: { provider: "deepseek"; model: "deepseek-flash"; configured: boolean; keyPreview?: string } | null;
+  byok: {
+    provider: "deepseek"; model: "deepseek-flash"; configured: boolean; keyPreview?: string;
+    chat?: { configured: true; host: string; model: string };
+  } | null;
 }
+
+type ConfigPatch = {
+  apiKey?: string;
+  chatHost?: string;
+  chatKey?: string;
+  chatModel?: string;
+};
 
 /** The server returns credential status only. A saved key is never hydrated
  * into an input or sent back unchanged by a settings refresh. */
@@ -29,6 +39,9 @@ export function ClientSection() {
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
+  const [chatHostDraft, setChatHostDraft] = useState("");
+  const [chatKeyDraft, setChatKeyDraft] = useState("");
+  const [chatModelDraft, setChatModelDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const alive = useRef(true);
 
@@ -46,7 +59,11 @@ export function ClientSection() {
         const settings = await fetch("/api/client/config", { signal: controller.signal });
         if (!settings.ok) throw new Error(`Config HTTP ${settings.status}`);
         const body = await settings.json() as ClientConfig;
-        if (alive.current) setConfig(body);
+        if (alive.current) {
+          setConfig(body);
+          setChatHostDraft(body.byok?.chat?.host ?? "");
+          setChatModelDraft(body.byok?.chat?.model ?? "");
+        }
       } catch (cause) {
         if (alive.current && !controller.signal.aborted) setLoadError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -54,24 +71,43 @@ export function ClientSection() {
     return () => { alive.current = false; controller.abort(); };
   }, []);
 
-  const saveKey = async (apiKey: string) => {
+  const savePatch = async (patch: ConfigPatch, afterSave?: () => void) => {
     if (saving || !config?.home) return;
     setSaving(true);
     try {
       const response = await fetch("/api/client/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ byok: { provider: "deepseek", model: "deepseek-flash", apiKey } }),
+        body: JSON.stringify({ byok: { provider: "deepseek", model: "deepseek-flash", ...patch } }),
       });
       const body = await response.json() as ClientConfig & { error?: string };
       if (!response.ok) throw new Error(body.error || t("saveFailed"));
-      if (alive.current) { setConfig(body); setKeyDraft(""); toast.success(t("saved")); }
+      if (alive.current) {
+        setConfig(body);
+        afterSave?.();
+        toast.success(t("saved"));
+      }
     } catch (cause) {
       if (alive.current) toast.error(cause instanceof Error ? cause.message : t("saveFailed"));
     } finally {
       if (alive.current) setSaving(false);
     }
   };
+
+  const saveKey = async (apiKey: string) => savePatch({ apiKey }, () => setKeyDraft(""));
+  const saveChat = async () => savePatch({
+    chatHost: chatHostDraft.trim(), chatModel: chatModelDraft.trim(),
+    ...(chatKeyDraft.trim() ? { chatKey: chatKeyDraft.trim() } : {}),
+  }, () => {
+    setChatKeyDraft("");
+    setChatHostDraft(chatHostDraft.trim());
+    setChatModelDraft(chatModelDraft.trim());
+  });
+  const removeChat = async () => savePatch({ chatHost: "", chatKey: "", chatModel: "" }, () => {
+    setChatHostDraft("");
+    setChatKeyDraft("");
+    setChatModelDraft("");
+  });
 
   if (!status) return loadError ? <p className="text-xs text-red-500">{t("loadFailed")}: {loadError}</p> : null;
 
@@ -104,6 +140,31 @@ export function ClientSection() {
           <div className="flex gap-3">
             <button type="button" disabled={saving || !keyDraft.trim()} onClick={() => void saveKey(keyDraft.trim())} className="rounded-md border px-3 py-1.5 text-sm disabled:opacity-40">{t(saving ? "keySaving" : "keySave")}</button>
             {config.byok?.configured && <button type="button" disabled={saving} onClick={() => void saveKey("")} className="rounded-md border px-3 py-1.5 text-sm text-destructive disabled:opacity-40">{t("keyRemove")}</button>}
+          </div>
+          <p className="text-xs text-muted-foreground/60">{t("applyHint")}</p>
+        </div>
+        <Separator />
+        <div className="space-y-4">
+          <h4 className="text-sm font-medium">{t("chatHeading")}</h4>
+          <p className="text-sm text-muted-foreground">{t("chatDesc")}</p>
+          <p role="status" className="text-xs text-muted-foreground">
+            {config.byok?.chat ? `${t("chatConfigured")} · ${config.byok.chat.host} · ${config.byok.chat.model}` : t("chatMissing")}
+          </p>
+          <Label className="block space-y-1">
+            <span className="text-xs font-normal text-muted-foreground">{t("chatHostLabel")}</span>
+            <Input type="url" value={chatHostDraft} onChange={(event) => setChatHostDraft(event.target.value)} placeholder="https://opencode.ai/inference/go/openai/v1" autoComplete="off" disabled={saving} />
+          </Label>
+          <Label className="block space-y-1">
+            <span className="text-xs font-normal text-muted-foreground">{t(config.byok?.chat ? "keyReplace" : "chatKeyLabel")}</span>
+            <Input type="password" value={chatKeyDraft} onChange={(event) => setChatKeyDraft(event.target.value)} placeholder={t("chatKeyPlaceholder")} autoComplete="off" disabled={saving} />
+          </Label>
+          <Label className="block space-y-1">
+            <span className="text-xs font-normal text-muted-foreground">{t("chatModelLabel")}</span>
+            <Input value={chatModelDraft} onChange={(event) => setChatModelDraft(event.target.value)} placeholder="deepseek-v4.1-flash" autoComplete="off" disabled={saving} />
+          </Label>
+          <div className="flex gap-3">
+            <button type="button" disabled={saving || !chatHostDraft.trim()} onClick={() => void saveChat()} className="rounded-md border px-3 py-1.5 text-sm disabled:opacity-40">{t(saving ? "keySaving" : "chatSave")}</button>
+            {config.byok?.chat && <button type="button" disabled={saving} onClick={() => void removeChat()} className="rounded-md border px-3 py-1.5 text-sm text-destructive disabled:opacity-40">{t("chatRemove")}</button>}
           </div>
           <p className="text-xs text-muted-foreground/60">{t("applyHint")}</p>
         </div>

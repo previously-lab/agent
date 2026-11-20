@@ -75,23 +75,29 @@ describe("task context projection", () => {
     expect(followed.lastFollowup).toBeDefined();
   });
 
-  it("cancelled and future-deferred tasks leave the projection immediately; needs_review stays unread", () => {
+  it("keeps unconfirmed tasks visible for a bounded status-check without trusting old dates", () => {
     const state = ledger([
       task("tasks/cancelled", { status: "cancelled" }),
       task("tasks/deferred", { dueOn: "2026-10-30" }),
-      task("tasks/legacy", { status: "needs_review", evidence: [] }),
+      task("tasks/unconfirmed", { status: "needs_review", evidence: [], dueOn: "2020-01-01" }),
     ]);
     const block = buildTaskContextBlock(
       { status: "ready", basisHeadSha: null, ledger: state },
       { todayLocal: TODAY },
     );
-    expect(block).toBeUndefined();
+    expect(block).toContain("tasks/unconfirmed");
+    expect(block).toContain("needs_review");
+    expect(block).toContain("confirmation");
+    expect(block).toContain("at most one natural question");
+    expect(block).toContain("Previously On user card is not a task system");
+    expect(block).not.toContain("tasks/cancelled");
+    expect(block).not.toContain("tasks/deferred");
     expect(queryTasks(state, { limit: 30 }).tasks.map((item) => item.ref)).toEqual([
       "tasks/cancelled",
       "tasks/deferred",
-      "tasks/legacy",
+      "tasks/unconfirmed",
     ]);
-    expect(queryTasks(state, { ref: "tasks/legacy" }).tasks[0].status).toBe("needs_review");
+    expect(queryTasks(state, { ref: "tasks/unconfirmed" }).tasks[0].status).toBe("needs_review");
   });
 
   it("keeps more than five tasks canonical and reports the bounded projection honestly", () => {

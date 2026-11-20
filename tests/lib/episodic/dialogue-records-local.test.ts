@@ -47,6 +47,35 @@ function payload() {
 }
 
 describe("dialogue records on a plain local directory", () => {
+  it("records document/record overlap once on the landed input across projection replays", async () => {
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { readSlicePart } = await import("@/lib/episodic/paths");
+    const { buildThinkingProduct } = await import("@/lib/agents/thinking-product");
+    const product = buildThinkingProduct({ text: "A later report describes the topic.", messages: [], asOf: stamp,
+      inputScope: { scopeKey: "fixture", workId: "u1", inputIds: ["u1"], inputText: accepted.text, readScopeId: "u1" } });
+    const oldSlice = "2026-11-05-1020";
+    const recordRef = `records/${oldSlice}`;
+    const semantic = { evidenceId: "doc:1", sourceKind: "semantic_document" as const, coverage: "full" as const,
+      ref: "self/recap", revision: "doc-v1", asOf: stamp, mentionedSliceIds: [oldSlice, "2026-11-04-1100"] };
+    const excerpt = { evidenceId: "recall:1", sourceKind: "original_turn" as const, coverage: "excerpt" as const,
+      ref: recordRef, revision: "raw-v1", asOf: stamp, role: "assistant" as const, excerpt: "A later report." };
+    product.readSet = [semantic, excerpt, { ...excerpt, evidenceId: "recall:2" },
+      { ...excerpt, evidenceId: "recall:3", ref: "records/2026-11-04-1100", coverage: "failed", revision: null }];
+    const result: DialogueResult = { resultId: "work-u1", productRevision: 1, workId: "u1", inputIds: ["u1"],
+      producerRunId: "mock-run", sliceId: oldSlice, availableAt: stamp, product, claims: [], blocks: [] };
+    const projection = { ...payload(), result };
+    const receipt = await projectDialogueRecords(projection);
+    await projectDialogueRecords(projection);
+    expect(receipt?.sliceId).toBe("2026-11-06-0300");
+    const rows = (await readSlicePart(receipt!.sliceId, "agent")).split("\n")
+      .filter(line => line.startsWith("[source-reference-v1] "));
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.slice("[source-reference-v1] ".length))).toMatchObject({
+      sourceTurnId: "u1", workId: "u1", documentRef: semantic.ref, recordRef,
+    });
+    expect(fs.existsSync(join(memoryRoot, "records/2026/11/05/1020/agent.md"))).toBe(false);
+  });
+
   it("stores exact native HTML in the original core reply without new sidecars or legacy migration", async () => {
     const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
     const { readArchivedDialogueArtifact } = await import("@/lib/episodic/dialogue-artifact-archive");

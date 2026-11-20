@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { ModelMessage } from "@/lib/deepseek/types";
 import {
+  collectThinkingReads,
   createThinkingReadReceipt,
   substantiveThinkingReadCheckpoint,
   wrapThinkingRead,
@@ -9,6 +11,45 @@ import {
 const asOf = "2026-11-06T00:00:00.000Z";
 const doc = (ref: string, coverage: ThinkingRead["coverage"] = "full", revision: string | null = "bytes-v1"): Omit<ThinkingRead, "evidenceId"> => ({
   ref, sourceKind: "semantic_document", edition: "current", revision, asOf, coverage,
+});
+
+describe("recallSearch passage authority", () => {
+  const passage = {
+    ...doc("research/audio", "excerpt", "a".repeat(64)), excerpt: "已核对的正文。",
+  };
+  function returned(reads: Omit<ThinkingRead, "evidenceId">[], callName = "recallSearch", scope = "work"): ModelMessage[] {
+    const toolCallId = "search-1";
+    const output = wrapThinkingRead(createThinkingReadReceipt(scope, toolCallId, reads), "search results");
+    return [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName: callName, input: { query: "正文" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName: "recallSearch", output: { type: "text", value: output } }] },
+    ];
+  }
+
+  it("admits one or two distinct canonical, scoped and revisioned document excerpts", () => {
+    const reads = [passage, { ...passage, ref: "things/Player", edition: "original" as const }];
+    expect(collectThinkingReads(returned(reads), "work")).toMatchObject(reads);
+    expect(collectThinkingReads(returned(reads, "recallRead"), "work")).toEqual([]);
+    expect(collectThinkingReads(returned(reads, "recallSearch", "old"), "work")).toEqual([]);
+  });
+
+  it("rejects excess, ambiguous, unverified, private and elevated search evidence", () => {
+    const invalid: Omit<ThinkingRead, "evidenceId">[][] = [
+      [], [passage, passage], [passage, { ...passage, ref: "things/Player" }, { ...passage, ref: "events/Launch" }],
+      [turn("records/2026-11-05-1329")], [{ ...passage, ref: "records/2026-11-05-1329" }],
+      [{ ...passage, ref: "self/agenda" }], [{ ...passage, ref: "people/user" }], [{ ...passage, ref: "people/user/profile" }],
+      [{ ...passage, ref: "memory/research/audio/index.md" }], [{ ...passage, coverage: "full" }],
+      [{ ...passage, edition: "history" }], [{ ...passage, revision: null }], [{ ...passage, revision: "unverified" }],
+      [{ ...passage, excerpt: " " }], [{ ...passage, role: "user" }], [{ ...passage, turnId: "original" }],
+      [{ ...passage, turnIndex: 2 }], [{ ...passage, range: { start: 1, end: 2 } }],
+      [{ ...passage, mentionedSliceIds: ["2026-11-05-1329"] }],
+    ];
+    for (const reads of invalid) {
+      expect(collectThinkingReads(returned(reads), "work")).toEqual([]);
+      const output = { thinkingReceipt: createThinkingReadReceipt("work", "search-1", reads) };
+      expect(substantiveThinkingReadCheckpoint(output, "work", "recallSearch", "search-1")).toBeNull();
+    }
+  });
 });
 const turn = (ref: string, coverage: ThinkingRead["coverage"] = "excerpt"): Omit<ThinkingRead, "evidenceId"> => ({
   ref, sourceKind: "original_turn", edition: "original", revision: "record-v1", asOf, coverage,

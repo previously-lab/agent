@@ -157,7 +157,13 @@ describe("lifecycle suppression", () => {
     ]);
   });
 
-  it("excludes completed, cancelled, and unreviewed legacy tasks on every day", () => {
+  it("excludes terminal tasks but offers needs_review for confirmation without activating old dates", () => {
+    const unconfirmed = makeTask("tasks/unconfirmed", {
+      status: "needs_review",
+      evidence: [],
+      dueOn: "2020-01-01",
+      nextCheckOn: "2020-01-02",
+    });
     const ledger = ledgerWith([
       makeTask("tasks/completed", {
         status: "completed",
@@ -168,13 +174,34 @@ describe("lifecycle suppression", () => {
         status: "cancelled",
         dueOn: TODAY,
       }),
-      makeTask("tasks/legacy", {
-        status: "needs_review",
-        evidence: [],
-        dueOn: TODAY,
-      }),
+      unconfirmed,
     ]);
-    expect(selectedRefs(ledger)).toEqual([]);
+    const selection = selectTaskCandidates(ledger, { todayLocal: TODAY, limit: 10 });
+    expect(selection.candidates).toHaveLength(1);
+    expect(selection.candidates[0]).toMatchObject({
+      task: { ref: "tasks/unconfirmed", status: "needs_review" },
+      reasons: ["confirmation"],
+    });
+    expect(unconfirmed.status).toBe("needs_review");
+    expect(unconfirmed.dueOn).toBe("2020-01-01");
+  });
+
+  it("suppresses a status-check only after a saved same-day follow-up, then asks again", () => {
+    const task = makeTask("tasks/unconfirmed", {
+      status: "needs_review",
+      evidence: [],
+      lastFollowup: {
+        revision: 1,
+        on: TODAY,
+        reply: { sliceId: "slice", turnId: "reply" },
+      },
+    });
+    expect(selectedRefs(ledgerWith([task]))).toEqual([]);
+    expect(selectedRefs(ledgerWith([{
+      ...task,
+      lastFollowup: { ...task.lastFollowup!, on: "2026-10-25" },
+    }]))).toEqual(["tasks/unconfirmed"]);
+    expect(task.status).toBe("needs_review");
   });
 
   it("uses lastFollowup only for the same revision and day", () => {

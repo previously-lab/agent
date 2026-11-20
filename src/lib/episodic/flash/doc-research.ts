@@ -224,6 +224,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
   const result = await runSubAgent({
     role: "recall",
     model,
+    sessionId: sliceId,
     system: RESEARCH_SYSTEM,
     prompt,
     maxSteps: 15,

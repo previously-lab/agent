@@ -62,6 +62,17 @@ describe("structured screen observations", () => {
     expect(args[1][0].lastUserMessage).toBe("解释一下这里");
     expect(JSON.stringify(args[1][0].modelMessages)).not.toContain("项目理解");
   });
+
+  it("keeps long Chinese input in Workflow arguments and out of size-limited attributes", async () => {
+    dataSource.resolveDataSource.mockReturnValue("local");
+    loader.loadUserConfig.mockResolvedValue({ model: { provider: "deepseek-flash" } });
+    const text = "请分析这个任务并保留完整输入。".repeat(100);
+    await startTurn({ messages: [{ id: "输入".repeat(128), role: "user", parts: [{ type: "text", text }] }] });
+    const call = workflow.start.mock.calls.at(-1) as unknown as [unknown, [{ lastUserMessage: string }], { attributes: Record<string, string> }];
+    expect(call[1][0].lastUserMessage).toBe(text);
+    expect(call[2].attributes).not.toHaveProperty("inputText");
+    for (const value of Object.values(call[2].attributes)) expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(256);
+  });
 });
 
 describe("sanitizeView room snapshots", () => {

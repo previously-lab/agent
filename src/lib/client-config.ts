@@ -2,7 +2,7 @@
 import { readFile, writeFile, rename, rm, mkdir, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { parseByok, type ClientByok } from "./byok-parse";
+import { parseByok, compatibleChatEndpoint, normalizeCompatibleChatHost, type ClientByok } from "./byok-parse";
 export type { ClientByok } from "./byok-parse";
 export interface ClientConfigFile {
   storage?: string; memoryRoot?: string; port?: number; hostname?: string;
@@ -10,10 +10,12 @@ export interface ClientConfigFile {
 }
 export interface ClientConfigSnapshot {
   home: string|null; path: string|null; exists: boolean;
-  byok: {provider:"deepseek"; model:"deepseek-flash"; configured:boolean; keyPreview?:string};
+  byok: {provider:"deepseek"; model:"deepseek-flash"; configured:boolean; keyPreview?:string;
+    chat?:{configured:true;host:string;model:string}};
 }
 export interface ClientConfigPatch {
-  byok?: {apiKey?:string; provider?:"deepseek"; model?:"deepseek-flash"} | null;
+  byok?: {apiKey?:string; provider?:"deepseek"; model?:"deepseek-flash";
+    chatHost?:string; chatKey?:string; chatModel?:string} | null;
 }
 export class ClientConfigError extends Error {
   constructor(message:string, readonly status=400) { super(message); }
@@ -42,9 +44,12 @@ export async function readClientConfig():Promise<ClientConfigSnapshot> {
   const path=home ? join(home,"config.json") : null;
   const raw=path ? await readRaw(path) : null;
   const byok=credential(raw);
+  const chat=byok?.chatHost && byok.chatKey
+    ? {configured:true as const,host:byok.chatHost,model:byok.chatModel ?? "deepseek-v4.1-flash"} : undefined;
   return {home,path,exists:raw!==null,byok:{
     provider:"deepseek",model:"deepseek-flash",configured:!!byok,
     ...(byok ? {keyPreview:byok.apiKey.length>8 ? "…"+byok.apiKey.slice(-4) : "configured"} : {}),
+    ...(chat ? {chat} : {}),
   }};
 }
 export async function writeClientConfig(patch:ClientConfigPatch):Promise<ClientConfigSnapshot> {
@@ -59,12 +64,47 @@ export async function writeClientConfig(patch:ClientConfigPatch):Promise<ClientC
   if (input === null) next=null;
   else {
     if (!input || typeof input!=="object" || Array.isArray(input)) throw new ClientConfigError("byok must be an object or null.");
-    if (Object.keys(input).some(k=>!["apiKey","provider","model"].includes(k))) throw new ClientConfigError("Unsupported BYOK setting.");
+    if (Object.keys(input).some(k=>!["apiKey","provider","model","chatHost","chatKey","chatModel"].includes(k))) throw new ClientConfigError("Unsupported BYOK setting.");
     if (input.provider!==undefined && input.provider!=="deepseek") throw new ClientConfigError("Only DeepSeek is supported.");
     if (input.model!==undefined && input.model!=="deepseek-flash") throw new ClientConfigError("The model is fixed to deepseek-flash.");
     if (input.apiKey!==undefined) {
       if (typeof input.apiKey!=="string") throw new ClientConfigError("apiKey must be a string.");
-      next=input.apiKey.trim() ? {provider:"deepseek",model:"deepseek-flash",apiKey:input.apiKey.trim()} : null;
+      next=input.apiKey.trim() ? {...next,provider:"deepseek",model:"deepseek-flash",apiKey:input.apiKey.trim()} : null;
+    }
+    if (input.chatHost!==undefined) {
+      if (typeof input.chatHost!=="string") throw new ClientConfigError("chatHost must be a string.");
+      if (!next && input.chatHost.trim()) throw new ClientConfigError("Configure the primary DeepSeek key before the compatible Chat route.");
+      if (next) {
+        if (input.chatHost.trim()) {
+          let host: string;
+          try { host=normalizeCompatibleChatHost(input.chatHost); }
+          catch (error) { throw new ClientConfigError(error instanceof Error ? error.message : "Invalid Chat Host."); }
+          if (next.chatHost && new URL(compatibleChatEndpoint(next.chatHost)).href !== new URL(compatibleChatEndpoint(host)).href &&
+              !(typeof input.chatKey === "string" && input.chatKey.trim())) {
+            throw new ClientConfigError("Enter the Chat API key for the new endpoint.");
+          }
+          next.chatHost=host;
+        } else delete next.chatHost;
+      }
+    }
+    if (input.chatKey!==undefined) {
+      if (typeof input.chatKey!=="string") throw new ClientConfigError("chatKey must be a string.");
+      if (next) {
+        if (input.chatKey.trim()) next.chatKey=input.chatKey.trim();
+        else delete next.chatKey;
+      }
+    }
+    if (input.chatModel!==undefined) {
+      if (typeof input.chatModel!=="string") throw new ClientConfigError("chatModel must be a string.");
+      if (next) {
+        if (input.chatModel.trim()) next.chatModel=input.chatModel.trim();
+        else delete next.chatModel;
+      }
+    }
+    if (next) {
+      const parsed=parseByok(next);
+      if (!parsed) throw new ClientConfigError("Chat Host and Chat Key must be valid and configured together.");
+      next=parsed;
     }
   }
   const merged:ClientConfigFile={...raw,byok:next};

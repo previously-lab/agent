@@ -211,6 +211,7 @@
         "summaryEmpty": "{scope} · nothing here yet",
         "summaryPastEnd": "No more entries ({total} total)",
         "summaryReadFailure": "Unreadable right now · read failure",
+        "caseReadPending": "Using the case reading first",
         "summaryRead": "{reference}",
         "summaryOutline": "Outline · {reference}",
         "outlineEmpty": "No headings — read it directly by line range.",
@@ -318,6 +319,9 @@
       "tool_viewImage": "View image",
       "tool_thinkDeep": "Think deeply",
       "tool_finishThinking": "Finish thinking",
+      "tool_workCheckpoint": "Report progress",
+      "tool_completeWork": "Hand off the result",
+      "tool_readWorkSnapshot": "Read related work",
       "tool_offerReply": "Offer reply",
       "tool_unknown": "Tool",
       "activity_webSearch": "Searching “{subject}”…",
@@ -678,7 +682,17 @@
       "keyReplace": "Replace API key",
       "keySave": "Save key",
       "keySaving": "Saving…",
-      "keyRemove": "Remove key"
+      "keyRemove": "Remove key",
+      "chatHeading": "Compatible Chat API (optional)",
+      "chatDesc": "Agent model calls use this OpenAI-compatible host and its own key. Native DeepSeek capabilities, including Search, keep using the DeepSeek key above.",
+      "chatConfigured": "Compatible Chat API configured",
+      "chatMissing": "No compatible Chat API — Agents use DeepSeek by default",
+      "chatHostLabel": "Chat Host (Base URL)",
+      "chatKeyLabel": "Chat API key",
+      "chatKeyPlaceholder": "A separate key for this compatible service",
+      "chatModelLabel": "Chat model ID",
+      "chatSave": "Save compatible route",
+      "chatRemove": "Remove compatible route"
     }
   },
   "conversationPanel": {

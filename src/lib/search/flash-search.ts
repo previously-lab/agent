@@ -267,7 +267,7 @@ export const SEARCH_TIMEOUT_MS = 600_000;
 export async function searchViaFlash(
   query: string,
   progress?: SubAgentProgressRef,
-  opts?: { scout?: boolean },
+  opts?: { scout?: boolean; sessionId?: string },
 ): Promise<WebSearchResult> {
   const scout = opts?.scout ?? false;
   // Effective caps: scout is a lean fan-out leg with half the page-read quota
@@ -297,6 +297,7 @@ export async function searchViaFlash(
   );
   const res = await runSubAgent<SearchReport>({
     role: "search",
+    sessionId: opts?.sessionId,
     system: systemPrompt,
     selfSop: "search",
     prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}`,
@@ -402,7 +403,7 @@ export async function searchViaFlash(
             );
           }
           imageReads += 1;
-          const result = await describeImage({ image: { url }, question });
+          const result = await describeImage({ image: { url }, question, sessionId: opts?.sessionId });
           return result.ok ? result.description : result.error;
         },
       }),

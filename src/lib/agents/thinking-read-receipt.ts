@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { ModelMessage } from "@/lib/deepseek/types";
 import { parseCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 
 const BEGIN = "<!-- PREVIOUSLY_THINKING_READ_V1\n";
 const END = "\n-->\n";
-const READ_TOOLS = new Set(["recallRead", "recallScenario", "webFetch", "webSearch", "viewImage"]);
+const READ_TOOLS = new Set(["recallRead", "recallSearch", "recallScenario", "webFetch", "webSearch", "viewImage"]);
 const reading = z.object({
   evidenceId: z.string().min(1).max(512),
   ref: z.string().min(1).max(2048),
@@ -17,6 +18,8 @@ const reading = z.object({
   turnId: z.string().min(1).max(128).optional(),
   turnIndex: z.number().int().nonnegative().optional(),
   excerpt: z.string().max(1200).optional(),
+  /** Record IDs mentioned in the document text. Navigation only. */
+  mentionedSliceIds: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/)).max(100).optional(),
   range: z.object({ start: z.number().int().positive(), end: z.number().int().positive() }).strict().optional(),
 }).strict();
 const receiptSchema = z.object({
@@ -26,6 +29,17 @@ const receiptSchema = z.object({
 
 export type ThinkingRead = z.infer<typeof reading>;
 export type ThinkingReadReceipt = z.infer<typeof receiptSchema>;
+
+function validSearchPassages(reads: ThinkingRead[]): boolean {
+  return reads.length > 0 && reads.length <= 2 && new Set(reads.map(read => read.ref)).size === reads.length &&
+    reads.every(read => read.sourceKind === "semantic_document" && read.coverage === "excerpt" &&
+      (read.edition === "current" || read.edition === "original") && /^[a-f0-9]{64}$/.test(read.revision ?? "") &&
+      Boolean(read.excerpt?.trim()) && parseCanonicalDocumentRef(read.ref) === read.ref &&
+      /^(?:people|events|things|places|orgs|research|hypotheses|tasks)\//.test(read.ref) &&
+      !/^people\/user(?:\/|$)/.test(read.ref) &&
+      read.role === undefined && read.turnId === undefined && read.turnIndex === undefined &&
+      read.range === undefined && read.mentionedSliceIds === undefined);
+}
 
 export function createThinkingReadReceipt(scopeId: string, toolCallId: string, reads: readonly Omit<ThinkingRead, "evidenceId">[]): ThinkingReadReceipt {
   return receiptSchema.parse({ version: 1, scopeId, toolCallId,
@@ -38,7 +52,7 @@ export function wrapThinkingRead(receipt: ThinkingReadReceipt, text: string): st
   return `${BEGIN}${json}${END}${text}`;
 }
 
-function readReceipt(output: unknown): ThinkingReadReceipt | null {
+export function readReceipt(output: unknown): ThinkingReadReceipt | null {
   let candidate: unknown;
   if (typeof output === "string") {
     const text = parseCaseReadEnvelope(output)?.body ?? output;
@@ -54,8 +68,31 @@ function readReceipt(output: unknown): ThinkingReadReceipt | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** Presentation consumes the human-readable result after its verified host receipt. */
+export function unwrapThinkingRead(text: string): string {
+  return text.startsWith(BEGIN) && readReceipt(text) ? text.slice(text.indexOf(END, BEGIN.length) + END.length) : text;
+}
+
+/** Render the verified source text first; the host retains its complete original receipt. */
+export function renderVerifiedSearchPassages(output: unknown, toolCallId: string): string | undefined {
+  if (typeof output !== "string" || !output.startsWith(BEGIN)) return;
+  const receipt = readReceipt(output);
+  if (!receipt || receipt.toolCallId !== toolCallId || !validSearchPassages(receipt.reads)) return;
+  const passages = receipt.reads.map(read =>
+    `[${read.evidenceId}] ${read.ref} (edition: ${read.edition})\n${read.excerpt}`);
+  const navigation = output.slice(output.indexOf(END, BEGIN.length) + END.length).split("\n").map(line => {
+    const source = receipt.reads.find(read => line.startsWith("- [") && line.endsWith(` (ref: ${read.ref})`));
+    const separator = line.indexOf(" — ");
+    if (!source || separator < 0) return line;
+    const date = /^\[cited slice opened \d{4}-\d{2}-\d{2} local\]/.exec(line.slice(separator + 3))?.[0];
+    return `${line.slice(0, separator)}${date ? " — " + date : ""} (ref: ${source.ref})`;
+  }).join("\n");
+  return "Case passages read for this question\n\n" + passages.join("\n\n") +
+    "\n\nSearch navigation\n" + navigation.replace("Document excerpts (use these for a supported overview):", "Document matches:");
+}
+
 /** Only paired tool returns from the current attempt can contribute read evidence. */
-export function collectThinkingReads(messages: readonly ModelMessage[], scopeId: string): ThinkingRead[] {
+export function collectThinkingReads(messages: readonly ModelMessage[], scopeId: string, onlyTool?: string): ThinkingRead[] {
   const calls = new Map<string, string>();
   const receipts = new Map<string, ThinkingReadReceipt>();
   const invalid = new Set<string>();
@@ -75,11 +112,13 @@ export function collectThinkingReads(messages: readonly ModelMessage[], scopeId:
           (part.output.type !== "text" && part.output.type !== "json")) continue;
       const receipt = readReceipt(part.output.value);
       if (!receipt || receipt.scopeId !== scopeId || receipt.toolCallId !== part.toolCallId) continue;
+      if (part.toolName === "recallSearch" && !validSearchPassages(receipt.reads)) continue;
       if (!receipt.reads.every((read, index) => read.evidenceId === `${part.toolCallId}:${index + 1}`)) continue;
       receipts.set(part.toolCallId, receipt);
     }
   }
-  return [...receipts.entries()].flatMap(([id, receipt]) => invalid.has(id) ? [] : receipt.reads);
+  return [...receipts.entries()].flatMap(([id, receipt]) =>
+    invalid.has(id) || (onlyTool && calls.get(id) !== onlyTool) ? [] : receipt.reads);
 }
 
 export interface SubstantiveThinkingReadCheckpoint {
@@ -101,11 +140,12 @@ export function substantiveThinkingReadCheckpoint(
   toolName: string,
   toolCallId: string,
 ): SubstantiveThinkingReadCheckpoint | null {
-  const sourceKind = toolName === "recallRead" ? "semantic_document"
+  const sourceKind = toolName === "recallRead" || toolName === "recallSearch" ? "semantic_document"
     : toolName === "recallScenario" ? "original_turn" : null;
   if (!sourceKind) return null;
   const receipt = readReceipt(output);
   if (!receipt || receipt.scopeId !== scopeId || receipt.toolCallId !== toolCallId) return null;
+  if (toolName === "recallSearch" && !validSearchPassages(receipt.reads)) return null;
   if (!receipt.reads.every((read, index) => read.evidenceId === `${toolCallId}:${index + 1}`)) return null;
   const evidenceCount = receipt.reads.filter((read) =>
     read.sourceKind === sourceKind && read.revision !== null &&

@@ -9,15 +9,25 @@ const h = vi.hoisted(() => ({
   finalizeTurn: vi.fn(async () => {}),
   record: vi.fn(),
   closeThoughts: vi.fn(async () => {}),
+  started: vi.fn(async () => {}),
+  ensure: vi.fn(async (_request: unknown) => ({
+    runId: "wrun_ORCHESTRATOR", sessionId: "session", reused: false,
+    otherWorks: [{ workId: "previous-work", status: "running" }],
+  })),
+  witness: vi.fn(async () => "delivered" as const),
   beginLegacy: vi.fn(),
   completeLegacy: vi.fn(),
+  completeWork: vi.fn(),
+  completeEvent: vi.fn(),
   stream: vi.fn(),
   agentOptions: null as null | {
     toolsContext: Record<string, { dialogueOffer?: unknown }>;
     onStepEnd: (step: unknown) => Promise<void>;
+    onToolExecutionResult: (result: unknown) => Promise<void>;
   },
-  text: "可以交付的结果",
-  finishReason: "stop",
+  text: "",
+  finishReason: "tool-calls",
+  finalOffer: true,
   extraMessages: [] as ModelMessage[],
   finishThinking: null as null | { toolCallId: string; input: unknown },
 }));
@@ -44,6 +54,15 @@ vi.mock("@/app/api/chat/dialogue-steps", () => ({
 vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   closeDialogueThoughtsStep: h.closeThoughts,
   startDialogueRecordRunStep: h.record,
+  publishThoughtStartedStep: h.started,
+}));
+vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
+  ensureDialogueOrchestratorStep: h.ensure,
+  witnessDialogueDeliveryStep: h.witness,
+}));
+vi.mock("@/app/api/agent/tool-executors", () => ({
+  completeWorkExecute: h.completeWork,
+  completeWorkEventExecute: h.completeEvent,
 }));
 vi.mock("@/app/api/agent/tools", () => ({ buildChatToolsContext: (context: unknown) => ({ context }) }));
 vi.mock("@/app/api/agent/agent", () => ({
@@ -53,12 +72,25 @@ vi.mock("@/app/api/agent/agent", () => ({
     return {
       stream: async (streamOptions: unknown) => {
         h.stream(streamOptions);
+        const toolCalls = [];
+        if (h.finalOffer) {
+          const input = { result: "Final | verified result", relation: "related", dependsOnInputIds: ["previous-work"] };
+          toolCalls.push({ toolCallId: "offer-1", toolName: "completeWork", input });
+          await options.onToolExecutionResult({
+            toolCallId: "offer-1", toolName: "completeWork",
+            output: {
+              ok: true, kind: "work-update", updateId: "work:offer-1",
+              runId: "wrun_ORCHESTRATOR", sourceInputId: "input",
+            },
+          });
+        }
+        if (h.finishThinking) toolCalls.push({
+          toolCallId: h.finishThinking.toolCallId, toolName: "finishThinking", input: h.finishThinking.input,
+        });
         await options.onStepEnd({
           text: h.text,
           response: { messages: [{ role: "assistant", content: h.text }, ...h.extraMessages] },
-          toolCalls: h.finishThinking
-            ? [{ toolCallId: h.finishThinking.toolCallId, toolName: "finishThinking", input: h.finishThinking.input }]
-            : [],
+          toolCalls,
           toolResults: [],
         });
         return {
@@ -109,26 +141,45 @@ describe("native thinking work", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.agentOptions = null;
-    h.text = "可以交付的结果";
-    h.finishReason = "stop";
-    h.extraMessages = [];
-    h.finishThinking = null;
+    h.text = "";
+    h.finishReason = "tool-calls";
+    h.finalOffer = true;
+    h.finishThinking = {
+      toolCallId: "finish-1",
+      input: { findings: [{ text: "可以交付的结果", kind: "conversation" }] },
+    };
+    h.extraMessages = [{ role: "assistant", content: [{
+      type: "tool-call", toolCallId: "finish-1", toolName: "finishThinking", input: h.finishThinking.input,
+    }] }];
     h.housekeeping.mockResolvedValue({
       slice, previouslyContent: "", sliceHeadBlock: "", identityPrompt: "", analysis: null,
       evidenceAttachments: null, sliceOnDisk: true,
     });
+    h.beginLegacy.mockResolvedValue({ inputs: [], pending: [], publications: [], firstRecentUserSeq: 1 });
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
+    const accepted = (toolCallId: string, _stage: "checkpoint" | "final") => ({
+      ok: true, kind: "work-update", updateId: `work:${toolCallId}`,
+      runId: "wrun_ORCHESTRATOR", sourceInputId: "input",
+    });
+    h.completeWork.mockImplementation(async (_input, options) => accepted(options.toolCallId, _input.stage ?? "final"));
+    h.completeEvent.mockImplementation(async (_input, options) => accepted(options.toolCallId, _input.stage ?? "final"));
   });
 
-  it("uses the complete client history and returns only private dialogue work", async () => {
+  it("keeps ordinary thought text empty and publishes a scoped final offer", async () => {
     const turn = input();
     const result = await turnWorkflow(turn);
-    expect(h.stream).toHaveBeenCalledWith(expect.objectContaining({ messages: turn.modelMessages }));
-    expect(Object.values(h.agentOptions!.toolsContext)[0]!.dialogueOffer).toBeUndefined();
+    const outbound = h.stream.mock.calls[0]![0] as { messages: Array<{ role: string; content: unknown }> };
+    expect(outbound.messages.at(-1)?.content).toContain("current_task_contract");
+    expect(outbound.messages.at(-1)?.content).toContain("previous-work");
+    expect(outbound.messages).toHaveLength(1);
+    expect(outbound.messages[0]?.content).not.toContain("earlier question");
+    expect(Object.values(h.agentOptions!.toolsContext)[0]!.dialogueOffer).toMatchObject({
+      scopeKey: "scope", workId: "work", parentRunId: "wrun_01JTESTPARENT0000000000000",
+    });
     expect(result.dialogueWork).toMatchObject({
       workId: "work",
       scopeKey: "scope",
-      text: "可以交付的结果",
+      text: "",
       product: expect.objectContaining({ version: 1, status: "complete" }),
       producerRunId: "wrun_01JTESTPARENT0000000000000",
       source: expect.objectContaining({ inputId: "input", text: "问题" }),
@@ -142,24 +193,59 @@ describe("native thinking work", () => {
     expect(h.finalizeTurn).not.toHaveBeenCalled();
     expect(h.beginLegacy).not.toHaveBeenCalled();
     expect(h.completeLegacy).not.toHaveBeenCalled();
+    expect(h.completeWork).not.toHaveBeenCalled();
+    expect(h.completeEvent).not.toHaveBeenCalled();
     expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ work: result.dialogueWork }));
     expect(h.closeThoughts).toHaveBeenCalledOnce();
+    expect(h.started).toHaveBeenCalledWith(expect.objectContaining({
+      parentRunId: "wrun_01JTESTPARENT0000000000000", source: expect.objectContaining({ text: "问题" }),
+    }));
+    expect(h.ensure.mock.calls.map(call => (call[0] as { triggerKey: string }).triggerKey)).toEqual([
+      "wrun_01JTESTPARENT0000000000000:start", "work:offer-1",
+    ]);
+    expect(h.witness).toHaveBeenCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }),
+      "wrun_ORCHESTRATOR", "work:offer-1");
+    expect(result.dialogueDelivery).toEqual({ status: "delivered", candidateId: "work:offer-1" });
   });
 
-  it("returns a server-produced terminal report even without ordinary text", async () => {
+  it("hands a genuine user blocker to the dialogue orchestrator without ordinary text", async () => {
     const report = { needsUser: { kind: "missing_information", detail: "需要确认预算上限" } };
-    h.text = "";
-    h.finishReason = "tool-calls";
+    h.finalOffer = false;
     h.finishThinking = { toolCallId: "finish-1", input: report };
     h.extraMessages = [{ role: "assistant", content: [{ type: "tool-call", toolCallId: "finish-1", toolName: "finishThinking", input: report }] }];
     const result = await turnWorkflow(input());
     expect(result.dialogueWork).toMatchObject({ text: "", report });
     expect(result.error).toBeUndefined();
+    expect(h.completeEvent).toHaveBeenCalledWith(
+      { event: { kind: "needs_user", needsUser: report.needsUser } },
+      expect.objectContaining({ toolCallId: "host-needs-user" }),
+    );
     expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ work: result.dialogueWork }));
   });
 
-  it("records only the user input when no usable work result exists", async () => {
-    h.text = "";
+  it.each([true, false])("accepts an empty terminal report only after a real handoff (accepted=%s)", async accepted => {
+    h.finalOffer = accepted;
+    h.finishThinking = { toolCallId: "finish-1", input: { findings: [] } };
+    h.extraMessages = [{ role: "assistant", content: [{
+      type: "tool-call", toolCallId: "finish-1", toolName: "finishThinking", input: { findings: [] },
+    }] }];
+    const result = await turnWorkflow(input());
+    if (accepted) {
+      expect(result.dialogueWork?.text).toBe("Final | verified result");
+      expect(result.dialogueDelivery?.status).toBe("delivered");
+      expect(result.error).toBeUndefined();
+      expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ work: result.dialogueWork }));
+    } else {
+      expect(result.dialogueWork).toBeUndefined();
+      expect(result.error).toContain("without a work result");
+    }
+  });
+
+  it("records only the user input when no final offer or usable work result exists", async () => {
+    h.finalOffer = false;
+    h.finishThinking = null;
+    h.extraMessages = [];
+    h.finishReason = "stop";
     const result = await turnWorkflow(input());
     expect(result.dialogueWork).toBeUndefined();
     expect(result.replyText).toBe("");

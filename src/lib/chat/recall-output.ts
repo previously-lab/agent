@@ -5,7 +5,9 @@
  * Navigation tools have a structured response. Legacy recall responses are
  * classified by their fixed templates; unrecognized text renders verbatim.
  */
+import { unwrapThinkingRead } from "@/lib/agents/thinking-read-receipt";
 import { unwrapCaseReadEnvelope } from "./case-read-receipt";
+import { isPublicRecordRead } from "./scenario-recall-contract";
 import type { DirectoryEntry } from "@/lib/memory/navigation";
 
 export interface ParsedEntry {
@@ -33,6 +35,7 @@ export type RecallPageNote =
     };
 
 export type ParsedRecallOutput =
+  | { kind: "caseReadPending" }
   | {
       kind: "directory";
       entries: DirectoryEntry[];
@@ -156,7 +159,8 @@ const RE_SEARCH_CONTINUATION =
   /^Scanned (\d+) candidate file\(s\); pass scanCursor=(\d+) and offset=(\d+) together to continue\. This partial scan is not absence\.$/;
 const RE_SEARCH_FAILURES =
   /^(\d+) candidate file\(s\) could not be read; those reads are gaps, not misses\.$/;
-const RE_ENTRY_LINE = /^- \[([^\]]*)\] ([\s\S]*?) \(ref: (.+)\)$/;
+// The rendered row appends its source last; quoted body text may contain its own "(ref: ...)".
+const RE_ENTRY_LINE = /^- \[([^\]]*)\] (.*) \(ref: (.+)\)$/;
 const RE_NOTE_OFFSET =
   /^Showing (\d+) from offset (\d+) — pass offset=(\d+) for older ones\.$/;
 const RE_NOTE_CAPPED =
@@ -272,8 +276,12 @@ export function parseRecallOutput(
   if ((toolName === "recallList" || toolName === "recallFind") && output !== null && typeof output === "object") {
     return parseDirectoryOutput(output);
   }
+  if (toolName === "recallRead" && isPublicRecordRead(output)) {
+    if (output.status === "deferred") return { kind: "caseReadPending" };
+    output = output.text;
+  }
   if (typeof output !== "string" || output.length === 0) return null;
-  const text = unwrapCaseReadEnvelope(output);
+  const text = unwrapThinkingRead(unwrapCaseReadEnvelope(output));
 
   const unavailable = RE_UNAVAILABLE.exec(text);
   if (unavailable) return { kind: "readFailure", note: unavailable[1] };

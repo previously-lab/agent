@@ -35,12 +35,10 @@ import {
   serializeCard,
   CARD_PROFILE_MAX_CHARS,
   NOW_ITEM_MAX_CHARS,
-  HORIZON_ITEM_MAX_CHARS,
   SELF_MODEL_LINE_MAX_CHARS,
   PAST_ANCHOR_MAX_CHARS,
   CARD_NOW_MAX,
   PAST_ANCHORS_MAX,
-  HORIZON_MAX,
   type CardDocument,
 } from "./previously-format";
 
@@ -429,62 +427,10 @@ export function sessionPromoteNowToPast(session: CardSession, match: string): st
   return `OK — promoted to Past anchors: "${hit.text.slice(0, 60)}".`;
 }
 
-// ─── Horizon ──────────────────────────────────────────────────────────────
-
-export function sessionAddHorizon(
-  session: CardSession,
-  text: string,
-  by: string,
-  refs: string[],
-): string {
-  const key = brakeKey("addHorizon", text, by, refs);
-  let effective = text.trim();
-  let forced = false;
-  const len = brakeLength(session, key, "Horizon item", text, HORIZON_ITEM_MAX_CHARS);
-  if (len) {
-    if ("forcedText" in len) {
-      effective = len.forcedText;
-      forced = true;
-    } else return len.reject;
-  }
-  const err =
-    checkRefs(refs) ??
-    checkDup(session.doc.horizon.map((h) => h.text), effective, "Horizon");
-  if (err) return brakeReject(session, key, err);
-  if (!DATE_RE.test(by))
-    return brakeReject(session, key, `REJECTED: by must be YYYY-MM-DD (got "${by}") — every open loop carries an explicit due date.`);
-  if (session.doc.horizon.length >= HORIZON_MAX)
-    return brakeReject(session, key, `REJECTED: Horizon is full (${HORIZON_MAX}). Resolve or merge an existing loop first — one commitment per line.`);
-  session.doc.horizon.push({ text: effective, by, refs });
-  session.log.push(`${forced ? "forced: " : ""}addHorizon: ${effective.slice(0, 50)}`);
-  return forced
-    ? forcedOk("Horizon item", HORIZON_ITEM_MAX_CHARS)
-    : `OK — Horizon item added (${session.doc.horizon.length}/${HORIZON_MAX}), by: ${by}.`;
-}
-
-/**
- * Resolve (remove) a Horizon open loop. Horizon items are NEVER age-expired —
- * this is the only way they leave the card. Record where the outcome went in
- * `note` (e.g. "folded into Now" / "dropped — user cancelled").
- */
-export function sessionResolveHorizon(
-  session: CardSession,
-  match: string,
-  note?: string,
-): string {
-  const hit = findMatch(session.doc.horizon, match);
-  if (!hit)
-    return brakeReject(session, brakeKey("resolveHorizon", match, note ?? ""), noMatch("Horizon", match, session.doc.horizon));
-  session.doc.horizon = session.doc.horizon.filter((h) => h !== hit);
-  session.log.push(`resolveHorizon: ${hit.text.slice(0, 50)}${note ? ` (${note})` : ""}`);
-  return `OK — Horizon item resolved: "${hit.text.slice(0, 60)}".${
-    note ? "" : " If the outcome matters, record it via addNow / updatePastProfile."
-  }`;
-}
-
-// NOTE: there are deliberately NO Self-model session mutations — the card is a
-// pure semantic memory pool (Identity/Past/Now/Horizon); user patterns live in
-// the evolution direction's Portrait (src/lib/evolution/direction-agent.ts).
+// NOTE: there are deliberately NO Self-model or task/Horizon session mutations —
+// the card is a pure background memory pool (Identity/Past/Now); user patterns
+// live in the evolution direction's Portrait (src/lib/evolution/direction-agent.ts),
+// and commitments live in the authoritative task ledger and tasks/ cases.
 // parseCard still fills doc.selfModel from a LEGACY card so the old lines
 // survive until the evolution agent migrates them; serializeSession never
 // writes the section back.

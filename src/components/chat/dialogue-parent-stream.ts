@@ -1,13 +1,13 @@
 "use client";
 
-import { readDurableChat } from "@/lib/chat/client-transport";
 import { readChatEvents } from "@/lib/chat/client-stream";
+import type { PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { UIMessage } from "@/lib/chat/protocol";
-import type { DialogueOfferStage } from "@/lib/dialogue/transport";
+import type { DialogueOffersDoneEvent, DialogueOfferStage } from "@/lib/dialogue/transport";
 import { findDialogueThoughtRuns, type DialogueThoughtRecovery } from "@/lib/chat/dialogue-run-recovery";
 import {
   appendDialogueTurn,
-  applyDialoguePublicMessage,
+  applyDialoguePublication,
   dialogueMetadata,
   patchDialogueAssistant,
   type DialogueMessageMetadata,
@@ -34,9 +34,11 @@ export interface DialogueParentDone {
   status?: "running" | "completed" | "failed" | "cancelled";
   cursor?: number;
   retryAfterMs?: number;
+  deliveryStatus?: DialogueOffersDoneEvent["deliveryStatus"];
 }
 
-export type DialogueParentEvent = ({ type: "offer" } & DialogueOffer) | DialogueParentDone;
+export type DialogueParentEvent = ({ type: "offer" } & DialogueOffer) |
+  { type: "dialogue_wake"; runId: string } | DialogueParentDone;
 
 export interface DialogueParentRecord extends DialogueAcceptedV2 {
   acceptedAt: string;
@@ -45,6 +47,8 @@ export interface DialogueParentRecord extends DialogueAcceptedV2 {
   done: boolean;
   cancelled?: boolean;
   failed?: boolean;
+  /** Older cached failures predate the public delivery witness check. */
+  failureVerified?: boolean;
   replyStarted?: boolean;
   replyCompleted?: boolean;
   dialogueRunId?: string;
@@ -95,7 +99,9 @@ export function parseDialogueParentEvent(value: unknown): DialogueParentEvent {
         event.status !== "failed" && event.status !== "cancelled") throw new Error("Invalid parent stream status");
     if (event.cursor !== undefined && (!Number.isSafeInteger(event.cursor) || (event.cursor as number) < 0)) throw new Error("Invalid parent stream cursor");
     if (event.retryAfterMs !== undefined && (!Number.isFinite(event.retryAfterMs) || (event.retryAfterMs as number) < 0)) throw new Error("Invalid parent retry");
+    if (event.deliveryStatus !== undefined && event.deliveryStatus !== "delivered" && event.deliveryStatus !== "unverified") throw new Error("Invalid delivery status");
     return { type: "done", ...(event.status ? { status: event.status } : {}),
+      ...(event.deliveryStatus ? { deliveryStatus: event.deliveryStatus } : {}),
       ...(typeof event.cursor === "number" ? { cursor: event.cursor } : {}),
       ...(typeof event.retryAfterMs === "number" ? { retryAfterMs: event.retryAfterMs } : {}) };
   }
@@ -103,6 +109,7 @@ export function parseDialogueParentEvent(value: unknown): DialogueParentEvent {
     return { type: "offer", offerId: event.offerId, runId: event.runId, sourceInputId: event.sourceInputId,
       ...(event.stage === "checkpoint" || event.stage === "final" ? { stage: event.stage } : {}) };
   }
+  if (event.type === "dialogue_wake" && nonEmpty(event.runId)) return { type: "dialogue_wake", runId: event.runId };
   throw new Error("Invalid parent stream event");
 }
 
@@ -137,6 +144,7 @@ function parseStoredRecord(value: unknown): DialogueParentRecord | null {
       ...(userMessage ? { userMessage } : {}),
       ...(record.cancelled === true ? { cancelled: true } : {}),
       ...(record.failed === true ? { failed: true } : {}),
+      ...(record.failureVerified === true ? { failureVerified: true } : {}),
       ...(record.replyStarted === true ? { replyStarted: true } : {}),
       ...(record.replyCompleted === true ? { replyCompleted: true } : {}),
       ...(nonEmpty(record.dialogueRunId) ? { dialogueRunId: record.dialogueRunId } : {}),
@@ -163,8 +171,8 @@ export function readDialogueParentRecords(persona: string, storage = defaultStor
 
 function writeDialogueParentRecords(persona: string, records: readonly DialogueParentRecord[], storage = defaultStorage()) {
   if (!storage) return;
-  const active = records.filter(record => !record.replyCompleted && !record.cancelled && !record.failed);
-  const completed = records.filter(record => record.replyCompleted || record.cancelled || record.failed).slice(-STORED_COMPLETED_PARENTS);
+  const active = records.filter(record => (!record.done || record.replyCompleted === false) && !record.cancelled && !record.failed);
+  const completed = records.filter(record => (record.done && record.replyCompleted !== false) || record.cancelled || record.failed).slice(-STORED_COMPLETED_PARENTS);
   try { storage.setItem(storageKey(persona), JSON.stringify([...active, ...completed])); } catch { /* local recovery is best-effort */ }
 }
 
@@ -200,43 +208,22 @@ function waitForReconnect(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function isTerminalDialogueStreamError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || (error as { terminal?: unknown }).terminal !== true) return false;
-  const message = error instanceof Error ? error.message : "";
-  return message !== "Run not available" && !/^Chat stream HTTP \d{3}$/.test(message);
-}
-
-function hasVisibleContent(message: UIMessage): boolean {
-  return message.parts.some(part => part.type === "text" ? part.text.length > 0
-    : part.type === "file" || part.type === "data-dialogue-publication");
-}
-
-function publicationIdOf(message: UIMessage): string | undefined {
-  const metadata = dialogueMetadata(message);
-  if (nonEmpty(metadata.publicationId)) return metadata.publicationId;
-  for (const part of message.parts) {
-    if (part.type !== "data-dialogue-publication" || !part.data || typeof part.data !== "object") continue;
-    const id = (part.data as Record<string, unknown>).utteranceId;
-    if (nonEmpty(id)) return id;
-  }
-  return nonEmpty(message.id) ? message.id : undefined;
-}
-
-/** One controller owns independent thought/reply pipelines, but every pipeline
- * writes through the caller's single UIMessage[] history. */
+/** One controller owns thought recovery and the Workflow dialogue stream. */
 export class DialogueParentController {
   private records: DialogueParentRecord[] = [];
-  private readonly settledReplies = new Set<string>();
   private readonly disconnected = new Set<string>();
   private readonly reconnecting = new Set<string>();
   private readonly parentCursors = new Map<string, number>();
   private readonly parentTasks = new Map<string, Promise<void>>();
-  private readonly replyTasks = new Map<string, Promise<void>>();
   private readonly published = new Set<string>();
   private readonly request: Fetch;
   private readonly storage?: ParentStorage;
   private readonly retryDelayMs: number;
   private registryTask?: Promise<void>;
+  private publicationTask?: Promise<void>;
+  private readonly orchestratorTasks = new Map<string, Promise<void>>();
+  private readonly completedOrchestrators = new Set<string>();
+  private orchestratorRunId?: string;
 
   constructor(private readonly options: {
     persona: string;
@@ -255,6 +242,7 @@ export class DialogueParentController {
   }
 
   start(since?: string, savedPublications: ReadonlySet<string> = new Set()) {
+    for (const id of savedPublications) this.published.add(id);
     this.records = this.records.filter(record => !record.publicationId || !savedPublications.has(record.publicationId));
     const current = new Set(this.records.map(record => record.parentRunId));
     const restored = readDialogueParentRecords(this.options.persona, this.storage)
@@ -263,10 +251,13 @@ export class DialogueParentController {
     this.records = [...restored, ...this.records];
     for (const record of this.records) this.restoreSeat(record);
     this.resumeRecords(true);
+    this.startPublications();
     void this.recoverFromRegistry();
   }
 
   resume() {
+    // Thought streams carry every new wake. A reconnect must not rediscover
+    // and replay every historical orchestrator merely because the tab woke.
     this.resumeRecords(false);
   }
 
@@ -311,31 +302,26 @@ export class DialogueParentController {
       };
       this.records.push(record);
     }
-    if (entry.status === "failed") { record.failed = true; record.done = true; }
+    if (entry.status === "failed") { record.failed = true; record.failureVerified = true; record.done = true; }
     if (entry.status === "cancelled") { record.cancelled = true; record.done = true; }
     if (entry.status === "completed") record.done = true;
     if (!record.userMessage && userMessage) record.userMessage = userMessage;
     if (existingSeat) record.assistantId = existingSeat.id;
   }
 
-  private resumeRecords(replayCompleted: boolean) {
+  private resumeRecords(_replayCompleted: boolean) {
     for (const record of this.records) {
       this.disconnected.delete(record.parentRunId);
       if (record.cancelled || record.failed) {
         this.patch(record, { workStatus: record.cancelled ? "cancelled" : "failed", workConnection: "connected" });
+        if (!record.cancelled && !record.failureVerified) this.startParent(record, true);
         continue;
       }
-      if (!record.done) {
-        this.startParent(record);
+      if (record.done) {
+        this.patch(record, { workStatus: "completed", workConnection: "connected" });
         continue;
       }
-      if (this.settledReplies.has(record.parentRunId) || this.replyTasks.has(record.parentRunId)) continue;
-      if (record.replyCompleted && !replayCompleted) {
-        this.settledReplies.add(record.parentRunId);
-        continue;
-      }
-      if (record.dialogueRunId) this.startPublicReplay(record);
-      else this.startReply(record);
+      this.startParent(record);
     }
   }
 
@@ -357,13 +343,16 @@ export class DialogueParentController {
     this.patch(record, this.workMetadata(record, "running"));
     this.persist();
     this.startParent(record);
+    this.startPublications();
   }
 
   async stop(workId?: string) {
     const targets = this.records.filter(record => (!workId || record.workId === workId) && !record.cancelled &&
       !record.failed && !record.replyCompleted);
     await Promise.all(targets.map(async record => {
-      const runIds = [...new Set([record.parentRunId, ...(record.dialogueRunId ? [record.dialogueRunId] : [])])];
+      const runIds = [...new Set([record.parentRunId,
+        ...(record.dialogueRunId ? [record.dialogueRunId] : []),
+        ...(this.orchestratorRunId ? [this.orchestratorRunId] : [])])];
       const responses = await Promise.all(runIds.map(runId => this.request(`/api/chat/${encodeURIComponent(runId)}/cancel`, {
         method: "POST", credentials: "same-origin", keepalive: true,
       })));
@@ -405,50 +394,58 @@ export class DialogueParentController {
       if (existing) {
         record.assistantId = existing.id;
         return patchDialogueAssistant(previous, existing.id, this.workMetadata(record,
-          record.cancelled ? "cancelled" : record.failed ? "failed" : record.replyCompleted ? "completed" : "running"));
+          record.cancelled ? "cancelled" : record.failed ? "failed" : record.done || record.replyCompleted ? "completed" : "running"));
       }
       if (!record.userMessage) return previous;
       const appended = appendDialogueTurn(previous, record.userMessage, record.assistantId, record.acceptedAt);
       return patchDialogueAssistant(appended, record.assistantId, this.workMetadata(record,
-        record.cancelled ? "cancelled" : record.failed ? "failed" : record.replyCompleted ? "completed" : "running"));
+        record.cancelled ? "cancelled" : record.failed ? "failed" : record.done || record.replyCompleted ? "completed" : "running"));
     });
   }
 
-  private startParent(record: DialogueParentRecord) {
-    if (this.options.signal.aborted || record.done || record.cancelled || record.failed || this.parentTasks.has(record.parentRunId)) return;
-    this.patch(record, this.workMetadata(record, "running"));
+  private startParent(record: DialogueParentRecord, recheckFailure = false) {
+    if (this.options.signal.aborted || record.cancelled || this.parentTasks.has(record.parentRunId) ||
+        (!recheckFailure && (record.done || record.failed))) return;
+    if (!recheckFailure) this.patch(record, this.workMetadata(record, "running"));
     const task = (async () => {
       let failures = 0;
-      while (!this.options.signal.aborted && !record.done && !record.cancelled) {
+      while (!this.options.signal.aborted && (!record.done || recheckFailure) && !record.cancelled) {
         try {
           const done = await readDialogueParentOffers({
             offersUrl: record.offersUrl,
             startIndex: this.parentCursors.get(record.parentRunId),
             signal: this.options.signal,
             request: this.request,
-            onEvent: () => {},
+            onEvent: event => {
+              if (!recheckFailure && (event.type === "offer" || event.type === "dialogue_wake")) void this.attachOrchestrator(event.runId);
+            },
           });
           if (!done) throw new Error("Parent stream ended before done");
+          if (done.deliveryStatus === "unverified") throw new Error("Delivery status unavailable");
+          if (recheckFailure && !done.status) return;
+          if (recheckFailure && done.status === "completed" && done.deliveryStatus !== "delivered") return;
           if (done.cursor !== undefined) this.parentCursors.set(record.parentRunId, Math.max(done.cursor, this.parentCursors.get(record.parentRunId) ?? 0));
           failures = 0;
           this.reconnecting.delete(record.parentRunId);
           if (done.status === "running" || done.retryAfterMs !== undefined) {
+            if (recheckFailure) return;
             this.patch(record, this.workMetadata(record, "running"));
             await waitForReconnect(done.retryAfterMs ?? this.retryDelayMs, this.options.signal);
             continue;
           }
           record.done = true;
           if (done.status === "cancelled") record.cancelled = true;
-          if (done.status === "failed") record.failed = true;
+          record.failed = done.status === "failed";
+          record.failureVerified = record.failed;
           this.persist();
           if (record.cancelled || record.failed) {
             this.patch(record, this.workMetadata(record, record.cancelled ? "cancelled" : "failed"));
           } else {
-            this.startReply(record);
+            this.patch(record, this.workMetadata(record, "completed"));
           }
           return;
         } catch {
-          if (this.options.signal.aborted || record.cancelled) return;
+          if (this.options.signal.aborted || record.cancelled || recheckFailure) return;
           if (failures === 3) {
             this.reconnecting.delete(record.parentRunId);
             this.disconnected.add(record.parentRunId);
@@ -468,92 +465,94 @@ export class DialogueParentController {
     this.parentTasks.set(record.parentRunId, task);
   }
 
-  private startReply(record: DialogueParentRecord) {
-    if (this.options.signal.aborted || record.cancelled || record.failed || this.settledReplies.has(record.parentRunId) ||
-        this.replyTasks.has(record.parentRunId)) return;
-    record.replyStarted = true;
-    this.persist();
+  /** Discovery happens only on mount/recovery or a newly accepted input. */
+  private startPublications() {
+    if (this.publicationTask || this.options.signal.aborted) return;
     const task = (async () => {
-      const response = await this.request("/api/chat/dialogue/reply", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({
-          thoughtRunId: record.parentRunId,
-          workId: record.workId,
-          messages: this.options.getMessages(),
-        }),
-        signal: this.options.signal,
+      const response = await this.request(`/api/chat/dialogue/orchestrator?persona=${encodeURIComponent(this.options.persona)}`, {
+        credentials: "same-origin", cache: "no-store", signal: this.options.signal,
       });
-      if (!response.ok) throw Object.assign(new Error(`Dialogue reply HTTP ${response.status}`), {
-        terminal: response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429,
-      });
-      const runId = response.headers.get("x-workflow-run-id");
-      if (!runId) throw new Error("Dialogue reply run unavailable");
-      record.dialogueRunId = runId;
-      this.persist();
-      this.patch(record, this.workMetadata(record, "running"));
-      await this.readPublicReply(record, response);
-    })().catch(error => this.handleReplyError(record, error)).finally(() => {
-      this.replyTasks.delete(record.parentRunId);
-    });
-    this.replyTasks.set(record.parentRunId, task);
-  }
-
-  private startPublicReplay(record: DialogueParentRecord) {
-    if (this.options.signal.aborted || record.cancelled || record.failed || this.settledReplies.has(record.parentRunId) ||
-        this.replyTasks.has(record.parentRunId) || !record.dialogueRunId) return;
-    const task = this.readPublicReply(record).catch(error => this.handleReplyError(record, error)).finally(() => {
-      this.replyTasks.delete(record.parentRunId);
-    });
-    this.replyTasks.set(record.parentRunId, task);
-  }
-
-  private async readPublicReply(record: DialogueParentRecord, response?: Response) {
-    await readDurableChat({
-      runId: record.dialogueRunId!,
-      assistantId: record.assistantId,
-      signal: this.options.signal,
-      response,
-      fetch: this.request,
-      retryDelayMs: this.retryDelayMs,
-      onData: chunk => {
-        if (chunk.type !== "data-turn-status" || !chunk.data || typeof chunk.data !== "object") return;
-        const status = (chunk.data as Record<string, unknown>).status;
-        if (status !== "error" && status !== "interrupted") return;
-        throw Object.assign(new Error(`Dialogue reply ${status}`), { terminal: true });
-      },
-      onMessage: message => {
-        if (record.cancelled || this.options.signal.aborted) return;
-        const publicationId = publicationIdOf(message);
-        if (publicationId) record.publicationId = publicationId;
-        const visible = hasVisibleContent(message);
-        this.options.setMessages(previous => applyDialoguePublicMessage(previous, record.assistantId, message,
-          this.workMetadata(record, "running")));
-        if (visible && !this.published.has(record.parentRunId)) {
-          this.published.add(record.parentRunId);
-          this.options.onPublication();
+      if (!response.ok) throw new Error("Dialogue discovery unavailable");
+      const discovery = await response.json() as {
+        runId: string | null;
+        status: string;
+        runs?: Array<{ runId: string; status: string; createdAt?: string; triggeredAt?: string }>;
+      };
+      const discovered = discovery.runs ??
+        (discovery.runId ? [{ runId: discovery.runId, status: discovery.status }] : []);
+      // Terminal Workflow runs are history, not live subscriptions. Remember
+      // them so a delayed wake cannot attach them after this discovery either.
+      for (const run of discovered) {
+        if (nonEmpty(run.runId) && run.status !== "pending" && run.status !== "running") {
+          this.completedOrchestrators.add(run.runId);
         }
-        this.persist();
-      },
+      }
+      const runs = discovered.filter(run => nonEmpty(run.runId) && (run.status === "pending" || run.status === "running"))
+        .sort((a, b) => (a.createdAt ?? a.triggeredAt ?? "").localeCompare(b.createdAt ?? b.triggeredAt ?? ""));
+      if (runs.length) this.orchestratorRunId = runs.at(-1)!.runId;
+      for (const run of runs) void this.attachOrchestrator(run.runId);
+    })().catch(() => undefined).finally(() => {
+      if (this.publicationTask === task) this.publicationTask = undefined;
     });
-    if (record.cancelled || this.options.signal.aborted) return;
-    record.replyCompleted = true;
-    this.settledReplies.add(record.parentRunId);
-    this.disconnected.delete(record.parentRunId);
-    this.patch(record, this.workMetadata(record, "completed"));
-    this.persist();
+    this.publicationTask = task;
   }
 
-  private handleReplyError(record: DialogueParentRecord, error: unknown) {
-    if (this.options.signal.aborted || record.cancelled) return;
-    if (isTerminalDialogueStreamError(error) || error instanceof Error && error.message === "Dialogue reply run unavailable") {
-      record.failed = true;
-      this.patch(record, this.workMetadata(record, "failed"));
-    } else {
-      this.disconnected.add(record.parentRunId);
-      this.patch(record, this.workMetadata(record, "running"));
+  private attachOrchestrator(runId: string): Promise<void> {
+    const existing = this.orchestratorTasks.get(runId);
+    if (existing) return existing;
+    if (this.completedOrchestrators.has(runId)) return Promise.resolve();
+    this.orchestratorRunId = runId;
+    const task = this.followOrchestrator(runId).catch(() => undefined).finally(() => {
+      this.orchestratorTasks.delete(runId);
+    });
+    this.orchestratorTasks.set(runId, task);
+    return task;
+  }
+
+  private async followOrchestrator(runId: string): Promise<void> {
+    const { signal } = this.options;
+    let delay = this.retryDelayMs;
+    while (!signal.aborted && !this.completedOrchestrators.has(runId)) {
+      await this.readOrchestrator(runId).catch(() => undefined);
+      if (signal.aborted || this.completedOrchestrators.has(runId)) return;
+      await waitForReconnect(delay, signal);
+      delay = Math.min(delay * 2, 30_000);
     }
-    this.persist();
+  }
+
+  private async readOrchestrator(runId: string): Promise<void> {
+    const response = await this.request(`/api/chat/${encodeURIComponent(runId)}/stream?startIndex=0`, {
+      credentials: "same-origin", cache: "no-store", redirect: "error",
+      headers: { Accept: "text/event-stream" }, signal: this.options.signal,
+    });
+    if ([401, 403, 404, 410].includes(response.status)) {
+      this.completedOrchestrators.add(runId);
+      return;
+    }
+    if (!response.ok || !response.body) throw new Error("Dialogue stream unavailable");
+    const markComplete = () => { this.completedOrchestrators.add(runId); };
+    for await (const value of readChatEvents(response.body, this.options.signal, markComplete)) {
+      const chunk = value as { type?: string; data?: Record<string, unknown> };
+      if (chunk.type === "data-dialogue-publication" && chunk.data) {
+        this.publish(chunk.data as unknown as PublicUtterance);
+        continue;
+      }
+      if (chunk.type === "data-dialogue-continued" || chunk.type === "data-dialogue-delegated") {
+        const target = chunk.data?.nextRunId ?? chunk.data?.holderRunId;
+        if (nonEmpty(target)) void this.attachOrchestrator(target);
+      }
+      if (chunk.type === "finish") markComplete();
+    }
+  }
+
+  private publish(utterance: PublicUtterance) {
+    if (this.published.has(utterance.utteranceId)) return;
+    this.published.add(utterance.utteranceId);
+    const work = this.records
+      .filter(record => utterance.inputIds.includes(record.sourceInputId))
+      .sort((a, b) => b.acceptedAt.localeCompare(a.acceptedAt))[0];
+    this.options.setMessages(previous => applyDialoguePublication(previous, utterance,
+      work ? { workId: work.workId, inputId: work.sourceInputId } : undefined));
+    this.options.onPublication();
   }
 }

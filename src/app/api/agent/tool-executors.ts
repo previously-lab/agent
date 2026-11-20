@@ -19,6 +19,7 @@ import { getWritable } from "workflow";
 import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
 import { CHECKPOINT_TEXT_MAX_CHARS, dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS, parseOfferReplyResult } from "@/lib/dialogue/transport";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
+import { WORK_RELATIONS, WORK_RESPONSE_MODES, type WorkRelation, type WorkResponseMode, type WorkUpdateResult, type WorkSnapshot } from "@/lib/dialogue/work-contract";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
@@ -29,7 +30,7 @@ import { readFile, readFileViaTree, getRepoTree } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {
   readFileLocal,
-  listFilesLocal,
+  walkPathsLocal,
 } from "@/lib/tools/local-fs";
 import {
   readFileDemo,
@@ -41,6 +42,7 @@ import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_
 import { describeImage } from "@/lib/vision/describe-image";
 import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
+import { hasDeepSeekCredential } from "@/lib/deepseek/credentials";
 import {
   checkDocRework,
   logDocReworkSignal,
@@ -72,9 +74,10 @@ import {
   createCaseReadEnvelope,
 } from "@/lib/chat/case-read-receipt";
 import { reconstructCaseReadScope } from "@/lib/agents/case-read-proof";
-import { createThinkingReadReceipt, wrapThinkingRead, type ThinkingRead } from "@/lib/agents/thinking-read-receipt";
+import { collectThinkingReads, createThinkingReadReceipt, wrapThinkingRead, type ThinkingRead } from "@/lib/agents/thinking-read-receipt";
 import { caseStorageRevision, parseCaseCurrent } from "@/lib/docs/case-doc";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
+import { archiveCaseDocument } from "@/lib/docs/archive-case";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { replaceMainCraftBlock } from "@/lib/chat/craft-prompt";
 import {
@@ -85,9 +88,12 @@ import { renderRoleSkillGuidance } from "@/lib/evolution/skill-policy";
 import { runScenarioRecall, type ScenarioRecallResult } from "@/lib/agents/scenario-recall";
 import {
   createConversationRecordReadRedirect,
+  directPublicRecordRef,
   scenarioRecallRequestSchema,
+  singleRecordForVerification,
   withoutConversationEntryContent,
   type ConversationRecordReadRedirect,
+  type PublicRecordReadResult,
   type ScenarioRecallRequest,
 } from "@/lib/chat/scenario-recall-contract";
 
@@ -120,6 +126,7 @@ import {
   type DirectoryResult, type RecallListInput, type RecallPathFindInput,
 } from "@/lib/memory/navigation";
 import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
+import { recallSearchQuerySchema } from "@/lib/memory/search-query";
 import {
   DOC_MARKER_PREFIX,
   extractDocMarkers,
@@ -308,13 +315,33 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
   const readFile = (path: string): Promise<string> => readRawBackend(ctx, path);
   return {
     readFile,
-    listMemoryFiles: async (): Promise<string[]> => {
+    listMemoryFiles: async (scope): Promise<string[]> => {
+      const root = scope ? `memory/${scope.category}` : "memory";
+      if (!ctx.useGithub && !ctx.useDemo) {
+        // Dirent traversal skips symlinks. Prune by UTC date prefix before visiting
+        // month/day directories; attachments and other slice subdirectories never open.
+        if (scope?.category === "records") {
+          return walkPathsLocal(root, Infinity, {
+            maxDepth: 5, requireRealRoot: true,
+            descend: path => {
+              const parts = path.slice(root.length + 1).split("/");
+              const expected = [4, 2, 2, 4];
+              const segment = parts[parts.length - 1]!;
+              if (segment.length !== expected[parts.length - 1] || !/^\d+$/.test(segment)) return false;
+              const prefix = parts.slice(0, 3).join("-");
+              return (!scope.after || prefix >= scope.after.slice(0, prefix.length)) &&
+                (!scope.before || prefix <= scope.before.slice(0, prefix.length));
+            },
+          });
+        }
+        return walkPathsLocal(root, Infinity, { maxDepth: scope ? 1 : Infinity, requireRealRoot: true });
+      }
       if (ctx.useGithub) {
         const tree = await getRepoTree(ctx.repo, ctx.owner);
         if (!tree.truncated) {
           // The cached memory/ tree: within the TTL this costs zero API calls.
           return tree.entries
-            .filter((e) => e.type === "blob" && e.path.startsWith("memory/"))
+            .filter((e) => e.type === "blob" && e.path.startsWith(root + "/"))
             .map((e) => e.path);
         }
         // A truncated listing cannot truthfully answer "what exists" — fall
@@ -323,16 +350,15 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
       const listDir = (path: string) =>
         ctx.useDemo
           ? listFilesDemo(path)
-          : ctx.useGithub
-            ? listFiles(path, ctx.repo, ctx.owner)
-            : listFilesLocal(path);
+          : listFiles(path, ctx.repo, ctx.owner);
       const paths: string[] = [];
       const walk = async (dir: string): Promise<void> => {
         let entries: Array<{ name: string; type: string }>;
         try {
           entries = await listDir(dir);
-        } catch {
-          return; // missing dir — a fresh memory root, fine
+        } catch (error) {
+          if (error instanceof Error && /^Directory not found|^File not found/.test(error.message)) return;
+          throw error;
         }
         for (const e of entries) {
           const p = `${dir}/${e.name}`;
@@ -340,7 +366,7 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
           else if (p.startsWith("memory/")) paths.push(p);
         }
       };
-      await walk("memory");
+      await walk(root);
       return paths;
     },
   };
@@ -437,13 +463,15 @@ export async function recallSearchExecute(
     query: string | string[];
     category?: string;
     includeRecords?: boolean;
+    dateBasis?: "activity" | "conversation";
+    turnLinks?: "user" | "assistant" | "both";
     since?: string;
     until?: string;
     limit?: number;
     offset?: number;
     scanCursor?: number;
   },
-  { context: ctx }: ExecuteOpts<ToolContext>,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
   const rawCategory = input.category?.trim();
@@ -456,14 +484,16 @@ export async function recallSearchExecute(
   const category: RecallCategory | undefined = rawCategory
     ? (rawCategory as RecallCategory)
     : undefined;
-  const keywords = (Array.isArray(input.query) ? input.query : [input.query])
-    .map((q) => q?.trim() ?? "")
-    .filter((q) => q.length > 0);
-  if (keywords.length === 0) {
-    return renderRecallResult({ kind: "unavailable", note: "query must not be empty" }, {});
+  const query = recallSearchQuerySchema.safeParse(input.query);
+  if (!query.success) {
+    return renderRecallResult({ kind: "unavailable", note: "Expected one to eight keywords of 1–256 characters each." }, {});
   }
+  const keywords = Array.isArray(query.data) ? query.data : [query.data];
   const result = await recallSearch(createRecallBackend(ctx), {
     query: keywords,
+    includeSemanticPassages: ctx.thinkingFlow === true,
+    turnLinks: input.turnLinks,
+    ...(input.dateBasis ? { dateBasis: input.dateBasis, timezone: ctx.timezone } : {}),
     ...(category ? { category } : {}),
     ...(input.includeRecords !== undefined ? { includeRecords: input.includeRecords } : {}),
     ...(input.since ? { since: input.since } : {}),
@@ -472,27 +502,50 @@ export async function recallSearchExecute(
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
     ...(input.scanCursor !== undefined ? { scanCursor: input.scanCursor } : {}),
   });
-  return renderRecallResult(publicRecallResult(result), {
+  const text = renderRecallResult(publicRecallResult(result), {
     query: keywords.join(" "),
     ...(category ? { category } : {}),
     ...(input.limit !== undefined ? { limit: input.limit } : {}),
   });
+  if (!ctx.thinkingFlow || result.kind !== "entries" || !result.passages?.length) return text;
+  const asOf = new Date().toISOString();
+  const reads = result.passages.map(passage => ({
+    ...passage, sourceKind: "semantic_document" as const, coverage: "excerpt" as const, asOf,
+  }));
+  const links = result.turnNavigation?.length
+    ? "\nTURN NAVIGATION ONLY — these documents link to the following candidate messages. " +
+      "A link alone establishes neither the words nor agreement. To verify a requested original, pass relevant cardTargets to recallScenario.targets.\n" +
+      JSON.stringify(result.turnNavigation)
+    : "";
+  return wrapThinkingRead(createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads),
+    text + links);
 }
 
 /**
  * recallRead — read semantic documents. Original conversation refs redirect
  * to recallScenario before any backend read. A successful semantic read still
- * records the document + referenced slice ids for the doc_rework probe;
+ * records the document and any referenced slices for the source audit;
  * partial ranges and outlines never receive a full-index read receipt.
  */
 function renderThinkingRead(result: RecallReadResult, ref: string, ctx: ToolContext, toolCallId: string,
   input: { range?: RecallReadRange; includeHistory?: boolean }): string {
   const text = renderRecallReadResult(result, ref);
   if (!ctx.thinkingFlow) return text;
+  return wrapThinkingRead(observeThinkingRead(result, ref, ctx, toolCallId, input, text), text);
+}
+
+function observeThinkingRead(result: RecallReadResult, ref: string, ctx: ToolContext, toolCallId: string,
+  input: { range?: RecallReadRange; includeHistory?: boolean }, text: string) {
   const asOf = new Date().toISOString();
   const source = { sourceKind: "semantic_document" as const, asOf };
   const reads: Omit<ThinkingRead, "evidenceId">[] = [];
-  if (result.kind === "content" && result.path.startsWith("memory/")) {
+  if (result.kind === "no_matching_turns") return createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads);
+  if (ref.startsWith("records/")) {
+    const coverage = result.kind === "outline" ? "outline"
+      : result.kind !== "content" || text.startsWith("ERROR:") ? "failed" : input.range ? "range" : "full";
+    reads.push({ ref, sourceKind: "original_turn", edition: "original", asOf, coverage,
+      revision: result.kind === "content" ? result.storageRevision ?? null : null });
+  } else if (result.kind === "content" && result.path.startsWith("memory/")) {
     const actualRef = parseCanonicalDocumentRef(result.path.replace(/^memory\//, "").replace(/(?:\/index)?\.md$/, ""));
     if (actualRef && result.storageRevision) {
       const coverage = text.startsWith("ERROR:") ? "failed" as const : input.range ? "range" as const : "full" as const;
@@ -500,7 +553,10 @@ function renderThinkingRead(result: RecallReadResult, ref: string, ctx: ToolCont
         : result.currentUnderstanding ? "original" as const : "current" as const;
       const range = input.range?.type === "lines" && input.range.start && input.range.end
         ? { start: input.range.start, end: input.range.end } : undefined;
+      const mentionedSliceIds = ctx.dialogueOffer && coverage !== "failed" && !actualRef.startsWith("records/")
+        ? extractSliceIds(result.content) : [];
       reads.push({ ...source, ref: actualRef, coverage, edition, revision: result.storageRevision,
+        ...(mentionedSliceIds.length ? { mentionedSliceIds } : {}),
         ...(range ? { range } : {}) });
       if (result.currentUnderstanding && !input.range) {
         const currentRaw = result.currentUnderstanding.content;
@@ -523,7 +579,7 @@ function renderThinkingRead(result: RecallReadResult, ref: string, ctx: ToolCont
     if (canonical) reads.push({ ...source, ref: canonical, revision: null,
       coverage: result.kind === "outline" ? "outline" : "failed" });
   }
-  return wrapThinkingRead(createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads), text);
+  return createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads);
 }
 
 export async function recallReadExecute(
@@ -533,9 +589,11 @@ export async function recallReadExecute(
     range?: RecallReadRange;
     outline?: boolean;
     includeHistory?: boolean;
+    /** Deliberate original-record read; not the default recollection path. */
+    direct?: boolean;
   },
-  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
-): Promise<string | ConversationRecordReadRedirect> {
+  { context: ctx, toolCallId, messages = [] }: ExecuteOpts<ToolContext>,
+): Promise<string | ConversationRecordReadRedirect | PublicRecordReadResult> {
   "use step";
   const ref = input.ref?.trim();
   if (!ref) {
@@ -547,10 +605,17 @@ export async function recallReadExecute(
       ref,
     );
   }
+  const directRef = directPublicRecordRef(input);
   const recordRedirect = createConversationRecordReadRedirect(ref);
-  if (recordRedirect) return recordRedirect;
+  if (recordRedirect && !directRef) return recordRedirect;
+  if (ctx.thinkingFlow && directRef && !input.range && !input.outline &&
+      hasPendingCaseRead(messages, toolCallId, ctx.readScopeId)) {
+    return { kind: "public_record_v1", status: "deferred", ref: directRef, scopeId: ctx.readScopeId,
+      toolCallId, text: CASE_READ_FIRST };
+  }
   const result = await recallRead(createRecallBackend(ctx), {
-    ref,
+    ref: directRef ?? ref,
+    ...(directRef ? { publicRecordOnly: true } : {}),
     ...(input.part ? { part: input.part } : {}),
     ...(input.range ? { range: input.range } : {}),
     ...(input.outline ? { outline: true } : {}),
@@ -559,8 +624,16 @@ export async function recallReadExecute(
     ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
   });
 
+  if (directRef) {
+    const text = renderRecallReadResult(result, directRef);
+    return {
+      kind: "public_record_v1", scopeId: ctx.readScopeId, toolCallId, ref: directRef, text,
+      ...(ctx.thinkingFlow ? { thinkingReceipt: observeThinkingRead(result, directRef, ctx, toolCallId, input, text) } : {}),
+    };
+  }
+
   if (result.kind === "content") {
-    if (result.path.startsWith("memory/")) {
+    if (!ctx.dialogueOffer && result.path.startsWith("memory/") && !result.path.startsWith("memory/records/")) {
       recordDocRead(ctx.sliceId, result.path, extractSliceIds(result.content));
     }
     const caseMatch = !input.outline && !input.range
@@ -590,21 +663,54 @@ export async function recallReadExecute(
 
 // ─── recallSince — the differential view (v0.11) ──────────────────────────
 
+const CASE_READ_FIRST = "Originals have not been read. Use the case passage returned in this batch. If an original is still needed for this request, ask for that detail separately.";
+
+/** A broad fallback requested alongside the first case read cannot yet take
+ * that read into account. Targeted reads and standalone recollection stay available. */
+function hasPendingCaseRead(messages: ModelMessage[], toolCallId: string, scopeId: string) {
+  const batch = messages.at(-1);
+  if (batch?.role !== "assistant" || !Array.isArray(batch.content)) return false;
+  const parts = batch.content;
+  if (!parts.some(p => p.type === "tool-call" && (p.toolName === "recallScenario" || p.toolName === "recallRead") && p.toolCallId === toolCallId)) return false;
+  const hasCaseRead = parts.some(p => {
+    if (p.type !== "tool-call" || p.toolName !== "recallRead" || !p.input || typeof p.input !== "object") return false;
+    const input = p.input as { ref?: unknown; outline?: unknown; part?: unknown; direct?: unknown };
+    const ref = parseCanonicalDocumentRef(input.ref);
+    return !!ref && isCaseCategory(ref.split("/")[0]!) && !input.outline && !input.part && !input.direct;
+  });
+  return hasCaseRead && !collectThinkingReads(messages, scopeId).some(read =>
+    read.sourceKind === "semantic_document" && read.revision &&
+    (read.coverage === "full" || read.coverage === "range"));
+}
+
 /** Question-conditioned recollection, with verified excerpts from original records. */
 export async function recallScenarioExecute(
   input: ScenarioRecallRequest,
-  { context: ctx, toolCallId, abortSignal }: ExecuteOpts<ToolContext>,
-): Promise<ScenarioRecallResult & { thinkingReceipt?: ReturnType<typeof createThinkingReadReceipt> }> {
+  { context: ctx, toolCallId, messages = [], abortSignal }: ExecuteOpts<ToolContext>,
+): Promise<(ScenarioRecallResult & { thinkingReceipt?: ReturnType<typeof createThinkingReadReceipt> }) |
+  { status: "deferred"; answer: string; evidence: []; uncertainty: [] }> {
   "use step";
   const request = scenarioRecallRequestSchema.parse(input);
+  if (ctx.thinkingFlow && !request.targets?.length && !request.searchTerms?.length && !request.cursor &&
+      hasPendingCaseRead(messages, toolCallId, ctx.readScopeId)) {
+    return { status: "deferred", evidence: [], uncertainty: [], answer: CASE_READ_FIRST };
+  }
   await emitToolProgress(toolCallId, "recallScenario", "Recollecting the conversation…", "running");
+  const refToVerify = ctx.thinkingFlow ? singleRecordForVerification(request) : undefined;
+  const priorRecord = refToVerify
+    ? collectThinkingReads(messages, ctx.readScopeId, "recallRead").findLast(read => read.ref === refToVerify &&
+        read.sourceKind === "original_turn" && read.edition === "original" && read.coverage === "full" &&
+        /^[a-f0-9]{64}$/.test(read.revision ?? "")) : undefined;
   const result = await runScenarioRecall({
     ...request,
+    sessionId: ctx.sliceId,
     backend: createRecallBackend(ctx),
     model: FIXED_MODEL,
     timezone: ctx.timezone,
     signal: abortSignal,
     trackRevision: ctx.thinkingFlow,
+    preferExactTargets: ctx.thinkingFlow === true,
+    ...(priorRecord?.revision ? { priorFullRecord: { ref: priorRecord.ref, revision: priorRecord.revision } } : {}),
   });
   if (result.evidence.length > 0) {
     const seen = new Set<string>();
@@ -616,14 +722,15 @@ export async function recallScenarioExecute(
     });
     // Only evidence verified by the read-only recall agent counts as a record
     // read. Requested refs and search/read coverage alone prove no recollection.
-    // Keep the existing semantic-document probe outside that agent; this audit
-    // signal grants neither a case-read receipt nor document write authority.
-    for (const { slice_id: sliceId } of references) {
-      try {
-        const docFileName = checkDocRework(ctx.sliceId, sliceId);
-        if (docFileName) await logDocReworkSignal(ctx.sliceId, sliceId, docFileName);
-      } catch (error) {
-        console.warn("[recallScenario] doc_rework probe failed:", error instanceof Error ? error.message : error);
+    // Native dialogue projects the read set once its actual landing slice is known.
+    if (!ctx.dialogueOffer) {
+      for (const { slice_id: sliceId } of references) {
+        try {
+          const docFileName = checkDocRework(ctx.sliceId, sliceId);
+          if (docFileName) await logDocReworkSignal(ctx.sliceId, sliceId, docFileName);
+        } catch (error) {
+          console.warn("[recallScenario] source-reference audit failed:", error instanceof Error ? error.message : error);
+        }
       }
     }
     try {
@@ -642,7 +749,8 @@ export async function recallScenarioExecute(
     coverage: "excerpt" as const, edition: "original" as const, turnId: evidence.turnId, turnIndex: evidence.turnIndex,
     role: evidence.role, excerpt: evidence.quote,
   }] : []);
-  for (const ref of request.refs ?? []) if (!reads.some((read) => read.ref === ref)) {
+  const attemptedRefs = result.coverage.unsearchedRefs === undefined ? request.refs ?? [] : [];
+  for (const ref of attemptedRefs) if (!reads.some((read) => read.ref === ref)) {
     reads.push({ ref, revision: null, asOf, sourceKind: "original_turn", coverage: "failed", edition: "original" });
   }
   return { ...result, thinkingReceipt: createThinkingReadReceipt(ctx.readScopeId, toolCallId, reads) };
@@ -1055,6 +1163,24 @@ export async function writeCaseExecute(
   return result;
 }
 
+/** Archive a complete case without deleting its content or changing task state. */
+export async function archiveCaseExecute(
+  input: { category: string; caseName: string; reason: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ ok: true; path: string; files: number; noop?: boolean } | { ok: false; reason: string }> {
+  "use step";
+  try {
+    const category = input.category.trim();
+    if (!isCaseCategory(category)) throw new Error("Unknown case category");
+    return await archiveCaseDocument({
+      category, caseName: input.caseName.trim(), reason: input.reason,
+      date: ctx.startedAtIso?.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+    });
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function documentRefusalFields(error: unknown): { code?: string; details?: unknown } {
   if (!error || typeof error !== "object") return {};
   const value = error as { code?: unknown; details?: unknown };
@@ -1291,43 +1417,51 @@ function offerPublicSeq(messages: ModelMessage[] | undefined, toolCallId: string
   for (const message of messages ?? []) {
     if (message.role !== "tool" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
-      if (part.type !== "tool-result" || part.toolName !== "offerReply") continue;
+      if (part.type !== "tool-result" || !["offerReply", "workCheckpoint", "completeWork"].includes(part.toolName)) continue;
       prior++;
     }
   }
-  // Parallel offer calls in one model response receive distinct public slots.
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index--) {
     const message = messages![index]!;
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    const calls = message.content.filter((part) => part.type === "tool-call" && part.toolName === "offerReply");
-    const current = calls.findIndex((part) => part.type === "tool-call" && part.toolCallId === toolCallId);
+    const calls = message.content.filter(part => part.type === "tool-call" && ["offerReply", "workCheckpoint", "completeWork"].includes(part.toolName));
+    const current = calls.findIndex(part => part.type === "tool-call" && part.toolCallId === toolCallId);
     if (current >= 0) return prior + current + 1;
   }
   return prior + 1;
 }
 
-function precedingCheckpoints(messages: ModelMessage[] | undefined, workId: string): DialogueCheckpoint[] {
+function precedingCheckpoints(messages: ModelMessage[] | undefined, workId: string, parentRunId?: string): DialogueCheckpoint[] {
   const candidates = new Map<string, string>();
   const checkpoints = new Map<string, DialogueCheckpoint>();
   for (const message of messages ?? []) {
     if (!Array.isArray(message.content)) continue;
     for (const part of message.content) {
-      if (message.role === "assistant" && part.type === "tool-call" && part.toolName === "offerReply") {
+      if (message.role === "assistant" && part.type === "tool-call" && ["offerReply", "workCheckpoint"].includes(part.toolName)) {
         const input = part.input as { stage?: unknown; text?: unknown } | null | undefined;
-        if (input?.stage === "checkpoint" && typeof input.text === "string") {
+        if ((part.toolName === "workCheckpoint" || input?.stage === "checkpoint") && typeof input?.text === "string") {
           candidates.set(part.toolCallId, input.text.slice(0, CHECKPOINT_TEXT_MAX_CHARS));
         }
-      } else if (message.role === "tool" && part.type === "tool-result" && part.toolName === "offerReply") {
-        const result = parseOfferReplyResult(part.output.value);
+      } else if (message.role === "tool" && part.type === "tool-result" && ["offerReply", "workCheckpoint"].includes(part.toolName)) {
         const text = candidates.get(part.toolCallId);
-        if (result?.stage === "checkpoint" && result.offerId === dialogueOfferId(workId, part.toolCallId) && text) {
-          checkpoints.set(result.offerId, { offerId: result.offerId, runId: result.runId, text });
+        if (!text) continue;
+        const legacy = parseOfferReplyResult(part.output.value);
+        if (legacy?.stage === "checkpoint" && legacy.offerId === dialogueOfferId(workId, part.toolCallId)) {
+          checkpoints.set(legacy.offerId, { offerId: legacy.offerId, runId: legacy.runId, text });
+          continue;
+        }
+        const value = part.output.value as { ok?: unknown; updateId?: unknown; runId?: unknown };
+        if (value?.ok === true && value.updateId === dialogueOfferId(workId, part.toolCallId)) {
+          checkpoints.set(value.updateId, { offerId: value.updateId,
+            runId: parentRunId ?? (typeof value.runId === "string" ? value.runId : ""), text });
         }
       }
     }
   }
   return [...checkpoints.values()];
 }
+
+type WorkHandoffOptions = { relation?: WorkRelation; dependsOnInputIds?: string[]; responseMode?: WorkResponseMode };
 
 async function startDialogueOffer(params: {
   context: DialogueOfferContext;
@@ -1337,32 +1471,52 @@ async function startDialogueOffer(params: {
   event?: DialogueSemanticEvent;
   stage?: DialogueOfferStage;
   priorCheckpoints: DialogueCheckpoint[];
+  workUpdate?: WorkHandoffOptions;
 }): Promise<OfferReplyResult> {
-  const { context, offerId, publicSeq, text, event, stage, priorCheckpoints } = params;
+  const { context, offerId, publicSeq, text, event, stage, workUpdate } = params;
   try {
-    const { dialogueWorkflow } = await import("../chat/dialogue-workflow");
-    const run = await start(dialogueWorkflow, [{
+    const result: OfferReplyResult = {
+      ok: true,
+      kind: DIALOGUE_OFFER_RESULT,
       offerId,
-      publicSeq,
+      runId: context.parentRunId,
+      parentRunId: context.parentRunId,
+      sourceInputId: context.sourceInputId,
+      workId: context.workId,
+      locale: context.locale,
       text,
       ...(event ? { event } : {}),
-      context,
-      ...(stage ? { stage } : {}),
-      ...(priorCheckpoints.length ? { priorCheckpoints } : {}),
-    }], {
-      region: "hkg1",
-      attributes: {
-        role: "dialogue",
-        parent: context.parentRunId,
-        work: context.workId,
-        offer: offerId,
-      },
+      record: context.record,
+      ...(stage ? { stage } : {}), publicSeq,
+      ...(event ? { eventKind: event.kind } : {}),
+    };
+    if (workUpdate) {
+      const { publishWorkUpdateStep } = await import("../chat/dialogue-transport-steps");
+      await publishWorkUpdateStep({
+        type: stage === "checkpoint" ? "work_checkpoint" : "work_completed",
+        updateId: offerId, runId: context.parentRunId,
+        sourceInputId: context.sourceInputId, workId: context.workId,
+        acceptedAt: new Date().toISOString(), text,
+        ...(event ? { event } : {}), record: context.record,
+        ...(workUpdate.responseMode ? { responseMode: workUpdate.responseMode } : {}),
+        ...(workUpdate.relation ? { relation: workUpdate.relation } : {}),
+        ...(workUpdate.dependsOnInputIds?.length ? { dependsOnInputIds: workUpdate.dependsOnInputIds } : {}),
+      });
+    } else {
+      // Legacy compatibility only. New thought runs always use workUpdate.
+      const { publishDialogueOfferControlsStep } = await import("../chat/dialogue-transport-steps");
+      await publishDialogueOfferControlsStep([result]);
+    }
+    const { ensureDialogueOrchestratorStep: ensure } = await import("../chat/dialogue-orchestrator-steps");
+    const started = await ensure({
+      scope: context.scopeKey,
+      parentRunId: context.parentRunId,
+      sourceInputId: context.sourceInputId,
+      workId: context.workId,
+      triggerKey: offerId,
+      candidateKeys: [offerId],
     });
-    // The follow-on parent step publishes this SDK value to native control.
-    // The child and /offers use that stream as admission; no completion wait.
-    return { ok: true, kind: DIALOGUE_OFFER_RESULT, offerId, runId: run.runId, sourceInputId: context.sourceInputId,
-      ...(stage ? { stage, publicSeq } : {}),
-      ...(event ? { eventKind: event.kind } : {}) };
+    return { ...result, runId: started.runId };
   } catch (error) {
     return {
       ok: false,
@@ -1374,7 +1528,7 @@ async function startDialogueOffer(params: {
 }
 
 export async function offerReplyExecute(
-  input: { text: string; stage?: DialogueOfferStage },
+  input: { text: string; stage?: DialogueOfferStage; workUpdate?: WorkHandoffOptions },
   { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
 ): Promise<OfferReplyResult> {
   "use step";
@@ -1387,16 +1541,17 @@ export async function offerReplyExecute(
   if (!input.text.trim() || input.text.length > limit) {
     return reject(`text must be nonblank and at most ${limit} characters.`);
   }
-  const priorCheckpoints = precedingCheckpoints(messages, context.workId);
+  const priorCheckpoints = precedingCheckpoints(messages, context.workId, context.parentRunId);
   if (checkpoint) {
     if (priorCheckpoints.some((prior) => prior.text.trim() === input.text.trim())) return reject("This checkpoint was already offered.");
     if (parseNativeSections(input.text).some((section) => section.kind === "native")) return reject("Include native artifacts only in the final result.");
     const current = messages?.at(-1);
     if (current?.role === "assistant" && Array.isArray(current.content)) {
-      const calls = current.content.filter((part) => part.type === "tool-call" && part.toolName === "offerReply");
+      const calls = current.content.filter(part => part.type === "tool-call" && ["offerReply", "workCheckpoint", "completeWork"].includes(part.toolName));
       const first = calls[0];
-      if (first?.type === "tool-call" && calls.some((part) => part.type === "tool-call" && part.toolCallId === toolCallId)) {
-        if (calls.some((part) => part.type === "tool-call" && (part.input as { stage?: unknown } | null)?.stage !== "checkpoint")) {
+      if (first?.type === "tool-call" && calls.some(part => part.type === "tool-call" && part.toolCallId === toolCallId)) {
+        if (calls.some(part => part.type === "tool-call" && (part.toolName === "completeWork" ||
+            (part.toolName === "offerReply" && (part.input as { stage?: unknown } | null)?.stage !== "checkpoint")))) {
           return reject("The final result in this step replaces this checkpoint.");
         }
         if (first.toolCallId !== toolCallId) return reject("Send one combined checkpoint per model response.");
@@ -1408,19 +1563,13 @@ export async function offerReplyExecute(
     context, offerId, publicSeq, text: input.text,
     ...(input.stage ? { stage: input.stage } : {}),
     priorCheckpoints,
+    ...(input.workUpdate ? { workUpdate: input.workUpdate } : {}),
   });
 }
 
-// ─── offerDialogueEvent — host semantic offers, never model-issued ─────────
-
-/**
- * Start a public dialogue run from a host semantic event, such as a user
- * blocker or structured findings. Same admission
- * and non-waiting start as offerReply; the stable synthetic toolCallId makes
- * the offer id a durable duplicate fence across retries.
- */
+// Host semantic results can use the new work contract without model drafting.
 export async function offerDialogueEventExecute(
-  input: { event: DialogueSemanticEvent; stage?: DialogueOfferStage },
+  input: { event: DialogueSemanticEvent; stage?: DialogueOfferStage; workUpdate?: WorkHandoffOptions },
   { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
 ): Promise<OfferReplyResult> {
   "use step";
@@ -1431,13 +1580,94 @@ export async function offerDialogueEventExecute(
   const parsed = dialogueSemanticEventSchema.safeParse(input.event);
   if (!parsed.success) return reject("event must be a valid dialogue semantic event.");
   const stage = input.stage === "checkpoint" || input.stage === "final" ? input.stage : undefined;
-  const priorCheckpoints = precedingCheckpoints(messages, context.workId);
+  const priorCheckpoints = precedingCheckpoints(messages, context.workId, context.parentRunId);
   const publicSeq = offerPublicSeq(messages, toolCallId);
   return startDialogueOffer({
     context, offerId, publicSeq, text: "", event: parsed.data,
     ...(stage ? { stage } : {}),
     priorCheckpoints,
+    ...(input.workUpdate ? { workUpdate: input.workUpdate } : {}),
   });
+}
+
+function workUpdateResult(result: OfferReplyResult, updateId: string): WorkUpdateResult {
+  if (!result.ok) return { ok: false, kind: "work-update", updateId, reason: result.reason };
+  return { ok: true, kind: "work-update", updateId, runId: result.runId, sourceInputId: result.sourceInputId };
+}
+
+function validRelation(relation?: WorkRelation): boolean {
+  return !relation || (WORK_RELATIONS as readonly string[]).includes(relation);
+}
+
+function validResponseMode(mode?: WorkResponseMode): boolean {
+  return !mode || (WORK_RESPONSE_MODES as readonly string[]).includes(mode);
+}
+
+/** Work-only progress: no public reply is generated by the thinking role. */
+export async function workCheckpointExecute(
+  input: { text: string; relation?: WorkRelation; dependsOnInputIds?: string[] },
+  opts: ExecuteOpts<ToolContext>,
+): Promise<WorkUpdateResult> {
+  "use step";
+  const updateId = dialogueOfferId(opts.context.dialogueOffer?.workId ?? opts.context.turnId, opts.toolCallId);
+  if (!validRelation(input.relation)) return { ok: false, kind: "work-update", updateId, reason: "Invalid work relation." };
+  return workUpdateResult(await offerReplyExecute({
+    stage: "checkpoint", text: input.text,
+    workUpdate: {
+      ...(input.relation ? { relation: input.relation } : {}),
+      ...(input.dependsOnInputIds?.length ? { dependsOnInputIds: input.dependsOnInputIds } : {}),
+    },
+  }, opts), updateId);
+}
+
+/** Complete a work item, including any native artifacts, without public wording. */
+export async function completeWorkExecute(
+  input: { result: string; relation?: WorkRelation; dependsOnInputIds?: string[]; responseMode?: WorkResponseMode },
+  opts: ExecuteOpts<ToolContext>,
+): Promise<WorkUpdateResult> {
+  "use step";
+  const updateId = dialogueOfferId(opts.context.dialogueOffer?.workId ?? opts.context.turnId, opts.toolCallId);
+  if (!validRelation(input.relation)) return { ok: false, kind: "work-update", updateId, reason: "Invalid work relation." };
+  if (!validResponseMode(input.responseMode)) return { ok: false, kind: "work-update", updateId, reason: "Invalid response mode." };
+  return workUpdateResult(await offerReplyExecute({
+    stage: "final", text: input.result,
+    workUpdate: {
+      responseMode: input.responseMode ?? "focused",
+      ...(input.relation ? { relation: input.relation } : {}),
+      ...(input.dependsOnInputIds?.length ? { dependsOnInputIds: input.dependsOnInputIds } : {}),
+    },
+  }, opts), updateId);
+}
+
+/** Host-owned structured result or blocker, also using the work-only contract. */
+export async function completeWorkEventExecute(
+  input: { event: DialogueSemanticEvent; relation?: WorkRelation; dependsOnInputIds?: string[]; responseMode?: WorkResponseMode },
+  opts: ExecuteOpts<ToolContext>,
+): Promise<WorkUpdateResult> {
+  "use step";
+  const updateId = dialogueOfferId(opts.context.dialogueOffer?.workId ?? opts.context.turnId, opts.toolCallId);
+  if (!validRelation(input.relation)) return { ok: false, kind: "work-update", updateId, reason: "Invalid work relation." };
+  if (!validResponseMode(input.responseMode)) return { ok: false, kind: "work-update", updateId, reason: "Invalid response mode." };
+  return workUpdateResult(await offerDialogueEventExecute({
+    event: input.event, stage: "final",
+    workUpdate: {
+      ...(input.responseMode ? { responseMode: input.responseMode } : {}),
+      ...(input.relation ? { relation: input.relation } : {}),
+      ...(input.dependsOnInputIds?.length ? { dependsOnInputIds: input.dependsOnInputIds } : {}),
+    },
+  }, opts), updateId);
+}
+
+/** Read-only Workflow snapshot. No memory file or client cache is involved. */
+export async function readWorkSnapshotExecute(
+  input: { workId: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ snapshot: WorkSnapshot | null }> {
+  "use step";
+  const scope = ctx.dialogueOffer?.scopeKey;
+  if (!scope || !input.workId.trim()) return { snapshot: null };
+  const { readWorkSnapshotStep } = await import("../chat/dialogue-orchestrator-steps");
+  return { snapshot: await readWorkSnapshotStep(scope, input.workId) };
 }
 // ─── startLongTask — the conversation's sub-stream, dispatched on the spot ──
 
@@ -1518,13 +1748,13 @@ export async function startLongTaskExecute(
 
 /**
  * webSearch �?delegates to the Flash search adapter (see lib/search/). The
- * context is accepted for tool-set uniformity but unused: search needs no
+ * calling slice scopes the model session. The search tool needs no
  * repo identity. A missing API key is a deterministic config problem �?
  * returned as data; transient search failures throw and get the step retries.
  */
 export async function webSearchExecute(
   { query, mode }: { query: string; mode?: "standard" | "scout" },
-  { toolCallId }: ExecuteOpts<ToolContext>,
+  { toolCallId, context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<WebSearchResult | { error: string }> {
   "use step";
   // Status subtitle streams for the whole execution; awaited so it is ordered
@@ -1533,9 +1763,8 @@ export async function webSearchExecute(
 
   // webSearch is a DEEPSEEK-ONLY infra call (see lib/search/flash-search.ts
   // @security note). Gate on the key itself, not the generic isAIConfigured():
-  // a deployment with ANTHROPIC_API_KEY but no DEEPSEEK_API_KEY would pass the
-  // generic check and then fail deep inside the adapter.
-  if (!isAIConfigured()) {
+  // A Chat-only route is not a native DeepSeek credential either.
+  if (!hasDeepSeekCredential()) {
     return {
       error:
         "Web search requires a DeepSeek API key. Configure DeepSeek BYOK in client settings or DEEPSEEK_API_KEY on the server.",
@@ -1555,7 +1784,7 @@ export async function webSearchExecute(
         searchViaFlash(
           query,
           { toolCallId, toolName: "webSearch" },
-          { scout: mode === "scout" },
+          { scout: mode === "scout", sessionId: ctx.sliceId },
         ),
       SEARCH_TIMEOUT_MS,
     );
@@ -1760,6 +1989,7 @@ export async function viewImageExecute(
 
   const result = await describeImage({
     image: imageInput,
+    sessionId: ctx.sliceId,
     question,
     locale: ctx.locale,
   });
@@ -2139,6 +2369,7 @@ export async function thinkDeepExecute(
     {
       modelConfig,
       baseSystemPrompt: ctx.baseSystemPrompt,
+      sessionId: ctx.sliceId,
       toolCallId,
       stepStartMs,
     },
@@ -2158,6 +2389,7 @@ async function runThinkDeepFragment(
   opts: {
     modelConfig: ModelConfig;
     baseSystemPrompt?: string;
+    sessionId: string;
     toolCallId: string;
     stepStartMs: number;
   },
@@ -2308,6 +2540,7 @@ async function runThinkDeepFragment(
           // progressively — never lost, even mid-thought.
           const stream = await streamText({
             role: "think",
+            sessionId: opts.sessionId,
             system,
             prompt: userPrompt,
             thinking: true,

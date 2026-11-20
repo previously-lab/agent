@@ -19,6 +19,7 @@ const local = vi.hoisted(() => {
 
 vi.mock("@/lib/tools/local-fs", () => ({
   readFileLocal: (p: string) => local.readFileLocal(p),
+  walkPathsLocal: async (root: string) => [...local.files.keys()].filter(path => path.startsWith(root + "/")),
   listFilesLocal: vi.fn(async () => []),
   writeFileLocal: vi.fn(async () => ({ path: "", created: false })),
 }));
@@ -428,7 +429,7 @@ describe("webSearchExecute mode threading", () => {
     );
     expect(searchFlashDeps.searchViaFlash).toHaveBeenCalledTimes(1);
     const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
-    expect(opts).toEqual({ scout: true });
+    expect(opts).toEqual({ scout: true, sessionId: makeCtx().sliceId });
   });
 
   it("passes { scout: false } to searchViaFlash when mode is 'standard'", async () => {
@@ -437,7 +438,7 @@ describe("webSearchExecute mode threading", () => {
       { context: makeCtx(), toolCallId: "tc-web" },
     );
     const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
-    expect(opts).toEqual({ scout: false });
+    expect(opts).toEqual({ scout: false, sessionId: makeCtx().sliceId });
   });
 
   it("passes { scout: false } to searchViaFlash when mode is omitted", async () => {
@@ -446,7 +447,7 @@ describe("webSearchExecute mode threading", () => {
       { context: makeCtx(), toolCallId: "tc-web" },
     );
     const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
-    expect(opts).toEqual({ scout: false });
+    expect(opts).toEqual({ scout: false, sessionId: makeCtx().sliceId });
   });
 });
 
@@ -505,6 +506,7 @@ describe("viewImageExecute", () => {
       image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
       question: "What color?",
       locale: "en",
+      sessionId: makeCtx().sliceId,
     });
   });
 
@@ -525,6 +527,7 @@ describe("viewImageExecute", () => {
       image: { url: "https://example.com/cat.png" },
       question: undefined,
       locale: undefined,
+      sessionId: makeCtx().sliceId,
     });
   });
 

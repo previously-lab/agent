@@ -29,6 +29,7 @@ import { withGitHubReadBudget } from "@/lib/github/client";
 import { screenContextSchema, type ScreenContext } from "@/lib/chat/screen-context";
 import { parseDocumentContext } from "@/lib/chat/document-context";
 import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
+import { DIALOGUE_TRANSPORT } from "@/lib/dialogue/transport";
 
 export interface StartTurnArgs {
   /** Server-verified images; never copied directly from a request field. */
@@ -343,7 +344,9 @@ export async function startPreparedTurn(input: TurnInput) {
     attributes: {
       role: input.dialogue ? "thinking" : "turn",
       ...(input.dialogue ? { dialogue: "1", work: input.dialogue.workId, scope: input.dialogue.scopeKey } : {}),
+      ...(input.dialogue?.transport === DIALOGUE_TRANSPORT ? { delivery: "orchestrator" } : {}),
       turn: input.turnId,
+      acceptedAt: input.startedAtIso,
       ...(input.burstId ? { burst: input.burstId } : {}),
     },
   });

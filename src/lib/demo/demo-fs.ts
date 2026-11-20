@@ -167,8 +167,12 @@ async function readFileDemoDirect(
 
   // Local disk
   const fullPath = join(LOCAL_DATA_DIR, rel);
-  if (!existsSync(fullPath)) throw new Error(`File not found: "${path}"`);
-  return readFileSync(fullPath, "utf-8");
+  try {
+    return readFileSync(fullPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`File not found: "${path}"`);
+    throw error;
+  }
 }
 
 export async function listFilesDemo(

@@ -47,6 +47,7 @@ import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { caseOpeningBody, casePieceCatalog, casePieceNavigation, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { assertDocumentWrite, assertTailBudget, documentSize, exceededSize, TAIL_TOTAL_LIMITS, DOCUMENT_SOFT_LIMITS, DocumentFullRefusal, DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 import { isHistoryArchiveFileName, planHistoryArchive } from "@/lib/docs/history-archive";
+import { archivedCaseRefPaths } from "@/lib/docs/archive-case";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { confirmedDocumentProducts, stageDocumentProduct } from "../document-products";
 import {
@@ -1153,7 +1154,9 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
     execute: async ({ ref }: { ref: string }) => {
       const parsed = parseCaseRef(ref);
       if (!parsed) return `(unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>])`;
-      for (const path of resolveCaseRefPaths(parsed)) {
+      const [exact, ...fallbacks] = resolveCaseRefPaths(parsed);
+      const archived = archivedCaseRefPaths(ref);
+      for (const path of [exact!, ...archived, ...fallbacks]) {
         try {
           if (parsed.kind === "case" && path === caseIndexPath(parsed.category, parsed.caseName)) {
             const read = await readCaseIndexForScope({
@@ -1165,6 +1168,9 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
             return renderWriterCaseRead(read, scope);
           }
           const content = await fsReadFile(path, batch);
+          if (archived.includes(path)) {
+            return `(archived: ${ref} — preserved outside active memory and excluded from default discovery; do not cite or update it as current.)`;
+          }
           if (isHistoryArchiveFileName(path)) return `HISTORICAL SOURCE — preserved earlier writing, not a new active conclusion or automatic evidence receipt.\n\n${content}`;
           if (parsed.kind === "case") {
             scope?.recordEvidence(`${parsed.category}/${parsed.caseName}`);
@@ -1400,6 +1406,7 @@ Report one decision per case as instructed.`;
   const result = await runSubAgent({
     role: "recall",
     model,
+    sessionId: closedSliceId,
     system: CASE_WRITER_SYSTEM,
     prompt,
     maxSteps: 50,
@@ -1788,6 +1795,7 @@ Report one entry per marker as instructed.`;
   const result = await runSubAgent({
     role: "recall",
     model,
+    sessionId: sliceId,
     system: SCRIBE_SYSTEM,
     prompt,
     maxSteps: 50,

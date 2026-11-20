@@ -1,33 +1,47 @@
 import { getRun } from "workflow/api";
 import {
   DIALOGUE_OFFERS_NAMESPACE,
-  parseDialogueOfferEvent,
+  parseDialogueControlEvent,
+  type DialogueControlEvent,
   type DialogueOfferEvent,
 } from "./transport";
+import { workUpdateAsDialogueCandidate } from "./work-contract";
 
-/** Read only the known parent's SDK-decoded native control stream. */
-export async function listDialogueOffers(parentRunId: string): Promise<DialogueOfferEvent[]> {
+/** Read the thought run's replayable lifecycle and work events in one pass. */
+export async function listDialogueEvents(parentRunId: string): Promise<DialogueControlEvent[]> {
   const readable = getRun(parentRunId).getReadable({
     namespace: DIALOGUE_OFFERS_NAMESPACE,
     startIndex: 0,
   });
   const tail = await readable.getTailIndex();
   const reader = readable.getReader();
-  const offers = new Map<string, DialogueOfferEvent>();
+  const events = new Map<string, DialogueControlEvent>();
   try {
     for (let index = 0; index <= tail; index++) {
       const next = await reader.read();
       if (next.done) break;
-      const offer = parseDialogueOfferEvent(next.value);
-      if (offer && !offers.has(offer.offerId)) offers.set(offer.offerId, offer);
+      const event = parseDialogueControlEvent(next.value);
+      if (!event) continue;
+      const id = event.type === "offer" ? event.offerId
+        : event.type === "work_checkpoint" || event.type === "work_completed" ? event.updateId
+        : event.type === "dialogue_wake" ? `${event.triggerKey}:${event.runId}` : `${event.type}:${event.runId}`;
+      if (!events.has(id)) events.set(id, event);
     }
   } finally {
-    // This is a snapshot, not a subscription. Releasing the reader lock alone
-    // leaves the SDK's underlying listener attached to the live stream.
     await reader.cancel().catch(() => undefined);
     try { reader.releaseLock(); } catch { /* Already released. */ }
   }
-  return [...offers.values()];
+  return [...events.values()];
+}
+
+export async function listDialogueOffers(parentRunId: string): Promise<DialogueOfferEvent[]> {
+  return (await listDialogueEvents(parentRunId)).flatMap(event => {
+    if (event.type === "offer") return [event];
+    if (event.type === "work_checkpoint" || event.type === "work_completed") {
+      return [workUpdateAsDialogueCandidate(event)];
+    }
+    return [];
+  });
 }
 
 export type DialogueAdmission = "admitted" | "duplicate" | "pending" | "parent_terminal";

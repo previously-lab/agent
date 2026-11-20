@@ -77,6 +77,8 @@ function summarize(
   const first = (entries: ParsedEntry[]) =>
     entries[0] ? entries[0].title : "";
   switch (parsed?.kind) {
+    case "caseReadPending":
+      return { text: t("recall.caseReadPending"), tone: "muted", icon: <BookOpenText className="h-3.5 w-3.5" /> };
     case "directory":
       return {
         text: t("recall.summaryDirectory", { count: parsed.entries.length, total: parsed.total }),

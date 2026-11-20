@@ -12,14 +12,17 @@ import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
  * those references; each content reader owns its storage paths.
  */
 
+import { renderVerifiedSearchPassages } from "@/lib/agents/thinking-read-receipt";
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import type { DialogueOfferContext } from "@/lib/dialogue/transport";
+import { WORK_RESPONSE_MODES } from "@/lib/dialogue/work-contract";
 
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { currentViewSchema } from "@/lib/chat/current-view";
 import { ROOM_SNAPSHOT_MAX_DOOR_COUNT } from "@/lib/game/room-snapshot";
 import { RECALL_CATEGORIES } from "@/lib/memory/categories";
+import { recallSearchQuerySchema } from "@/lib/memory/search-query";
 import { recallListInputSchema, recallPathFindInputSchema } from "@/lib/memory/navigation";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
@@ -43,8 +46,11 @@ import {
   describeRoomExecute,
   viewImageExecute,
   writeCaseExecute,
+  archiveCaseExecute,
   startLongTaskExecute,
-  offerReplyExecute,
+  workCheckpointExecute,
+  completeWorkExecute,
+  readWorkSnapshotExecute,
   noteForSedimentExecute,
   queryTasksExecute,
   createTaskExecute,
@@ -143,17 +149,9 @@ export const toolContextSchema = z.object({
 export const chatTools = {
   recallScenario: tool({
     description:
-      "Recover a focused memory from ORIGINAL CONVERSATIONS. Give the question and, when known, record refs or a date window; " +
-      "When recallRead returns cardTargets, pass the relevant targets as-is. With only targets (no refs or cursor), the host reads the exact messages and returns their verified text without launching a recall agent. " +
-      "For older documents with only recordLeads, use up to four of those refs with searchTerms when you know useful literal words. The host searches user speech inside those records only; a literal miss does not rule out the topic. " +
-      "For older documents with only slice refs, pass those refs plus literal searchTerms to get matching original user excerpts without a recall agent. Keyword misses do not establish topical absence. " +
-      "an independent recall agent locates and reads scenarios and returns a concise answer with host-verified original quotes, roles, and gaps. " +
-      "Use this for recollection rather than loading long transcripts into your context. Only returned verified quotes count as original evidence; " +
-      "verification=quote_and_source_only: the narrative answer and evidence notes remain interpretations, not verified user facts. " +
-      "Read each quote's role, timestamp and adjacent context: an assistant suggestion is not user confirmation, and a user may quote or deny a claim. " +
-      "Ask another focused recallScenario question when more original detail is needed. If coverage.nextCursor is present, repeat the same question/window with that cursor to continue scanning older records. " +
-      "For semantic documents, case understandings and other existing prose, use recallRead directly: they are already compressed and this tool cannot read them. " +
-      "Incomplete coverage or no evidence is not proof that the user never said something. This tool does not create write authority or task evidence.",
+      "Recover original conversation evidence for a specific gap in the case account, exact words, disputed attribution, or proof of a commitment. Read the case passage first when its content will determine whether recollection is needed. " +
+      "Give a focused question. Pass cardTargets as targets to read exact messages directly. With recordLeads, pass up to four refs plus literal searchTerms to find matching user excerpts. Otherwise the recall agent can locate and read records. " +
+      "Only the verified excerpts establish original wording and roles. Use the turn's localTimestamp for the user's local date and time when available. A record ref identifies a UTC slice and does not specify the turn's local clock. The narrative and notes are interpretations. If missing coverage could change the answer, nextCursor resumes the same question and window. A miss does not establish absence. Recollection grants no write authority or task evidence.",
     inputSchema: scenarioRecallRequestSchema,
     contextSchema: toolContextSchema,
     execute: recallScenarioExecute,
@@ -163,27 +161,8 @@ export const chatTools = {
   // in" answer); a category narrows to one world.
   recallRecent: tool({
     description:
-      "See what has been happening in memory — the N most recent ENTRIES " +
-      "(ref / title / date / one-line excerpt), never raw files. Record rows expose focus/summary only as labeled navigation metadata; use recallScenario for verified original content. Semantic rows keep their excerpts. Results are newest " +
-      "activity first. Use this for questions about recent activity: omit `category` and you get one " +
-      "cross-category timeline (conversation slices + cases interleaved by " +
-      "activity date). Pass a category to look inside one world — events / " +
-      "people / things / tasks / research / places / orgs / self / timeline " +
-      "(slice heads) / records (slices). `n` defaults to 10 (hard cap 30); " +
-      "`after` / `before` (YYYY-MM-DD, inclusive) bound the window. Order is " +
-      "always newest activity first — you cannot sort. `offset` (default 0) " +
-      "pages deeper: pass the offset the result tells you to continue past " +
-      "the first page. Use recallFind when the thing is NAMED, recallSearch " +
-      "for a keyword hunt. " +
-      "FIXED result wording (recognize it, do not paraphrase): entries open " +
-      "with `The {n} most recent {category} entries:`; an empty scope opens " +
-      "with `There is nothing here yet — no {category} entries exist in this " +
-      "scope.` — report THAT, not your own guess about what the user " +
-      "remembers; a page with older entries behind it appends `Showing {n} " +
-      "from offset {offset} — pass offset={offset+n} for older ones.`; an " +
-      "offset past the end returns `No more entries — offset {offset} is " +
-      "past the end; only {total} exist in this scope, newest first.` — an " +
-      "empty page is NOT absence.",
+      "Browse recent activity, newest first. Omit category for a cross-category timeline or restrict it to a category. Record heads are navigation metadata. Semantic entries include excerpts. " +
+      "Use an offset or date bounds for older entries when the question calls for them. An empty page describes only its scope.",
     inputSchema: z.object({
       category: z
         .enum(RECALL_CATEGORIES)
@@ -205,7 +184,7 @@ export const chatTools = {
         .optional()
         .describe(
           "Skip the newest `offset` entries and return the next page " +
-          "(default 0). Continue with the offset the full-page note gives you.",
+          "(default 0). Use the returned offset if older entries matter.",
         ),
       after: z
         .string()
@@ -230,9 +209,8 @@ export const chatTools = {
   // ② Locate named documents by their public directory paths.
   recallFind: tool({
     description:
-      "Find public memory names or paths, ranked by match quality. Omit category to find candidates across categories; optionally scope to a category or a directory with under. " +
-      "Directory hits are navigation only and are not document reads. Use recallList on a directory path or recallRead on a document ref. " +
-      "If you already know a record date or slice ID, explicitly select category 'records' or 'timeline' and use recallScenario for original words.",
+      "Find an unfamiliar case or document by exact, included, normalized or near name. Omit category to search across categories, or restrict by category or directory. " +
+      "Hits are navigation only. A known document ref can go straight to recallRead. For a known record ID use the records category, or pass the ref to recallScenario for original evidence.",
     inputSchema: recallPathFindInputSchema,
     contextSchema: toolContextSchema,
     execute: recallFindExecute,
@@ -243,15 +221,12 @@ export const chatTools = {
     description:
       "Search memory text by keyword. By default searches semantic documents, self documents, the user profile, and slice navigation heads. " +
       "Raw conversation is scanned only with category 'records' or includeRecords:true; the resulting record refs are navigation only. Use recallScenario to verify original words. " +
-      "Each call scans at most 50 candidates and ranks the hits within that page by relevance. When given several keywords, it favors passages that match more of them together. " +
+      "To find accounts of a conversation, set dateBasis to 'conversation' with since/until. This matches the local opening day of a cited slice, including in accounts filed later. Each call scans up to 50 candidates. Mixed searches scan and show semantic documents before record leads. Within each group, passages matching more keywords together rank higher on the page. " +
+      "A thinking-read receipt may include up to two verified semantic document excerpts. Use those passages directly when they answer the question; read further only for missing context. " +
       "If there is no text match in a page, the result may offer separately labeled related names or paths. Those are navigation leads, not content matches or evidence. " +
-      "Continue with both scanCursor and offset when supplied. An empty or partially unreadable page is not proof of absence.",
+      "If another page could affect the answer or complete coverage is required, pass both continuation values. A partial scan leaves the rest unknown.",
     inputSchema: z.object({
-      query: z
-        .union([
-          z.string().trim().min(1).max(256),
-          z.array(z.string().trim().min(1).max(256)).min(1).max(8),
-        ])
+      query: recallSearchQuerySchema
         .describe(
           "One keyword or up to eight (case-insensitive). Results favor passages matching more terms together.",
         ),
@@ -269,14 +244,20 @@ export const chatTools = {
           "Also scan raw conversation bodies (default false — the " +
           "structured layer only).",
         ),
+      dateBasis: z.enum(["activity", "conversation"]).optional().describe(
+        "Use activity (default) for when documents were active. Conversation matches the user's local day when a cited slice opened. Turns can cross midnight; for a specific turn's date, check its original timestamp and include the preceding slice when needed.",
+      ),
+      turnLinks: z.enum(["user", "assistant", "both"]).optional().describe(
+        "When the question asks for original wording, authorship or explicit agreement, request turn pointers for the relevant speaker. Links from matched documents identify candidates for recallScenario.targets. They do not establish what the linked turns say.",
+      ),
       since: z
         .string()
         .optional()
-        .describe("Inclusive lower day bound, YYYY-MM-DD."),
+        .describe("Inclusive lower day bound for the selected date basis, YYYY-MM-DD."),
       until: z
         .string()
         .optional()
-        .describe("Inclusive upper day bound, YYYY-MM-DD."),
+        .describe("Inclusive upper day bound for the selected date basis, YYYY-MM-DD. For one day, use the same date as since."),
       limit: z
         .number()
         .int()
@@ -296,32 +277,18 @@ export const chatTools = {
         .int()
         .min(0)
         .optional()
-        .describe("Candidate-page cursor from nextScanCursor; omit for the newest 50 files. This is independent of hit offset."),
+        .describe("Candidate-page cursor from nextScanCursor; omit for the first 50 candidates. This is independent of hit offset."),
     }),
     contextSchema: toolContextSchema,
     execute: recallSearchExecute,
+    toModelOutput: renderVerifiedSearchPassages,
   }),
   // ④ Continue reading — the "出处" verb: entries cite refs, refs read here.
   recallRead: tool({
     description:
-      "Continue reading a SEMANTIC document — pass its `ref` from any recall result " +
-      "(e.g. 'events/换手机', 'research/手机调研/" +
-      "2026-09-08-报价篇', 'self/agenda', 'people/user/profile'). An approximate name in the ref also " +
-      "resolves — the result opens by telling you which stored name it " +
-      "matched. Case refs return the whole document. Original conversation refs, /records aliases, and raw record storage paths " +
-      "return a typed recallScenario_required redirect instead of content; call recallScenario with a focused question and the canonical ref. " +
-      "Use the returned source navigation: follow relatedCases with recallRead, pass cardTargets to recallScenario.targets for exact messages, and use recordLeads only as whole-slice clues. " +
-      "For a LONG semantic document, first call with `outline: true` " +
-      "to get its heading skeleton (levels + line spans), then read only the " +
-      "spans you need with `range: { type: \"lines\", start, end }`. FIXED " +
-      "result wording: an approximate match " +
-      "opens `(matched the near-name \"{stored ref}\" — read it under " +
-      "that stored name)`; an unresolvable ref returns `Nothing named " +
-      "\"{ref}\" exists in memory. Closest matches: …` (or `…and nothing " +
-      "similar.`); a read failure returns `This could not be read right " +
-      "now (…). That is a read failure, not absence — it may still " +
-      "exist.` — never report either as the user not having remembered " +
-      "something.",
+      "Read a semantic document by ref. Approximate names resolve with a matched-name note. A reliable account you read can answer a gist question at its supported scope. " +
+      "For a long document, outline returns headings and line spans for bounded reads. Optional relatedCases, cardTargets and recordLeads point to further evidence when a material question remains. " +
+      "An original record ref normally returns recallScenario_required. For surrounding public conversation, direct: true returns original user and assistant messages from core. A failed read leaves the content unknown.",
     inputSchema: z.object({
       ref: z
         .string()
@@ -334,7 +301,7 @@ export const chatTools = {
         .enum(["core", "agent", "previously"])
         .optional()
         .describe(
-          "Legacy record-only field. Any records ref returns recallScenario_required; semantic documents do not use parts.",
+          "Record part. Only core can be read with direct: true. Private agent and previously parts always redirect. Semantic documents do not use parts.",
         ),
       range: z
         .object({
@@ -343,8 +310,7 @@ export const chatTools = {
             .describe(
               "turns = specific turn indices. last = most recent N turns. " +
               "date = turns after a given timestamp. search = keyword match, " +
-              "returns matching turns (+ context); if nothing matches, " +
-              "returns the full slice with a note. lines = 1-indexed line " +
+              "returns matching turns (+ context); a direct public read reports when none match. lines = 1-indexed line " +
               "range of the raw file.",
             ),
           indices: z
@@ -378,19 +344,22 @@ export const chatTools = {
         })
         .optional()
         .describe(
-          "For semantic documents, use type 'lines' to read at most 400 lines/16000 chars; larger spans are explicitly bounded. Legacy record range requests return recallScenario_required.",
+          "For semantic documents, 'lines' reads at most 400 lines/16000 chars. For direct record reads the range applies to the public conversation.",
         ),
       outline: z
         .boolean()
         .optional()
         .describe(
           "true = return the document's heading skeleton instead of its " +
-          "body (levels + line spans, no prose). Use FIRST on a long " +
-          "document, then fetch the spans you need with " +
+          "body (levels + line spans, no prose). On a long " +
+          "document you can request the relevant spans with " +
           'range: { type: "lines", start, end }.',
         ),
       includeHistory: z.boolean().optional().describe(
         "For a case index, include its earlier current-understanding revisions. Use when the user is reading the history edition or asks why an earlier interpretation changed. This directly reads stored prose; it does not call another model.",
+      ),
+      direct: z.boolean().optional().describe(
+        "Original records only: read the public user and assistant messages in core, optionally by range, when surrounding original context matters.",
       ),
     }),
     contextSchema: toolContextSchema,
@@ -410,7 +379,7 @@ export const chatTools = {
       "`cursor` (a commit sha from a previous result's paging note — the " +
       "changes AFTER that commit); neither defaults to the last 1 day. " +
       "Every returned entry is a ref carrying its change (added / modified / removed) and date. " +
-      "Continue semantic refs with recallRead(ref) and record refs with recallScenario. " +
+      "When details matter, semantic refs are readable with recallRead(ref) and record refs with recallScenario. " +
       "`limit` caps ENTRIES (default 20, hard cap 50), not commits; " +
       "`category` narrows to one world (records / events / …). The refs of " +
       "one conversation slice collapse into ONE records/<sliceId> entry no " +
@@ -540,6 +509,17 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: writeCaseExecute,
   }),
+  archiveCase: tool({
+    description:
+      "Archive a case when the user explicitly asks to forget/retire it, or when its content is clearly obsolete. The complete case and attachments move intact to a sibling directory with the -archived suffix; nothing is deleted or detached from its semantic home. Archived cases leave default directories, search and recent views, and an old ref reads as ARCHIVED. This is not task completion and never changes the task ledger. The live people/user model and original records cannot be archived here.",
+    inputSchema: z.object({
+      category: z.enum(["people", "events", "things", "places", "orgs", "research", "hypotheses", "tasks", "self"]),
+      caseName: z.string().trim().min(1),
+      reason: z.string().trim().min(1).max(500).describe("A short human reason for retiring this case"),
+    }).strict(),
+    contextSchema: toolContextSchema,
+    execute: archiveCaseExecute,
+  }),
   queryTasks: tool({
     description:
       "List or query the AUTHORITATIVE task ledger, including revisions and non-candidates. " +
@@ -564,7 +544,8 @@ export const chatTools = {
   updateTask: tool({
     description:
       "Narrowly revise task state from EXPLICIT feedback in the CURRENT user message: complete, cancel, " +
-      "defer, wait, pause/resume, or correct details. A postponement is never completion. Pass the revision " +
+      "defer, wait, pause/resume, resolve needs_review, or correct details. A postponement is never completion. " +
+      "If a status-check question receives no answer, leave the state unchanged and unconfirmed. Pass the revision " +
       "returned by queryTasks; stale revisions refuse instead of overwriting newer state. The executor attaches " +
       "the actual current user statement as evidence, never model-authored evidence.",
     inputSchema: fieldUpdateTaskSchema,
@@ -573,11 +554,11 @@ export const chatTools = {
   }),
   reportTaskFollowup: tool({
     description:
-      "Declare that THIS reply actually delivers a pending background result or follows up a task candidate. " +
-      "Pass exactly one resultId from the pending-result projection or ref from the ledger. This only queues " +
-      "acknowledgment intent; it does not mark anything delivered. Delivery is confirmed separately only after " +
-      "the matching reply is saved and this source turn reaches a clean completed state. Injection, partial, " +
-      "failed, and cancelled turns consume nothing.",
+      "Declare that THIS reply actually delivers a pending background result, follows up a task candidate, or " +
+      "asks a needs_review status-check question. Pass exactly one resultId from the pending-result projection " +
+      "or ref from the ledger. This only queues acknowledgment intent; it does not mark anything delivered or " +
+      "change lifecycle state. Follow-up is confirmed separately only after the matching reply is saved and " +
+      "this source turn reaches a clean completed state. Injection, partial, failed, and cancelled turns consume nothing.",
     inputSchema: reportTaskFollowupInputSchema,
     contextSchema: toolContextSchema,
     execute: reportTaskFollowupExecute,
@@ -774,23 +755,8 @@ export const chatTools = {
   }),
   webSearch: tool({
     description:
-      "Hand a research question to a search-desk copy of yourself — a sub-agent " +
-      "that searches the live web AND reads the most promising pages itself, " +
-      "then returns a real answer that combines what it found with its own " +
-      "knowledge (web claims carry source mentions), plus its confidence " +
-      "assessment (what is solid, what is uncertain or conflicting) and a few " +
-      "suggested pages for your own follow-up. Use it for current or external " +
-      "information — news, releases, prices, docs, anything time-sensitive or " +
-      "beyond the user's memory. Do not use it for things already in memory " +
-      "or that you reliably know. " +
-      "For comparative / evaluation / survey-shaped questions, decompose the " +
-      "question yourself into 2–4 non-overlapping sub-queries and issue the " +
-      "calls in the SAME step with mode 'scout' (tool calls within one step " +
-      "run concurrently). Push source diversity — different angles, vendors, " +
-      "or regions where relevant. When all reports return, synthesize and " +
-      "cross-validate; where researchers conflict, say so explicitly. " +
-      "Simple factual questions get ONE standard call — never fan out. " +
-      "Max 4 parallel researchers.",
+      "Use for current or external evidence needed for the answer. A search agent finds and reads sources, then reports an answer, its sources and uncertainty. " +
+      "Choose standard for one research question. Independent gaps in a broad request can use up to four concurrent scout calls. Suggested pages are optional when the report already answers the question.",
     inputSchema: z.object({
       query: z
         .string()
@@ -888,8 +854,8 @@ export const chatTools = {
       "trade-offs, architecture decisions, deep analysis; dispatch with " +
       "the fixed maximum reasoning profile. (b) Parallel " +
       "reasoning when the user raises several independent questions or angles " +
-      "in one turn — break it into one self-contained question per direction " +
-      "and dispatch all of them in the SAME step (tool calls within one step " +
+      "in one turn — dispatch only directions that benefit from deeper reasoning " +
+      "together in the SAME step (tool calls within one step " +
       "run concurrently), then synthesize. " +
       "Embed not just facts but the user's DECISION CRITERIA — what matters " +
       "to them, constraints, standards. A pod fed only facts reasons by " +
@@ -913,15 +879,42 @@ export const chatTools = {
   }),
 };
 
-export const offerReplyTool = tool({
+const workRelationSchema = z.object({
+  relation: z.enum(["new", "related", "continuation", "unclear"]).optional()
+    .describe("Advisory relation to other work; never changes ownership of this input."),
+  dependsOnInputIds: z.array(z.string().min(1)).max(8).optional()
+    .describe("Other input IDs whose existing handoffs are useful; not permission to redo them."),
+}).strict();
+
+export const workCheckpointTool = tool({
   description:
-    "REQUIRED task-state event; leave ordinary assistant content empty. Use short internal notes, labels or bullets. The dialogue role owns public wording. Checkpoints are limited to 2,400 characters each. FIRST action on every user task: call offerReply alone with stage checkpoint and Opening | notes, before any other tool or finishing. Include the ask, provisional take or unknown, and concrete plan. After EACH search, recall, source read, or completed substantive phase, call offerReply in the NEXT separate step with stage checkpoint and Progress | notes, before continuing or finishing. Include results and sources, uncertainty or errors, and what remains. Combine parallel results into one checkpoint and report empty, failed, or partial results. If a checkpoint is rejected, do not retry or claim delivery; carry all remaining unhanded evidence into final. Simple requests still require the opening. For a genuine user blocker after the opening, finishThinking with needsUser is the terminal handoff. Otherwise send exactly one final with structured notes for the complete verified result and any native HTML; wait for it to succeed, then call finishThinking in a separate later tool step, never bundled or parallel.",
-  inputSchema: z.object({
-    stage: z.enum(["checkpoint", "final"]).describe("checkpoint while work continues; final for a complete result that needs direct handoff."),
-    text: z.string().max(200_000).refine((text) => text.trim().length > 0, "text must not be blank"),
+    "Report a public-safe WORK checkpoint, not a reply draft. For lengthy work, share a concrete update when it would help the user; simple direct work may stay silent until completion. After meaningful progress, report only new evidence, status and remaining work. Use readWorkSnapshot if a specific related handoff could supply missing evidence or avoid repeating work. Never treat running work as completed, never perform another work item, and leave ordinary assistant content empty. The dialogue Actor independently decides what to say.",
+  inputSchema: workRelationSchema.extend({
+    text: z.string().max(2400).refine(text => text.trim().length > 0, "text must not be blank"),
   }).strict(),
   contextSchema: toolContextSchema,
-  execute: offerReplyExecute,
+  execute: workCheckpointExecute,
+});
+
+export const completeWorkTool = tool({
+  description:
+    "Complete ONLY the current input with verified work results, not public wording. Include the selected responseMode and what the user needs at the requested precision. Preserve material caveats, sources and complete native HTML artifacts. Call exactly once when work is complete, then call finishThinking in a SEPARATE later tool step; never bundle them. For a genuine user-input blocker, skip this tool and use finishThinking with needsUser. Do not answer, repeat or complete other inputs. The dialogue Actor owns integration and public expression.",
+  inputSchema: workRelationSchema.extend({
+    result: z.string().max(200_000).refine(text => text.trim().length > 0, "result must not be blank")
+      .describe("Findings for the current ask, with their evidence and material limits. State what was established about the event separately from what you could find in the records. An unavailable source leaves its contents unknown. Omit wording advice and incidental claims. The dialogue role chooses its own words."),
+    responseMode: z.enum(WORK_RESPONSE_MODES).optional()
+      .describe("The response mode selected for this input. The result should fit the user's requested shape."),
+  }).strict(),
+  contextSchema: toolContextSchema,
+  execute: completeWorkExecute,
+});
+
+export const readWorkSnapshotTool = tool({
+  description:
+    "Read another thinking run's public-safe current snapshot: status, stage, handoffs and result reference. Read it when the answer depends on that handoff or it could avoid repeating needed work. This is read-only Workflow state, not permission to take over the work. Do not treat pending work as finished or share its private reasoning.",
+  inputSchema: z.object({ workId: z.string().min(1) }).strict(),
+  contextSchema: toolContextSchema,
+  execute: readWorkSnapshotExecute,
 });
 /** Cloud and local BYOK share the same tool surface. */
 export function getChatTools(): typeof chatTools { return chatTools; }
@@ -941,6 +934,7 @@ export function buildChatToolsContext(
     recallRead: ctx,
     recallSince: ctx,
     writeCase: ctx,
+    archiveCase: ctx,
     queryTasks: ctx,
     createTask: ctx,
     updateTask: ctx,

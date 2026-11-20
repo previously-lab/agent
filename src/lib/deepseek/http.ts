@@ -1,12 +1,14 @@
-import { deepseekApiKey } from "./credentials";
+import { compatibleChatRoute, deepseekApiKey } from "./credentials";
 import { readSse } from "./sse";
 import { DEEPSEEK_MODEL, type ModelRequest, type ModelResponse, type ModelCallStreamPart, type NativeToolCall, type TokenUsage } from "./types";
+import { APP_VERSION } from "../version/constants";
 
 const ENDPOINT = "https://api.deepseek.com/chat/completions";
 const FIRST_RESPONSE_MS = 90_000;
 
 export class DeepSeekError extends Error {
-  constructor(message: string, readonly statusCode?: number, readonly retryAfterMs?: number, readonly partial?: ModelResponse) {
+  constructor(message: string, readonly statusCode?: number, readonly retryAfterMs?: number, readonly partial?: ModelResponse,
+    readonly quotaExceeded = false) {
     super(message); this.name = "DeepSeekError";
   }
 }
@@ -21,9 +23,11 @@ export function emptyUsage(): TokenUsage {
 function usageFrom(raw: Record<string, unknown>): TokenUsage {
   const num = (key: string) => typeof raw[key] === "number" ? raw[key] as number : 0;
   const details = raw.completion_tokens_details as { reasoning_tokens?: number } | undefined;
+  const promptDetails = raw.prompt_tokens_details as { cached_tokens?: number } | undefined;
+  const cached = num("prompt_cache_hit_tokens") || promptDetails?.cached_tokens || 0;
   return { inputTokens: num("prompt_tokens"), outputTokens: num("completion_tokens"), totalTokens: num("total_tokens"),
-    reasoningTokens: details?.reasoning_tokens ?? 0, cachedInputTokens: num("prompt_cache_hit_tokens"),
-    uncachedInputTokens: typeof raw.prompt_cache_miss_tokens === "number" ? num("prompt_cache_miss_tokens") : num("prompt_tokens") - num("prompt_cache_hit_tokens") };
+    reasoningTokens: details?.reasoning_tokens ?? 0, cachedInputTokens: cached,
+    uncachedInputTokens: typeof raw.prompt_cache_miss_tokens === "number" ? num("prompt_cache_miss_tokens") : num("prompt_tokens") - cached };
 }
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -34,7 +38,7 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 function retryable(error: unknown): boolean {
-  if (error instanceof DeepSeekError) return error.statusCode === 408 || error.statusCode === 429 || (error.statusCode !== undefined && error.statusCode >= 500 && error.statusCode <= 599);
+  if (error instanceof DeepSeekError) return !error.quotaExceeded && (error.statusCode === 408 || error.statusCode === 429 || (error.statusCode !== undefined && error.statusCode >= 500 && error.statusCode <= 599));
   return error instanceof TypeError || (error instanceof Error && /ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket|fetch failed/i.test(error.message));
 }
 export type HttpDependencies = {
@@ -48,7 +52,10 @@ export async function requestDeepSeek(
   emit: (part: ModelCallStreamPart) => void | Promise<void>,
   deps: HttpDependencies = {},
 ): Promise<ModelResponse> {
-  const apiKey = deps.apiKey ?? deepseekApiKey();
+  const compatible = deps.apiKey === undefined ? compatibleChatRoute() : undefined;
+  const apiKey = deps.apiKey ?? compatible?.apiKey ?? deepseekApiKey();
+  const endpoint = compatible?.endpoint ?? ENDPOINT;
+  const model = compatible?.model ?? DEEPSEEK_MODEL;
   const safeMessage = (value: string) => (apiKey ? value.split(apiKey).join("[redacted]") : value).slice(0, 2000);
   const timeoutSignal = request.timeoutMs === undefined ? undefined : AbortSignal.timeout(request.timeoutMs);
   const signals = [deps.signal, timeoutSignal].filter((signal): signal is AbortSignal => !!signal);
@@ -59,7 +66,7 @@ export async function requestDeepSeek(
     throw new DeepSeekError("DeepSeek thinking mode requires auto or none tool choice.", 400);
   }
   const body = JSON.stringify({
-    model: DEEPSEEK_MODEL, messages: request.messages, stream: true, stream_options: { include_usage: true },
+    model, messages: request.messages, stream: true, stream_options: { include_usage: true },
     thinking: { type: request.thinking ? "enabled" : "disabled" },
     ...(request.thinking ? { reasoning_effort: request.reasoningEffort } : {}),
     ...(request.tools?.length ? { tools: request.tools, tool_choice: nativeToolChoice ?? "auto" } : {}),
@@ -72,8 +79,14 @@ export async function requestDeepSeek(
     const headerController = new AbortController();
     const headerTimer = setTimeout(() => headerController.abort(new DOMException("DeepSeek response headers timed out", "TimeoutError")), FIRST_RESPONSE_MS);
     try {
-      response = await (deps.fetch ?? fetch)(ENDPOINT, {
-        method: "POST", redirect: "error", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      response = await (deps.fetch ?? fetch)(endpoint, {
+        method: "POST", redirect: "error", headers: {
+          Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json",
+          ...(compatible ? {
+            "User-Agent": `previously-agent/${APP_VERSION}`,
+            ...(request.sessionId?.trim() ? { "x-opencode-session": request.sessionId.trim() } : {}),
+          } : {}),
+        },
         body, signal: signal ? AbortSignal.any([signal, headerController.signal]) : headerController.signal,
       });
       clearTimeout(headerTimer);
@@ -85,7 +98,9 @@ export async function requestDeepSeek(
       const errorBody = safeMessage(await response.text());
       let message = `DeepSeek request failed (${response.status})`;
       try { const parsed = JSON.parse(errorBody); if (typeof parsed.error?.message === "string") message += `: ${parsed.error.message}`; } catch { /* status remains useful */ }
-      throw new DeepSeekError(message, response.status, retryMs);
+      const quotaExceeded = response.status === 429 &&
+        /insufficient[_ -]?quota|quota[_ -]?(?:exceeded|exhausted)|allowance[_ -]?(?:exceeded|exhausted)|(?:hourly|weekly|monthly)[_ -](?:quota|limit)/i.test(errorBody);
+      throw new DeepSeekError(message, response.status, retryMs, undefined, quotaExceeded);
     } catch (error) {
       clearTimeout(headerTimer);
       if (signal?.aborted) throw signal.reason;

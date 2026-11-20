@@ -21,6 +21,7 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { fsListFiles } from "../io-helpers";
 import { walkPathsLocal } from "@/lib/tools/local-fs";
 import { RECORDS_ROOT } from "../paths";
+import { absentDocumentError } from "@/lib/docs/write-validation";
 
 /** A slice relative path segment: "2026/08/11/1115". */
 export const SLICE_PATH_RE = /^(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})$/;
@@ -94,6 +95,41 @@ export async function enumerateTreePaths(root = "memory"): Promise<string[]> {
   }
   if (source === "local") return walkPathsLocal(root);
   return walkViaList(root);
+}
+
+/** A file-only, complete inventory for operations that move actual bytes. */
+export async function enumerateTreeFiles(root: string): Promise<string[]> {
+  const source = resolveDataSource();
+  if (source === "local") {
+    return walkPathsLocal(root, 50_000, { maxDepth: Infinity, requireRealRoot: true });
+  }
+  if (source === "github") {
+    const { owner, repo } = getRepoConfig();
+    const tree = await getRepoTree(repo, owner);
+    if (!tree.truncated) {
+      return tree.entries.filter(entry => entry.type === "blob" && entry.path.startsWith(root + "/"))
+        .map(entry => entry.path);
+    }
+  }
+  const files: string[] = [];
+  const directories = [root];
+  while (directories.length) {
+    const directory = directories.pop()!;
+    let children;
+    try { children = await fsListFiles(directory); }
+    catch (error) {
+      if (directory === root && absentDocumentError(error)) return [];
+      throw error;
+    }
+    // GitHub's contents fallback caps a directory at 1,000 entries. A move
+    // must refuse an ambiguous inventory instead of silently leaving files.
+    if (source === "github" && children.length >= 1000) throw new Error(`Case directory listing may be incomplete: ${directory}`);
+    for (const child of children) {
+      if (child.type === "dir") directories.push(child.path);
+      else files.push(child.path);
+    }
+  }
+  return files;
 }
 
 /** The demo/fallback walk — fsListFiles recursion (tiny trees only). */

@@ -461,7 +461,28 @@ export function createDoc(input: {
  * write entry, which owns the clock.
  */
 export function rewriteBody(doc: CaseDoc, body: string): CaseDoc {
-  return { ...doc, body: body.trim() };
+  // readCase returns the whole stored document. A writer may therefore send
+  // the header and existing tail back with its revised prose. Those mechanical
+  // parts are not new body content, and replayed dated rows must not duplicate.
+  let content = body;
+  try { content = matter(body).content; } catch { /* Tolerate a broken copied header. */ }
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const marker = lines.findIndex(line => TAIL_MARKER.test(line));
+  if (marker < 0) return { ...doc, body: content.trim() };
+  const existing = new Set(doc.tail.map(line => `${line.date}：${line.text}`));
+  const copied = new Set<string>();
+  for (const line of lines.slice(marker + 1)) {
+    if (!line.trim() || TAIL_MARKER.test(line)) continue;
+    const match = TAIL_LINE.exec(line);
+    if (!match) throw new Error("rewriteIndex accepts only dated lines after the tail marker; keep prose in the body and retry");
+    const key = `${match[1]!}：${match[2]!.trim()}`;
+    if (copied.has(key)) continue;
+    copied.add(key);
+    // A rewrite never adds or rewrites supplements. Even a paraphrased copied
+    // link must go through the separate, read-backed appendTail operation.
+    if (!existing.has(key)) throw new Error("rewriteIndex cannot add or rewrite tail lines; keep the copied tail unchanged and use appendTail separately for new information");
+  }
+  return { ...doc, body: lines.slice(0, marker).join("\n").trim() };
 }
 
 /**

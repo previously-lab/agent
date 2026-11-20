@@ -206,6 +206,8 @@ export interface HousekeepingResult {
    * See buildSliceHeadBlock in src/lib/turn-priming.ts.
    */
   sliceHeadBlock: string;
+  /** Recent derived record summaries; navigation only, never original evidence. */
+  timelineBlock?: string;
   /**
    * The agent's constitution: SOUL + "who you're assisting" + DIRECTIVES
    * (memory access rules included), derived from previously.md's identity
@@ -493,6 +495,8 @@ export interface TurnRunResult extends TaskAckSource {
   /** Exact current-turn replay, kept in Workflow/client state rather than GitHub memory files. */
   nativeMessages?: ModelMessage[];
   dialogueWork?: DialogueWorkResult;
+  /** Final public-delivery witness, derived only from Workflow facts. */
+  dialogueDelivery?: { status: "delivered" | "failed"; candidateId: string };
   /** This turn's id (the turn headers + dedupe keys carry it). */
   turnId: string;
   clientMessageId?: string;

@@ -544,10 +544,11 @@ describe("buildDirectionBlock", () => {
     );
   });
 
-  it("renders hypotheses explicitly as UNVERIFIED GUESSES (probe, never assert)", () => {
+  it("keeps existing guesses provisional while the request and confirmed preferences govern precision", () => {
     const block = buildDirectionBlock(VALID_PROPOSAL);
     expect(block).toContain("UNVERIFIED GUESSES");
-    expect(block).toContain("never assert one as fact");
+    expect(block).toContain("current request and confirmed preferences");
+    expect(block).toContain("no reason to investigate, ask for confirmation or raise the required precision");
     expect(block).toContain("The user may dislike long preambles");
   });
 

@@ -8,7 +8,9 @@
  * map keys.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { parseCaseReadEnvelope, unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { findCaseReadReceipt, parseCaseReadEnvelope, unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { parseRecallOutput } from "@/lib/chat/recall-output";
+import { mediateReplayedRecordReads, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
 import type { ScenarioRecallEvidence, ScenarioRecallResult } from "@/lib/agents/scenario-recall";
 import { collectThinkingReads } from "@/lib/agents/thinking-read-receipt";
 import { buildThinkingProduct, permitsThinkingClaim } from "@/lib/agents/thinking-product";
@@ -286,6 +288,74 @@ describe("recallFindExecute", () => {
 });
 
 describe("recallSearchExecute", () => {
+  it("passes the requested conversation date and timezone through to later-filed case search", async () => {
+    const ref = "things/回复阶段";
+    const raw = "---\nopened: '2026-11-15'\n---\n实际收到多流回执。\n" +
+      "[原话](previously:records/2026-11-07-1800?turn=original&role=user)";
+    io.files.set(`memory/${ref}/index.md`, raw);
+    const result = await recallSearchExecute({ query: "多流回执", dateBasis: "conversation",
+      since: "2026-11-08", until: "2026-11-08" },
+      opts({ ...makeCtx("2026-11-16-1000"), timezone: "Asia/Shanghai" }));
+    expect(result).toContain(`(ref: ${ref})`);
+    expect(result).toContain("cited slice opened 2026-11-08 local");
+  });
+
+  it("keeps verified text in the work receipt across replay and presents a normal search card", async () => {
+    const ref = "research/手机调研";
+    const citation = "- [2026-09-04] 线索 (ref: records/2026-09-04-2130)";
+    const body = ["手机设计，保留小屏。", citation].join("\r\n");
+    const raw = "---\r\nopened: 2026-09-05\r\n---\r\n\r\n" + body + "\r\n";
+    io.files.set(`memory/${ref}/index.md`, raw);
+    const context = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
+    const input = { query: "手机", includeRecords: true };
+    const toolCallId = "mixed-search", toolName = "recallSearch";
+    const out = await recallSearchExecute(input, { context, toolCallId });
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolCallId, toolName, input }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId, toolName, output: { type: "text", value: out } }] },
+    ];
+    const reads = collectThinkingReads(mediateReplayedRecordReads(messages), context.readScopeId);
+    expect(reads).toMatchObject([{ ref, sourceKind: "semantic_document", coverage: "excerpt",
+      edition: "current", revision: caseStorageRevision(raw), excerpt: body }]);
+    expect(parseCaseReadEnvelope(out)).toBeNull();
+    expect(findCaseReadReceipt({ messages, scopeId: context.readScopeId, category: "research", caseName: "手机调研" })).toBeNull();
+
+    const plain = await recallSearchExecute(input, opts(makeCtx("2026-09-10-1000")));
+    const card = parseRecallOutput(toolName, out);
+    expect(card).toMatchObject({ kind: "entries", entries: expect.arrayContaining([expect.objectContaining({ ref })]) });
+    expect(card).toEqual(parseRecallOutput(toolName, plain));
+    expect(JSON.stringify(card)).not.toContain("PREVIOUSLY_THINKING_READ");
+  });
+
+  it("runs provider-stringified keywords as the same search as a native array", async () => {
+    const context = opts(makeCtx("2026-09-10-1000"));
+    const terms = ["换手机", "手机", "买手机", "换新手机"];
+    const native = await recallSearchExecute({ query: terms, includeRecords: true }, context);
+    const encoded = await recallSearchExecute({ query: JSON.stringify(terms), includeRecords: true }, context);
+    expect(encoded).toEqual(native);
+    expect(encoded).toContain('match(es) for "换手机 手机 买手机 换新手机"');
+    expect(encoded).toContain("research/手机调研");
+    expect(encoded).toContain("records/2026-09-04-2130");
+    expect(encoded.indexOf("research/手机调研")).toBeLessThan(encoded.indexOf("records/2026-09-04-2130"));
+    expect(encoded).toContain("Document excerpts");
+    expect(encoded).toContain("Original record leads");
+    expect(encoded).not.toContain("我想换手机，预算 5000。");
+  });
+
+  it("keeps bracketed literal keywords and enforces native limits on encoded arrays", async () => {
+    const { recallSearch } = (await import("@/app/api/agent/tools")).chatTools;
+    const parse = (query: unknown) => recallSearch.inputSchema.safeParse({ query });
+    for (const literal of [" 通勤 ", "[tag]", "[1,2]"]) {
+      expect(parse(literal)).toMatchObject({ success: true, data: { query: literal.trim() } });
+    }
+    const full = Array.from({ length: 8 }, () => "字".repeat(256));
+    expect(parse(JSON.stringify(full))).toMatchObject({ success: true, data: { query: full } });
+    for (const invalid of [[], [...full, "ninth"], [" "], ["字".repeat(257)]]) {
+      expect(parse(invalid).success).toBe(false);
+      expect(parse(JSON.stringify(invalid)).success).toBe(false);
+    }
+  });
+
   it("finds a structured document by keyword and renders the match template", async () => {
     const out = await recallSearchExecute(
       { query: "小屏旗舰" },
@@ -467,6 +537,11 @@ describe("recallReadExecute", () => {
     );
     expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-09-04-2130" });
     expect(JSON.stringify(out)).not.toContain("我想换手机，预算 5000。");
+    const direct = await recallReadExecute(
+      { ref: "records/2026-09-04-2130", direct: true },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(direct).toMatchObject({ kind: "public_record_v1", text: expect.stringContaining("我想换手机，预算 5000。") });
     const miss = await recallReadExecute(
       { ref: "research/不存在" },
       opts(makeCtx("2026-09-10-1000")),
@@ -475,9 +550,143 @@ describe("recallReadExecute", () => {
       'Nothing named "research/不存在" exists in memory — and nothing similar.',
     );
   });
+
+  it("holds a whole conversation requested beside the first case passage, while a targeted read still works", async () => {
+    const ref = "records/2026-09-04-2130";
+    const input = { ref, direct: true };
+    const ctx = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
+    const options = { context: ctx, toolCallId: "raw", messages: [{ role: "assistant" as const, content: [
+      { type: "tool-call" as const, toolName: "recallRead", toolCallId: "raw", input },
+      { type: "tool-call" as const, toolName: "recallRead", toolCallId: "case", input: { ref: "research/手机调研" } },
+    ] }] };
+    const result = await recallReadExecute(input, options);
+    expect(result).toMatchObject({ kind: "public_record_v1", status: "deferred" });
+    expect(result).not.toHaveProperty("thinkingReceipt");
+    expect(JSON.stringify(result)).not.toContain("预算 5000");
+    expect(await recallReadExecute({ ...input, range: { type: "turns", indices: [0] } }, options))
+      .toMatchObject({ kind: "public_record_v1", text: expect.stringContaining("预算 5000") });
+  });
+
+  it("projects only public utterances before applying direct core ranges, and mediates private parts", async () => {
+    io.files.set(CORE_PATH, CORE_RAW.replace("focus: 手机选购闲聊", "focus: INTERNAL_ONLY") + [
+      "## Turn 2 — 2026-09-04T21:30:01.000Z (tool)", "PRIVATE_TOOL_PAYLOAD",
+      "## Turn bad — 2026-09-04T21:30:01.000Z (agent) invalid legacy suffix", "AMBIGUOUS_PRIVATE_TURN",
+      "## Turn uncertain — 2026-09-04T21:30:01.000Z (user) [source-role tool]", "MISATTRIBUTED_PRIVATE_TURN",
+      "## Turn 3 — 2026-09-04T21:30:02.000Z (agent)", "PUBLIC_REPLY",
+      "```html live", "<html>ARTIFACT_CODE</html>", "```",
+    ].join("\n"));
+    const ref = "records/2026-09-04-2130";
+    const options = opts({ ...makeCtx("2026-09-10-1000"), thinkingFlow: true });
+    const result = await recallReadExecute({ ref: "memory/records/2026/09/04/2130/core.md", direct: true,
+      range: { type: "lines", start: 1, end: 90 } }, options);
+    expect(result).toMatchObject({ kind: "public_record_v1", text: expect.stringContaining("预算 5000") });
+    expect(result).toMatchObject({ text: expect.stringContaining("PUBLIC_REPLY") });
+    expect(result).toMatchObject({ thinkingReceipt: { reads: [{ sourceKind: "original_turn", edition: "original", coverage: "range",
+      revision: expect.any(String) }] } });
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_TOOL_PAYLOAD|ARTIFACT_CODE|INTERNAL_ONLY|AMBIGUOUS_PRIVATE_TURN|MISATTRIBUTED_PRIVATE_TURN/);
+    const miss = await recallReadExecute({ ref, direct: true, range: { type: "search", keywords: ["植物园"] } }, options);
+    expect(miss).toMatchObject({ kind: "public_record_v1", text: `No public turns matched the requested keywords in ${ref}.`,
+      thinkingReceipt: { reads: [] } });
+    const hit = await recallReadExecute({ ref, direct: true, range: { type: "search", keywords: ["预算"] } }, options);
+    expect(hit).toMatchObject({ text: expect.stringContaining("预算 5000"),
+      thinkingReceipt: { reads: [{ sourceKind: "original_turn", coverage: "range" }] } });
+    for (const part of ["agent", "previously"] as const) {
+      expect(await recallReadExecute({ ref, direct: true, part }, options)).toMatchObject({ kind: "recallScenario_required" });
+      expect(await recallReadExecute({ ref: `memory/records/2026/09/04/2130/${part}.md`, direct: true }, options))
+        .toMatchObject({ kind: "recallScenario_required" });
+    }
+  });
 });
 
-describe("doc_rework probe (§4.4)", () => {
+describe("memory precision on the same source material", () => {
+  it("checks a proposal's original wording via tail links only when requested and preserves a refusal", async () => {
+    const ref = "research/登记提议";
+    const original = "records/2026-09-04-2130";
+    const message = "我只说先试一下，现在别登记成任务。";
+    io.files.set(`memory/${ref}/index.md`, [
+      "登记提议出现于片 2026-09-04-2130。没有记下谁同意。", "# 其他情况",
+      "无关段落。".repeat(160), "—— 尾部 ——",
+      "[另一轮](previously:records/2026-09-05-0900?turn=other&role=user)",
+      `[提议](previously:${original}?turn=proposal&role=assistant)`,
+      `[原话](previously:${original}?turn=decision&role=user)`,
+    ].join("\n\n"));
+    io.files.set(CORE_PATH, `## Turn decision — 2026-09-04T21:31:00Z (user)\n\n${message}`);
+    const context = { ...makeCtx("2026-09-10-1100"), thinkingFlow: true };
+    const input = { category: "research", query: "登记提议" };
+    const plain = await recallSearchExecute(input, { context, toolCallId: "ordinary" });
+    expect(plain).not.toContain("turn=decision");
+    expect(plain).not.toContain("TURN NAVIGATION");
+    const out = await recallSearchExecute({ ...input, turnLinks: "user" }, { context, toolCallId: "original-requested" });
+    const navigation = JSON.parse(out.split("\n").find(line => line.startsWith('[{"sourceRef":'))!) as
+      { sourceRef: string; cardTargets: ScenarioRecallTarget[] }[];
+    expect(navigation).toEqual([{ sourceRef: ref, cardTargets: [
+      { ref: original, role: "user", turnId: "decision" },
+      { ref: "records/2026-09-05-0900", role: "user", turnId: "other" },
+    ] }]);
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolName: "recallSearch", toolCallId: "original-requested", input: { ...input, turnLinks: "user" } }] },
+      { role: "tool", content: [{ type: "tool-result", toolName: "recallSearch", toolCallId: "original-requested", output: { type: "text", value: out } }] },
+    ];
+    expect(collectThinkingReads(messages, context.readScopeId)).toMatchObject([
+      { ref, sourceKind: "semantic_document", excerpt: "登记提议出现于片 2026-09-04-2130。没有记下谁同意。" },
+    ]);
+    expect(out).not.toContain(message);
+    expect(vi.mocked(readFileLocal).mock.calls.map(([path]) => path)).not.toContain(CORE_PATH);
+    const real = await vi.importActual<typeof import("@/lib/agents/scenario-recall")>("@/lib/agents/scenario-recall");
+    recall.run.mockImplementation(real.runScenarioRecall);
+    const exact = await recallScenarioExecute({ question: "用户究竟怎么说的？", targets: [navigation[0]!.cardTargets[0]!] },
+      { context, toolCallId: "verify", messages });
+    expect(exact.evidence).toMatchObject([{ ref: original, role: "user", quote: message }]);
+  });
+
+  it("serves a qualified topic from its report and checks the original only on the exact-message path", async () => {
+    const ref = "research/手机调研";
+    const original = "records/2026-09-04-2130";
+    const originalPath = "memory/records/2026/09/04/2130/core.md";
+    io.files.set("memory/research/手机调研/index.md", `${INDEX_RAW}\n在可查的最早一轮，话题是换手机。[那句提问](previously:${original}?turn=question&role=user)`);
+    io.files.set(originalPath, "## Turn question — 2026-09-04T21:30:00Z (user)\n\n换手机时我该先看什么？");
+    const ctx: ToolContext = { ...makeCtx("2026-09-10-1100"), thinkingFlow: true, dialogueOffer: {
+      scopeKey: "scope", workId: "work", parentRunId: "parent", sourceInputId: "turn-test", sourceTurnId: "turn-test",
+      source: { inputId: "turn-test", clientMessageId: "client", userSeq: 1, eventSeq: 1,
+        acceptedAt: "2026-09-10T11:00:00Z", text: "最早那次聊了什么？" },
+      priorContext: [], locale: "zh", record: { owner: "local", repo: "local", useGithub: false, useDemo: false,
+        timezone: "UTC", slicing: { idleGapMinutes: 30, maxSliceMinutes: 60, maxTurnsPerSlice: 40 } },
+    } };
+    const report = await recallReadExecute({ ref }, { context: ctx, toolCallId: "report" });
+    if (typeof report !== "string") throw new Error("Expected a semantic report");
+    expect(report).toContain("在可查的最早一轮，话题是换手机");
+    expect(vi.mocked(readFileLocal).mock.calls.map(([path]) => path)).not.toContain(originalPath);
+    expect(recall.run).not.toHaveBeenCalled();
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: [{ type: "tool-call", toolName: "recallRead", toolCallId: "report", input: { ref } }] },
+      { role: "tool", content: [{ type: "tool-result", toolName: "recallRead", toolCallId: "report", output: { type: "text", value: report } }] },
+    ];
+    expect(collectThinkingReads(messages, ctx.readScopeId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ref, sourceKind: "semantic_document", mentionedSliceIds: ["2026-09-04-2130"] }),
+    ]));
+    const real = await vi.importActual<typeof import("@/lib/agents/scenario-recall")>("@/lib/agents/scenario-recall");
+    recall.run.mockImplementation(real.runScenarioRecall);
+    const request = { question: "那句提问的原话是什么？", targets: [{ ref: original, turnId: "question", role: "user" as const }] };
+    const exact = await recallScenarioExecute(request, { context: ctx, toolCallId: "exact", messages });
+    expect(exact.evidence).toMatchObject([{ ref: original, role: "user", quote: "换手机时我该先看什么？" }]);
+    const mixed = await recallScenarioExecute({ ...request, refs: [original, "records/2026-09-10-1000"] },
+      { context: ctx, toolCallId: "mixed-original", messages });
+    expect(mixed).toMatchObject({ coverage: { unsearchedRefs: [original, "records/2026-09-10-1000"] },
+      thinkingReceipt: { reads: [{ ref: original, coverage: "excerpt" }] } });
+    io.files.delete(originalPath);
+    const missing = await recallScenarioExecute(request, { context: ctx, toolCallId: "missing", messages });
+    expect(missing).toMatchObject({ status: "insufficient_evidence", evidence: [], truncated: true,
+      coverage: { omitted: 1, targets: [{ ref: original, status: "unavailable" }] } });
+    expect(missing.uncertainty.join(" ")).toContain("File not found");
+    vi.mocked(readFileLocal).mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
+    const forbidden = await recallScenarioExecute(request, { context: ctx, toolCallId: "denied", messages });
+    expect(forbidden).toMatchObject({ status: "error", evidence: [], truncated: true });
+    // Native source observations belong to the projected work's actual landing.
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
+  });
+});
+
+describe("document/record source observations", () => {
   const evidence: ScenarioRecallEvidence = {
     source: "original_turn",
     boundary: "legacy_header",
@@ -524,6 +733,7 @@ describe("doc_rework probe (§4.4)", () => {
         expect.stringContaining(`main agent read slice ${sliceId} that document "memory/research/手机调研/index.md" references`));
     }
     expect(sinks.writeAgentTimeline.mock.calls.every(([, line]) => !line.includes(evidence.quote))).toBe(true);
+    expect(sinks.writeAgentTimeline.mock.calls.every(([, line]) => line.startsWith("- **source_reference**"))).toBe(true);
     expect(parseCaseReadEnvelope(JSON.stringify(out))).toBeNull();
     expect(JSON.stringify(out)).not.toContain(CORE_RAW);
   });

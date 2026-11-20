@@ -34,7 +34,8 @@ type AcceptedV2 = {
 };
 
 type OfferEvent = {
-  type: "offer" | "done";
+  type: "offer" | "dialogue_wake" | "done";
+  status?: string;
   offerId?: string;
   runId?: string;
   sourceInputId?: string;
@@ -213,36 +214,33 @@ test("v2 keeps verified reads out of the chat and publishes the structured final
   const finalGate = `structured-final-${token}`;
   gates.add(finalGate);
   const terminalThinking = `terminal-thinking-${token}`;
+  const completeRule = `complete-work-${token}`;
   const finalDialogue = `structured-final-dialogue-${token}`;
   await writeRules([
     idleReflectionRule(),
     analyzerRule(token, "structured"),
     { id: `first-read-${token}`, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
       frames: [toolFrame("recallRead", { ref }, firstReadId)] },
-    { id: `second-read-${token}`, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
-      frames: [toolFrame("recallRead", { ref }, `tool-second-read-${token}`)] },
-    { id: terminalThinking, contains: ["finishThinking", token], thinking: "enabled", gate: finalGate, finishReason: "tool_calls",
-      frames: [toolFrame("finishThinking", { findings: [{ kind: "project_fact", text: fact,
-        evidenceIds: [`${firstReadId}:1`] }] }, `finish-structured-${token}`)] },
+    { id: completeRule, contains: ["completeWork", privateDocumentMarker], thinking: "enabled", gate: finalGate, finishReason: "tool_calls",
+      frames: [toolFrame("completeWork", { responseMode: "focused", result: fact }, `complete-${token}`)] },
+    { id: terminalThinking, contains: ["finishThinking", fact], thinking: "enabled", finishReason: "tool_calls",
+      frames: [toolFrame("finishThinking", { findings: [] }, `finish-structured-${token}`)] },
     { id: finalDialogue, contains: [fact], thinking: "disabled", frames: [{ content: finalPublic }] },
   ]);
   const accepted = await sendThroughComposer(page, `Check the schedule in my reading-room note ${token}`, `tool-event-${token}`);
   let offers: Awaited<ReturnType<typeof observeOffers>> | undefined;
   try {
-    await expect.poll(async () => (await capturedRequests(terminalThinking)).length).toBe(1);
+    await expect.poll(async () => (await capturedRequests(completeRule)).length).toBe(1);
     const firstThinkingRequest = (await capturedRequests(`first-read-${token}`))[0]!;
     const thinkingSystem = (firstThinkingRequest.messages as Array<{ role: string; content: string }>)
       .find(message => message.role === "system")?.content;
     expect(thinkingSystem?.includes("finishThinking") && thinkingSystem.includes("needsUser"),
       "native handoff instructions survive the assembled system prompt").toBe(true);
-    expect(thinkingSystem?.includes("SEPARATE tool step before the first investigative tool"),
-      "the model gets a separate starting handoff before investigation").toBe(true);
-    expect(thinkingSystem).toContain("checkpoints of at most 2,400 characters each");
     expect(thinkingSystem?.includes("yours is the only mouth"),
       "the private thinker does not receive the old speaking role").toBe(false);
     const offeredTool = (firstThinkingRequest.tools as Array<{ function: { name: string; parameters: { required?: string[] } } }>)
-      .find(entry => entry.function.name === "offerReply");
-    expect(offeredTool?.function.parameters.required).toContain("stage");
+      .find(entry => entry.function.name === "completeWork");
+    expect(offeredTool?.function.parameters.required).toContain("result");
     await expect(assistantReply(page, finalPublic)).toHaveCount(0);
     await release(finalGate);
     // The endpoint can wait to send headers until the first offer. With no
@@ -250,8 +248,11 @@ test("v2 keeps verified reads out of the chat and publishes the structured final
     const observed = await observeOffers(accepted.offersUrl);
     offers = observed;
     await expect(assistantReply(page, finalPublic)).toHaveCount(1);
-    await expect.poll(() => observed.events.some(event => event.type === "done")).toBe(true);
-    expect(offers.events.filter(event => event.type === "offer")).toHaveLength(1);
+    await expect.poll(() => observed.events.find(event => event.type === "done")?.status).toBe("completed");
+    const closing = (await capturedRequests(terminalThinking))[0]!;
+    expect((closing.tools as Array<{ function: { name: string } }>).map(tool => tool.function.name)).toEqual(["finishThinking"]);
+    await expect(page.locator(`[data-dialogue-work="${accepted.workId}"] [data-dialogue-work-caption]`))
+      .toHaveAttribute("title", "Completed");
     const finalCall = (await capturedRequests(finalDialogue))[0]!;
     const dialogueSystem = (finalCall.messages as Array<{ role: string; content: string }>)
       .find(message => message.role === "system")?.content;

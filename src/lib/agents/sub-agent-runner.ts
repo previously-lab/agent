@@ -88,14 +88,16 @@ export function createProgressEmitter(
 
 
 export function extractToolReport<S extends z.ZodType>(
-  toolCalls: ReadonlyArray<{ toolName: string; input: unknown }> | undefined,
+  toolCalls: ReadonlyArray<{ toolName: string; input: unknown; invalid?: boolean }> | undefined,
   reportToolName: string,
   reportSchema: S,
 ): z.infer<S> | undefined {
-  const call = toolCalls?.find((tc) => tc.toolName === reportToolName);
-  if (!call || call.input === undefined || call.input === null) return undefined;
-  const parsed = reportSchema.safeParse(call.input);
-  return parsed.success ? parsed.data : undefined;
+  for (const call of toolCalls ?? []) {
+    if (call.invalid || call.toolName !== reportToolName || call.input == null) continue;
+    const parsed = reportSchema.safeParse(call.input);
+    if (parsed.success) return parsed.data;
+  }
+  return undefined;
 }
 
 // ─── Runner ────────────────────────────────────────────────────────────────
@@ -105,6 +107,8 @@ export function extractToolReport<S extends z.ZodType>(
 export interface RunSubAgentOptions<Report> {
   /** Parent cancellation must reach the model request, not just a waiting caller. */
   abortSignal?: AbortSignal;
+  /** Stable parent-derived session identity, never an API credential. */
+  sessionId?: string;
   model?: ModelConfig;
   role?: DeepSeekRole;
   system?: string; selfSop?: SelfAgent; skillRole?: SkillRole; prompt: string; tools: ToolSet;
@@ -169,6 +173,7 @@ export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Rep
     opts.abortSignal?.throwIfAborted();
     const stream = await streamText({ role: opts.role ?? "recall", system, prompt: opts.prompt,
       abortSignal: opts.abortSignal,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       tools: opts.tools, toolChoice: opts.toolChoice === "none" ? "none" : "auto", thinking: true,
       ...(opts.maxSteps !== undefined ? {stopWhen: isStepCount(opts.maxSteps)} : {}),
       ...(opts.timeoutMs !== undefined ? {timeout: opts.timeoutMs} : {}),

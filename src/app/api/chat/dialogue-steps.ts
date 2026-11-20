@@ -58,7 +58,7 @@ export async function expressionRoundStep(
   if (!snapshot) return null;
   let plan: ExpressionPlan;
   try {
-    plan = await composeExpression(snapshot, `${callId}:${snapshot.wakeVersion}`);
+    plan = await composeExpression(snapshot, `${callId}:${snapshot.wakeVersion}`, callId);
   } catch (error) {
     console.warn(
       "[Expression] compose failed — results stay ready for the next wake:",

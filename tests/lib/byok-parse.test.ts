@@ -18,3 +18,30 @@ describe("DeepSeek BYOK migration", () => {
     expect(parseByok({ provider: "deepseek", apiKey: "key", baseUrl })?.apiKey).toBe("key");
   });
 });
+
+
+describe("optional compatible Chat credentials", () => {
+  it("keeps the primary DeepSeek key separate and normalizes the Chat Host", () => {
+    expect(parseByok({
+      provider: "deepseek", apiKey: "primary-key",
+      chatHost: " https://opencode.ai/inference/go/openai/v1/ ", chatKey: " chat-key ",
+    })).toEqual({
+      provider: "deepseek", model: "deepseek-flash", apiKey: "primary-key",
+      chatHost: "https://opencode.ai/inference/go/openai/v1", chatKey: "chat-key", chatModel: "deepseek-v4.1-flash",
+    });
+  });
+
+  it.each([
+    { provider: "deepseek", apiKey: "primary", chatHost: "https://proxy.example/v1" },
+    { provider: "deepseek", apiKey: "primary", chatKey: "chat-only" },
+    { provider: "deepseek", apiKey: "primary", chatHost: "https://user:secret@proxy.example/v1", chatKey: "chat" },
+    { provider: "deepseek", apiKey: "primary", chatHost: "http://proxy.example/v1", chatKey: "chat" },
+  ])("rejects incomplete or unsafe alternate routes: %j", input => {
+    expect(parseByok(input)).toBeNull();
+  });
+
+  it("allows a local HTTP route only for explicit local development", () => {
+    expect(parseByok({ provider: "deepseek", apiKey: "primary", chatHost: "http://localhost:3000/v1", chatKey: "local" })?.chatHost)
+      .toBe("http://localhost:3000/v1");
+  });
+});

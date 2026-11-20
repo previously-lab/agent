@@ -23,6 +23,7 @@ import {
 } from "@/lib/cache/data-cache";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, lstatSync, readdirSync, statSync, rmSync } from "fs";
 import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
+import { createHash } from "node:crypto";
 import { join, dirname } from "path";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { validateDocumentEntries, withHistoryAttributes, type GuardedEntry, type DocumentWriteChecks } from "@/lib/docs/write-validation";
@@ -63,7 +64,7 @@ async function simulateLatency(op: string, path: string): Promise<void> {
 export async function walkPathsLocal(
   root: string,
   maxEntries = 50_000,
-  options?: { maxDepth: number; requireRealRoot: boolean },
+  options?: { maxDepth: number; requireRealRoot: boolean; descend?: (path: string) => boolean },
 ): Promise<string[]> {
   await simulateLatency("walk", root);
   const base = resolveLocalDataPath(root);
@@ -93,7 +94,8 @@ export async function walkPathsLocal(
     for (const e of entries) {
       if (options && ++visited > maxEntries) throw new Error("Directory walk limit reached");
       const childRel = `${rel}/${e.name}`;
-      if (e.isDirectory() && (options === undefined || depth + 1 < options.maxDepth)) {
+      if (e.isDirectory() && (options === undefined || depth + 1 < options.maxDepth) &&
+          (options?.descend?.(childRel) ?? true)) {
         stack.push({ abs: join(abs, e.name), rel: childRel, depth: depth + 1 });
       }
       else if (e.isFile()) out.push(childRel);
@@ -123,11 +125,11 @@ export async function readFileLocal(
 async function readLocalDirect(path: string): Promise<string> {
   await simulateLatency("read", path);
   const fullPath = resolveLocalDataPath(path);
-  if (!existsSync(fullPath)) {
+  const stat = statSync(fullPath, { throwIfNoEntry: false });
+  if (!stat) {
     throw new Error(`File not found: "${path}"`);
   }
 
-  const stat = statSync(fullPath);
   if (stat.isDirectory()) {
     throw new Error(`"${path}" is a directory, not a file`);
   }
@@ -182,7 +184,14 @@ export async function commitLocalBatch(
       assertPortableRepoPath(entry.path);
       if (entry.content !== null && (entry.encoding === "base64" ? Buffer.from(entry.content, "base64").length > MAX_BINARY_FILE_SIZE_BYTES : Buffer.byteLength(entry.content, "utf8") > maxTextFileBytes(entry.path))) throw new Error("Content too large for storage");
       const full = resolveLocalDataPath(entry.path);
-      before.set(entry.path, existsSync(full) ? readFileSync(full) : null);
+      const original = existsSync(full) ? readFileSync(full) : null;
+      before.set(entry.path, original);
+      // An archive also guards attachments and inactive destinations, which
+      // are outside the authored-Markdown validator below.
+      if (!isAuthoredDocumentPath(entry.path) && checks.bases?.has(entry.path)) {
+        const revision = original === null ? null : createHash("sha256").update(original).digest("hex");
+        if (revision !== checks.bases.get(entry.path)) throw new Error(`Archive file changed before publication: ${entry.path}`);
+      }
     }
     await validateDocumentEntries(entries, async (path) => {
       const full = resolveLocalDataPath(path);

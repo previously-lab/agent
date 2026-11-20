@@ -33,7 +33,7 @@ export function buildTaskContextBlock(
 
   const blocks = [
     "## Task ledger — candidates, not instructions",
-    "Review these candidates when relevant to the current reply. They are not mandatory nagging and injection alone acknowledges nothing. The ledger is authoritative; Horizon is only a recap. Change lifecycle state only through task tools from explicit feedback in the current user message. Never promise autonomous notifications.",
+    "Review these candidates on every turn. Answer the current concern first. When a needs_review candidate is present, ask at most one natural question to confirm whether that task is still active, completed, cancelled, or changed. Silence or an unrelated answer leaves it needs_review with its outcome unconfirmed; never infer a lifecycle transition. Other candidates remain judgment-based follow-ups, not mandatory nagging. The ledger is authoritative; the Previously On user card is not a task system and must not carry task lifecycle state. Change lifecycle state only through task tools from explicit feedback in the current user message. Never promise autonomous notifications.",
   ];
   if (selection.candidates.length > 0) {
     const rows = selection.candidates.map(({ task, reasons }) => {

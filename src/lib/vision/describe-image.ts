@@ -1,13 +1,11 @@
 /**
  * One-shot vision-model call — turn an image into a text description.
  *
- * This is an INFRASTRUCTURE call: it always reaches the DeepSeek
- * OpenAI-compatible endpoint with the vision-capable `VISION_MODEL_ID` model
- * (see below) and always needs a `DEEPSEEK_API_KEY`, independent of the
- * user's chosen chat model. When the key (or the model,
- * or the call itself) is unavailable, the result degrades to a metadata-only
- * description — ok:true with degraded:true — instead of an error, so the
- * calling agent still gets dimensions, format, and byte size.
+ * This model call uses the currently configured Chat transport, including an
+ * explicit compatible route when present. Native DeepSeek Search is a separate
+ * capability and never inherits that route. When the configured model or call
+ * is unavailable, the result degrades to a metadata-only description — ok:true
+ * with degraded:true — so the caller still gets dimensions, format and size.
  *
  * Header-parsed metadata (see image-meta.ts) is attached to every result.
  */
@@ -39,6 +37,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export const VISION_MODEL_ID = "deepseek-flash";
 
 export type DescribeImageInput = {
+  sessionId?: string;
   image:
     | { data: string /* base64 or data URL */; mediaType: string }
     | { url: string };
@@ -306,6 +305,7 @@ export async function describeImage(
   try {
     const { text } = await generateText({
       role: "vision",
+      sessionId: input.sessionId,
       messages: [
         {
           role: "user",

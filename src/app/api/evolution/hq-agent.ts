@@ -1,6 +1,6 @@
 import { stageDocumentProduct } from "@/lib/episodic/document-products";
-import { cardLinkSourceSchema, stageCaseCardCitation, validateCardSource } from "@/lib/episodic/card-evidence";
-import { dialogueSourceTurnId, readDialogueResearchRecords, selectDialogueResearchProducts } from "@/lib/episodic/dialogue-record";
+import { cardLinkSourceSchema, originalUserCard, stageCaseCardCitation, validateCardSource } from "@/lib/episodic/card-evidence";
+import { dialogueResearchMaterialId, dialogueSourceTurnId, readDialogueResearchRecords, selectDialogueResearchProducts } from "@/lib/episodic/dialogue-record";
 import { reorganizeUserModel } from "@/lib/evolution/user-model-maintenance";
 import { DOCUMENT_BUDGET_RULE, isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { forkWriteBatch, mergeWriteBatch } from "@/lib/docs/write-batch";
@@ -36,7 +36,7 @@ import { caseStorageRevision } from "@/lib/docs/case-doc";
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
-import { parseSliceId } from "@/lib/episodic/turn-parser";
+import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
 import {
   commitReflectionRound,
   createBatch,
@@ -90,6 +90,7 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { PEOPLE_USER_PROFILE_PATH } from "@/lib/evolution/paths";
 import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
+import { archiveCaseDocument } from "@/lib/docs/archive-case";
 import {
   findMemoryPaths,
   listMemoryDirectory,
@@ -183,9 +184,9 @@ type HqReport = z.infer<typeof hqReportSchema>;
 
 const HQ_ROLE = `You are the reflection unit — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "reflection unit" as a third party, and nothing reads as a report from another being.
 
-The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the turn(s) named as this round's material (their slice may still be open), what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
+The record is the channel. You are woken mechanically with a docket — a date, the turn(s) named as this round's material (their slice may still be open), what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
 - A docket is a plan, not a fact. It names slices and beats; it does not carry their content.
-- BEFORE writing anything, verify against the raw records with readRound. Read an existing target with readCase before updating it. Never write from the docket alone.
+- Verify the original evidence before writing. Exact user cards supplied from core.md after the docket are already read for that message alone. Use readRound when the card is missing or surrounding conversation or field work matters. Read an existing target with readCase before updating it.
 - Use recallFind to locate an existing case by name or path across categories; use recallList to browse one level when you do not know the name. Directory results and survey are pointers, never read receipts.
 - This round's material is the turn(s) named below — a slice may still be open; you owe the TURNS, not a seal. The cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
 - For each listed native user card, read the exact user message. Cite its exact words in writeCase sources when filing it, or use linkCard after reading the existing case if only a source citation is needed. After createTask/updateTask, readCase the task and linkCard its source. A single message can be cited in several cases. If you actually read a card and decide it warrants no case link, call skipArchiveTurn with its exact quote and a short reason. Do not skip a failed read or write; leave that card owed. hqReport itself does not settle a card.
@@ -200,9 +201,9 @@ You decide what to do and in what order. The natural order, when several things 
 2. Cases usually before people/user — the user model should cite the cases the round just wrote, not speak in generalities.
 3. self/ comes last — craft reflections are informed by everything else the round did.
 
-Tasks are user commitments with lifecycle, not merely another prose directory. Query the task ledger for existing identities before creating an action. Read the RAW USER turn with readRound; createTask/updateTask quote that exact turn as evidence. An agent suggestion or a task document's old wording is not user authorization to complete, cancel or reopen anything. Historical task documents enter needs_review until direct evidence resolves them. Task documents may deepen the account; their prose never replaces the ledger's status.
+Tasks are user commitments with lifecycle, not merely another prose directory. Every commitment, deadline, awaited reply, next action and task outcome belongs to this task system, never to a Horizon section in people/user. Query the task ledger for existing identities before creating an action. Use the supplied original user card or readRound for its exact words; createTask/updateTask quote that turn as evidence. An agent suggestion or a task document's old wording is not user authorization to complete, cancel or reopen anything. needs_review means the current state is unconfirmed; only direct user evidence resolves it, and the field agent may ask the user without treating silence as an answer. Task documents may deepen the account; their prose never replaces the ledger's status. Handle task writes before evolveProfile so the user-model pass remains background compression rather than a second task system.
 
-Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Keep competing interpretations, unanswered questions and what would change your mind in natural investigative prose. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
+Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Keep competing interpretations, unanswered questions and what would change your mind in natural investigative prose. A substantive case must not be an empty folder or a quote-only copy of the record: give the future reader a concise interpretation, its limits and a path to evidence. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
 
 Procedural learning uses readSkillSource/querySkills/manageSkill. New or revised guidance is a candidate until explicitly adopted. Read the current source and raw evidence; preserve a stable id when revising. Expected benefit is a hypothesis, not proof of improvement. Only a later observed applicable scenario can support a positive review; absent one, defer or review inconclusively. Direct SOP rewrites separately require readSelfSop and its baseRevision. A worker's reads are its own, never receipts you may borrow.
 
@@ -228,6 +229,10 @@ How your prose reads — the investigator's account, never the work order:
 - No system self-reference: you do not describe how this system works, do not explain its architecture, do not address whoever maintains it. The record says what you encountered and under what circumstances you learned it — nothing about what you are made of.
 
 ${DOC_HOUSE_STYLE}`;
+
+const CARD_REVIEW_ROLE = `You maintain the agent's memory after it answered the user. Read the original and use assessCard to decide whether the message adds anything that needs work in memory. A question recalling an existing detail is usually complete in itself. The old detail it asks about is not a new user observation. A correction, commitment, new decision, or a genuine uncertainty about how to file it can require work. The user's exact words are evidence; a guess about their interests is not.
+
+Assess all the obligations the message actually introduces, including task or procedural work. The separately due profile pass reads the slice and user model itself. Finish with hqReport from actual tool receipts.`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
@@ -354,13 +359,58 @@ function renderSurvey(tree: Record<string, string[]>): string {
 
 type CardSource = z.infer<typeof cardLinkSourceSchema>;
 
+interface ReadUserCard { sliceId: string; turnId: string; content: string; raw: string }
+
+/** Read originals at the round's pinned basis. Admitting a card gives no slice-wide read receipt. */
+async function loadRoundCards(cards: Map<string, Set<string>>, batch: WriteBatch) {
+  const originals = new Map<string, ReadUserCard>();
+  // Long cards and large backlogs remain available through readRound. Never present
+  // a clipped message as the whole basis for skipping or filing it.
+  let remainingChars = 12_000;
+  for (const [sliceId, ids] of cards) {
+    if (!ids.size || !parseSliceId(sliceId) || remainingChars <= 0) continue;
+    let raw: string;
+    try { raw = await readSlicePart(sliceId, "core", batch); } catch { continue; }
+    const { turns } = parseTurns(raw);
+    for (const turnId of ids) {
+      const turn = originalUserCard(turns, turnId);
+      if (!turn?.content.trim() || turn.content.length > remainingChars || turn.attachments?.length) continue;
+      originals.set(`${sliceId}/${turnId}`, { sliceId, turnId, content: turn.content, raw });
+      remainingChars -= turn.content.length;
+    }
+  }
+  return originals;
+}
+
+/** Only narrow the tool menu when every material item is accounted for at this batch's basis. */
+async function isCardReview(input: ReflectionRoundInput, originals: ReadonlyMap<string, ReadUserCard>, batch: WriteBatch) {
+  if (!originals.size || input.agendaDue.length || input.skillReviewDue?.length || input.skillReviewError) return false;
+  for (const { sliceId, turnIds, userTurnIds } of input.scope) {
+    if (!turnIds.length) return false;
+    if (userTurnIds?.some(id => !originals.has(`${sliceId}/${id}`))) return false;
+    const researchIds = turnIds.filter(id => !originals.has(`${sliceId}/${id}`));
+    if (researchIds.some(id => !originals.has(`${sliceId}/${dialogueSourceTurnId(id)}`))) return false;
+    if (!researchIds.length) continue;
+    const records = readDialogueResearchRecords(await readSlicePart(sliceId, "agent", batch).catch(() => ""));
+    for (const id of researchIds) {
+      const matches = records.filter(record => dialogueResearchMaterialId(record) === id);
+      if (matches.length !== 1) return false;
+      const record = matches[0];
+      if (record.status !== "complete" || record.delta || record.artifacts.length ||
+          !record.inputIds.length || record.inputIds.some(inputId => !originals.has(`${sliceId}/${inputId}`))) return false;
+    }
+  }
+  return true;
+}
+
 function buildHqTools(
   date: string,
   model: ModelConfig,
   batch: WriteBatch,
-  flags: { evolutionRan: boolean },
+  flags: { evolutionRan: boolean; profileNeedsAttention: boolean },
   mutateTask: BatchTaskMutation,
   sourceScope: ScopedSlice[],
+  originalCards: ReadonlyMap<string, ReadUserCard>,
   cardSettlement: {
     linked: (source: CardSource) => void;
     skipped: (source: CardSource) => void;
@@ -376,7 +426,7 @@ function buildHqTools(
     if (!scoped?.userTurnIds?.includes(source.turnId) || !scoped.turnIds.includes(source.turnId)) {
       throw new Error("Source is not a native user card owed in this round");
     }
-    const raw = readState.rawRecords.get(source.sliceId);
+    const raw = readState.rawRecords.get(source.sliceId) ?? originalCards.get(`${source.sliceId}/${source.turnId}`)?.raw;
     if (raw === undefined) throw new Error(`Call readRound ${source.sliceId} before filing this card`);
     validateCardSource(source, raw);
     return raw;
@@ -422,7 +472,8 @@ function buildHqTools(
   }
   return {
     ...buildReflectionLearningTools(batch, readState),
-    ...buildReflectionTaskTools({ date, batch, rawRecords: readState.rawRecords, mutateTask }),
+    ...buildReflectionTaskTools({ date, batch, rawRecords: readState.rawRecords, mutateTask,
+      readCardText: (sliceId, turnId) => originalCards.get(`${sliceId}/${turnId}`)?.content }),
     recallList: tool({
       description:
         "Browse the semantic memory directories. Omit path for categories, then open a returned category or case path for its immediate children. Follow nextOffset for more. Paths are navigation, not evidence; use readCase with a returned case or piece ref before writing.",
@@ -497,7 +548,7 @@ function buildHqTools(
     readSlice: makeCrossSliceReadTool({ batch, scope: readState.scope }),
 
     linkCard: tool({
-      description: "Append a short citation to the exact user message in an existing canonical case. Read the message with readRound and the case with readCase first; source.quote must match the user's original words. The document update is queued until this round commits.",
+      description: "Append a short citation to the exact user message in an existing canonical case. Use the supplied original card or readRound for the message, and readCase for the existing case; source.quote must match the user's original words. The document update is queued until this round commits.",
       inputSchema: z.object({ ref: z.string().min(1), source: cardLinkSourceSchema }).strict(),
       execute: async ({ ref, source }) => {
         try {
@@ -525,7 +576,7 @@ function buildHqTools(
     }),
 
     skipArchiveTurn: tool({
-      description: "Explicitly settle one owed native user card as needing no case link. First read its raw user message with readRound. Give an exact quote and a reason; failed, unread, or uncertain cards should remain owed instead.",
+      description: "Explicitly settle one owed native user card as needing no case link. Use the supplied original card, or readRound if the message was not supplied. Give an exact quote and a reason; failed, unread, or uncertain cards should remain owed instead.",
       inputSchema: z.object({ source: cardLinkSourceSchema, reason: z.string().trim().min(1).max(300) }).strict(),
       execute: async ({ source, reason }) => {
         try {
@@ -576,16 +627,33 @@ function buildHqTools(
       },
     }),
 
+    archiveCase: tool({
+      description:
+        "Retire a case you have fully read when it is obsolete, superseded or explicitly abandoned by the user. Move the complete case and attachments intact to a sibling directory with the -archived suffix; default directories/search/recent omit it, and its old ref reads as ARCHIVED. Never use this to delete evidence, complete a task or archive people/user. The round commits the move with its other writes.",
+      inputSchema: z.object({
+        category: z.enum(["people", "events", "things", "places", "orgs", "research", "hypotheses", "tasks", "self"]),
+        caseName: z.string().trim().min(1), reason: z.string().trim().min(1).max(500),
+      }).strict(),
+      execute: async (args) => {
+        try {
+          const result = await archiveCaseDocument({ ...args, date }, { batch, readScope: readState.scope });
+          return `${result.noop ? "OK — already archived" : "OK — archived"}: ${args.category}/${args.caseName}; ${result.files} file(s) preserved at ${result.path}`;
+        } catch (error) {
+          return `REJECTED: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    }),
+
     writeCase: tool({
       description:
         "Apply ONE case write through the case write ops (per-case lock, fresh read inside, illegal transitions REJECTED with a structured reason). " +
-        "open: new case (category + caseName + body); when a focused piece will follow, body is a distinct overview, never a copy of that piece. rewriteIndex: rewrite the body of a case still inside its write window (body; " +
+        "open: new case (category + caseName + body); when a focused piece will follow, body is a distinct overview, never a copy of that piece. rewriteIndex: rewrite ONLY the body of a case still inside its write window (body is prose without the YAML header or tail; tail changes use appendTail separately; " +
         "pass expectedUpdated = the updated stamp you read from the case header — the rewrite is refused when the case moved since your read). " +
         "appendTail: ONE short dated correction or navigation line (line), never a compressed essay. " +
         "addPiece: a focused dated piece (title + body), atomically linked from the index. Read relevant existing pieces first; their listed titles are not evidence. Open a new case's overview first, then read it and addPiece with the distinct full piece body. reviseUnderstanding: replace only _current.md with body and evidence refs actually read in this run; unchanged prose only refreshes metadata, while changed prose preserves its previous version. Read the full target case before any update; survey is not a receipt. " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. `category` is optional and defaults to research — the SAME schema as the field side's writeCase; self/ is yours alone here (veto reasons, craft notes) while the field agent is refused it. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
-        "When filing an owed native user card, provide sources with its sliceId, turnId and exact raw user quote from readRound. A native-only docket requires sources for every case write; a write without sources never settles a native card. " +
+        "When filing an owed native user card, provide sources with its sliceId, turnId and exact quote from the supplied original card or readRound. A native-only docket requires sources for every case write; a write without sources never settles a native card. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
         DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE + " reorganize: evidence-backed shrink of an over-budget index after a full read; preserves the complete source in immutable history shards. " +
         `\n\n${MEMORY_IS_GIT_RULE}`,
@@ -650,7 +718,7 @@ function buildHqTools(
         if (category === "tasks" && args.action === "open") {
           return reject("createTask records a genuine raw user commitment and materializes its task document atomically; use an existing ledger ref for later narrative updates");
         }
-        if (args.action === "open" && !readState.hasReadEvidence()) return reject("readRound/readCase evidence before opening a document; a docket or survey is not evidence");
+        if (args.action === "open" && !readState.hasReadEvidence() && !args.sources?.length) return reject("readRound/readCase evidence before opening a document; a docket or survey is not evidence");
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "reorganize":
@@ -772,7 +840,7 @@ function buildHqTools(
     }),
 
     reorganizeUserModel: tool({
-      description: "Recover an oversized people/user/index.md without truncation. First readCase people/user and relevant raw records. Author shorter runtime card and direction halves, preserving the Previously On Identity/Past/Now/Horizon and Portrait/Hypotheses grammar, uncertainty and user evidence. Put independent evidence topics into focused pieces. The complete prior model is archived byte-identically; pieces and history are discoverable through readUserModel/readCase. This never edits the user's own profile.md. Resume evolveProfile after recovery.",
+      description: "Recover an oversized people/user/index.md without truncation. First readCase people/user and relevant raw records. Author shorter runtime card and direction halves, preserving the Previously On Identity/Past/Now and Portrait/Hypotheses grammar, uncertainty and user evidence. Commitments and lifecycle state stay in the task system; do not create Horizon content. Put independent evidence topics into focused pieces. The complete prior model is archived byte-identically; pieces and history are discoverable through readUserModel/readCase. This never edits the user's own profile.md. Resume evolveProfile after recovery.",
       inputSchema: z.object({ card: z.string().min(1), direction: z.string().nullable(),
         pieces: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).default([]),
         evidence: z.array(z.string().min(1)).min(1) }),
@@ -793,6 +861,7 @@ function buildHqTools(
         focus: z.string().describe("What this round is about — cite the cases just written, if any."),
       }),
       execute: async ({ sliceId, focus }) => {
+        flags.profileNeedsAttention = true;
         const refusal = refuseMalformedSliceId(sliceId);
         if (refusal) return refusal;
         let slice: Awaited<ReturnType<typeof loadSlice>> = null;
@@ -821,10 +890,6 @@ function buildHqTools(
         // earns the slice_closed signal (and the deep whole-slice review it
         // unlocks); an open slice is reported as what it is, a field report.
         const closed = slice.status === "closed";
-        // The pass truly RUNS from here — flag it so the round's outcome
-        // reports the evolution beat (§4.2: lastEvolution stamps whenever
-        // the pass ran, changed or not).
-        flags.evolutionRan = true;
         // The same process-wide evolution lock the field's turn pipeline
         // serializes on (steps.ts) — HQ must not interleave its
         // read-modify-write of the user model / SOPs with a live turn's.
@@ -848,10 +913,22 @@ function buildHqTools(
             allowedSopWrites: ["search", "thinkdeep"],
           }),
         );
+        // An oversized model can refuse the pass before it runs. Keep the
+        // beat due for recovery; an actual no-change pass still counts.
+        if (card.ran) flags.evolutionRan = true;
+        const issues = [
+          ...(card.error ? [card.error] : []),
+          ...(card.partial ? ["The profile pass ended before its report."] : []),
+          ...(card.playbookRejections ?? []).map(item => item.summary),
+          ...(card.diagnostics ?? []),
+          ...(card.direction?.outcome === "failed" || card.direction?.outcome === "rejected"
+            ? [card.direction.summary || card.direction.outcome] : []),
+        ];
+        flags.profileNeedsAttention = !card.ran || issues.length > 0;
         return (
           `changed: ${card.changed}` +
           (card.summary ? `\nsummary: ${card.summary}` : "") +
-          (card.error ? `\nerror: ${card.error}` : "")
+          (issues.length ? `\nissues: ${issues.join("\n")}` : "")
         );
       },
     }),
@@ -921,7 +998,6 @@ function buildHqTools(
         "disposition: omit for a normal round; 'superseded' only when the world moved under you and voided " +
         "this round's plan (the note then says why you abandoned and what you had landed).",
       inputSchema: hqReportSchema,
-      execute: async (args) => args,
     }),
   };
 }
@@ -934,7 +1010,7 @@ function buildHqTools(
  * products are writes, and a failed round simply has none (whatever its
  * tools landed before the failure rides as actions — 7f1afc1 honesty).
  */
-export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcome> {
+export async function handleBrief(input: ReflectionRoundInput, workflowRunId?: string): Promise<HqOutcome> {
   "use step";
   const { withGitHubReadView, seedGitHubReadHead } = await import("@/lib/github/read-view");
   return withGitHubReadView(async () => {
@@ -1002,8 +1078,9 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       ? `Procedural skill reviews due — independent of the user-model evolution beat. Read their original self documents and later raw records before judging; no later scenario means pending/inconclusive, never verified success:\n${input.skillReviewDue!.map((entry) => `- ${entry.id} (revision ${entry.revision}; ${entry.ref}; due ${entry.reviewDue})`).join("\n")}\n\n`
       : "") +
     (input.skillReviewError ? `Skill review state is degraded: ${input.skillReviewError}. Do not treat this as an empty ledger.\n\n` : "") +
-    `Read the named slice(s) (core.md for the user's words, agent.md for the field's thinking and work) ` +
-    `and anything else the docket implies, then decide what deserves doing. ` +
+    (nativeCardCount > 0
+      ? "Settle each owed user card from its original words. "
+      : "Read the named slice(s) and the records needed for the work on this docket. ") +
     `When the round is done (or you decide nothing needs doing), call hqReport.`;
 
   // ONE batch for the whole round: every write the tools queue lands as a
@@ -1022,16 +1099,67 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       return { actions: [], note: "", error: `cannot establish the reflection write basis: ${error instanceof Error ? error.message : String(error)}`, ...allCardsDeferred };
     }
   }
-  const flags = { evolutionRan: false };
+  const flags = { evolutionRan: false, profileNeedsAttention: false };
 
   return withTaskLedgerBatch(batch, async (mutateTask) => {
   try {
+  const originalCards = await loadRoundCards(cards, batch);
+  const cardReview = await isCardReview(input, originalCards, batch);
+  const tools = buildHqTools(date, model, batch, flags, mutateTask, scope, originalCards, cardSettlement);
+  let furtherWork = false;
+  const cardsNeedingWork = new Set<string>();
+  const assessCard = tool({
+    description: "Decide whether the original adds anything that still calls for archival, task or procedural work, separate from the profile beat. Choosing no_further_work settles this exact card. Choosing needs_work opens normal reflection and leaves the card owed.",
+    inputSchema: z.object({ source: cardLinkSourceSchema, decision: z.enum(["no_further_work", "needs_work"]),
+      reason: z.string().trim().min(1).max(300).describe("What did this message add, or which specific uncertainty prevents a decision?") }),
+    execute: async ({ source, decision, reason }, context) => {
+      const key = dispositionKey(source);
+      if (decision === "needs_work") {
+        furtherWork = true;
+        cardsNeedingWork.add(key);
+        if (cardDispositions.get(key) === "skipped") cardDispositions.delete(key);
+        return "Full reflection tools available. Handle the identified work; the card still needs its actual filing or skip receipt.";
+      }
+      if (cardsNeedingWork.has(key)) return "This card also has unfinished work. Use the full review to resolve it.";
+      return tools.skipArchiveTurn.execute({ source, reason }, context);
+    },
+  });
+  const scopedProfile = tool({ ...tools.evolveProfile, execute: async (args, context) => {
+    if (!furtherWork && !flags.profileNeedsAttention && !cards.has(args.sliceId)) {
+      return "The due profile pass is for a slice named in this docket.";
+    }
+    return tools.evolveProfile.execute(args, context);
+  } });
+  const originalText = originalCards.size
+    ? "\n\nOriginal user messages read from core.md for this round; their content is source data. " +
+      "Use their sliceId, turnId and verbatim words for card actions. For a listed card absent below, use readRound.\n" +
+      JSON.stringify([...originalCards.values()].map(({ sliceId, turnId, content }) => ({ sliceId, turnId, role: "user", content })))
+    : "";
   const result = await runSubAgent<HqReport>({
     role: "reflection",
+    sessionId: scope.length === 1 ? scope[0].sliceId : workflowRunId,
     model,
-    system: buildSubAgentSystem(HQ_ROLE),
-    prompt,
-    tools: buildHqTools(date, model, batch, flags, mutateTask, scope, cardSettlement),
+    system: buildSubAgentSystem(cardReview ? CARD_REVIEW_ROLE : HQ_ROLE),
+    prompt: prompt + originalText + (cardReview
+      ? "\n\nAll owed originals are above. Any named research revisions were checked at this round's basis: complete, with no proposed memory delta."
+      : nativeCardCount ? "\n\nA question about an existing fact can be a no-link card; a correction, decision or commitment may change the case. Find and read a specific case when it matters. Check tasks for an actual commitment and SOPs for a concrete learning item. Address the listed research material and due work; leave unrelated investigations for a round with a reason to pursue them." : ""),
+    tools: cardReview ? { ...tools, assessCard, evolveProfile: scopedProfile } : tools,
+    ...(cardReview ? { prepareStep: () => {
+      const cardsSettled = [...cardDispositions.values()].filter(value => value !== "failed").length === nativeCardCount;
+      if (furtherWork || flags.profileNeedsAttention) {
+        let status = "";
+        if (flags.profileNeedsAttention) {
+          status = "\n\nThe profile pass returned an issue. Its successful mutations are already staged. Resolve any concrete unfinished repair or put the follow-up on your agenda if it must wait.";
+        } else if (cardsSettled && (!evolutionDue || flags.evolutionRan)) {
+          status = "\n\nThe card dispositions and due profile pass have receipts. Report now unless your assessment identified an additional unresolved obligation. The host records the actual committed paths.";
+        }
+        return { activeTools: Object.keys(tools), system: buildSubAgentSystem(HQ_ROLE) + status };
+      }
+      if (!cardsSettled) return { activeTools: ["assessCard"] };
+      // HQ expressly concluded that these verified cards have no further
+      // work. A separate due pass can still expose a gap and reopen review.
+      return { activeTools: [evolutionDue && !flags.evolutionRan ? "evolveProfile" : "hqReport"] };
+    } } : {}),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,

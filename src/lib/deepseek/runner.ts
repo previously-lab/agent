@@ -46,7 +46,8 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
     const response = await call({ messages: toNativeMessages(messages), tools: serializeTools(tools),
       toolChoice: preparation?.toolChoice ?? options.toolChoice,
       thinking: settings.thinking, reasoningEffort: settings.effort, temperature: options.temperature,
-      callId: `${callPrefix}:${stepNumber}`, timeoutMs: options.timeout, maxRetries: options.maxRetries });
+      callId: `${callPrefix}:${stepNumber}`, timeoutMs: options.timeout, maxRetries: options.maxRetries,
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}) });
     // A length/error finish may include an incomplete tool_calls fragment.
     // Preserve its text/thinking, but never leave unpaired calls in continuation.
     const permitsTools = response.finishReason === "tool_calls" || response.finishReason === "stop";
@@ -125,7 +126,10 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
       if (!result) continue;
       const { toolCallId, toolName, output, error } = result;
       toolResults.push(result);
-      messages.push({ role: "tool", content: [{ type: "tool-result", toolCallId, toolName,
+      const display = error ? undefined : tools?.[toolName]?.toModelOutput?.(output, toolCallId);
+      messages.push({ role: "tool",
+        ...(display !== undefined ? { deepseek: { role: "tool" as const, tool_call_id: toolCallId, content: display } } : {}),
+        content: [{ type: "tool-result", toolCallId, toolName,
         output: typeof output === "string" ? { type: error ? "error-text" : "text", value: output }
           : { type: error ? "error-json" : "json", value: output ?? null } }] });
       await emit({ type: error ? "tool-output-error" : "tool-output-available", toolCallId,

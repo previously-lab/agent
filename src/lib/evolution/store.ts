@@ -89,10 +89,22 @@ export interface UserModel {
   full: string;
 }
 
+/** Exact duplicate bullets in the living model carry no extra evidence. */
+function dedupeModelBullets(text: string): string {
+  const seen = new Set<string>();
+  return text.split(/\r?\n/).flatMap(line => {
+    if (!/^\s*[-*]\s+\S/.test(line)) return [line];
+    const key = line.trim().replace(/\s+/g, " ");
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [line];
+  }).join("\n");
+}
+
 /** Compose the single index.md document from its two halves. */
 export function composeUserModel(card: string, direction: string | null): string {
-  const c = card.trim();
-  const d = direction?.trim() ?? "";
+  const c = dedupeModelBullets(card.trim());
+  const d = direction?.trim() ? dedupeModelBullets(direction.trim()) : "";
   if (c && d) return `${c}${USER_MODEL_DIRECTION_SEPARATOR}${d}`;
   return c || d;
 }

@@ -10,6 +10,7 @@ import {
   resolveDialogueScope,
 } from "@/lib/dialogue/runtime";
 import { digest } from "@/lib/dialogue/artifacts";
+import { formatLocalTime } from "@/lib/turn-priming";
 import { DialogueConflict } from "@/lib/dialogue/store";
 import { dispatchDialogueDueScopes, ensureDialogueDispatch } from "./dispatch-host";
 import {
@@ -74,6 +75,7 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
       workId,
       transport: DIALOGUE_TRANSPORT,
       sourceInputId,
+      acceptedTime: formatLocalTime(input.acceptedAt, prepared.clientTimezone),
     },
   });
   await args.reservation.confirm().catch((error) =>

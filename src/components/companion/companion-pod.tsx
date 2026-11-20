@@ -38,12 +38,12 @@
  *
  * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
  * read-only instrumentation sections — the HQ activity face (the field↔HQ
- * channel made visible: last dispatch, run status, recent writes. v0.11
- * streams made it EVENT-DRIVEN: the status face (reflection + runs, zero
- * GitHub calls) polls ~3s while the panel is open; the log face (水位 /
- * recent archives) reads GET /api/evolution/hq-log ONLY on panel open, a
- * watched run's stream terminal (debounced 1s), or the manual refresh — the
- * live beats still ride the running run's `data-hq-activity` frames,
+ * channel made visible: last dispatch, run status, recent writes. The status
+ * face (reflection + runs, zero GitHub calls) reads on entry/open/reconnect
+ * and evolution events; the log face (水位 / recent archives) reads
+ * GET /api/evolution/hq-log ONLY on panel open, a watched run's stream
+ * terminal (debounced 1s), or the manual refresh — the live beats ride the
+ * running run's `data-hq-activity` frames,
  * attached from the pointer's runId through
  * GET /api/evolution/hq/[runId]/stream; turn/summary runs get their own
  * terminal watchers on /api/chat/[runId]/stream) and a memory-map summary
@@ -135,8 +135,6 @@ type NarrationStatus = "connecting" | "streaming" | "done" | "error";
 
 /** The HQ beat log is a glance, not an archive — the newest few frames only. */
 const HQ_ACTIVITY_CAP = 20;
-/** Closed-panel discovery: how often the pod checks for a NEW running HQ run. */
-const HQ_DISCOVERY_POLL_MS = 15_000;
 
 /** A finished narration kept for replay after the stream is dismissed. */
 interface LatestNarration {
@@ -958,12 +956,9 @@ function CompanionPodBody({
   }, [target, status, text]);
 
   // ── Debug: the HQ activity face ───────────────────────────────────────────
-  // v0.11 streams — EVENT-DRIVEN, no GitHub polling:
-  //   status (reflection + runs, ZERO GitHub calls): first open + every 3s —
-  //     the live status clock; also what closed-panel discovery reads.
-  //   log (水位 / rounds / archives, the GitHub read): first open + a watched
-  //     run's stream terminal (debounced 1s across simultaneous finishes) +
-  //     the manual refresh — never on the 3s clock.
+  // Status and logs are event-driven: entry/open/reconnect/evolution events
+  // and run terminals. Neither visible nor hidden panels have a fetch clock.
+  // Log terminals within 1s collapse into one debounced refresh.
   // The seq guards drop responses that land after a newer fetch started.
   const [hq, setHq] = useState<HQStatusResponse | null>(null);
   const [hqFailed, setHqFailed] = useState(false);
@@ -1092,7 +1087,7 @@ function CompanionPodBody({
             hqRetryRef.current.set(runId, { attempts, after: Date.now() + Math.min(30_000, 1000 * 2 ** Math.min(attempts - 1, 5)) });
           }
           // A gone run (404) invalidates the stash; a transport failure
-          // keeps it — the discovery poll below re-attaches.
+          // keeps it — the next entry/open/evolution event re-attaches.
           if (e instanceof HQStreamError && e.code === "not_found") {
             clearStoredHQRunId();
             hqAppliedRef.current = null;
@@ -1122,20 +1117,18 @@ function CompanionPodBody({
     runWatchers.sync(runIds, open && visible);
   }, [open, visible, hq, runWatchers]);
 
-  // One visibility-owned clock: the open panel reads status every 3s;
-  // closed discovery reads every 15s until an HQ stream owns the feed.
+  // Status is discovered on entry/open/reconnect and on the shell's evolution
+  // events. A live run's own stream carries subsequent changes; no client clock.
   useEffect(() => {
     if (!visible || document.visibilityState === "hidden") {
       detachHQ();
       return;
     }
     let stopped = false;
-    let discovering = false;
     const controller = new AbortController();
     const discover = async () => {
-      if (stopped || discovering || (!open && hqAttachRef.current)) return;
-      discovering = true;
-      const status = await loadStatus(controller.signal).finally(() => { discovering = false; });
+      if (stopped || (!open && hqAttachRef.current)) return;
+      const status = await loadStatus(controller.signal);
       if (stopped || controller.signal.aborted || document.visibilityState === "hidden" || !status) return;
       if (status.reflection.state === "live" &&
         (status.reflection.status === "running" || status.reflection.status === "pending")) {
@@ -1143,13 +1136,13 @@ function CompanionPodBody({
       }
     };
     void discover();
-    const timer = setInterval(() => void discover(), open ? 3000 : HQ_DISCOVERY_POLL_MS);
+    window.addEventListener("online", discover);
     return () => {
       stopped = true;
       controller.abort();
-      clearInterval(timer);
+      window.removeEventListener("online", discover);
     };
-  }, [open, visible, loadStatus, attachHQ, detachHQ]);
+  }, [open, visible, evolution?.working, evolution?.latest, loadStatus, attachHQ, detachHQ]);
 
   useEffect(() => () => {
     detachHQ();

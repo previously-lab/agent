@@ -10,6 +10,7 @@ import { persistEvidenceAttachments, persistImageAttachments } from "@/lib/tools
 import { settleStagedImages } from "@/lib/tools/staged-images";
 import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
 import { seedGitHubReadHead, withGitHubReadView } from "@/lib/github/read-view";
+import { updateTimelineProjection } from "@/lib/episodic/timeline/projection";
 
 type Landing = { slice: TimeSlice; sealedEdge: { edge: TimeSlice; signal: SlicingSignal } | null } | { error: Error };
 
@@ -70,7 +71,8 @@ async function persistSummaryMembersInView(
   if (landing.sealedEdge) {
     const { edge, signal } = landing.sealedEdge;
     if (!minimal) {
-      const analysis = await analyzeTurn({ model: payload.modelConfig, userMessage: pending[0]?.userText ?? "", closingSlice: { turns: edge.turns } }).catch(() => null);
+      const analysis = await analyzeTurn({ model: payload.modelConfig, sessionId: edge.slice_id,
+        userMessage: pending[0]?.userText ?? "", closingSlice: { turns: edge.turns } }).catch(() => null);
       const mark = analysis?.closedMarking;
       if (mark?.focus) edge.focus = mark.focus;
       if (mark?.summary) edge.summary = mark.summary;
@@ -174,6 +176,9 @@ async function persistSummaryMembersInView(
   }
   const ownSlice = targets.get(payload.own.turnId)!;
   for (const slice of touched.values()) await saveSliceSnapshot(slice, batch);
+  const timelineTargets = new Map(touched);
+  if (landing.sealedEdge) timelineTargets.set(landing.sealedEdge.edge.slice_id, landing.sealedEdge.edge);
+  for (const slice of timelineTargets.values()) await updateTimelineProjection(slice, batch);
   if (touched.size) body.push("snapshot");
   const records = [...new Set([...targets.values()].map((s) => s.slice_id))].map((sliceId) => ({
     sliceId, turnIds: [...targets].filter(([, slice]) => slice.slice_id === sliceId).map(([turnId]) => turnId),

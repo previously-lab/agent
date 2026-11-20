@@ -24,6 +24,7 @@ import { renderAttributedRecord } from "@/lib/episodic/record-attribution";
 import { fsListFiles, fsReadFile, type WriteBatch } from "@/lib/episodic/io-helpers";
 import type { CaseWriterManifest } from "@/lib/episodic/flash/librarian";
 import { getModel, getDefaultModelId } from "@/lib/models/registry";
+import { isArchivedCaseStoragePath } from "@/lib/docs/paths";
 import type { CardEvolutionReaders } from "@/app/api/evolution/run-card-evolution";
 
 /** The deployment's default model — a background run has no turn input. */
@@ -50,7 +51,7 @@ export async function buildRunManifest(): Promise<CaseWriterManifest> {
       const p = `${dir}/${e.name}`;
       if (e.type === "dir") {
         await walk(p);
-      } else if (p.startsWith("memory/") && !p.startsWith("memory/config/")) {
+      } else if (p.startsWith("memory/") && !p.startsWith("memory/config/") && !isArchivedCaseStoragePath(p)) {
         paths.push(p.slice("memory/".length));
       }
     }

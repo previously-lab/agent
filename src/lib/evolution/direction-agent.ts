@@ -29,9 +29,7 @@
  *     RETIRED (re-proposable on new evidence) — the TTL is enforced IN CODE
  *     (retireExpiredHypotheses) on accepted proposals and independently at the
  *     reflection read boundary, so an undecided guess cannot settle in merely
- *     because no card/direction pass ran. Every evolution
- *     run refills the pool up to the cap with guesses about the PERSON —
- *     never predictions about events.
+ *     because no card/direction pass ran. No minimum pool size is required.
  *
  * The card and playbooks are PRODUCTS evolved under this portrait (the merged
  * self-evolution agent, previously-agent.ts, evaluates the direction FIRST and
@@ -434,7 +432,7 @@ export function applyDirectionOps(
         })();
         const poolSize = bulletIndices(work, hyp).length;
         if (poolSize >= DIRECTION_HYPOTHESES_MAX) {
-          result = { op: op.op, ok: false, detail: `the pool is full (${DIRECTION_HYPOTHESES_MAX}) — promote or remove a guess first` };
+          result = { op: op.op, ok: false, detail: `the pool is full (${DIRECTION_HYPOTHESES_MAX}); the new guess was not added` };
           break;
         }
         const entry = `- [proposed ${opts.sliceId}] ${text} — falsify if: ${falsify}`;
@@ -710,7 +708,7 @@ export function buildDirectionBlock(direction: string | null): string {
       "",
       "### Hypotheses — UNVERIFIED GUESSES about the user",
       "",
-      "The lines below are guesses about the user's traits and patterns, NOT established facts — they may shape what you pay attention to, and you may probe them gently (asking the user is allowed); never assert one as fact. User feedback on a guess is exactly the signal that confirms or refutes it:",
+      "These are provisional interpretations. The user's current request and confirmed preferences determine how much detail and verification to provide. A guess supplies no reason to investigate, ask for confirmation or raise the required precision. Never present a guess as fact.",
       "",
       hypBody!.trim(),
     );

@@ -31,6 +31,9 @@ export const thinkingReportSchema = z.object({
     findingIndices: z.array(z.number().int().nonnegative().max(11)).min(1).max(8),
     targetRefs: z.array(boundedId).max(4),
   }).strict().optional(),
+  /** Advisory relation to other work; never changes this result's ownership. */
+  relation: z.enum(["new", "related", "continuation", "unclear"]).optional(),
+  dependsOnInputIds: z.array(boundedId).max(8).optional(),
   /** Genuine user-input blocker (missing file/info, a decision, permission). Optional. */
   needsUser: dialogueNeedsUserSchema.optional(),
 }).strict();

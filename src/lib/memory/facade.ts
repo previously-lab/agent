@@ -1,5 +1,8 @@
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
+import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
+import { sliceIdToIso } from "@/lib/chat/slice-id-time";
+import { localDateKey } from "@/lib/time/relative";
 export { nameSimilarity, normalizeRecallName } from "./name-match";
 /**
  * The memory-read facade (v0.36) — the field agent's read vocabulary over the
@@ -40,7 +43,7 @@ import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getMemoryRoot } from "@/lib/whitelist";
 import { isGitRepo, logCommits } from "@/lib/episodic/local-git";
-import { CASE_CATEGORIES, MEMORY_ROOT_DIR } from "@/lib/docs/paths";
+import { CASE_CATEGORIES, isArchivedCaseName, MEMORY_ROOT_DIR } from "@/lib/docs/paths";
 import type { CaseCategory } from "@/lib/docs/paths";
 import {
   caseCurrentPath,
@@ -58,13 +61,15 @@ import {
 import { parsePieceFileName } from "@/lib/docs/case-naming";
 import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { parseSliceId, parseTurns, applyRange, reassembleSlice } from "@/lib/episodic/turn-parser";
-import { projectRecordArtifactTranscript } from "@/lib/episodic/record-attribution";
+import { projectRecordArtifactTranscript, publicRecordTranscript } from "@/lib/episodic/record-attribution";
 import { slicePartPath } from "@/lib/episodic/paths";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
 import { annotateSliceWithLocalTime, sliceLocalBanner } from "@/lib/episodic/time-localize";
 import { splitParagraphs, segmentSearch, textLines, searchResultToString } from "@/lib/retrieval/doc-segments";
 import { extractMarkdownRefs, extractSemanticDocumentLinks } from "@/lib/archive/ref-tokens";
-import { canonicalConversationRecordRef, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
+import { canonicalConversationRecordRef, withoutConversationEntryContent, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
+import { archivedCaseRefPaths } from "@/lib/docs/archive-case";
+import { parseTimelineEntries, timelinePathForSlice, type TimelineEntry } from "@/lib/episodic/timeline/projection";
 
 // ─── Categories (the leaf module owns the enum; re-exported here) ─────────
 
@@ -107,6 +112,8 @@ export interface MemoryEntry {
   title: string;
   /** YYYY-MM-DD — free from the path or frontmatter (same-source discipline). */
   date: string;
+  /** User-local opening day of one cited record slice, independent of individual turns. */
+  citedSliceStartDay?: string;
   /** Summary or hit snippet; fixed-length, NEVER the whole file. */
   excerpt: string;
   /** Cases only: the last-write stamp (ISO). */
@@ -145,6 +152,10 @@ export type RecallResult =
       readFailures?: number;
       /** Search only: name/path leads when this page has no content hits. */
       pathMatches?: MemoryEntry[];
+      /** Body text actually observed in this search, scoped to its returned page. */
+      passages?: SemanticSearchPassage[];
+      /** Optional pointers printed outside the read receipt. They identify turns to check. */
+      turnNavigation?: { sourceRef: string; cardTargets: ScenarioRecallTarget[] }[];
       /**
        * recallFind only: the hit was adopted by approximate name matching —
        * this is the stored (true) name the query resolved to.
@@ -186,6 +197,8 @@ export type RecallReadResult =
       headings: OutlineHeading[];
     }
   | { kind: "not_found"; nearMisses?: MemoryEntry[] }
+  | { kind: "no_matching_turns" }
+  | { kind: "archived"; ref: string; note: string }
   | { kind: "unavailable"; note: string };
 
 /** One heading span in a document outline (1-based line numbers). */
@@ -220,7 +233,8 @@ export const EXCERPT_MAX_CHARS = 160;
  * enumeration, so listing is the only "index" this layer ever touches.
  */
 export interface RecallBackend {
-  listMemoryFiles(): Promise<string[]>;
+  /** A backend may restrict traversal to this scope; callers still filter returned paths. */
+  listMemoryFiles(scope?: { category: "records" | "timeline"; after?: string; before?: string }): Promise<string[]>;
   readFile(path: string): Promise<string>;
 }
 
@@ -307,7 +321,7 @@ export function createReadCache(backend: RecallBackend): RecallBackend {
     }
     return content;
   };
-  return { listMemoryFiles: () => backend.listMemoryFiles(), readFile };
+  return { listMemoryFiles: scope => backend.listMemoryFiles(scope), readFile };
 }
 
 // ─── Tree index (paths only — zero content reads) ─────────────────────────
@@ -357,7 +371,7 @@ export function buildTreeIndex(paths: string[]): MemoryTreeIndex {
   for (const path of paths) {
     if (!path.startsWith(`${MEMORY_ROOT_DIR}/`)) continue;
     if (path.startsWith("memory/config/") || path === "memory/user/config.json") continue;
-    if (path.includes("/attachments/")) continue;
+    if (path.includes("/attachments/") || isArchivedCaseName(path.split("/")[2] ?? "")) continue;
 
     const recordsMatch = RECORDS_CORE_RE.exec(path);
     if (recordsMatch) {
@@ -676,11 +690,7 @@ async function buildProfileEntry(backend: RecallBackend, path: string): Promise<
 
 // ─── Shared scope helpers ─────────────────────────────────────────────────
 
-interface ScopeEntry {
-  built: BuiltEntry;
-  /** Where the entry came from — for unavailable accounting. */
-  sourcePath: string;
-}
+type RecentCandidate = BuiltEntry | { sliceId: string; activity: string };
 
 /** Case-shaped categories (everything but timeline/records). */
 function isCaseCategory(c: RecallCategory): boolean {
@@ -695,8 +705,8 @@ async function gatherScopeEntries(
   backend: RecallBackend,
   index: MemoryTreeIndex,
   category: RecallCategory | undefined,
-): Promise<ScopeEntry[]> {
-  const out: ScopeEntry[] = [];
+): Promise<RecentCandidate[]> {
+  const out: RecentCandidate[] = [];
   const wantNode = (node: CaseNode): boolean => {
     if (category === undefined) return true;
     return isCaseCategory(category) && nodeCategory(node) === category;
@@ -706,30 +716,26 @@ async function gatherScopeEntries(
   const builtCases = await mapWithConcurrency(nodes, RECALL_READ_CONCURRENCY, (node) =>
     buildCaseEntry(backend, node),
   );
-  for (const [i, built] of builtCases.entries()) {
-    if (built) out.push({ built, sourcePath: nodes[i]!.indexPath! });
+  for (const built of builtCases) {
+    if (built) out.push(built);
   }
   if (category === undefined || category === "self") {
     if (index.agendaPath) {
       const built = await buildAgendaEntry(backend, index.agendaPath);
-      if (built) out.push({ built, sourcePath: index.agendaPath });
+      if (built) out.push(built);
     }
   }
   if (category === undefined || category === "people") {
     if (index.profilePath) {
       const built = await buildProfileEntry(backend, index.profilePath);
-      if (built) out.push({ built, sourcePath: index.profilePath });
+      if (built) out.push(built);
     }
   }
   if (category === undefined || category === "records" || category === "timeline") {
-    const sliceCategory = category === "timeline" ? "timeline" : "records";
-    const builtSlices = await mapWithConcurrency(
-      index.slices,
-      RECALL_READ_CONCURRENCY,
-      (sliceId) => buildSliceEntry(backend, sliceId, sliceCategory),
-    );
-    for (const [i, built] of builtSlices.entries()) {
-      if (built) out.push({ built, sourcePath: `records/${index.slices[i]!}` });
+    // A derived month can cover only some of the physical records. Their
+    // identities alone determine membership, order and the page boundaries.
+    for (const sliceId of index.slices) {
+      if (parseSliceId(sliceId)) out.push({ sliceId, activity: sliceId.slice(0, 10) });
     }
   }
   return out;
@@ -763,38 +769,65 @@ export async function recallRecent(
   const offset = Math.max(0, Math.floor(input.offset ?? 0));
   let index: MemoryTreeIndex;
   try {
-    index = buildTreeIndex(await backend.listMemoryFiles());
+    const scope = input.category === "records" || input.category === "timeline"
+      ? { category: "records" as const, after: input.after, before: input.before } : undefined;
+    index = buildTreeIndex(await backend.listMemoryFiles(scope));
   } catch (e) {
     throw e; // a listing failure is infrastructure — the step retry handles it
   }
 
   const scope = await gatherScopeEntries(backend, index, input.category);
-  const filtered = scope.filter((s) =>
-    inDateRange(s.built.activity, input.after, input.before),
-  );
+  const filtered = scope.filter(s => inDateRange(s.activity, input.after, input.before));
   if (filtered.length === 0) {
     return { kind: "empty" };
   }
-  filtered.sort((a, b) => (a.built.activity >= b.built.activity ? -1 : 1));
-  if (offset >= filtered.length) {
+  const total = filtered.length;
+  if (offset >= total) {
     return {
       kind: "entries",
       entries: [],
-      scanned: filtered.length,
+      scanned: total,
       truncated: false,
       offset,
       pastEnd: true,
     };
   }
+  filtered.sort((a, b) => b.activity.localeCompare(a.activity) ||
+    ("sliceId" in b ? b.sliceId : "").localeCompare("sliceId" in a ? a.sliceId : ""));
   const page = filtered.slice(offset, offset + n);
+  const category = input.category === "timeline" ? "timeline" : "records";
+  const months = new Map<string, Promise<Map<string, TimelineEntry>>>();
+  let readFailures = 0;
+  const entries = await mapWithConcurrency(page, RECALL_READ_CONCURRENCY, async (candidate): Promise<MemoryEntry> => {
+    if ("entry" in candidate) return candidate.entry;
+    const { sliceId, activity: date } = candidate;
+    const path = timelinePathForSlice(sliceId);
+    let month = months.get(path);
+    if (!month) {
+      month = backend.readFile(path)
+        .then(raw => new Map(parseTimelineEntries(raw).map(item => [item.sliceId, item])))
+        .catch(() => new Map<string, TimelineEntry>());
+      months.set(path, month);
+    }
+    const item = (await month).get(sliceId);
+    if (!item) {
+      const built = await buildSliceEntry(backend, sliceId, category);
+      if (built) return built.entry;
+      readFailures++;
+    }
+    const focus = item?.focus ?? "";
+    const summary = item?.summary ?? "";
+    return { ref: `records/${sliceId}`, category, kind: "slice", title: focus || `Slice ${sliceId}`, date,
+      excerpt: summary || focus, navigation: { kind: "navigation_only", focus, summary } };
+  });
+  const truncated = offset + entries.length < total;
   return {
     kind: "entries",
-    entries: page.map((s) => s.built.entry),
-    scanned: filtered.length,
-    truncated: filtered.length > offset + page.length,
-    // Offset rides the result only when the caller actually paged — a full
-    // page then teaches the model how to continue.
-    ...(input.offset !== undefined ? { offset } : {}),
+    entries,
+    scanned: total,
+    truncated,
+    ...(input.offset !== undefined || truncated ? { offset } : {}),
+    ...(readFailures ? { readFailures } : {}),
   };
 }
 
@@ -971,6 +1004,9 @@ export async function recallFind(
 // ─── Verb ③ recallSearch ──────────────────────────────────────────────────
 
 export interface RecallSearchInput {
+  /** Internal: provide bounded, attributable semantic passages to the thinking reader. */
+  includeSemanticPassages?: boolean;
+  turnLinks?: "user" | "assistant" | "both";
   /** One keyword or several; matches with more keywords together rank first. */
   query: string | string[];
   /** Omitted = ALL structured documents (cases + self + timeline heads) —
@@ -978,7 +1014,10 @@ export interface RecallSearchInput {
    *  includeRecords is true (v0.36 §3 扫描面纪律). */
   category?: RecallCategory;
   includeRecords?: boolean;
-  /** Inclusive day bounds on the entry's activity date. */
+  /** With conversation bounds, match cited slice opening days in the user's calendar. */
+  dateBasis?: "activity" | "conversation";
+  timezone?: string;
+  /** Inclusive day bounds; existing callers filter by activity. */
   since?: string;
   until?: string;
   /** Default 20, hard cap 30. */
@@ -992,12 +1031,93 @@ export interface RecallSearchInput {
 /** One searchable document: where it lives, how to build its entry, its sort date. */
 interface SearchUnit {
   docPath: string;
+  edition?: "original" | "current";
   /** Set for slice units — slices read through the records core path. */
   sliceId?: string;
   activity: string;
   /** Slices in the default scope scan only the bounded head, not the body. */
   sliceHeadOnly: boolean;
   build(raw: string): Promise<BuiltEntry | null>;
+}
+
+interface SemanticSearchPassage {
+  ref: string;
+  excerpt: string;
+  revision: string;
+  edition: "original" | "current";
+}
+
+type ScannedSearchUnit = { failed: true } | {
+  failed: false;
+  entry: MemoryEntry | null;
+  score: number;
+  matchedAllTerms?: boolean;
+  source?: { raw: string; edition: "original" | "current" };
+};
+
+function withoutFrontmatter(raw: string): string {
+  const header = /^\uFEFF?---[ \t]*\r?\n/.test(raw);
+  return header ? /^\uFEFF?---[ \t]*\r?\n[\s\S]*?^---[ \t]*\r?$(?:\n|$)([\s\S]*)/m.exec(raw)?.[1] ?? "" : raw;
+}
+
+/** Keep literal spans and citation syntax intact. Never match across removed Markdown. */
+function semanticMarkdownSections(raw: string): string[] {
+  const nonProse = /<!--[\s\S]*?(?:-->|(?![\s\S]))|^[ \t]*(`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?(?:^[ \t]*\1[ \t]*\r?$|(?![\s\S]))/gm;
+  return withoutFrontmatter(raw).replace(nonProse, "\0").split("\0");
+}
+
+/** A heading may carry a citation but cannot supply the content of an answer. */
+function splitAtHeadings(section: string): string[] {
+  return section.split(/^[ \t]*#{1,6}(?:[ \t]+[^\r\n]*|[ \t]*)\r?$/gm);
+}
+
+function matchedBodyPassage(raw: string, keywords: readonly string[]): string | undefined {
+  let best: string | undefined;
+  let bestTerms = 0;
+  const terms = keywords.map(k => k.toLowerCase());
+  // Each retained window is cut from a single contiguous stretch of the file.
+  // Hidden spans remain separate; only prose can establish a match.
+  const sections = semanticMarkdownSections(raw);
+  const body = sections.length === 1 ? sections[0]!.trim() : undefined;
+  for (const section of sections.flatMap(splitAtHeadings)) {
+    if (!section) continue;
+    for (const hit of section.matchAll(/[^\s][^\r\n]*(?:\r?\n(?![ \t]*\r?$)[^\r\n]+)*/gm)) {
+      const paragraph = hit[0].trimEnd();
+      const lower = paragraph.toLowerCase();
+      const matched = terms.filter(k => lower.includes(k));
+      if (matched.length <= bestTerms) continue;
+      // A compact case can contain its observations and limitations under later
+      // headings. Keep them together after confirming an actual body match.
+      if (body && body.length <= 840) return body;
+      const at = hit.index + Math.min(...matched.map(k => lower.indexOf(k)));
+      const start = Math.max(0, hit.index - 120, at - 180);
+      const paragraphEnd = hit.index + paragraph.length;
+      let end = Math.min(start + 840, paragraphEnd + 220);
+      if (end < section.length && end > paragraphEnd) {
+        // Do not append the first half of an unrelated neighboring paragraph.
+        const trailing = section.slice(paragraphEnd, end);
+        const boundary = Array.from(trailing.matchAll(/\r?\n[ \t]*\r?\n/g)).at(-1);
+        end = paragraphEnd + (boundary?.index ?? 0);
+      }
+      const excerpt = section.slice(start, end).trim();
+      if (!matched.some(k => excerpt.toLowerCase().includes(k))) continue;
+      best = excerpt;
+      bestTerms = matched.length;
+    }
+  }
+  return best;
+}
+
+/** Only public, role-qualified, canonical links can address an original turn. */
+function linkedTurns(markdown: string): ScenarioRecallTarget[] {
+  const targets = new Map<string, ScenarioRecallTarget>();
+  for (const { link } of extractSemanticDocumentLinks(markdown)) {
+    if (link.ref.startsWith("records/") && link.turnId && link.role) {
+      const target = { ref: link.ref, turnId: link.turnId, role: link.role };
+      targets.set(JSON.stringify(target), target);
+    }
+  }
+  return [...targets.values()];
 }
 
 /** The fallback deals only in names of readable semantic entries, never body text. */
@@ -1070,7 +1190,7 @@ async function gatherSearchUnits(
   input: RecallSearchInput,
 ): Promise<SearchUnit[]> {
   const units: SearchUnit[] = [];
-  const scanSlicesHeads = input.category === undefined || input.category === "timeline";
+  const scanSlicesHeads = (input.category === undefined && input.dateBasis !== "conversation") || input.category === "timeline";
   const scanSlicesFull =
     input.category === "records" || (input.category === undefined && input.includeRecords === true);
 
@@ -1084,9 +1204,9 @@ async function gatherSearchUnits(
     RECALL_READ_CONCURRENCY,
     async (node): Promise<SearchUnit[]> => {
       const out: SearchUnit[] = [];
-      // Sort key needs the header — one cached read per case in scope.
+      // Activity sorting needs stored dates. Citation search can rank candidates from paths alone.
       let caseActivity = latestPieceDate(node);
-      if (node.indexPath) {
+      if (node.indexPath && input.dateBasis !== "conversation") {
         try {
           const raw = await backend.readFile(node.indexPath);
           const doc = parseCaseDoc(raw, {
@@ -1103,8 +1223,11 @@ async function gatherSearchUnits(
         } catch {
           // header unreadable — fall back to the piece-date sort key
         }
+      }
+      if (node.indexPath) {
         out.push({
           docPath: node.indexPath,
+          edition: node.currentPath ? "original" : "current",
           activity: caseActivity,
           sliceHeadOnly: false,
           build: async (raw) => {
@@ -1139,6 +1262,7 @@ async function gatherSearchUnits(
         const date = pieceDate(piecePath);
         out.push({
           docPath: piecePath,
+          edition: "current",
           activity: date,
           sliceHeadOnly: false,
           build: (raw) => {
@@ -1249,61 +1373,112 @@ export async function recallSearch(
   if (keywords.length === 0) {
     return { kind: "unavailable", note: "empty query" };
   }
+  const byConversation = input.dateBasis === "conversation";
+  if (byConversation && !input.since && !input.until) {
+    return { kind: "unavailable", note: "Conversation-date search needs a since or until date." };
+  }
+  const recordDay = (ref: string): string | null => {
+    if (!ref.startsWith("records/") || !parseCanonicalDocumentRef(ref)) return null;
+    const instant = sliceIdToIso(ref.slice("records/".length));
+    return instant ? localDateKey(instant, input.timezone ?? "UTC") : null;
+  };
 
   const index = buildTreeIndex(await backend.listMemoryFiles());
-  const units = (await gatherSearchUnits(backend, index, input)).filter((u) =>
-    inDateRange(u.activity, input.since, input.until),
-  );
+  const units = (await gatherSearchUnits(backend, index, input)).filter((unit) => {
+    if (!byConversation) return inDateRange(unit.activity, input.since, input.until);
+    if (!unit.sliceId) return true; // A later-written document may cite a conversation in this window.
+    const day = recordDay(unit.docPath);
+    return day !== null && inDateRange(day, input.since, input.until);
+  });
   if (units.length === 0) return { kind: "empty" };
 
-  units.sort((a, b) => b.activity.localeCompare(a.activity) || b.docPath.localeCompare(a.docPath));
+  // Path matches prioritize verification only. A dated hit still requires both
+  // matching prose and a citation in the requested slice-start window.
+  const named = new Set<SearchUnit>();
+  if (byConversation) {
+    const terms = keywords.map(term => term.toLowerCase());
+    for (const unit of units) {
+      if (unit.sliceId) continue;
+      const name = unit.docPath.split("/").slice(2).join("/").replace(/\/(?:index|_current)\.md$|\.md$/, "").toLowerCase();
+      if (terms.every(term => name.includes(term))) named.add(unit);
+    }
+  }
+  units.sort((a, b) => Number(Boolean(a.sliceId)) - Number(Boolean(b.sliceId)) ||
+    Number(named.has(b)) - Number(named.has(a)) ||
+    b.activity.localeCompare(a.activity) || b.docPath.localeCompare(a.docPath));
   const scanCursor = Math.min(units.length, Math.max(0, Math.floor(input.scanCursor ?? 0)));
-  const scanEnd = Math.min(units.length, scanCursor + SEARCH_SCAN_CAP);
-  const scanned = scanEnd - scanCursor;
-  if (scanned === 0) return { kind: "entries", entries: [], scanned, truncated: false, offset, pastEnd: true };
-  const scanUnits = units.slice(scanCursor, scanEnd);
+  const scanUnits = units.slice(scanCursor, scanCursor + SEARCH_SCAN_CAP);
+  if (!scanUnits.length) return { kind: "entries", entries: [], scanned: 0, truncated: false, offset, pastEnd: true };
 
-  const scannedUnits = await mapWithConcurrency(
-    scanUnits,
-    RECALL_READ_CONCURRENCY,
-    async (unit): Promise<{ failed: true } | { failed: false; entry: MemoryEntry | null; score: number }> => {
-      let raw: string;
-      try {
-        raw = unit.sliceId
-          ? await readSliceRaw(backend, unit.sliceId, "core")
-          : await backend.readFile(unit.docPath);
-      } catch {
-        return { failed: true };
+  const readUnit = async (unit: SearchUnit): Promise<ScannedSearchUnit> => {
+    let raw: string;
+    try {
+      raw = unit.sliceId
+        ? await readSliceRaw(backend, unit.sliceId, "core")
+        : await backend.readFile(unit.docPath);
+    } catch {
+      return { failed: true };
+    }
+    if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
+    else if (unit.sliceId) raw = projectRecordArtifactTranscript(raw);
+    const current = unit.docPath.endsWith("/_current.md") ? parseCaseCurrent(raw) : undefined;
+    if (current) raw = current.body;
+    const sections = (unit.sliceId ? [raw] : semanticMarkdownSections(raw)).map(section => section.replace(/\r\n/g, "\n"));
+    const prose = unit.sliceId ? sections : sections.flatMap(splitAtHeadings);
+    const segments = prose.flatMap(splitParagraphs);
+    const found = segmentSearch(segments, keywords, 0, 0);
+    if (found.length === 0) return { failed: false, entry: null, score: 0 };
+    let citedSliceStartDay: string | undefined;
+    if (byConversation && !unit.sliceId) {
+      const citations = [...sections.flatMap(extractMarkdownRefs), ...(current?.evidence ?? [])];
+      for (const ref of citations) {
+        const day = recordDay(ref);
+        if (day && inDateRange(day, input.since, input.until)) {
+          citedSliceStartDay = day;
+          break;
+        }
       }
-      if (unit.sliceHeadOnly) raw = sliceHeadText(raw);
-      else if (unit.sliceId) raw = projectRecordArtifactTranscript(raw);
-      if (unit.docPath.endsWith("/_current.md")) raw = parseCaseCurrent(raw).body;
-      const segments = splitParagraphs(raw);
-      const found = segmentSearch(segments, keywords, 0, 0);
-      if (found.length === 0) return { failed: false, entry: null, score: 0 };
-      const built = await unit.build(raw);
-      if (!built) return { failed: true };
-      const strongest = found.reduce((best, next) => next.keywords.length > best.keywords.length ? next : best);
-      built.entry.excerpt = searchExcerpt(strongest.content, strongest.keywords);
-      // Rank only within the stable candidate page; dates still decide scan
-      // coverage and break exact ties. Term coverage wins over name proximity.
-      const terms = new Set(found.flatMap((hit) => hit.keywords)).size;
-      const name = unit.sliceId ? 0 : searchNameScore(built.entry, keywords);
-      const score = strongest.keywords.length + terms / (keywords.length + 1) + name / (keywords.length + 1) ** 2;
-      return { failed: false, entry: built.entry, score };
-    },
-  );
+      if (!citedSliceStartDay) return { failed: false, entry: null, score: 0 };
+    }
+    const built = await unit.build(raw);
+    if (!built) return { failed: true };
+    const strongest = found.reduce((best, next) => next.keywords.length > best.keywords.length ? next : best);
+    const entry = unit.sliceId ? withoutConversationEntryContent(built.entry)
+      : { ...built.entry, excerpt: searchExcerpt(strongest.content, strongest.keywords),
+        ...(citedSliceStartDay ? { citedSliceStartDay } : {}) };
+    // Within each source group, term coverage wins over name proximity.
+    const terms = new Set(found.flatMap((hit) => hit.keywords)).size;
+    const name = unit.sliceId ? 0 : searchNameScore(built.entry, keywords);
+    const score = strongest.keywords.length + terms / (keywords.length + 1) + name / (keywords.length + 1) ** 2;
+    const canonical = unit.edition && parseCanonicalDocumentRef(entry.ref);
+    const exactFile = canonical && (unit.docPath === `memory/${canonical}/index.md` || unit.docPath === `memory/${canonical}.md`);
+    const source = input.includeSemanticPassages && unit.edition && exactFile &&
+      !canonical.startsWith("self/") && canonical !== "people/user" && !canonical.startsWith("people/user/")
+      ? { raw, edition: unit.edition } : undefined;
+    return { failed: false, entry, score, matchedAllTerms: strongest.keywords.length === keywords.length, source };
+  };
+  // Return verified name matches promptly. On a miss continue inside this call,
+  // so a misleading filename costs no extra model decision. All candidates
+  // remain reachable via the same cursor and offset protocol.
+  const firstUnnamed = scanUnits.findIndex(unit => !named.has(unit));
+  const firstBatch = firstUnnamed > 0 ? scanUnits.slice(0, firstUnnamed) : scanUnits;
+  const scannedUnits = await mapWithConcurrency(firstBatch, RECALL_READ_CONCURRENCY, readUnit);
+  if (firstBatch.length < scanUnits.length && !scannedUnits.some(hit => !hit.failed && hit.matchedAllTerms)) {
+    scannedUnits.push(...await mapWithConcurrency(scanUnits.slice(firstBatch.length), RECALL_READ_CONCURRENCY, readUnit));
+  }
+  const scanned = scannedUnits.length;
+  const scanEnd = scanCursor + scanned;
   const readFailures = scannedUnits.filter((unit) => unit.failed).length;
   const hitRefs = new Map<string, MemoryEntry>();
-  const ranked = scannedUnits.flatMap((unit) => !unit.failed && unit.entry ? [{ entry: unit.entry, score: unit.score }] : [])
-    .sort((a, b) => b.score - a.score);
+  const ranked = scannedUnits.flatMap((unit) => !unit.failed && unit.entry ? [{ entry: unit.entry, score: unit.score, source: unit.source }] : [])
+    .sort((a, b) => Number(a.entry.kind === "slice") - Number(b.entry.kind === "slice") || b.score - a.score);
   for (const { entry } of ranked) {
     if (!hitRefs.has(entry.ref)) hitRefs.set(entry.ref, entry);
   }
   const hits = [...hitRefs.values()];
 
   const hasMoreCandidates = scanEnd < units.length;
-  const pathMatches = hits.length === 0 && (hasMoreCandidates || readFailures < scanned)
+  const pathMatches = !byConversation && hits.length === 0 && (hasMoreCandidates || readFailures < scanned)
     ? closestSearchPaths(units, index, keywords, limit)
     : [];
   if (hits.length === 0 && !hasMoreCandidates) {
@@ -1330,12 +1505,37 @@ export async function recallSearch(
     };
   }
   const page = hits.slice(offset, offset + limit);
+  const passages: SemanticSearchPassage[] = [];
+  const turnNavigation: { sourceRef: string; cardTargets: ScenarioRecallTarget[] }[] = [];
+  if (input.includeSemanticPassages) {
+    for (const entry of page) {
+      const source = ranked.find(hit => hit.entry === entry)?.source;
+      if (!source) continue;
+      const excerpt = matchedBodyPassage(source.raw, keywords);
+      if (!excerpt) continue;
+      passages.push({ ref: entry.ref, excerpt, revision: caseStorageRevision(source.raw), edition: source.edition });
+      if (input.turnLinks) {
+        const inExcerpt = new Set(linkedTurns(excerpt).map(target => JSON.stringify(target)));
+        const mentioned = new Set(excerpt.match(/\b\d{4}-\d{2}-\d{2}-\d{4}\b/g) ?? []);
+        const rank = (target: ScenarioRecallTarget) => inExcerpt.has(JSON.stringify(target)) ? 2 :
+          Number(mentioned.has(target.ref.slice("records/".length)));
+        const cardTargets = linkedTurns(semanticMarkdownSections(source.raw).join("\n\n"))
+          .filter(target => input.turnLinks === "both" || target.role === input.turnLinks)
+          .filter(target => !byConversation || inDateRange(recordDay(target.ref) ?? "", input.since, input.until))
+          .sort((a, b) => rank(b) - rank(a)).slice(0, 3);
+        if (cardTargets.length) turnNavigation.push({ sourceRef: entry.ref, cardTargets });
+      }
+      if (passages.length === 2) break;
+    }
+  }
   const hasMoreHits = hits.length > offset + page.length;
   const nextScanCursor = hasMoreHits ? scanCursor : hasMoreCandidates ? scanEnd : undefined;
   const nextOffset = hasMoreHits ? offset + page.length : 0;
   return {
     kind: "entries",
     entries: page,
+    ...(passages.length ? { passages } : {}),
+    ...(turnNavigation.length ? { turnNavigation } : {}),
     scanned,
     truncated: nextScanCursor !== undefined,
     ...(input.offset !== undefined ? { offset } : {}),
@@ -1364,6 +1564,8 @@ export interface RecallReadInput {
   ref: string;
   /** records only: which slice part (default "core"). */
   part?: "core" | "agent" | "previously";
+  /** Project core to public turns before applying even line- or search-based ranges. */
+  publicRecordOnly?: boolean;
   /** Record cores support all filters; semantic documents support bounded lines. */
   range?: RecallReadRange;
   /** User-local rendering for slice parts (turn annotation / snapshot banner). */
@@ -1378,7 +1580,7 @@ export interface RecallReadInput {
 }
 
 /** Apply the five range filters to a slice core — the readSlice protocol. */
-export function applySliceRange(sliceId: string, record: string, range?: RecallReadRange): string {
+export function applySliceRange(sliceId: string, record: string, range?: RecallReadRange, searchMiss: "full" | "empty" = "full"): string {
   // Range selection works on the same prose view as an unbounded recall.
   const raw = projectRecordArtifactTranscript(record);
   if (!range) return raw;
@@ -1387,6 +1589,7 @@ export function applySliceRange(sliceId: string, record: string, range?: RecallR
     const context = range.context ?? 1;
     const turns = sliceTurnSegments(raw);
     const hits = segmentSearch(turns, keywords, context, context);
+    if (!hits.length && searchMiss === "empty") return "";
     return searchResultToString(sliceId, keywords, hits, raw);
   }
   if (range.type === "lines") {
@@ -1643,7 +1846,7 @@ export async function recallRead(
 ): Promise<RecallReadResult> {
   let result = await recallReadBody(createReadCache(backend), input);
   if (input.includePieceCatalog && result.kind === "content") {
-    result = { ...result, storageRevision: result.caseRevision ?? caseStorageRevision(result.content) };
+    result = { ...result, storageRevision: result.storageRevision ?? result.caseRevision ?? caseStorageRevision(result.content) };
   }
   if (input.outline && result.kind === "content") {
     const { totalLines, headings } = parseDocumentOutline(result.content);
@@ -1654,13 +1857,7 @@ export async function recallRead(
   }
   const caseRef = result.kind === "content" ? owningCaseRef(result.path) : null;
   if (result.kind === "content" && !input.range && !input.outline && caseRef) {
-    const exact = new Map<string, ScenarioRecallTarget>();
-    for (const { link } of extractSemanticDocumentLinks(result.content)) {
-      if (link.ref.startsWith("records/") && link.turnId && link.role) {
-        const target = { ref: link.ref, turnId: link.turnId, role: link.role };
-        exact.set(JSON.stringify(target), target);
-      }
-    }
+    const exact = linkedTurns(result.content);
     const refs = [...extractMarkdownRefs(result.content),
       ...(result.currentUnderstanding ? parseCaseCurrent(result.currentUnderstanding.content).evidence : [])];
     const recordLeads = [...new Set(refs.flatMap((ref) => {
@@ -1674,7 +1871,7 @@ export async function recallRead(
     }))].filter((ref) => ref !== caseRef).slice(0, 8);
     result = {
       ...result,
-      ...(exact.size ? { cardTargets: [...exact.values()].slice(0, 8) } : {}),
+      ...(exact.length ? { cardTargets: exact.slice(0, 8) } : {}),
       ...(recordLeads.length ? { recordLeads } : {}),
       ...(relatedCases.length ? { relatedCases } : {}),
     };
@@ -1721,11 +1918,15 @@ async function recallReadBody(
       return { kind: "content", content: withBanner, path: `records/${sliceId} (previously)` };
     }
     // core: range filter, then the local-time annotation.
-    const ranged = applySliceRange(sliceId, raw, input.range);
+    const ranged = input.publicRecordOnly
+      ? applySliceRange(sliceId, publicRecordTranscript(raw), input.range, "empty")
+      : applySliceRange(sliceId, raw, input.range);
+    if (input.publicRecordOnly && input.range?.type === "search" && ranged === "") return { kind: "no_matching_turns" };
     const content = input.timezone
       ? annotateSliceWithLocalTime(ranged, input.timezone, sliceId)
       : ranged;
-    return { kind: "content", content, path: `records/${sliceId}` };
+    return { kind: "content", content, path: `records/${sliceId}`,
+      ...(input.publicRecordOnly && input.includePieceCatalog ? { storageRevision: caseStorageRevision(raw) } : {}) };
   }
 
   // The two reserved bare-file refs (ruling #3).
@@ -1738,7 +1939,15 @@ async function recallReadBody(
 
   const candidates = recallReadCandidates(ref);
   if (!candidates) return { kind: "not_found" };
-  const direct = await readFirstCandidate(backend, candidates);
+  const [exact, ...fallbacks] = candidates;
+  let direct = await readFirstCandidate(backend, [exact!]);
+  if (direct.kind === "allAbsent") {
+    const archived = archivedCaseRefPaths(ref);
+    direct = await readFirstCandidate(backend, [...archived, ...fallbacks]);
+    if (direct.kind === "content" && archived.includes(direct.path)) {
+      return { kind: "archived", ref, note: "This case is archived and excluded from active memory; its content remains preserved, not current." };
+    }
+  }
   if (direct.kind === "content") {
     return withCaseCurrent(backend, direct, input.includeHistory === true, input.includePieceCatalog === true && !input.range && !input.outline);
   }
@@ -2206,7 +2415,8 @@ function renderEntryLines(entries: MemoryEntry[]): string {
   return entries
     .map((e) => {
       const core = `- [${e.date || "undated"}] ${e.title}`;
-      return e.excerpt ? `${core} — ${e.excerpt} (ref: ${e.ref})` : `${core} (ref: ${e.ref})`;
+      const citation = e.citedSliceStartDay ? `[cited slice opened ${e.citedSliceStartDay} local] ` : "";
+      return e.excerpt ? `${core} — ${citation}${e.excerpt} (ref: ${e.ref})` : `${core} (ref: ${e.ref})`;
     })
     .join("\n");
 }
@@ -2245,7 +2455,11 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
             ? `No content match for "${meta.query}" in this scan page.`
             : `${result.entries.length} match(es) for "${meta.query}":`
           : `The ${result.entries.length} most recent ${meta.category ?? "memory"} entries:`;
-      const lines = renderEntryLines(result.entries);
+      const recordStart = meta.query === undefined ? -1 : result.entries.findIndex(entry => entry.kind === "slice");
+      const lines = recordStart > 0
+        ? `Document excerpts (use these for a supported overview):\n${renderEntryLines(result.entries.slice(0, recordStart))}\n` +
+          `Original record leads (for unresolved details or exact wording):\n${renderEntryLines(result.entries.slice(recordStart))}`
+        : renderEntryLines(result.entries);
       // Paging notes (fixed wording): an offset page with more entries behind
       // it tells the model exactly how to continue; otherwise the legacy
       // truncation note applies (both verbs, offset 0).
@@ -2283,10 +2497,12 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
 /** Render a recallRead outcome. */
 export function renderRecallReadResult(result: RecallReadResult, ref: string): string {
   switch (result.kind) {
+    case "no_matching_turns":
+      return `No public turns matched the requested keywords in ${ref}.`;
     case "content": {
       const navigation = (result.cardTargets?.length ||
         result.recordLeads?.length || result.relatedCases?.length)
-        ? `\n\nSOURCE NAVIGATION ONLY — use relatedCases with recallRead, cardTargets with recallScenario.targets (exact messages), and recordLeads with recallScenario.refs (whole-slice clues). Verify original words before asserting facts.\n${JSON.stringify({
+        ? `\n\nSOURCE NAVIGATION ONLY — optional leads for unresolved questions. relatedCases name documents, cardTargets identify exact messages, and recordLeads identify whole slices. Stop when the current evidence supports the requested answer.\n${JSON.stringify({
           cardTargets: result.cardTargets, recordLeads: result.recordLeads, relatedCases: result.relatedCases,
         })}`
         : "";
@@ -2302,6 +2518,8 @@ export function renderRecallReadResult(result: RecallReadResult, ref: string): s
         ? `Nothing named "${ref}" exists in memory. Closest matches: ${near.join(", ")}.`
         : `Nothing named "${ref}" exists in memory — and nothing similar.`;
     }
+    case "archived":
+      return `ARCHIVED — ${result.ref} is excluded from active memory. ${result.note}`;
     case "unavailable":
       return `This could not be read right now (${result.note}). That is a read failure, not absence — it may still exist.`;
   }

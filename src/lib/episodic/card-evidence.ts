@@ -10,7 +10,7 @@ import { isCaseCategory } from "@/lib/docs/paths";
 import { assertDocumentWrite, assertTailBudget } from "@/lib/docs/write-limits";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
-import { parseTurns } from "./turn-parser";
+import { parseTurns, type ParsedTurn } from "./turn-parser";
 
 export const cardLinkSourceSchema = z.object({
   sliceId: z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/),
@@ -39,14 +39,20 @@ export function preserveCaseCardCitationsOnSameBody(previous: string, incoming: 
   return previous.trim().slice(0, citationStart).trim() === incoming.trim() ? previous : incoming;
 }
 
+/** A user attribution is valid only for one unambiguous source turn. */
+export function originalUserCard(turns: readonly ParsedTurn[], turnId: string): ParsedTurn | undefined {
+  const matching = turns.filter(turn => turn.turnId === turnId &&
+    (turn.role === "user" || turn.boundary === "ambiguous" && turn.sourceRole === "user"));
+  return matching.length === 1 && matching[0].role === "user" && matching[0].boundary !== "ambiguous"
+    ? matching[0] : undefined;
+}
+
 /** Prove one exact user message, independent of the surrounding slice. */
 export function validateCardSource(source: CardLinkSource, raw: string): void {
   cardLinkSourceSchema.parse(source);
   if (!formatDocumentLink(`records/${source.sliceId}`)) throw new Error("Invalid card slice");
-  const turns = parseTurns(raw).turns.filter((turn) => turn.turnId === source.turnId &&
-    (turn.role === "user" || turn.boundary === "ambiguous" && turn.sourceRole === "user"));
-  if (turns.length !== 1 || turns[0].role !== "user" || !source.quote.trim() ||
-      !turns[0].content.includes(source.quote)) {
+  const turn = originalUserCard(parseTurns(raw).turns, source.turnId);
+  if (!turn || !source.quote.trim() || !turn.content.includes(source.quote)) {
     throw new Error("Card source must quote one uniquely identified original user message");
   }
 }

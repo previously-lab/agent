@@ -5,6 +5,7 @@ import type { UIMessage, UIMessageChunk, UIMessagePart } from "./protocol";
 export async function* readChatEvents(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  onDone?: () => void,
 ): AsyncGenerator<UIMessageChunk> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -24,7 +25,10 @@ export async function* readChatEvents(
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).replace(/^ /, "")).join("\n");
         if (!data) continue;
-        if (data === "[DONE]") return;
+        if (data === "[DONE]") {
+          onDone?.();
+          return;
+        }
         const event: unknown = JSON.parse(data);
         if (!event || typeof event !== "object" || typeof (event as UIMessageChunk).type !== "string") {
           throw new Error("Invalid chat stream event");

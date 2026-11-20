@@ -14,20 +14,19 @@
  *   (b) CARD + SOPs under the (possibly new) direction — evolve
  *       previously.md (the v5 user card) and the allowed self/ SOPs.
  *
- * The card is a PURE dynamic semantic memory pool with the user's time axis
- * explicit — what the user did, is doing, will do:
+ * The card is a PURE dynamic semantic background pool:
  *   1. Identity head — structured, machine-parsed (Name / Address them as / Pronouns / Alias).
  *   2. Past          — ONE rolling third-person profile paragraph (updated IN
  *      PLACE) + durable "anchor facts" (still true in 3 years).
  *   3. Now           — current-state hooks. EXPIRY IS AGENT-OWNED: items older
  *      than 7 days are surfaced with their age; the agent promotes the durable
  *      substance to Past or drops the hook. Nothing is removed mechanically.
- *   4. Horizon       — future-facing open loops (commitments / deadlines /
- *      awaited replies), each with an explicit `by` date. Resolved only by
- *      being fulfilled — never age-expired, overdue items are kept.
  *
- * The card carries NO rules and NO analysis — ONE FACT, ONE HOME: facts and
- * states go to the card; patterns/tendencies about the user go to the
+ * Commitments, deadlines, awaited replies and task lifecycle belong to the
+ * authoritative task ledger and tasks/ cases, never to this card.
+ *
+ * The card carries NO rules and NO analysis — ONE FACT, ONE HOME: background
+ * facts and states go to the card; patterns/tendencies about the user go to the
  * direction Portrait; guesses go to the Hypotheses pool. The card's old
  * Self-model section is gone: when the card the agent reads still contains
  * one, the run folds those lines into the Portrait (descriptive phrasing,
@@ -35,7 +34,7 @@
  *
  * WRITING IS MUTATION-BASED: the agent never outputs the whole card. It edits
  * an in-memory copy through per-entry write tools (addNow / updatePastProfile /
- * resolveHorizon / …) that validate each write and REJECT with compression
+ * …) that validate each write and REJECT with compression
  * instructions. The session's LOOP BRAKE (card-session.ts) bounds the
  * re-submission failure mode: the 2nd identical rejection escalates with the
  * exact arithmetic, the 3rd force-lands length violations (truncated) or skips
@@ -85,15 +84,12 @@ import {
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import {
   parseCard,
-  findOverdueHorizonItems,
   CARD_NOW_EXPIRY_DAYS,
   CARD_PROFILE_MAX_CHARS,
   NOW_ITEM_MAX_CHARS,
-  HORIZON_ITEM_MAX_CHARS,
   PAST_ANCHOR_MAX_CHARS,
   CARD_NOW_MAX,
   PAST_ANCHORS_MAX,
-  HORIZON_MAX,
 } from "../previously-format";
 import {
   createCardSession,
@@ -105,8 +101,6 @@ import {
   sessionAddNow,
   sessionRemoveNow,
   sessionPromoteNowToPast,
-  sessionAddHorizon,
-  sessionResolveHorizon,
   type CardSession,
 } from "../card-session";
 
@@ -233,7 +227,7 @@ export interface PreviouslyAgentOutput {
   /** ONE user-language sentence describing what changed — shown in the UI and
    *  handed to the core agent. Empty when nothing changed. */
   summary: string;
-  /** Compact log of every applied mutation ("addNow: …", "resolveHorizon: …"). */
+  /** Compact log of every applied card mutation ("addNow: …"). */
   mutations: string[];
   /**
    * True when the pass ended WITHOUT a finish call (step cap / plain-text
@@ -284,13 +278,14 @@ ${MEMORY_IS_GIT_RULE}
 
 ## What the card is
 
-The card half of \`people/user/index.md\` — the agent's complete current understanding of the user: who they are, what they're doing, what they plan. A compact, bounded snapshot of the user across their time axis — what they did, are doing, will do. NOT an event log, NOT an additive archive, and NOT a rulebook:
+The card half of \`people/user/index.md\` — the agent's compact background understanding of the user: who they are and what is happening in their world. NOT an event log, NOT an additive archive, NOT a task list, and NOT a rulebook:
 1. **Identity** — structured head: name, how to address them, pronouns, aliases.
 2. **Past** — ONE rolling third-person paragraph describing the user, updated IN PLACE — plus durable anchor facts.
 3. **Now** — current-state semantic compression: short hooks into what is happening right now, each carrying \`since\`. Expiry is YOURS: items past ${CARD_NOW_EXPIRY_DAYS} days are listed in the task — promote durable substance to Past or drop the hook.
-4. **Horizon** — future-facing open loops: commitments, deadlines, awaited replies. Each carries an explicit \`by: YYYY-MM-DD\`. Horizon items NEVER age-expire; overdue ones are KEPT until fulfilled.
 
-The raw evidence lives in the time slices; the card only summarizes and points at them via refs. Event, task and research cases are authoritative for fast-changing facts. Now and Horizon keep only the current thread's label and pointers to those cases and their source slices — never a second copy of changing status, dates, decisions or research details.
+Commitments, deadlines, awaited replies, next actions, and task outcomes belong EXCLUSIVELY to the task ledger and \`tasks/\` cases. Never create or maintain a Horizon section. A Now hook may point to a task as a current thread, but must not restate its deadline, lifecycle status, or next action.
+
+The raw evidence lives in the time slices; the card only summarizes and points at them via refs. Event, task and research cases are authoritative for fast-changing facts. This model is BACKGROUND CONTEXT and a semantic directory, not an encyclopedia: retain only stable high-level understanding and useful links, while details, evidence and current research live in their own case documents. Never copy the same conclusion into both the card and Portrait, or repeat a case's explanation merely because it matters. Now keeps only the current thread's label and pointers to those cases and their source slices — never a second copy of changing status, dates, decisions or research details.
 
 **LENGTH DISCIPLINE (hard)**: the card is an OVERVIEW, not a warehouse — it is injected into EVERY turn, so it must CONVERGE in length. Fold, compress, and drop hooks as they settle; never let the card grow monotonically. Detail stays in the slices (cite them via refs).
 
@@ -298,7 +293,8 @@ The raw evidence lives in the time slices; the card only summarizes and points a
 
 ## One fact, one home
 
-- **Facts and states** (what the user did / is doing / will do) → the CARD.
+- **Background facts and states** (what the user did / is doing) → the CARD.
+- **Commitments and future action** (deadlines / awaited replies / task outcomes) → the TASK LEDGER and \`tasks/\` cases.
 - **Patterns and tendencies** (what kind of person the user is, what works/fails with them) → the direction **Portrait**.
 - **Guesses** → the direction **Hypotheses** pool.
 
@@ -315,10 +311,9 @@ ${DOC_HOUSE_STYLE}
 direction.md has a fixed skeleton: \`# Portrait\` (six fixed \`##\` dimensions) / \`# Hypotheses\`. You edit it through MUTATION TOOLS, one targeted op per call — never a whole-doc rewrite; entries you never touch stay exactly as they are, and engineering stamps every hypothesis's \`[proposed …]\` pointer itself.
 
 - **Portrait** — CONFIRMED understanding of the user as a PERSON, in six fixed dimensions (always all present): \`## Traits & cognitive style\`, \`## Triggers & rhythms\`, \`## Patterns & loops\`, \`## Strengths & resilience\`, \`## Communication preferences\`, \`## Values & boundaries\`. An entry is portrait-grade ONLY when it holds across contexts, outlives the event that evidenced it, and predicts ("用户面对不确定时先搭建结构再行动" qualifies; "用户周四聊了面试" is a case note and belongs nowhere here). NEVER imperative — if a line tells you (the agent) what to do, it is misspelled: phrase the USER PATTERN that motivates it instead. Body text carries NO names/dates/events/slice ids — evidence rides ONLY as a trailing \`— refs: YYYY-MM-DD-HHMM, …\` tail.
-- **Hypotheses** — a bounded DYNAMIC pool of GUESSES about the user's traits/patterns (≤10), each line exactly: \`- [proposed YYYY-MM-DD-HHMM] <the guess> — falsify if: <condition>\`. Lifecycle: confirmed (evidence from ≥2 distinct slices, or explicit user confirmation) → PROMOTE into the matching Portrait dimension IN THE SAME RUN (a confirmed guess never lingers in the pool); refuted → REMOVE; still unverified 4 slices after its \`proposed\` pointer → RETIRE (re-proposable later — and engineering enforces the TTL deterministically, so an expired guess you keep is stripped from the applied doc anyway). Refill the pool toward 10 each run with honest, falsifiable guesses about the PERSON — never predictions about events.
-- A single explicit, DURABLE user statement ("用户明确不喜欢 X") becomes a Portrait entry directly (descriptive). Single-slice impressions stay hypotheses.
-- "No change" is the common and correct outcome for the direction — one loud slice is card/SOP material. A proposal that violates the writing discipline is rejected by code, so stay within it.
-- Mode BOOTSTRAP (never written) or MIGRATE (an old skeleton: \`# Direction\` / \`# Anti-goals\`, or the first portrait skeleton's \`# Evidence\` / \`# Log\`): seed/re-abstract the doc wholesale (event-shaped notes become portrait-grade lines, pointers into trailing refs); a single slice pointer suffices. Steady mode: ≥2 distinct slice pointers across the doc.
+- **Hypotheses** hold optional, falsifiable interpretations supported by user evidence across contexts. A single memory question or an unanswered reply establishes no enduring motive or preference. Leave the pool empty or unchanged when the record adds nothing. Expired entries leave room unused.
+- Promote a hypothesis when supported by independent evidence from at least two slices or the user's explicit confirmation. Remove a refuted guess. Engineering retires unverified guesses after four slices. An explicit durable preference may enter the Portrait directly.
+- Mode BOOTSTRAP (never written) or MIGRATE (an old skeleton: \`# Direction\` / \`# Anti-goals\`, or the first portrait skeleton's \`# Evidence\` / \`# Log\`): retain only supported, durable observations when seeding or migrating the doc; a single slice pointer suffices. Steady mode: ≥2 distinct slice pointers across the doc.
 
 ## How you write the card — MUTATIONS, never the whole file
 
@@ -330,7 +325,6 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 | \`updatePastProfile(text)\` | Rewrite the rolling profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). |
 | \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Durable fact ("still true in 3 years"), ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
 | \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
-| \`addHorizon(text, by, refs)\` / \`resolveHorizon(match, note?)\` | Open loop, ≤ ${HORIZON_ITEM_MAX_CHARS} chars, \`by: YYYY-MM-DD\` + refs required, ≤ ${HORIZON_MAX} total. Resolve removes it — the ONLY way a Horizon item leaves. |
 | \`writeSop(agent, content, evidence, expectedBenefit, applicability)\` | Rewrite a self/ colleague's SOP from its recorded full read (agent ∈ search / thinkdeep). GATED by the allowlist and read basis. Evidence, expected benefit, and applicability must each be nonempty. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
 | \`readAgentTimeline(sliceId)\` | Read agent.md — the reasoning + tool calls. Process context for judging how interactions went. |
@@ -346,9 +340,8 @@ Compare the conversation in the task against the current card. Incorporate anyth
 - New stable fact about the user → fold it into the Past profile paragraph (or Identity head if it is a name/address fact).
 - A durable fact that will ALMOST CERTAINLY still be true in 3 years (a date, a decision, a red line) → a Past anchor. Evolving situations do NOT belong in anchors.
 - Current situation that will fade → a Now hook naming the thread and pointing to its event/task/research case and source slice. Do not duplicate the case's fast-changing status, dates, decisions or details.
-- A commitment, deadline, or awaited reply → a Horizon line with \`by\` + refs when the task case does not already own that commitment; otherwise keep only its thread pointer.
-- **Horizon resolution rule**: when the user reports the outcome of an open loop, RESOLVE it — and record the outcome via addNow (or the Past profile if durable). Overdue items are KEPT, never silently dropped.
-- A user correction / explicit preference → update the Past paragraph AND consider the direction side (a durable stated preference is a Portrait entry; a suspected one is a hypothesis).
+- A commitment, deadline, awaited reply, or task-state report → NO task content in the card; the field/reflection task tools own it. Record only a durable outcome or a minimal current-thread pointer when independently useful.
+- Keep an explicit durable preference in the Portrait. Correct the relevant existing fact when the user corrects it.
 - Fragmented or mixed-language card content → rewrite those entries cleanly in the user's language while preserving substance.
 - Nothing new AND the card is already clean → make no writes; just \`finish\` with a short reasoning.
 
@@ -410,11 +403,6 @@ function buildTimeContext(input: PreviouslyAgentInput): string {
       );
       for (const r of aged) lines.push(`- ${r.days} days old (since ${r.since}): "${r.text.slice(0, 80)}"`);
     }
-    const overdue = findOverdueHorizonItems(doc, today);
-    if (overdue.length > 0) {
-      lines.push("OVERDUE Horizon items (by already passed — KEEP them, resolve only on fulfillment; flag in text if useful):");
-      for (const h of overdue) lines.push(`- by ${h.by}: "${h.text.slice(0, 80)}"`);
-    }
   }
   return lines.join("\n");
 }
@@ -430,7 +418,7 @@ function daysBetween(since: string, today: string): number {
 function buildDirectionEvalSection(evalInput: DirectionEvalInput): string {
   const modeLine =
     evalInput.mode === "bootstrap"
-      ? "BOOTSTRAP — the direction has never been written; seed the minimal baseline (a single slice pointer suffices)"
+      ? "BOOTSTRAP — the direction has never been written. Establish a baseline only if there is durable evidence (a single slice pointer suffices)."
       : evalInput.mode === "migrate"
         ? "MIGRATE — the doc still uses an OLD skeleton (# Direction / # Anti-goals, or the first portrait skeleton's # Evidence / # Log); re-abstract it wholesale into the new # Portrait (six fixed ## dimensions, refs-tailed pointers) / # Hypotheses skeleton (a single slice pointer suffices)"
         : "steady — the normal high bar (≥2 distinct slice pointers across the doc)";
@@ -629,7 +617,7 @@ function buildTools(
         addHypothesis: tool({
           description:
             "Add a GUESS about the user's traits/patterns to the hypothesis pool " +
-            "(≤10 — promote or remove first when full). Engineering stamps the " +
+            "(maximum 10, no minimum). Engineering stamps the " +
             "[proposed <slice>] pointer; you supply the guess + its falsification " +
             "condition. Guesses are about the PERSON, never event predictions.",
           inputSchema: z.object({
@@ -722,27 +710,6 @@ function buildTools(
         "Use when a fading situation turned out to be lasting.",
       inputSchema: z.object({ match: z.string() }),
       execute: async ({ match }) => sessionPromoteNowToPast(session, match),
-    }),
-    addHorizon: tool({
-      description:
-        `Add a Horizon open loop — commitment / deadline / awaited reply ` +
-        `(≤ ${HORIZON_ITEM_MAX_CHARS} chars, explicit by date + refs required, ≤ ${HORIZON_MAX} total).`,
-      inputSchema: z.object({
-        text: z.string(),
-        by: z.string().describe("YYYY-MM-DD — when this is due."),
-        refs: z.array(z.string()),
-      }),
-      execute: async ({ text, by, refs }) => sessionAddHorizon(session, text, by, refs),
-    }),
-    resolveHorizon: tool({
-      description:
-        "Resolve (remove) a Horizon item — the ONLY way one leaves the card. " +
-        "Record the outcome via addNow / updatePastProfile when it matters.",
-      inputSchema: z.object({
-        match: z.string(),
-        note: z.string().optional().describe("Where the outcome went, e.g. 'folded into Now'."),
-      }),
-      execute: async ({ match, note }) => sessionResolveHorizon(session, match, note),
     }),
     // ── SOP mutation (v0.19 §C.2 — the evolution agent is the single writer
     // of card / direction / self/ SOPs; the write lands on an in-memory list
@@ -935,6 +902,7 @@ async function attemptCall(
     directionSummary?: string;
   }>({
     model: input.model,
+    sessionId: input.currentSliceId,
     system: PREVIOUSLY_SYSTEM,
     prompt: buildUserPrompt(input),
     tools: buildTools(input, session, sopWrites, directionSession),

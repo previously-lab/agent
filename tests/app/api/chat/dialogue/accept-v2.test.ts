@@ -42,7 +42,7 @@ describe("native dialogue acceptance", () => {
     h.prepare.mockImplementation(async (preparedArgs: AcceptDialogueArgs) => ({
       clientMessageId: "message-1",
       lastUserMessage: "Think now.",
-      startedAtIso: "2026-11-07T00:00:00.000Z",
+      startedAtIso: "2026-11-19T17:47:00.000Z", clientTimezone: "Asia/Shanghai",
       modelMessages: [
         { role: "user", content: "earlier" },
         { role: "assistant", content: "public answer" },
@@ -80,6 +80,7 @@ describe("native dialogue acceptance", () => {
         workId: accepted.workId,
         sourceInputId: accepted.sourceInputId,
         transport: "workflow-v2",
+        acceptedTime: { utc: accepted.input.acceptedAt, local: "20 Nov 2026, 01:47", zone: "Asia/Shanghai", offset: "UTC+08:00" },
       },
     }));
     const launch = h.start.mock.calls[0]![0];

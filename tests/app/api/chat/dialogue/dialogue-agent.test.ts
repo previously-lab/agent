@@ -9,6 +9,9 @@ vi.mock("@/lib/deepseek/steps", () => ({
 
 import { createDialogueAgent, createThinkingAgent } from "@/app/api/agent/agent";
 
+import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
+import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
+
 type CapturedRequest = {
   messages: Array<{ role: string; content: string }>;
   tools?: Array<{ function: { name: string; description?: string } }>;
@@ -42,7 +45,7 @@ describe("dialogue DeepSeek profile", () => {
     expect(system).toContain("You own how to say it.");
     expect(system).toContain("Do not investigate, fact-check");
     expect(system).toContain("Preserve the event's attribution, corrections, and confidence level.");
-    expect(system).toContain("An offer_reply event");
+    expect(system).toContain("A work_update event");
     expect(system).toContain("Do not ask the user a question unless the current event is needs_user");
     expect(system).not.toContain("Keep ordinary replies to one or two short sentences");
   });
@@ -51,7 +54,48 @@ describe("dialogue DeepSeek profile", () => {
     await createDialogueAgent(true).stream({ prompt: "Opening | Plan: check the forecast." });
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     expect(request.tools).toBeUndefined();
-    expect(request.messages[0]?.content).toContain("including when it only confirms the task or states a plan");
+    expect(request.messages[0]?.content).toContain("A synthetic opening with empty handoff text may instead return empty text");
+  });
+
+  it("matches each input to a response mode instead of expanding all available context", async () => {
+    await createDialogueAgent().stream({ prompt: "fixture" });
+    const publicSystem = (h.call.mock.calls[0]![0] as CapturedRequest).messages[0]?.content;
+    expect(publicSystem).toContain("chat: Give a brief natural social reply");
+    expect(publicSystem).toContain("focused: Answer the exact ask directly and only that");
+    expect(publicSystem).toContain("rewrite: Transform only the referenced material");
+
+    type ThinkingOptions = Parameters<typeof createThinkingAgent>[0];
+    await createThinkingAgent({
+      model: {} as ThinkingOptions["model"], thinking: true, reasoningEffort: "low",
+      toolsContext: { currentTime: { dialogueOffer: { workId: "work-1" } } } as unknown as ThinkingOptions["toolsContext"],
+    }).stream({ prompt: "fixture" });
+    const thinkingSystem = h.call.mock.calls[1]![0].messages[0]?.content;
+    expect(thinkingSystem).toContain("Choose a responseMode for this request");
+    expect(thinkingSystem).toContain("return the requested text or fact in the requested form");
+  });
+
+  it("carries gist and quote boundaries through both model requests with an existing user hypothesis", async () => {
+    const direction = buildDirectionBlock([
+      "# Portrait", "## Communication preferences", "- Prefers short answers — refs: 2026-11-01-1000",
+      "# Hypotheses", "- [proposed 2026-11-01-1000] May test exact recall — falsify if: accepts a summary",
+    ].join("\n"));
+    type Options = Parameters<typeof createThinkingAgent>[0];
+    await createThinkingAgent({
+      model: {} as Options["model"], thinking: true, reasoningEffort: "low",
+      toolsContext: { currentTime: { dialogueOffer: { workId: "memory" } } } as unknown as Options["toolsContext"],
+    }).stream({ system: [CHARTER_MD, direction].join("\n\n"), prompt: "我们第一次聊的是什么？" });
+    const thought = (h.call.mock.calls[0]![0] as CapturedRequest).messages[0]!.content;
+    expect(thought).toContain("give the topic and qualify the order");
+    expect(thought).toContain("For exact wording, speaker attribution");
+    expect(thought).toContain("May test exact recall");
+    expect(thought).toContain("A guess supplies no reason to investigate");
+      expect(thought).toContain("Read the matched passages");
+    expect(thought).toContain("Hand off the answer when it covers the ask");
+
+    await createDialogueAgent().stream({ prompt: "We have a reliable case account of the topic. Chronology is incomplete." });
+    const publicRequest = h.call.mock.calls[1]![0] as CapturedRequest;
+    expect(publicRequest.messages[0]!.content).toContain("Preserve qualifications about order or coverage, and quote only verified wording");
+    expect(publicRequest.tools).toBeUndefined();
   });
 
   it("assembles lifecycle handoffs and separate final steps into the thinking request", async () => {
@@ -68,32 +112,26 @@ describe("dialogue DeepSeek profile", () => {
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     const system = request.messages.find(message => message.role === "system")?.content;
     expect(system?.startsWith("BASE PROMPT")).toBe(true);
-    expect(system).toContain("Leave ordinary assistant message content empty on every step, including the last.");
-    expect(system).toContain("FIRST action after receiving every user task");
-    expect(system).toContain("SEPARATE tool step before the first investigative tool");
-    expect(system).toContain("give your initial take");
-    expect(system).toContain("After each search, recall, source read");
-    expect(system).toContain("your NEXT tool step MUST be offerReply");
-    expect(system).not.toContain("may skip all checkpoints");
-    expect(system).toContain("checkpoints of at most 2,400 characters each");
-    expect(system).toContain("ONE combined checkpoint as the next tool step");
-    expect(system).toContain("every material still-unhanded result or error");
-    expect(system).toContain("Wait for the final offer to succeed");
+    expect(system).toContain("You own ONLY the current input's investigation");
+    expect(system).toContain("Never write ordinary assistant content or a public answer");
+    expect(system).toContain("If the conversation already answers the question, no snapshot or search is needed");
+    expect(system).toContain("Pending work is not a completed fact");
+    expect(system).toContain("use workCheckpoint when a substantive update would help the user");
+    expect(system).toContain("Simple direct work may skip it");
+    expect(system).toContain("A checkpoint is public-safe work state, not a reply draft");
+    expect(system).toContain("call completeWork exactly once");
+    expect(system).toContain("every complete native HTML artifact");
     expect(system).toContain("SEPARATE later tool step");
-    expect(system).toContain("Never bundle or run final offerReply and finishThinking in parallel");
     expect(system).toContain("finishThinking alone with needsUser");
-    expect(system).toContain("accepted explicit final suppresses the host fallback final");
-    expect(system).toContain('offerReply({stage: "checkpoint"');
-    expect(system).toContain('offerReply({stage: "final"');
-    expect(system).toContain("rather than emitting standalone artifact prose");
-    expect(system).not.toContain("Put a native visual's complete original document in final text");
+    expect(system).not.toContain("offerReply");
 
-    const offeredTool = request.tools?.find(entry => entry.function.name === "offerReply");
-    expect(offeredTool?.function.description).toContain("Checkpoints are limited to 2,400 characters each");
-    expect(offeredTool?.function.description).toContain("Opening |");
-    expect(offeredTool?.function.description).toContain("After EACH search, recall");
-    expect(offeredTool?.function.description).toContain("Progress |");
-    expect(offeredTool?.function.description).toContain("carry all remaining unhanded evidence into final");
-    expect(offeredTool?.function.description).toContain("never bundled or parallel");
+    expect(request.tools?.map(entry => entry.function.name)).toEqual(expect.arrayContaining([
+      "workCheckpoint", "completeWork", "readWorkSnapshot", "finishThinking",
+    ]));
+    expect(request.tools?.some(entry => entry.function.name === "offerReply")).toBe(false);
+    expect(request.tools?.find(entry => entry.function.name === "workCheckpoint")?.function.description)
+      .toContain("not a reply draft");
+    expect(request.tools?.find(entry => entry.function.name === "completeWork")?.function.description)
+      .toContain("The dialogue Actor owns integration and public expression");
   });
 });

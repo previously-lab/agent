@@ -289,6 +289,12 @@ describe("native sub-agent runner", () => {
 });
 describe("report and progress helpers", () => {
   it("validates reports and rejects absent, null or malformed inputs", () => {
+    // The model can correct a rejected report on the following step.
+    expect(extractToolReport([
+      { toolName: "report", input: { verdict: true } },
+      { toolName: "report", input: { verdict: "rejected", count: 2 }, invalid: true },
+      { toolName: "report", input: { verdict: "corrected", count: 3 } },
+    ], "report", reportSchema)).toEqual({ verdict: "corrected", count: 3 });
     expect(extractToolReport([{ toolName: "report", input: { verdict: "yes", count: 1 } }], "report", reportSchema)).toEqual({ verdict: "yes", count: 1 });
     expect(extractToolReport(undefined, "report", reportSchema)).toBeUndefined();
     expect(extractToolReport([{ toolName: "report", input: null }], "report", reportSchema)).toBeUndefined();

@@ -1,8 +1,6 @@
 /** Fixed deployment model. Credentials are resolved inside model steps only. */
-import { readClientByokSync } from "../byok-sync";
-import { isClientMode } from "../mode";
-
 import { DEEPSEEK_MODEL } from "@/lib/deepseek/types";
+import { hasCompatibleChatRoute, hasDeepSeekCredential } from "@/lib/deepseek/credentials";
 export { DEEPSEEK_MODEL };
 export interface ModelCapabilities { thinking: boolean; vision: boolean; maxTokens: number; }
 export interface ModelConfig {
@@ -22,9 +20,7 @@ export const FIXED_MODEL: ModelConfig = {
 };
 export const ALL_MODELS: ModelConfig[] = [FIXED_MODEL];
 export function getAvailableModels(): ModelConfig[] {
-  const configured = isClientMode()
-    ? !!readClientByokSync()?.apiKey || !!process.env.DEEPSEEK_API_KEY?.trim()
-    : !!process.env.DEEPSEEK_API_KEY?.trim();
+  const configured = hasCompatibleChatRoute() || hasDeepSeekCredential();
   return configured ? [FIXED_MODEL] : [];
 }
 /** Old preferences never re-enable a retired provider or runtime selector. */

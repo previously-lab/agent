@@ -38,7 +38,8 @@ try {
   // Compile production orchestration and HTTP/SSE code. Only credential lookup
   // is replaced; the fetch above never dispatches a real network request.
   await cp(join(projectRoot, "src/lib/deepseek"), join(directory, "deepseek"), { recursive: true });
-  await writeFile(join(directory, "deepseek/credentials.ts"), 'export function deepseekApiKey() { return "non-billable-fixture"; }\n');
+  await cp(join(projectRoot, "src/lib/version"), join(directory, "version"), { recursive: true });
+  await writeFile(join(directory, "deepseek/credentials.ts"), 'export function deepseekApiKey() { return "non-billable-fixture"; }\nexport function compatibleChatRoute() { return undefined; }\n');
   await mkdir(join(directory, "ledger"));
   process.env.FIXTURE_DIR = join(directory, "ledger");
   process.env.WORKFLOW_TARGET_WORLD = "local";

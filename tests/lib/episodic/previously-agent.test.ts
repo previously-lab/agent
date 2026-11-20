@@ -103,6 +103,22 @@ describe("runner wiring", () => {
     expect(opts.prompt).toContain("我周五有个面试");
   });
 
+  it("keeps commitments in the task system and mounts no Horizon mutation tools", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      expect(opts.tools.addHorizon).toBeUndefined();
+      expect(opts.tools.resolveHorizon).toBeUndefined();
+      expect(opts.system).toContain("Commitments, deadlines, awaited replies");
+      expect(opts.system).toContain("Never create or maintain a Horizon section");
+      expect(opts.system).not.toContain("`addHorizon(text");
+      return { ok: true, report: { reasoning: "task state stays out of the card", summary: "" }, text: "" };
+    });
+    const out = await runPreviouslyAgent(baseInput({
+      recentTurns: [{ role: "user", content: "提醒我周五续护照。" }],
+    }));
+    expect(out.failed).toBeFalsy();
+    expect(out.mutations).toEqual([]);
+  });
+
   it("projects only assistant formatting copy in recent turns without mutating them", async () => {
     runSubAgentMock.mockResolvedValue({
       ok: true,
@@ -440,6 +456,21 @@ describe("the merged direction half (directionEval)", () => {
       emotionalSignal: { intensity: "none", register: "neutral", note: "" },
     },
   };
+
+  it("allows an unchanged hypothesis pool on a memory question", async () => {
+    runSubAgentMock.mockResolvedValue({ ok: true, report: { reasoning: "nothing new", summary: "" }, text: "" });
+    const out = await runPreviouslyAgent(baseInput({
+      recentTurns: [{ role: "user", content: "我们第一次聊了什么？" }],
+      directionEval: DIRECTION_EVAL,
+    }));
+    const opts = runSubAgentMock.mock.calls[0]![0];
+    expect(opts.tools.addHypothesis).toBeDefined();
+    expect(opts.system).toContain("A single memory question or an unanswered reply establishes no enduring motive or preference");
+    expect(opts.system).toContain("Leave the pool empty or unchanged");
+    expect([opts.system, opts.prompt].join("\n")).not.toMatch(/refill|toward 10/i);
+    expect(out.direction).toBeUndefined();
+    expect(out.mutations).toEqual([]);
+  });
 
   it("the direction-evaluation section rides the USER prompt (mode, current doc, legacy Self-model)", async () => {
     runSubAgentMock.mockResolvedValue({

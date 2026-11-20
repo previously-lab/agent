@@ -94,6 +94,7 @@ import {
   type EvidenceAttachmentInput,
 } from "@/lib/tools/attachments";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
+import { readRecentTimelineFromStorage } from "@/lib/episodic/timeline/projection";
 import {
   readUserModel,
   readUserProfile,
@@ -725,6 +726,7 @@ export async function housekeeping(
 
       analysis = await analyzeTurn({
         model: input.modelConfig,
+        sessionId: slice.slice_id,
         userMessage: lastUserMessage,
         closingSlice: undefined,
       });
@@ -934,6 +936,17 @@ export async function housekeeping(
   // now the commit time, which postdates the turn it answers by construction.
   const reflectionNote = (await readLatestReflectionNote()) ?? undefined;
 
+  // A small derived reading view keeps recent context continuous without
+  // replaying original transcripts. Its entries remain navigation, not facts.
+  const recentTimeline = input.useDemo ? [] : await readRecentTimelineFromStorage(8).catch(error => {
+    console.warn("[Timeline] recent projection unavailable:", error instanceof Error ? error.message : error);
+    return [];
+  });
+  const timelineBlock = recentTimeline.length ? [
+    "## Recent timeline — derived navigation, not original evidence",
+    ...recentTimeline.map(entry => `- [${entry.focus}](previously:records/${entry.sliceId}) — ${entry.summary}`),
+  ].join("\n") : undefined;
+
   await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 
   // ── 7. Open UI stream ────────────────────────────────────────────────
@@ -944,6 +957,7 @@ export async function housekeeping(
     slice,
     previouslyContent: userModel?.readingLinks ? `${previouslyContent}\n\n${userModel.readingLinks}` : previouslyContent,
     sliceHeadBlock,
+    ...(timelineBlock ? { timelineBlock } : {}),
     identityPrompt,
     analysis,
 
@@ -1952,6 +1966,7 @@ async function runMergeLineCall(
         : "You are Previously's closer. The user fired several messages in one burst; each was answered by a parallel instance (the user messages and their answers follow, in order). When a later message corrects or contradicts an earlier one (\"not buns — dumplings\"), write a 1–2 sentence closing, the latest statement wins. When the answers do not conflict and are complete, output EMPTY (no closing needed). No per-message recap, no lists, no apologies.";
     const result = streamText({
       role: "summary",
+      sessionId: params.sliceId,
       system,
       prompt: windowText,
       thinking: true,

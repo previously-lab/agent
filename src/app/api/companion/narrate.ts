@@ -196,6 +196,7 @@ export async function narrateSlice(
   const abortSignal = AbortSignal.timeout(streamTimeoutMs);
   const result = streamText({
     role: "companion",
+    sessionId: args.sliceId,
     system,
     prompt: userPrompt,
     tools: buildCompanionTools(toolCtx),

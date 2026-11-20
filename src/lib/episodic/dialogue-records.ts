@@ -1,4 +1,3 @@
-import { dirname, join } from "node:path";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueResult } from "@/lib/dialogue/types";
 import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
@@ -17,6 +16,7 @@ import { slicePartPath } from "./paths";
 import { createBatch, flushBatch, fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
 import { withSliceLock } from "./slice-mutex";
 import { deterministicSliceMark } from "./slice-mark";
+import { updateTimelineProjection } from "./timeline/projection";
 import { parseSliceId } from "./turn-parser";
 import type { TimeSlice } from "./types";
 import { composeDialogueRecordBody, dialogueResearchMaterialId, encodeDialogueResearchRecord, makeDialogueResearchRecord, publicRecordText, publicRecordTurn, readDialogueResearchRecords } from "./dialogue-record";
@@ -213,7 +213,7 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
           artifacts: result.blocks.flatMap((block) => block.kind === "artifact_ref" ? [block.artifact] : []),
         }, null, 2)}\n`;
         const outputRef = `works/${caseStorageRevision(result.resultId)}.json`;
-        const outputPath = join(dirname(slicePartPath(landing.sliceId, "agent")), outputRef);
+        const outputPath = `${slicePartPath(landing.sliceId, "agent").slice(0, -"agent.md".length)}${outputRef}`;
         const previous = await readOptional(outputPath, batch);
         if (previous !== null && previous !== serialized) throw new Error("Immutable work output changed");
         if (previous === null) await fsWriteFile(outputPath, serialized, batch);
@@ -226,7 +226,26 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       const old = readDialogueResearchRecords(await readAgent(landing.sliceId)).find((entry) =>
         entry.resultId === record.resultId && entry.productRevision === record.productRevision);
       if (old && encodeDialogueResearchRecord(old) !== encodeDialogueResearchRecord(record)) throw new Error("Immutable research result changed");
-      if (!old) await appendAgent(landing.sliceId, encodeDialogueResearchRecord(record));
+      if (!old) {
+        await appendAgent(landing.sliceId, encodeDialogueResearchRecord(record));
+        // These are co-observed sources in one work result. Reading an original
+        // does not tell us whether its referring document answered the question.
+        const reads = result.product.readSet;
+        const originals = new Set(reads.filter(read => read.sourceKind === "original_turn" &&
+          read.coverage === "excerpt" && read.revision && read.excerpt).map(read => read.ref));
+        const observations = new Set<string>();
+        for (const read of reads) {
+          if (read.sourceKind !== "semantic_document" || !read.revision) continue;
+          for (const sliceId of read.mentionedSliceIds ?? []) {
+            const recordRef = `records/${sliceId}`;
+            if (sliceId !== landing.sliceId && originals.has(recordRef)) {
+              observations.add(JSON.stringify({ workId: record.workId, sourceTurnId: landing.turnId,
+                resultId: record.resultId, productRevision: record.productRevision, documentRef: read.ref, recordRef }));
+            }
+          }
+        }
+        for (const observation of observations) await appendAgent(landing.sliceId, `[source-reference-v1] ${observation}`);
+      }
       await owe(landing, result);
     }
 
@@ -265,7 +284,11 @@ export async function projectDialogueRecords(input: DialogueProjectionInput): Pr
       utteranceIds.push(utterance.utteranceId);
     }
 
-    for (const sliceId of touched) await saveSliceSnapshot(slices.get(sliceId)!, batch);
+    for (const sliceId of touched) {
+      const slice = slices.get(sliceId)!;
+      await saveSliceSnapshot(slice, batch);
+      await updateTimelineProjection(slice, batch);
+    }
     for (const [sliceId, text] of agentText) await fsWriteFile(slicePartPath(sliceId, "agent"), text, batch);
     const ranges = [...newlyRecorded.values()];
     const sliceId = landings[0].sliceId;

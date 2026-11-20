@@ -16,8 +16,6 @@ import {
   sessionAddNow,
   sessionRemoveNow,
   sessionPromoteNowToPast,
-  sessionAddHorizon,
-  sessionResolveHorizon,
 } from "@/lib/episodic/card-session";
 import {
   newCardTemplate,
@@ -25,7 +23,6 @@ import {
   serializeCard,
   CARD_NOW_MAX,
   PAST_ANCHORS_MAX,
-  HORIZON_MAX,
 } from "@/lib/episodic/previously-format";
 
 const SLICE = "2026-08-17-0515";
@@ -184,29 +181,6 @@ describe("addNow / removeNow / promoteNowToPast", () => {
     expect(sessionPromoteNowToPast(s, "xxx")).toMatch(/^OK/);
     expect(s.doc.now).toEqual([]);
     expect(s.doc.past.anchors[0].text).toHaveLength(400);
-  });
-});
-
-describe("Horizon", () => {
-  it("requires a well-formed by date", () => {
-    const s = session();
-    expect(sessionAddHorizon(s, "await reply", "soon", REFS)).toContain("REJECTED");
-    expect(sessionAddHorizon(s, "await reply", "2026-08-20", REFS)).toMatch(/^OK/);
-  });
-
-  it("caps at the section limit", () => {
-    const s = session();
-    for (let i = 0; i < HORIZON_MAX; i++)
-      sessionAddHorizon(s, `loop ${i}`, "2026-08-20", REFS);
-    expect(sessionAddHorizon(s, "overflow", "2026-08-20", REFS)).toContain("REJECTED");
-  });
-
-  it("resolveHorizon removes the item", () => {
-    const s = session();
-    sessionAddHorizon(s, "waiting on the recruiter reply", "2026-08-20", REFS);
-    expect(sessionResolveHorizon(s, "recruiter", "folded into Now")).toMatch(/^OK/);
-    expect(s.doc.horizon).toEqual([]);
-    expect(s.log.some((l) => l.includes("folded into Now"))).toBe(true);
   });
 });
 

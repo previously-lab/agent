@@ -1,9 +1,7 @@
 "use server";
 
-import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import type { DialogueInput } from "./dialogue-contract";
-import type { TurnRunResult } from "./turn-types";
 import { resolveDialogueScope } from "@/lib/dialogue/runtime";
 
 export interface DialogueThoughtRecovery {
@@ -27,8 +25,9 @@ export async function findDialogueThoughtRuns(persona: string): Promise<Dialogue
     if (attributes?.role !== "thinking" || attributes.scope !== scope ||
         !attributes.work || !attributes.turn) return [];
     const status = entry.status;
-    if (status !== "pending" && status !== "running" && status !== "completed" &&
-        status !== "failed" && status !== "cancelled") return [];
+    // Workflow status decides recovery eligibility. Terminal work has no live
+    // stream to restore and its returnValue must not be read on page entry.
+    if (status !== "pending" && status !== "running") return [];
     return [{
       runId: entry.runId,
       workId: attributes.work,
@@ -37,13 +36,5 @@ export async function findDialogueThoughtRuns(persona: string): Promise<Dialogue
       ...(entry.createdAt ? { createdAt: new Date(entry.createdAt).toISOString() } : {}),
     } satisfies DialogueThoughtRecovery];
   });
-  return Promise.all(matches.map(async entry => {
-    if (entry.status !== "completed") return entry;
-    try {
-      const result = await getRun<TurnRunResult>(entry.runId).returnValue;
-      return result?.dialogueWork?.source ? { ...entry, input: result.dialogueWork.source } : entry;
-    } catch {
-      return entry;
-    }
-  }));
+  return matches;
 }
