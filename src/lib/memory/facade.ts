@@ -1,5 +1,6 @@
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
+import { readStoredCaseActivity, type CaseActivitySource } from "./case-activity";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { parseDossierRef } from "@/lib/archive/refs";
 import { PEOPLE_USER_INDEX_PATH } from "@/lib/evolution/paths";
@@ -13,10 +14,9 @@ export { nameSimilarity, normalizeRecallName } from "./name-match";
  * recallRead / recallSince), one entry shape, one discriminated result
  * envelope, and fixed rendering per result kind.
  *
- * EVERYTHING here is read-time parsed and pure-facade: dates come from paths
- * and slice ids for free, content scans run newest-first over the existing
- * tree (60s) + blob (7d) caches, and no new storage, index, or projection file
- * is introduced. The agent never sees the tree — it sees entries
+ * Dates come from paths and the case documents. A versioned backend can reuse
+ * their parsed dates across searches. No additional repository file is needed.
+ * The agent never sees the tree — it sees entries
  * (ref / title / date / excerpt) and reads on through refs.
  *
  * Category table (v0.36 §1, rulings #1-#3 applied):
@@ -230,15 +230,17 @@ export const EXCERPT_MAX_CHARS = 160;
 // ─── Backend ──────────────────────────────────────────────────────────────
 
 /**
- * The two storage primitives the facade needs. Both are read-only. `readFile`
+ * The facade reads the repository through two primitives. `readFile`
  * takes a repo-relative path and throws when the file is absent; `listMemoryFiles`
- * returns every file path under memory/ (repo-relative) — the tree IS the
- * enumeration, so listing is the only "index" this layer ever touches.
+ * returns the file paths under memory/. A backend can also supply the case
+ * dates it has already derived from the same snapshot.
  */
 export interface RecallBackend {
   /** A backend may restrict traversal to this scope; callers still filter returned paths. */
   listMemoryFiles(scope?: { category: "records" | "timeline"; after?: string; before?: string }): Promise<string[]>;
   readFile(path: string): Promise<string>;
+  /** Exact stored sort dates from this listing's immutable snapshot when available. */
+  caseActivityDates?(sources: CaseActivitySource[]): Promise<Map<string, string> | undefined>;
 }
 
 /** True when a thrown read error means "absent", not "unreadable". */
@@ -324,16 +326,16 @@ export function createReadCache(backend: RecallBackend): RecallBackend {
     }
     return content;
   };
-  return { listMemoryFiles: scope => backend.listMemoryFiles(scope), readFile };
+  return {
+    listMemoryFiles: scope => backend.listMemoryFiles(scope),
+    caseActivityDates: backend.caseActivityDates?.bind(backend),
+    readFile,
+  };
 }
 
 // ─── Tree index (paths only — zero content reads) ─────────────────────────
 
-interface CaseNode {
-  treeDir: string;
-  caseName: string;
-  indexPath: string | null;
-  currentPath?: string;
+interface CaseNode extends CaseActivitySource {
   /** Repo-relative dated piece paths, ascending. */
   pieces: string[];
 }
@@ -1202,30 +1204,22 @@ async function gatherSearchUnits(
     return (CASE_TREE_DIRS[input.category] ?? []).includes(treeDir);
   };
 
+  const nodes = index.cases.filter((node) => wantDir(node.treeDir));
+  const needStoredDates = input.dateBasis !== "conversation";
+  const storedDates = needStoredDates && nodes.length
+    ? await backend.caseActivityDates?.(nodes).catch(() => undefined)
+    : undefined;
   const caseUnits = await mapWithConcurrency(
-    index.cases.filter((node) => wantDir(node.treeDir)),
+    nodes,
     RECALL_READ_CONCURRENCY,
     async (node): Promise<SearchUnit[]> => {
       const out: SearchUnit[] = [];
       // Activity sorting needs stored dates. Citation search can rank candidates from paths alone.
       let caseActivity = latestPieceDate(node);
-      if (node.indexPath && input.dateBasis !== "conversation") {
-        try {
-          const raw = await backend.readFile(node.indexPath);
-          const doc = parseCaseDoc(raw, {
-            category: node.treeDir as CaseCategory,
-            caseName: node.caseName,
-            fileName: "index.md",
-          });
-          caseActivity = doc.tail.reduce((at, tail) => maxDate(at, tail.date),
-            maxDate(doc.updated.slice(0, 10), caseActivity));
-          if (node.currentPath) {
-            const current = parseCaseCurrent(await backend.readFile(node.currentPath));
-            caseActivity = maxDate(caseActivity, current.asOf);
-          }
-        } catch {
-          // header unreadable — fall back to the piece-date sort key
-        }
+      if (node.indexPath && needStoredDates) {
+        const stored = storedDates?.get(node.indexPath)
+          ?? (await readStoredCaseActivity(node, path => backend.readFile(path))).date;
+        caseActivity = maxDate(caseActivity, stored);
       }
       if (node.indexPath) {
         out.push({

@@ -90,6 +90,11 @@ interface GitHubReadBudget {
 
 const readBudgetStorage = new AsyncLocalStorage<GitHubReadBudget>();
 
+/** Different deadlines must not share an in-flight read. */
+export function currentGitHubReadDeadline(): number | undefined {
+  return readBudgetStorage.getStore()?.deadline;
+}
+
 /**
  * Run `fn` with a total GitHub-read deadline. Every base read inside `fn`
  * (anything going through this module's octokit) races its own call against

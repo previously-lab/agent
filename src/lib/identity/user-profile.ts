@@ -125,7 +125,7 @@ export function parseIdentityFromPreviously(previouslyContent: string): UserProf
 export async function loadUserProfile(): Promise<UserProfile> {
   try {
     const { readUserModel } = await import("@/lib/evolution/store");
-    const model = await readUserModel();
+    const model = await readUserModel(undefined, { fresh: false });
     const profile = model ? parseIdentityFromPreviously(model.card) : null;
     if (profile) return profile;
   } catch (error) {

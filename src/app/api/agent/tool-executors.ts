@@ -26,8 +26,9 @@ import { start } from "workflow/api";
 // serialization-class registration for it runs before any doStreamStep
 // message is handled (see src/lib/models/step-boundary-model.ts).
 
-import { readFile, readFileViaTree, getRepoTree } from "@/lib/tools/readFile";
+import { readFile, readTextFromCompleteTree, getRepoTreeSnapshot, type RepoTreeSnapshot } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
+import { gitHubCaseActivityDates } from "@/lib/github/case-activity";
 import {
   readFileLocal,
   walkPathsLocal,
@@ -80,7 +81,6 @@ import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { archiveCaseDocument } from "@/lib/docs/archive-case";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { replaceMainCraftBlock } from "@/lib/chat/craft-prompt";
-import { PEOPLE_USER_INDEX_PATH } from "@/lib/evolution/paths";
 import {
   readSkillLedger,
   readSkillSource,
@@ -278,46 +278,32 @@ function emitToolProgress(
 
 // ─── Shared read helpers ───────────────────────────────────────────────────
 
-/**
- * Backend-dispatched raw read (demo / GitHub / local) — the dispatch the
- * facade backend below shares.
- *
- * GitHub historical reads go through the content-addressed tree + blob layer
- * (`readFileViaTree`): the path's sha comes from the cached tree, the bytes
- * from the permanent blob cache, so a recall scan over N slice files costs
- * zero per-file API calls on a warm instance instead of N direct reads. The
- * recall surface only ever reads history (committed slices), so staleness is
- * bounded by the tree TTL; `opts.fresh` keeps the direct per-file read for a
- * caller that must see the bytes on the other side NOW.
- */
-async function readRawBackend(
-  ctx: ToolContext,
-  path: string,
-  opts?: { fresh?: boolean },
-): Promise<string> {
-  if (ctx.useDemo) return readFileDemo(path);
-  if (ctx.useGithub) {
-    // The recall surface only reads history (committed slices), so the tree's
-    // TTL is the only staleness bound — `fresh` stays available for a caller
-    // that must see the bytes on the other side of a write.
-    return opts?.fresh
-      ? readFile(path, ctx.repo, ctx.owner, opts)
-      : readFileViaTree(path, ctx.repo, ctx.owner, opts);
-  }
-  return readFileLocal(path);
-}
-
-
 // ─── Memory navigation and reads ─────────────────────────────────────────
 // Directory tools return paths and refs, with no document text. The recall
 // facade handles text search, recent activity, and content reads by ref.
 
 /** Build the facade's read backend from the tool context's storage flags. */
 function createRecallBackend(ctx: ToolContext): RecallBackend {
-  const readFile = (path: string): Promise<string> => readRawBackend(ctx, path,
-    path === PEOPLE_USER_INDEX_PATH ? { fresh: true } : undefined);
+  // One read-only tool invocation spans enumeration, ranking and opening the
+  // result. Even a truncated-tree directory walk must stay on its commit.
+  let snapshot: Promise<RepoTreeSnapshot> | undefined;
+  const getSnapshot = () => snapshot ??= getRepoTreeSnapshot(ctx.repo, ctx.owner).catch(error => {
+    snapshot = undefined;
+    throw error;
+  });
   return {
-    readFile,
+    async caseActivityDates(nodes) {
+      if (!ctx.useGithub || ctx.useDemo) return undefined;
+      return gitHubCaseActivityDates((await getSnapshot()).tree, nodes, ctx.repo, ctx.owner);
+    },
+    async readFile(path) {
+      if (ctx.useDemo) return readFileDemo(path);
+      if (!ctx.useGithub) return readFileLocal(path);
+      const { tree, ref } = await getSnapshot();
+      return tree.truncated
+        ? readFile(path, ctx.repo, ctx.owner, { ref })
+        : readTextFromCompleteTree(tree, path, ctx.repo, ctx.owner);
+    },
     listMemoryFiles: async (scope): Promise<string[]> => {
       const root = scope ? `memory/${scope.category}` : "memory";
       if (!ctx.useGithub && !ctx.useDemo) {
@@ -339,11 +325,11 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
         }
         return walkPathsLocal(root, Infinity, { maxDepth: scope ? 1 : Infinity, requireRealRoot: true });
       }
-      if (ctx.useGithub) {
-        const tree = await getRepoTree(ctx.repo, ctx.owner);
-        if (!tree.truncated) {
+      const github = ctx.useGithub && !ctx.useDemo ? await getSnapshot() : undefined;
+      if (github) {
+        if (!github.tree.truncated) {
           // The cached memory/ tree: within the TTL this costs zero API calls.
-          return tree.entries
+          return github.tree.entries
             .filter((e) => e.type === "blob" && e.path.startsWith(root + "/"))
             .map((e) => e.path);
         }
@@ -353,7 +339,7 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
       const listDir = (path: string) =>
         ctx.useDemo
           ? listFilesDemo(path)
-          : listFiles(path, ctx.repo, ctx.owner);
+          : listFiles(path, ctx.repo, ctx.owner, { ref: github!.ref });
       const paths: string[] = [];
       const walk = async (dir: string): Promise<void> => {
         let entries: Array<{ name: string; type: string }>;

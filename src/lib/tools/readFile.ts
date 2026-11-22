@@ -1,5 +1,8 @@
+import { promisify } from "node:util";
+import { constants, gzip, gunzip } from "node:zlib";
 import {
   getOctokit,
+  currentGitHubReadDeadline,
   isGitHubRateLimitError,
   isGitHubReadTimeoutError,
 } from "@/lib/github/client";
@@ -223,13 +226,8 @@ export function invalidateReadCache(
 // bytes from the blob cache. A phase resolves the small mutable head pointer
 // once; every later path read reuses its tree, even after Next tags expire.
 //
-// THE CACHE ENTRY IS A COMPACT PROJECTION, not the API payload. Each entry
-// stores {path, type, sha, size?} ≈ 110 bytes of JSON; the raw items also
-// carry url/git_url/mode and cost ≈300+ bytes each. At the real tree's scale
-// (~800 slices ≈ 2400 slice blobs + ~1100 slice-dir trees, ~600 case entries,
-// ~200 other ≈ 4300 entries) that is ~0.5 MB cached against a ~1.5-2 MB raw
-// response — comfortably under the Data Cache's per-entry size class, which
-// the raw payload risks (coordinator-reviewed constraint from the audit).
+// Persist only path, type, sha and size. Larger trees also compress well
+// because record-directory prefixes repeat across thousands of entries.
 
 /** One entry of the cached `memory/` subtree listing. */
 export interface RepoTreeEntry {
@@ -257,7 +255,43 @@ export interface RepoTree {
   truncated: boolean;
 }
 
+export interface RepoTreeSnapshot {
+  /** Commit used for any path or directory outside the complete projection. */
+  ref: string;
+  tree: RepoTree;
+}
+
+interface RepoTreeIndex {
+  byPath: Map<string, RepoTreeEntry>;
+  children: Map<string, RepoTreeEntry[]>;
+}
+
+const indexes = new WeakMap<RepoTree, RepoTreeIndex>();
+
+/** Paths and directory membership share the immutable tree's lifetime. */
+function indexTree(tree: RepoTree): RepoTreeIndex {
+  const cached = indexes.get(tree);
+  if (cached) return cached;
+  const index: RepoTreeIndex = { byPath: new Map(), children: new Map() };
+  for (const entry of tree.entries) {
+    index.byPath.set(entry.path, entry);
+    const parent = entry.path.slice(0, entry.path.lastIndexOf("/"));
+    const children = index.children.get(parent);
+    if (children) children.push(entry);
+    else index.children.set(parent, [entry]);
+  }
+  indexes.set(tree, index);
+  return index;
+}
+
+export function getRepoTreeEntry(tree: RepoTree, path: string): RepoTreeEntry | undefined {
+  return indexTree(tree).byPath.get(path);
+}
+
 const MEMORY_TREE_ROOT = "memory";
+const COMPRESS_TREE_AT_ENTRIES = 1024;
+const gzipTree = promisify(gzip);
+const gunzipTree = promisify(gunzip);
 
 /**
  * The uncached fetch behind `getRepoTree`: the default branch's head ref,
@@ -266,15 +300,13 @@ const MEMORY_TREE_ROOT = "memory";
  * memory files and are dropped from the projection.
  */
 async function fetchRepoTree(
-  owner: string, repo: string, opts?: ReadOptions,
-  knownHead?: { headSha: string; treeSha?: string },
+  owner: string, repo: string, head: { headSha: string; treeSha?: string }, opts?: ReadOptions,
 ): Promise<RepoTree> {
   const octokit = getOctokit();
-  const head = knownHead ?? (opts?.ref ? { headSha: opts.ref } : await getGitHubReadHead(repo, owner, opts));
   // Both layers are immutable objects. Revalidating a mutable branch pointer
   // cannot make Next reject these entries for the rest of the HTTP request.
   const memorySha = await cachedFetch(
-    ["github", "root-tree", owner, repo, head.treeSha ?? head.headSha],
+    ["github", "root-tree", owner, repo, "root-presence-v2", head.treeSha ?? head.headSha],
     CACHE_TTLS.BLOB_SECONDS,
     [],
     async () => {
@@ -283,13 +315,13 @@ async function fetchRepoTree(
       });
       return (rootTree.tree ?? []).find(
         (e) => e.path === MEMORY_TREE_ROOT && e.type === "tree",
-      )?.sha ?? "";
+      )?.sha ?? (rootTree.truncated ? null : "");
     },
     opts,
   );
-  if (!memorySha) return { treeSha: "", entries: [], truncated: false };
-  return cachedFetch(
-    ["github", "tree", owner, repo, memorySha],
+  if (!memorySha) return { treeSha: "", entries: [], truncated: memorySha === null };
+  const stored = await cachedFetch(
+    ["github", "tree", owner, repo, "gzip-v1", memorySha],
     CACHE_TTLS.BLOB_SECONDS,
     [],
     async () => {
@@ -311,10 +343,16 @@ async function fetchRepoTree(
         });
       }
       entries.sort((a, b) => a.path.localeCompare(b.path));
-      return { treeSha: memorySha, entries, truncated: tree.truncated === true };
+      const projected = { treeSha: memorySha, entries, truncated: tree.truncated === true };
+      if (opts?.fresh || entries.length < COMPRESS_TREE_AT_ENTRIES) return projected;
+      const compressed = await gzipTree(JSON.stringify(projected), { level: constants.Z_BEST_SPEED });
+      return compressed.toString("base64");
     },
     opts,
   );
+  if (typeof stored !== "string") return stored;
+  const json = await gunzipTree(Buffer.from(stored, "base64"));
+  return JSON.parse(json.toString("utf8")) as RepoTree;
 }
 
 /**
@@ -331,33 +369,35 @@ const treeInflight = new Map<string, Promise<RepoTree>>();
  * The cached `memory/` subtree listing. `fresh` bypasses both caches and
  * writes nothing back — the same contract `cachedFetch` defines.
  */
-export async function getRepoTree(
+export async function getRepoTreeSnapshot(
   repo: string,
   owner: string,
   opts?: ReadOptions,
-): Promise<RepoTree> {
-  if (opts?.fresh || opts?.ref) return fetchRepoTree(owner, repo, opts);
+): Promise<RepoTreeSnapshot> {
+  if (opts?.fresh || opts?.ref) {
+    const head = opts.ref ? { headSha: opts.ref } : await getGitHubReadHead(repo, owner, opts);
+    return { ref: head.headSha, tree: await fetchRepoTree(owner, repo, head, opts) };
+  }
   return memoizeGitHubRead(repo, owner, "memory-tree", async () => {
     // Only object-addressed work may be shared across phases. Resolve a phase
     // head first so a concurrent writer's new phase never joins an old tree.
     const head = await getGitHubReadHead(repo, owner);
     const key = `${owner}/${repo}:${head.headSha}`;
-    const existing = treeInflight.get(key);
-    if (existing) return existing;
-    const p = fetchRepoTree(owner, repo, undefined, head);
-    treeInflight.set(key, p);
-    const settle = () => {
-      if (treeInflight.get(key) === p) treeInflight.delete(key);
-    };
-    p.then(settle, settle);
-    return p;
+    let pending = treeInflight.get(key);
+    if (!pending) {
+      pending = fetchRepoTree(owner, repo, head);
+      treeInflight.set(key, pending);
+      const settle = () => {
+        if (treeInflight.get(key) === pending) treeInflight.delete(key);
+      };
+      pending.then(settle, settle);
+    }
+    return { ref: head.headSha, tree: await pending };
   });
 }
 
-/** A fresh composite read still has one immutable anchor for its fallback. */
-async function treeReadOptions(repo: string, owner: string, opts?: ReadOptions): Promise<ReadOptions | undefined> {
-  if (!opts?.fresh || opts.ref) return opts;
-  return { ...opts, ref: (await getGitHubReadHead(repo, owner, { fresh: true })).headSha };
+export async function getRepoTree(repo: string, owner: string, opts?: ReadOptions): Promise<RepoTree> {
+  return (await getRepoTreeSnapshot(repo, owner, opts)).tree;
 }
 
 /** The uncached fetch behind `readBlobBase64`: one `git.getBlob` call. */
@@ -398,19 +438,34 @@ async function fetchBlobBase64(
  * there is nothing a tag could ever revalidate). `fresh` bypasses without
  * write-back, as everywhere in this module.
  */
+const blobInflight = new Map<string, Promise<string>>();
+
 export async function readBlobBase64(
   sha: string,
   repo: string,
   owner: string,
   opts?: ReadOptions,
 ): Promise<string> {
-  return cachedFetch(
+  const load = () => cachedFetch(
     ["github", "blob", owner, repo, sha],
     CACHE_TTLS.BLOB_SECONDS,
     [],
     () => fetchBlobBase64(sha, repo, owner),
     opts,
   );
+  if (opts?.fresh) return load();
+  // Separate read budgets so one caller's deadline never extends or aborts
+  // another's operation. Identical git bytes can otherwise share a cold load.
+  const key = JSON.stringify([owner, repo, sha, currentGitHubReadDeadline()]);
+  const existing = blobInflight.get(key);
+  if (existing) return existing;
+  const pending = load();
+  blobInflight.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    blobInflight.delete(key);
+  }
 }
 
 /** A blob's utf-8 text by sha (the text twin of `readBlobBase64`). */
@@ -448,13 +503,21 @@ export async function readFileViaTree(
     );
   }
   const normalized = path.replace(/\\/g, "/");
-  const snapshotOptions = await treeReadOptions(repo, owner, opts);
-  const tree = await getRepoTree(repo, owner, snapshotOptions);
+  const { tree, ref } = await getRepoTreeSnapshot(repo, owner, opts);
   if (tree.truncated || !normalized.startsWith(`${MEMORY_TREE_ROOT}/`)) {
-    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
-    return readFile(path, repo, owner, { ...opts, ...(ref ? { ref } : {}) });
+    return readFile(path, repo, owner, { ...opts, ref });
   }
-  const entry = tree.entries.find((e) => e.path === normalized);
+  return readTextFromCompleteTree(tree, path, repo, owner, opts);
+}
+
+/** Resolve exactly the tree used to select the candidate, including misses. */
+export async function readTextFromCompleteTree(
+  tree: RepoTree, path: string, repo: string, owner: string, opts?: ReadOptions,
+): Promise<string> {
+  if (!isPathAllowed(path)) throw new Error(`Access denied: path "${path}" is outside allowed directories`);
+  const normalized = path.replace(/\\/g, "/");
+  if (tree.truncated || !normalized.startsWith(`${MEMORY_TREE_ROOT}/`)) throw new Error("Expected a complete memory tree");
+  const entry = getRepoTreeEntry(tree, normalized);
   if (!entry) throw new Error(`File not found: "${path}"`);
   if (entry.type !== "blob") {
     throw new Error(`"${path}" is a directory, not a file`);
@@ -487,13 +550,11 @@ export async function listRepoChildren(
     );
   }
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  const snapshotOptions = await treeReadOptions(repo, owner, opts);
-  const tree = await getRepoTree(repo, owner, snapshotOptions);
+  const { tree, ref } = await getRepoTreeSnapshot(repo, owner, opts);
   if (tree.truncated || !(normalized === MEMORY_TREE_ROOT || normalized.startsWith(`${MEMORY_TREE_ROOT}/`))) {
-    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
-    return listFiles(normalized, repo, owner, { ...opts, ...(ref ? { ref } : {}) });
+    return listFiles(normalized, repo, owner, { ...opts, ref });
   }
-  const self = tree.entries.find((e) => e.path === normalized);
+  const self = getRepoTreeEntry(tree, normalized);
   if (self?.type === "blob") {
     return [
       {
@@ -510,14 +571,10 @@ export async function listRepoChildren(
   if (tree.treeSha === "" || (!self && normalized !== MEMORY_TREE_ROOT)) {
     throw new Error(`Directory not found: "${path}"`);
   }
-  const prefix = `${normalized}/`;
   const out: Array<{ name: string; type: "file" | "dir"; path: string; size?: number }> = [];
-  for (const e of tree.entries) {
-    if (!e.path.startsWith(prefix)) continue;
-    const rest = e.path.slice(prefix.length);
-    if (rest.includes("/")) continue; // deeper than one level
+  for (const e of indexTree(tree).children.get(normalized) ?? []) {
     out.push({
-      name: rest,
+      name: e.path.slice(normalized.length + 1),
       type: e.type === "blob" ? "file" : "dir",
       path: e.path,
       ...(e.size !== undefined ? { size: e.size } : {}),
@@ -563,13 +620,11 @@ export async function readBinaryFileViaTree(
     );
   }
   const normalized = path.replace(/\\/g, "/");
-  const snapshotOptions = await treeReadOptions(repo, owner, opts);
-  const tree = await getRepoTree(repo, owner, snapshotOptions);
+  const { tree, ref } = await getRepoTreeSnapshot(repo, owner, opts);
   if (tree.truncated || !normalized.startsWith(`${MEMORY_TREE_ROOT}/`)) {
-    const ref = snapshotOptions?.ref ?? (await getGitHubReadHead(repo, owner)).headSha;
     return fetchBinaryFromGitHub(path, repo, owner, ref);
   }
-  const entry = tree.entries.find((e) => e.path === normalized);
+  const entry = getRepoTreeEntry(tree, normalized);
   if (!entry || entry.type !== "blob") throw new Error(`Not a file: "${path}"`);
   return Buffer.from(
     await readBlobBase64(entry.sha, repo, owner, opts),

@@ -371,7 +371,7 @@ export async function getRecordDoc(
 
 async function readDossierViews() {
   try {
-    return dossierViews(await fsReadFile(PEOPLE_USER_INDEX_PATH, undefined, { fresh: true }));
+    return dossierViews(await fsReadFile(PEOPLE_USER_INDEX_PATH));
   } catch (error) {
     if (absentDocumentError(error)) return null;
     throw error;

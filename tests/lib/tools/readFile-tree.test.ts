@@ -195,6 +195,24 @@ describe("getRepoTree", () => {
     expect(hoisted.mockGetTree).toHaveBeenCalledTimes(2);
   });
 
+  it("stores a large tree compactly and restores all path metadata from cache", async () => {
+    const items = Array.from({ length: 1500 }, (_, i) => ({
+      path: `地点/旧居/record-${i}.md`, type: "blob", sha: String(i).padStart(40, "a"), size: i,
+    }));
+    primeTreeFetch({ data: { tree: items, truncated: true } });
+    const cold = await getRepoTree(repo, owner);
+    const warm = await getRepoTree(repo, owner);
+
+    expect(warm).toEqual(cold);
+    expect(warm.truncated).toBe(true);
+    expect(warm.entries).toHaveLength(items.length);
+    expect(warm.entries).toContainEqual({ ...items[123], path: "memory/" + items[123].path });
+    const encoded = [...hoisted.cacheStore.values()].find(value => typeof value === "string" && value.startsWith("H4sI"));
+    expect(typeof encoded).toBe("string");
+    expect(Buffer.byteLength(encoded as string)).toBeLessThan(Buffer.byteLength(JSON.stringify(warm)) / 2);
+    expect(hoisted.mockGetTree).toHaveBeenCalledTimes(2);
+  });
+
   it("single-flights concurrent cold reads of the tree identity", async () => {
     hoisted.mockGetRef.mockResolvedValue(REF);
     // The gate is created HERE so the releaser exists synchronously — the

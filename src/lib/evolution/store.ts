@@ -116,10 +116,10 @@ export function composeUserModel(card: string, direction: string | null): string
  * deterministic read failure rejects with the current path and original cause
  * so no caller can silently substitute a month-old historical document.
  */
-export async function readUserModel(batch?: WriteBatch): Promise<UserModel | null> {
+export async function readUserModel(batch?: WriteBatch, opts: { fresh: boolean } = { fresh: true }): Promise<UserModel | null> {
   let full: string;
   try {
-    full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch, { fresh: true });
+    full = await fsReadFile(PEOPLE_USER_INDEX_PATH, batch, opts);
   } catch (error) {
     if (isMissingFileError(error)) return null;
     const reason = error instanceof Error ? error.message : String(error);

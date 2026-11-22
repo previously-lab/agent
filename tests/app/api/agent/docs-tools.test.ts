@@ -51,14 +51,18 @@ vi.mock("@/lib/tools/local-fs", () => ({
   writeFileLocal: vi.fn(async () => ({ path: "", created: false })),
   deleteFileLocal: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/tools/readFile", () => ({
+vi.mock("@/lib/tools/readFile", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/tools/readFile")>(),
   readFile: vi.fn(async () => {
     throw new Error("github read should not be called in local mode");
   }),
   readFileFresh: vi.fn(async () => {
     throw new Error("github read should not be called in local mode");
   }),
-  readFileViaTree: vi.fn(async () => {
+  readTextFromCompleteTree: vi.fn(async () => {
+    throw new Error("github tree read should not be called in local mode");
+  }),
+  getRepoTreeSnapshot: vi.fn(async () => {
     throw new Error("github tree read should not be called in local mode");
   }),
   getRepoTree: vi.fn(async () => {
@@ -100,7 +104,8 @@ import {
 } from "@/app/api/agent/tool-executors";
 import {
   readFile as githubReadFile,
-  readFileViaTree as githubReadFileViaTree,
+  readTextFromCompleteTree as githubReadFromSnapshot,
+  getRepoTreeSnapshot as githubSnapshot,
   getRepoTree as githubGetRepoTree,
 } from "@/lib/tools/readFile";
 import { readFileLocal, walkPathsLocal } from "@/lib/tools/local-fs";
@@ -850,7 +855,8 @@ describe("GitHub backend routing (cached reads)", () => {
 
   beforeEach(() => {
     vi.mocked(githubGetRepoTree).mockClear();
-    vi.mocked(githubReadFileViaTree).mockClear();
+    vi.mocked(githubReadFromSnapshot).mockClear();
+    vi.mocked(githubSnapshot).mockReset();
     vi.mocked(githubReadFile).mockClear();
     // Warm tree: every seeded file is a blob entry, non-truncated — the
     // listing walk in createRecallBackend takes the cached-tree branch.
@@ -864,7 +870,8 @@ describe("GitHub backend routing (cached reads)", () => {
         size: io.files.get(p)!.length,
       })),
     }));
-    vi.mocked(githubReadFileViaTree).mockImplementation(async (p: string) => {
+    vi.mocked(githubSnapshot).mockImplementation(async (repo, owner) => ({ ref: "commit", tree: await githubGetRepoTree(repo, owner) }));
+    vi.mocked(githubReadFromSnapshot).mockImplementation(async (_tree, p) => {
       if (!io.files.has(p)) throw new Error(`File not found: "${p}"`);
       return io.files.get(p)!;
     });
@@ -876,7 +883,7 @@ describe("GitHub backend routing (cached reads)", () => {
 
   afterEach(() => {
     vi.mocked(githubGetRepoTree).mockImplementation(githubThrow);
-    vi.mocked(githubReadFileViaTree).mockImplementation(githubThrow);
+    vi.mocked(githubReadFromSnapshot).mockImplementation(githubThrow);
     vi.mocked(githubReadFile).mockImplementation(async () => {
       throw new Error("github read should not be called in local mode");
     });
@@ -907,30 +914,32 @@ describe("GitHub backend routing (cached reads)", () => {
       kind: "entries", total: 0, entries: [],
     });
     expect(githubGetRepoTree).toHaveBeenCalledTimes(2);
-    expect(githubReadFileViaTree).not.toHaveBeenCalled();
+    expect(githubReadFromSnapshot).not.toHaveBeenCalled();
     expect(githubReadFile).not.toHaveBeenCalled();
     expect(readFileLocal).not.toHaveBeenCalled();
   });
 
-  it("recallRecent reads slice files via readFileViaTree, never the direct read", async () => {
+  it("recallRecent opens slice files at its selected snapshot", async () => {
     const out = await recallRecentExecute({}, opts(makeGithubCtx("2026-09-10-1000")));
     expect(out).toContain("records/2026-09-04-2130");
-    expect(githubReadFileViaTree).toHaveBeenCalled();
+    expect(githubReadFromSnapshot).toHaveBeenCalled();
     expect(
-      vi.mocked(githubReadFileViaTree).mock.calls.every(([p]) =>
+      vi.mocked(githubReadFromSnapshot).mock.calls.every(([, p]) =>
         p.startsWith("memory/"),
       ),
     ).toBe(true);
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 
-  it("recallSearch scans records bodies via readFileViaTree, never the direct read", async () => {
+  it("recallSearch scans record bodies and the user dossier at the listed commit", async () => {
+    io.files.set("memory/people/user/index.md", "# Current user model");
     const out = await recallSearchExecute(
       { query: "深埋关键词", includeRecords: true },
       opts(makeGithubCtx("2026-09-10-1000")),
     );
     expect(out).toMatch(/^1 match\(es\) for "深埋关键词":/);
-    expect(githubReadFileViaTree).toHaveBeenCalled();
+    expect(githubSnapshot).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(githubReadFromSnapshot).mock.calls.map(([, path]) => path)).toContain("memory/people/user/index.md");
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 
@@ -940,7 +949,7 @@ describe("GitHub backend routing (cached reads)", () => {
       opts(makeGithubCtx("2026-09-10-1000")),
     );
     expect(out).toMatchObject({ kind: "recallScenario_required", ref: "records/2026-09-04-2130" });
-    expect(githubReadFileViaTree).not.toHaveBeenCalled();
+    expect(githubReadFromSnapshot).not.toHaveBeenCalled();
     expect(githubReadFile).not.toHaveBeenCalled();
   });
 });

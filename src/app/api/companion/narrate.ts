@@ -92,7 +92,7 @@ function capPlaybook(content: string): string {
  *  degrades to no card layer — it must not silence the mouth. */
 async function readLiveModel() {
   try {
-    return await readUserModel();
+    return await readUserModel(undefined, { fresh: false });
   } catch (error) {
     console.warn(
       "[Companion] current user model unavailable; no historical fallback used:",

@@ -813,7 +813,7 @@ export async function housekeeping(
   let userModel: Awaited<ReturnType<typeof readUserModel>> = null;
   let userModelDiagnostic: string | undefined;
   try {
-    userModel = await readUserModel(batch);
+    userModel = await readUserModel(batch, { fresh: false });
   } catch (error) {
     userModelDiagnostic = error instanceof Error ? error.message : String(error);
     console.warn(`[UserModel] ${userModelDiagnostic}`);

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNextDataCacheContext } from "../helpers/next-data-cache-context";
+import { withGitHubReadBudget } from "@/lib/github/client";
 
 const api = vi.hoisted(() => ({
   get: vi.fn(), getRef: vi.fn(), getTree: vi.fn(), getBlob: vi.fn(),
@@ -106,6 +107,60 @@ describe("GitHub read views with real Next Data Cache", () => {
     expect(two.treeSha).toBe("two-head-memory");
     expect(api.getRef).toHaveBeenCalledTimes(2);
     expect(api.getTree).toHaveBeenCalledTimes(4);
+  });
+
+  it("shares simultaneous reads of the same cold blob and keeps the next request warm", async () => {
+    const context = createNextDataCacheContext();
+    const eight = () => Promise.all(Array.from({ length: 8 }, () => reads.readBlobText("body", "one", "owner")));
+    await context.run(async () => {
+      expect(await eight()).toEqual(Array(8).fill("hello"));
+      expect(api.getBlob).toHaveBeenCalledTimes(1);
+      await context.flush();
+      expect(await eight()).toEqual(Array(8).fill("hello"));
+      expect(api.getBlob).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("retries a failed shared fetch and isolates repositories and read deadlines", async () => {
+    api.getBlob.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
+    const read = () => reads.readBlobText("body", "one", "owner");
+    const errors = await Promise.allSettled([read(), read()]);
+    expect(errors.map(e => e.status)).toEqual(["rejected", "rejected"]);
+    expect(api.getBlob).toHaveBeenCalledTimes(1);
+    const bodies = await Promise.all([
+      read(), reads.readBlobText("body", "two", "owner"), withGitHubReadBudget(read, 100),
+    ]);
+    expect(bodies).toEqual(["hello", "hello", "hello"]);
+    expect(api.getBlob).toHaveBeenCalledTimes(4);
+  });
+
+  it("uses complete-tree absence only until the writer publishes a new commit", async () => {
+    api.getTree.mockImplementation(async ({ tree_sha, recursive }) => ({ data: recursive
+      ? { tree: tree_sha === "after-memory" ? [{ path: "new.md", type: "blob", sha: "body" }] : [] }
+      : { tree: [{ path: "memory", type: "tree", sha: tree_sha === "written" ? "after-memory" : "before-memory" }] },
+    }));
+    await views.withGitHubReadView(async () => {
+      const lookup = () => reads.readFileViaTree("memory/new.md", "one", "owner");
+      await expect(lookup()).rejects.toThrow("File not found");
+      await expect(lookup()).rejects.toThrow("File not found");
+      expect(api.getContent).not.toHaveBeenCalled();
+      views.publishGitHubHead("one", "owner", { headSha: "written" });
+      await expect(lookup()).resolves.toBe("hello");
+    });
+    expect(api.getRef).toHaveBeenCalledTimes(1);
+    expect(api.getBlob).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not convert a truncated root or a permission error into a missing file", async () => {
+    api.getTree.mockResolvedValue({ data: { tree: [], truncated: true } });
+    api.getContent.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
+    api.getContent.mockResolvedValueOnce({ data: { type: "file", size: 5, content: Buffer.from("hello").toString("base64") } });
+    await views.withGitHubReadView(async () => {
+      const lookup = () => reads.readFileViaTree("memory/new.md", "one", "owner");
+      await expect(lookup()).rejects.toThrow("Forbidden");
+      await expect(lookup()).resolves.toBe("hello");
+      expect(api.getContent.mock.calls.map(([request]) => request.ref)).toEqual(["one-head", "one-head"]);
+    });
   });
 
   it("shares a live head once in an explicit phase without any Next request", async () => {
