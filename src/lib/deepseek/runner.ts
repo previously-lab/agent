@@ -88,6 +88,7 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
       await emit({ type: "tool-input-available", toolCallId: native.id, toolName: native.function.name, input });
       prepared.push({ native, definition, input, inputError, toolCall });
     }
+    options.onToolBatchStart?.(response.error ? [] : toolCalls, steps.at(-1));
     const completed = await Promise.all(prepared.map(async ({ native, definition, input, inputError, toolCall }): Promise<ToolResult | undefined> => {
       let output: unknown;
       let failure = inputError;

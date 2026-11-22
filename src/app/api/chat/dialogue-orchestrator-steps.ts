@@ -1,10 +1,12 @@
-import { getRun, resumeHook, start } from "workflow/api";
+import { getHookByToken, getRun, resumeHook, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { TurnRunResult } from "@/lib/chat/turn-types";
 import {
   DIALOGUE_PUBLICATION_CHUNK,
   type DialogueDeliveryEvent,
+  type DialogueHolderReceipt,
+  type DialogueParentWritable,
   type DialogueOfferEvent,
   type DialogueRunInput,
   type DialogueTypedArtifact,
@@ -62,6 +64,7 @@ export interface DialogueOrchestratorArgs {
 }
 
 const MAX_DELIVERY_REPLACEMENTS = 2;
+const MAX_HOLDER_STREAM_CHUNKS = 128;
 
 function iso(value: unknown): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
@@ -78,7 +81,7 @@ function runtimeEvent(value: unknown): DialogueRuntimeEvent | undefined {
   return undefined;
 }
 
-async function readDialogueStream(runId: string, cacheScope?: string) {
+async function readDialogueStream(runId: string, cacheScope?: string, maxChunks?: number) {
   const { entries, nextStreamIndex } = await readWorkflowStreamPrefix(
     runId, undefined, value => {
       const chunk = value as { type?: unknown; data?: unknown };
@@ -87,7 +90,7 @@ async function readDialogueStream(runId: string, cacheScope?: string) {
         ? candidate : undefined;
       const event = runtimeEvent(chunk.data);
       return publication || event ? { publication, event } : undefined;
-    }, cacheScope);
+    }, { cacheScope, maxChunks });
   const publications = new Map<string, PublicUtterance>();
   const events: DialogueRuntimeEvent[] = [];
   for (const { publication, event } of entries) {
@@ -142,6 +145,10 @@ async function listDialogueRegistry(includeActors: boolean) {
 /** Build the world entirely from Workflow registry and durable streams. */
 export async function readDialogueWorldStep(scope: string): Promise<DialogueWorldSnapshot> {
   "use step";
+  return readDialogueWorld(scope);
+}
+
+async function readDialogueWorld(scope: string, activatingInputId?: string): Promise<DialogueWorldSnapshot> {
   const startedAt = performance.now();
   const rows = await listDialogueRegistry(true);
   const registryMs = Math.round(performance.now() - startedAt);
@@ -152,9 +159,14 @@ export async function readDialogueWorldStep(scope: string): Promise<DialogueWorl
   const wakes: DialogueWakeEvent[] = [];
   const publications: PublicUtterance[] = [];
   const dialogueRuns: DialogueRunState[] = [];
+  // Cold admission needs other work facts, but this input has no Actor or
+  // session history to discover until an Actor exists in its scope.
+  const skipInput = activatingInputId && !rows.some(({ attributes }) =>
+    attributes?.scope === scope && attributes.role === "dialogueOrchestrator") ? activatingInputId : undefined;
   const relevant = rows.filter(({ attributes }) => attributes?.scope === scope &&
     (attributes.role === "dialogueOrchestrator" ||
-      (attributes.role === "thinking" && attributes.turn && (attributes.delivery === "orchestrator" || attributes.acceptedAt))));
+      (attributes.role === "thinking" && attributes.turn && attributes.turn !== skipInput &&
+        (attributes.delivery === "orchestrator" || attributes.acceptedAt))));
   // Each stream is authoritative for one run. Read independent runs in
   // parallel, then fold them in registry order just as in a serial replay.
   const histories = await mapWithConcurrency(relevant, 8, async row => {
@@ -229,8 +241,12 @@ export async function readDialogueWorldStep(scope: string): Promise<DialogueWorl
     input.userSeq = index + 1;
     input.eventSeq = index + 1;
   });
-  offers.sort((a, b) => (a.publicSeq ?? 0) - (b.publicSeq ?? 0) || a.offerId.localeCompare(b.offerId));
-  publications.sort((a, b) => a.publicSeq - b.publicSeq || a.committedAt.localeCompare(b.committedAt));
+  // A sequence is local to its source work. Across inputs, use the time the
+  // handoff became available; a new work starts numbering at one again.
+  const offerTime = (offer: DialogueOfferEvent) => offer.acceptedAt ?? inputs.get(offer.sourceInputId)?.acceptedAt ?? "";
+  offers.sort((a, b) => offerTime(a).localeCompare(offerTime(b)) ||
+    (a.publicSeq ?? 0) - (b.publicSeq ?? 0) || a.offerId.localeCompare(b.offerId));
+  publications.sort((a, b) => a.committedAt.localeCompare(b.committedAt) || a.publicSeq - b.publicSeq);
   dialogueRuns.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   if (process.env.VERCEL_ENV === "production") {
     console.log(`[dialogue-world] ${JSON.stringify({ registryMs, elapsedMs: Math.round(performance.now() - startedAt),
@@ -275,6 +291,62 @@ function hookMissing(error: unknown): boolean {
   return error instanceof Error && error.name === "HookNotFoundError";
 }
 
+function leavingDialogueRun(run: DialogueRunState): boolean {
+  return run.events.some(event => event.type === "continued" || event.type === "delegated" ||
+    event.type === "exit_commit" || event.type === "world_degraded");
+}
+
+function dialogueWake(request: DialogueEnsureRequest, holder: DialogueHolderReceipt, now: number): DialogueWakeEvent {
+  return {
+    type: "dialogue_wake", ...holder, parentRunId: request.parentRunId, sourceInputId: request.sourceInputId,
+    workId: request.workId, triggerKey: request.triggerKey, candidateKeys: request.candidateKeys,
+    wakeAt: new Date(now).toISOString(), reused: true,
+  };
+}
+
+async function resumeKnownDialogueHolder(request: DialogueEnsureRequest, holder: DialogueHolderReceipt,
+  writeWake: (event: DialogueWakeEvent) => Promise<void>) {
+  let hook: Awaited<ReturnType<typeof getHookByToken>>;
+  let wake: DialogueWakeEvent;
+  try {
+    const world = await getWorld();
+    const [currentHook, row] = await Promise.all([
+      getHookByToken(`dialogue-execution:${request.scope}`), world.runs.get(holder.runId, { resolveData: "none" }),
+    ]);
+    if (currentHook.runId !== holder.runId || row.runId !== holder.runId || row.attributes?.scope !== request.scope ||
+        row.attributes.role !== "dialogueOrchestrator" || (row.attributes.session ?? row.runId) !== holder.sessionId ||
+        (row.status !== "running" && row.status !== "pending")) return;
+    const { events } = await readDialogueStream(holder.runId, undefined, MAX_HOLDER_STREAM_CHUNKS);
+    const run: DialogueRunState = { ...holder, status: row.status, createdAt: iso(row.createdAt), events };
+    const now = Date.now();
+    if (leavingDialogueRun(run) || request.candidateKeys.some(id => dialogueCandidateFailed(run, id)) ||
+        Date.parse(run.createdAt) > now || !dialogueRunUsable(run.status, run.createdAt, now)) return;
+    const phase = events.findLast(event => event.type === "heartbeat" || event.type === "handoff_wait" ||
+      event.type === "exit_intent");
+    // Only a fresh idle intent proves that no other thought's wake could have
+    // already waited a heartbeat. An older one needs the full wake history.
+    const progressAge = now - Date.parse(phase?.at ?? run.createdAt);
+    if (phase?.type === "handoff_wait" || !(progressAge >= 0 && progressAge < DIALOGUE_HEARTBEAT_MS)) return;
+    hook = currentHook;
+    wake = dialogueWake(request, holder, now);
+  } catch {
+    // Read-only uncertainty is safe to resolve through normal discovery.
+    return;
+  }
+  try {
+    // Bind this write to the checked hook ID. A token lookup here could
+    // redirect it to an unchecked successor. Only a missing hook proves that
+    // no write committed. Other errors go back to the durable work witness.
+    const resumed = await resumeHook(hook, wake);
+    if (resumed.runId !== holder.runId) throw new Error("Unexpected dialogue hook owner");
+  } catch (error) {
+    if (hookMissing(error)) return;
+    throw error;
+  }
+  await writeWake(wake);
+  return holder;
+}
+
 async function resumeExistingActor(scope: string, wake: DialogueWakeEvent) {
   // start() returns before the new run can register its hook. Give that real
   // registration a bounded chance instead of creating a duplicate immediately.
@@ -301,14 +373,22 @@ export async function forwardDialogueWakeStep(scope: string, wake: DialogueWakeE
 }
 
 /** Resume the one live Actor, or create it with the first wake already attached. */
-export async function ensureDialogueOrchestratorStep(request: DialogueEnsureRequest): Promise<{
+export async function ensureDialogueOrchestratorStep(request: DialogueEnsureRequest, knownHolder?: DialogueHolderReceipt,
+  parentWritable?: DialogueParentWritable): Promise<{
   runId: string;
   sessionId: string;
   reused: boolean;
   otherWorks: DialogueOrchestrationWorld["works"];
 }> {
   "use step";
-  const world = await readDialogueWorldStep(request.scope);
+  const writeWake = parentWritable ? (event: DialogueWakeEvent) => recordDialogueWakeStep(event, parentWritable) : recordDialogueWakeStep;
+  // Only a persisted work update passes the start receipt. Admission and the
+  // delivery witness always discover the authoritative world and other works.
+  if (knownHolder) {
+    const resumed = await resumeKnownDialogueHolder(request, knownHolder, writeWake);
+    if (resumed) return { ...resumed, reused: true, otherWorks: [] };
+  }
+  const world = await readDialogueWorld(request.scope, request.sourceInputId);
   const otherWorks = world.works.filter(work => work.inputId !== request.sourceInputId);
   const runs = new Map(world.dialogueRuns.map(run => [run.runId, run]));
   const newest = world.dialogueRuns.at(-1);
@@ -321,20 +401,21 @@ export async function ensureDialogueOrchestratorStep(request: DialogueEnsureRequ
     if (stale && (existing.status === "pending" || existing.status === "running")) {
       await cancelDialogueRunStep(existing.runId);
       existing = undefined;
-    } else if (!stale && !failed && dialogueRunUsable(existing.status, lastWakeAt, now)) {
-      const wake: DialogueWakeEvent = {
-        type: "dialogue_wake", runId: existing.runId, parentRunId: request.parentRunId,
-        sourceInputId: request.sourceInputId, workId: request.workId, sessionId: existing.sessionId,
-        triggerKey: request.triggerKey, candidateKeys: request.candidateKeys,
-        wakeAt: new Date(now).toISOString(), reused: true,
-      };
+    } else if (!stale && !failed && !leavingDialogueRun(existing) && dialogueRunUsable(existing.status, lastWakeAt, now)) {
+      const wake = dialogueWake(request, { runId: existing.runId, sessionId: existing.sessionId }, now);
       const resumed = await resumeExistingActor(request.scope, wake);
       if (resumed) {
         // The hook can change owners after discovery. Persist the session of
         // the Actor which accepted the wake, including a just-started holder.
-        const sessionId = runs.get(resumed.runId)?.sessionId ??
-          (await (await getWorld()).runs.get(resumed.runId, { resolveData: "none" })).attributes.session ?? resumed.runId;
-        await recordDialogueWakeStep({ ...wake, runId: resumed.runId, sessionId });
+        let sessionId = runs.get(resumed.runId)?.sessionId;
+        if (!sessionId) {
+          const row = await (await getWorld()).runs.get(resumed.runId, { resolveData: "none" });
+          if (row.attributes?.role !== "dialogueOrchestrator" || row.attributes.scope !== request.scope) {
+            throw new Error("The resumed dialogue owner does not match its scope");
+          }
+          sessionId = row.attributes.session ?? resumed.runId;
+        }
+        await writeWake({ ...wake, runId: resumed.runId, sessionId });
         return { runId: resumed.runId, sessionId, reused: true, otherWorks };
       }
       // A terminal or pre-Actor holder has no live hook. Start below and let
@@ -351,7 +432,7 @@ export async function ensureDialogueOrchestratorStep(request: DialogueEnsureRequ
   };
   const run = await startDialogueRun({ scope: request.scope, ...(sessionId ? { sessionId } : {}), initialWake });
   const wake = { ...initialWake, runId: run.runId, sessionId: sessionId ?? run.runId };
-  await recordDialogueWakeStep(wake);
+  await writeWake(wake);
   return { runId: run.runId, sessionId: wake.sessionId, reused: false, otherWorks };
 }
 

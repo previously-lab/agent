@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkUpdateEvent } from "@/lib/dialogue/work-contract";
 
-const h = vi.hoisted(() => ({ call: vi.fn() }));
+const h = vi.hoisted(() => ({ call: vi.fn(), publish: vi.fn(), wake: vi.fn(), snapshot: vi.fn() }));
 vi.mock("@/lib/deepseek/steps", () => ({
   callModelStep: h.call,
   writeAgentEventStep: vi.fn(),
   closeAgentStreamStep: vi.fn(),
 }));
+vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
+  publishWorkUpdateStep: h.publish, reconcileDialogueOffersStep: vi.fn(),
+}));
+vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
+  ensureDialogueOrchestratorStep: h.wake, readWorkSnapshotStep: h.snapshot,
+}));
 
 import { createDialogueAgent, createThinkingAgent } from "@/app/api/agent/agent";
+import { buildChatToolsContext } from "@/app/api/agent/tools";
+import { isStepCount } from "@/lib/deepseek/tools";
 
 import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
@@ -26,6 +35,9 @@ const modelResponse = {
 beforeEach(() => {
   h.call.mockReset();
   h.call.mockResolvedValue(modelResponse);
+  h.publish.mockReset();
+  h.wake.mockReset().mockResolvedValue({ runId: "actor" });
+  h.snapshot.mockReset();
 });
 
 describe("dialogue DeepSeek profile", () => {
@@ -55,7 +67,8 @@ describe("dialogue DeepSeek profile", () => {
     await createDialogueAgent(true).stream({ prompt: "Opening | Plan: check the forecast." });
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     expect(request.tools).toBeUndefined();
-    expect(request.messages[0]?.content).toContain("A synthetic opening with empty handoff text may instead return empty text");
+    expect(request.messages[0]?.content).toContain("Give the part of the original question this handoff already answers");
+    expect(request.messages[0]?.content).toContain("a finding the user has already been told, return empty text");
   });
 
   it("matches each input to a response mode instead of expanding all available context", async () => {
@@ -119,10 +132,13 @@ describe("dialogue DeepSeek profile", () => {
     expect(system).toContain("Never write ordinary assistant content or a public answer");
     expect(system).toContain("If the conversation already answers the question, no snapshot or search is needed");
     expect(system).toContain("Pending work is not a completed fact");
-    expect(system).toContain("use workCheckpoint when a substantive update would help the user");
-    expect(system).toContain("Simple direct work may skip it");
-    expect(system).toContain("A checkpoint is public-safe work state, not a reply draft");
+    expect(system).toContain("one of several questions may already be answerable from context");
+    expect(system).toContain("alongside the next independent lookup in the same tool step");
+    expect(system).toContain("Skip a checkpoint when the full answer is ready");
+    expect(system).toContain("Keep private reasoning, plans, routine activity and HTML out of checkpoints");
     expect(system).toContain("call completeWork exactly once");
+    expect(system).toContain("Describe a link only in the direction the source shows");
+    expect(system).toContain("Confine a missing-record claim to the material actually checked");
     expect(system).toContain("every complete native HTML artifact");
     expect(system).toContain("SEPARATE later tool step");
     expect(system).toContain("finishThinking alone with needsUser");
@@ -133,8 +149,58 @@ describe("dialogue DeepSeek profile", () => {
     ]));
     expect(request.tools?.some(entry => entry.function.name === "offerReply")).toBe(false);
     expect(request.tools?.find(entry => entry.function.name === "workCheckpoint")?.function.description)
-      .toContain("not a reply draft");
+      .toContain("new, supported partial answer to this input while work continues");
     expect(request.tools?.find(entry => entry.function.name === "completeWork")?.function.description)
       .toContain("The dialogue Actor owns integration and public expression");
+    expect(request.tools?.find(entry => entry.function.name === "finishThinking")?.function.description)
+      .toContain("An empty report is sufficient otherwise");
   });
+
+  it("wakes public wording with the supported part while an independent lookup is still pending", async () => {
+    const task = "When is the workshop, and did the venue change?";
+    const partial = "The agenda confirms the workshop starts at 10 am.";
+    const source = { inputId: "input", clientMessageId: "message", userSeq: 1, eventSeq: 1,
+      acceptedAt: "2026-11-21T09:00:00Z", text: task };
+    const ctx = buildChatToolsContext({
+      repo: "local", owner: "local", useGithub: false, useDemo: false, sliceId: "slice", turnId: "input",
+      readScopeId: "work", currentUserText: task, recentTurns: [],
+      dialogueOffer: { scopeKey: "scope", parentRunId: "thought", workId: "work", sourceInputId: "input",
+        sourceTurnId: "input", source, priorContext: [], locale: "en",
+        record: { repo: "local", owner: "local", useGithub: false, useDemo: false, timezone: "UTC",
+          slicing: { idleGapMinutes: 30, maxSliceMinutes: 60, maxTurnsPerSlice: 40 } } },
+    });
+    const agendaCall = { id: "agenda", type: "function",
+      function: { name: "readWorkSnapshot", arguments: JSON.stringify({ workId: "agenda-work" }) } };
+    const toolCalls = [
+      { id: "venue", type: "function", function: { name: "readWorkSnapshot", arguments: JSON.stringify({ workId: "venue-work" }) } },
+      { id: "time", type: "function", function: { name: "workCheckpoint", arguments: JSON.stringify({ text: partial }) } },
+    ];
+    h.call.mockResolvedValueOnce({ ...modelResponse, toolCalls: [agendaCall], finishReason: "tool_calls",
+      message: { role: "assistant", content: null, tool_calls: [agendaCall] } })
+      .mockResolvedValueOnce({ ...modelResponse, toolCalls, finishReason: "tool_calls",
+        message: { role: "assistant", content: null, reasoning_content: "PRIVATE_FIXTURE", tool_calls: toolCalls } });
+    const lookup = Promise.withResolvers<null>();
+    h.snapshot.mockResolvedValueOnce({ status: "completed", publicHandoffs: [{ stage: "completed", text: partial }] })
+      .mockReturnValueOnce(lookup.promise);
+    const thinking = createThinkingAgent({ model: {} as Parameters<typeof createThinkingAgent>[0]["model"],
+      thinking: true, reasoningEffort: "low", toolsContext: ctx }).stream({
+      system: "Work agenda-work checked the workshop agenda. Work venue-work is checking the venue.",
+      prompt: task, stopWhen: isStepCount(3),
+    });
+    try {
+      await vi.waitFor(() => expect(h.wake).toHaveBeenCalledTimes(1));
+      expect(h.call).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(h.call.mock.calls[1]?.[0]?.messages)).toContain(partial);
+      expect(h.snapshot).toHaveBeenCalledWith("scope", "venue-work");
+      const event = h.publish.mock.calls[0]?.[0] as WorkUpdateEvent;
+      expect(event).toMatchObject({ type: "work_checkpoint", sourceInputId: "input", text: partial });
+      expect(JSON.stringify(event)).not.toContain("PRIVATE_FIXTURE");
+      expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ candidateKeys: [event.updateId] }));
+    } finally {
+      lookup.resolve(null);
+      await thinking;
+    }
+    expect(h.call).toHaveBeenCalledTimes(3);
+  });
+
 });

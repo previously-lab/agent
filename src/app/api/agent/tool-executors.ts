@@ -16,10 +16,10 @@ import type { ModelMessage } from "@/lib/deepseek/types";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
-import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
+import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueParentWritable, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
 import { CHECKPOINT_TEXT_MAX_CHARS, dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS, parseOfferReplyResult } from "@/lib/dialogue/transport";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
-import { WORK_RELATIONS, WORK_RESPONSE_MODES, type WorkRelation, type WorkResponseMode, type WorkUpdateResult, type WorkSnapshot } from "@/lib/dialogue/work-contract";
+import { WORK_RELATIONS, WORK_RESPONSE_MODES, type WorkRelation, type WorkResponseMode, type WorkUpdateEvent, type WorkUpdateResult, type WorkSnapshot } from "@/lib/dialogue/work-contract";
 import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
@@ -1461,8 +1461,9 @@ async function startDialogueOffer(params: {
   stage?: DialogueOfferStage;
   priorCheckpoints: DialogueCheckpoint[];
   workUpdate?: WorkHandoffOptions;
+  parentWritable?: DialogueParentWritable;
 }): Promise<OfferReplyResult> {
-  const { context, offerId, publicSeq, text, event, stage, workUpdate } = params;
+  const { context, offerId, publicSeq, text, event, stage, workUpdate, parentWritable } = params;
   try {
     const result: OfferReplyResult = {
       ok: true,
@@ -1480,33 +1481,58 @@ async function startDialogueOffer(params: {
       ...(event ? { eventKind: event.kind } : {}),
     };
     if (workUpdate) {
-      const { publishWorkUpdateStep } = await import("../chat/dialogue-transport-steps");
-      await publishWorkUpdateStep({
+      const { publishWorkUpdateStep, reconcileDialogueOffersStep } = await import("../chat/dialogue-transport-steps");
+      const update: WorkUpdateEvent = {
         type: stage === "checkpoint" ? "work_checkpoint" : "work_completed",
         updateId: offerId, runId: context.parentRunId,
         sourceInputId: context.sourceInputId, workId: context.workId,
-        acceptedAt: new Date().toISOString(), text,
+        acceptedAt: new Date().toISOString(), publicSeq, locale: context.locale, text,
         ...(event ? { event } : {}), record: context.record,
         ...(workUpdate.responseMode ? { responseMode: workUpdate.responseMode } : {}),
         ...(workUpdate.relation ? { relation: workUpdate.relation } : {}),
         ...(workUpdate.dependsOnInputIds?.length ? { dependsOnInputIds: workUpdate.dependsOnInputIds } : {}),
-      });
+      };
+      try {
+        if (parentWritable) await publishWorkUpdateStep(update, parentWritable);
+        else await publishWorkUpdateStep(update);
+      } catch (error) {
+        // Transport may lose the append acknowledgement. Reconcile the
+        // original candidate before any notification or host fallback.
+        const offers = await reconcileDialogueOffersStep(context.parentRunId);
+        if (!offers.some(candidate => candidate.offerId === offerId && candidate.parentRunId === context.parentRunId &&
+            candidate.workId === context.workId && candidate.sourceInputId === context.sourceInputId &&
+            candidate.stage === stage)) throw error;
+      }
     } else {
       // Legacy compatibility only. New thought runs always use workUpdate.
       const { publishDialogueOfferControlsStep } = await import("../chat/dialogue-transport-steps");
       await publishDialogueOfferControlsStep([result]);
     }
-    const { ensureDialogueOrchestratorStep: ensure } = await import("../chat/dialogue-orchestrator-steps");
-    const started = await ensure({
+    const request = {
       scope: context.scopeKey,
       parentRunId: context.parentRunId,
       sourceInputId: context.sourceInputId,
       workId: context.workId,
       triggerKey: offerId,
       candidateKeys: [offerId],
-    });
-    return { ...result, runId: started.runId };
+    };
+    try {
+      const { ensureDialogueOrchestratorStep: ensure } = await import("../chat/dialogue-orchestrator-steps");
+      const started = parentWritable ? await ensure(request, context.holder, parentWritable)
+        : workUpdate && context.holder ? await ensure(request, context.holder) : await ensure(request);
+      return { ...result, runId: started.runId };
+    } catch (error) {
+      if (!workUpdate) throw error;
+      // The thinking run already owns the committed update. A missing Actor
+      // acknowledgement lets the turn recover this same ID before witnessing
+      // delivery, rather than synthesizing a second completion.
+      console.warn("[Dialogue] work wake needs recovery", error);
+      return result;
+    }
   } catch (error) {
+    // An append can commit before either its acknowledgement or its recovery
+    // read fails. Redeliver the same durable tool call and updateId.
+    if (workUpdate) throw error;
     return {
       ok: false,
       kind: DIALOGUE_OFFER_RESULT,
@@ -1519,6 +1545,7 @@ async function startDialogueOffer(params: {
 export async function offerReplyExecute(
   input: { text: string; stage?: DialogueOfferStage; workUpdate?: WorkHandoffOptions },
   { context: ctx, toolCallId, messages }: ExecuteOpts<ToolContext>,
+  parentWritable?: DialogueParentWritable,
 ): Promise<OfferReplyResult> {
   "use step";
   const context = ctx.dialogueOffer as DialogueOfferContext | undefined;
@@ -1549,7 +1576,7 @@ export async function offerReplyExecute(
   }
   const publicSeq = offerPublicSeq(messages, toolCallId);
   return startDialogueOffer({
-    context, offerId, publicSeq, text: input.text,
+    context, offerId, publicSeq, text: input.text, parentWritable,
     ...(input.stage ? { stage: input.stage } : {}),
     priorCheckpoints,
     ...(input.workUpdate ? { workUpdate: input.workUpdate } : {}),
@@ -1581,7 +1608,9 @@ export async function offerDialogueEventExecute(
 
 function workUpdateResult(result: OfferReplyResult, updateId: string): WorkUpdateResult {
   if (!result.ok) return { ok: false, kind: "work-update", updateId, reason: result.reason };
-  return { ok: true, kind: "work-update", updateId, runId: result.runId, sourceInputId: result.sourceInputId };
+  return { ok: true, kind: "work-update", updateId, sourceInputId: result.sourceInputId,
+    ...(result.runId !== result.parentRunId ? { runId: result.runId } : {}),
+  };
 }
 
 function validRelation(relation?: WorkRelation): boolean {
@@ -1596,6 +1625,7 @@ function validResponseMode(mode?: WorkResponseMode): boolean {
 export async function workCheckpointExecute(
   input: { text: string; relation?: WorkRelation; dependsOnInputIds?: string[] },
   opts: ExecuteOpts<ToolContext>,
+  parentWritable?: DialogueParentWritable,
 ): Promise<WorkUpdateResult> {
   "use step";
   const updateId = dialogueOfferId(opts.context.dialogueOffer?.workId ?? opts.context.turnId, opts.toolCallId);
@@ -1606,7 +1636,7 @@ export async function workCheckpointExecute(
       ...(input.relation ? { relation: input.relation } : {}),
       ...(input.dependsOnInputIds?.length ? { dependsOnInputIds: input.dependsOnInputIds } : {}),
     },
-  }, opts), updateId);
+  }, opts, parentWritable), updateId);
 }
 
 /** Complete a work item, including any native artifacts, without public wording. */

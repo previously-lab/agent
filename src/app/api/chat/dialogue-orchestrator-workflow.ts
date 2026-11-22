@@ -217,6 +217,7 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       await openDialogueStreamStep(input);
       let text = "";
       let error: unknown;
+      let intentionallySilent = false;
       while (modelAttempts < MAX_MODEL_ATTEMPTS && !text.trim()) {
         modelAttempts++;
         try {
@@ -228,10 +229,14 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
             stopWhen: isStepCount(1),
             sendFinish: false,
             preventClose: true,
-            onStepEnd: step => { if (step.text) text = step.text; },
           });
-          text = result.text || text;
+          if (result.finishReason !== "stop") throw new Error("Dialogue wording did not finish.");
+          text = result.text;
           error = undefined;
+          if (checkpoint && !text.trim()) {
+            intentionallySilent = true;
+            break;
+          }
         } catch (cause) {
           error = cause;
         }
@@ -254,10 +259,10 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
         } catch (cause) {
           error ??= cause;
         }
-      } else if (primary.offerId.endsWith(":opening") && !error) {
+      } else if (intentionallySilent) {
         await writeDialogueRuntimeEventStep({
           type: "expression_outcome", status: "intentionally_silent", planId: input.publicationId ?? input.offerId,
-          candidateIds: [], inputIds: [input.context.sourceInputId],
+          candidateIds: [input.offerId], inputIds: [input.context.sourceInputId],
         });
       } else {
         error ??= "The dialogue model produced no public response";

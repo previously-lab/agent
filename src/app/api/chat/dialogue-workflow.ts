@@ -57,7 +57,7 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   }
 
   let text = "";
-  let superseded = false;
+  let held = false;
   let error: string | undefined;
   try {
     const agent = createDialogueAgent(checkpoint, input.direct === true);
@@ -68,14 +68,12 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
       stopWhen: isStepCount(1),
       sendFinish: false,
       preventClose: !checkpoint,
-      onStepEnd: (step) => {
-        if (step.text) text = step.text;
-      },
     });
-    text = result.text || text;
+    if (result.finishReason !== "stop") throw new Error("Dialogue wording did not finish.");
+    text = result.text;
+    held = checkpoint && !text.trim();
   } catch (cause) {
     error = failureMessage(cause);
-    if (checkpoint) text = "";
   }
 
   let utterance: PublicUtterance | undefined;
@@ -85,14 +83,14 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     try {
       utterance = await publishDialogueResultStep({ input, artifacts: prepared.artifacts, text });
       if (checkpoint && !utterance) {
-        superseded = true;
+        held = true;
         text = "";
       }
     } catch (cause) {
       error ??= failureMessage(cause);
     }
-  } else if (input.direct) {
-    superseded = true;
+  } else if (!error && (input.direct || held)) {
+    held = true;
   } else {
     error ??= "The dialogue ended without a public reply.";
   }
@@ -124,7 +122,7 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
     kind: "dialogue-reply",
     offerId: input.offerId,
     status: error ? "failed" : "completed",
-    ...(superseded ? { held: true } : {}),
+    ...(held ? { held: true } : {}),
     ...(utterance ? { utterance } : {}),
     artifacts: prepared.artifacts,
     ...(recordRunId ? { recordRunId } : {}),

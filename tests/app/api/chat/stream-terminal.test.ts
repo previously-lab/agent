@@ -72,29 +72,62 @@ describe("GET /api/chat/[runId]/stream — terminal runs", () => {
     );
   });
 
-  it("resumes a native dialogue GET that opened before its first chunk", async () => {
+  it.each(["dialogue-workflow//dialogueWorkflow", "dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow"])(
+    "follows %s when the first GET opens before the writer and the live reader stalls", async workflow => {
     vi.useFakeTimers();
     try {
       let attachments = 0;
-      const pendingReadable = new ReadableStream<unknown>();
-      Object.assign(pendingReadable, { getTailIndex: async () => 0 });
+      let tail = -1;
+      let initial!: ReadableStreamDefaultController<unknown>;
+      const pendingReadable = new ReadableStream<unknown>({ start(controller) { initial = controller; } });
+      Object.assign(pendingReadable, { getTailIndex: async () => tail });
       const readyReadable = new ReadableStream<unknown>({
         start(controller) {
+          controller.enqueue({ type: "start", messageId: "candidate" });
+          controller.enqueue({ type: "data-dialogue-source", data: { phase: "final_answer" } });
+          controller.enqueue({ type: "text-start", id: "text" });
           controller.enqueue({ type: "text-delta", id: "text", delta: "first" });
           controller.enqueue({ type: "finish" });
           controller.close();
         },
       });
-      Object.assign(readyReadable, { getTailIndex: async () => 1 });
+      Object.assign(readyReadable, { getTailIndex: async () => tail });
+      const getReadable = vi.fn(() => ++attachments === 1 ? pendingReadable : readyReadable);
       workflowApi.getRun.mockReturnValue({
         status: Promise.resolve("running"),
-        workflowName: Promise.resolve("workflow//./src/app/api/chat/dialogue-workflow//dialogueWorkflow"),
-        getReadable: () => ++attachments === 1 ? pendingReadable : readyReadable,
+        workflowName: Promise.resolve(`workflow//./src/app/api/chat/${workflow}`),
+        getReadable,
       });
       const res = await call("native-child");
+      expect(res.headers.get("x-workflow-stream-tail-index")).toBe("-1");
+      initial.enqueue({ type: "data-dialogue-lease_acquired", data: { at: "2026-11-22T13:29:23.561Z" } });
+      tail = 5;
       await vi.advanceTimersByTimeAsync(1_100);
-      expect(await res.text()).toContain("first");
+      const output = await res.text();
+      expect(output).toContain("data-dialogue-source");
+      expect(output).toContain("first");
+      expect(getReadable).toHaveBeenNthCalledWith(2, { startIndex: 1 });
       expect(attachments).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+  it("suspends Actor tail checks on exit intent and resumes after native activity", async () => {
+    vi.useFakeTimers();
+    try {
+      let wire!: ReadableStreamDefaultController<unknown>;
+      const getTailIndex = vi.fn(async () => -1);
+      const stream = Object.assign(new ReadableStream<unknown>({ start(controller) { wire = controller; } }), { getTailIndex });
+      workflowApi.getRun.mockReturnValue({ status: Promise.resolve("running"),
+        workflowName: Promise.resolve("workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow"),
+        getReadable: () => stream });
+      const res = await call("actor");
+      wire.enqueue({ type: "data-dialogue-exit_intent", data: { at: "2026-11-22T13:29:23.561Z" } });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getTailIndex).toHaveBeenCalledTimes(1);
+      wire.enqueue({ type: "data-dialogue-heartbeat", data: {} });
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(getTailIndex).toHaveBeenCalledTimes(2);
+      wire.close();
+      expect(await res.text()).toContain("data-dialogue-heartbeat");
     } finally { vi.useRealTimers(); }
   });
   it("a completed run still returns its durable stream (no terminal frame)", async () => {

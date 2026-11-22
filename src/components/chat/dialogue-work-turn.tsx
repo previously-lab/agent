@@ -11,7 +11,7 @@ import type { DialogueWorkSeat } from "./dialogue-stream-rows";
 
 /** A work keeps the same message seat from its first caption through its
  * contiguous public replies. Its preview never migrates into another prompt. */
-export function DialogueWorkTurn({ seat: { work, replying, replies = [] }, persona, onCancel, onRetry, onResume }: {
+export function DialogueWorkTurn({ seat: { work, replying, replies = [], preview }, persona, onCancel, onRetry, onResume }: {
   seat: DialogueWorkSeat;
   persona: string;
   onCancel: (workId: string) => Promise<void>;
@@ -34,8 +34,9 @@ export function DialogueWorkTurn({ seat: { work, replying, replies = [] }, perso
         </div> : <div className="conversation-prose" key={reply.id} data-dialogue-message={reply.id}>
           <MarkdownRenderer content={reply.message.parts.flatMap(part => part.type === "text" ? [part.text] : []).join("\n\n")} isStreaming={reply.isStreaming} />
         </div>)}
+        {preview && <div className="conversation-prose whitespace-pre-wrap" data-dialogue-final-preview={work.inputId}>{preview}</div>}
       </div>
-      {blocks.length > 0 && !streaming ? <MessageActions content={text} response={JSON.stringify(blocks, null, 2)} onRegenerate={() => void onRetry(work.inputId)} /> : null}
+      {blocks.length > 0 && !streaming && !preview ? <MessageActions content={text} response={JSON.stringify(blocks, null, 2)} onRegenerate={() => void onRetry(work.inputId)} /> : null}
     </ConversationTurn>
   </div>;
 }

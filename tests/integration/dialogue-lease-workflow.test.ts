@@ -52,7 +52,7 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   }),
 }));
 vi.mock("@/app/api/agent/agent", () => ({
-  createDialogueAgent: () => ({ stream: async () => { h.prompts++; return { text: "公开结果" }; } }),
+  createDialogueAgent: () => ({ stream: async () => { h.prompts++; return { text: "公开结果", finishReason: "stop" }; } }),
 }));
 
 import { dialogueOrchestratorWorkflow } from "@/app/api/chat/dialogue-orchestrator-workflow";

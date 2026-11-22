@@ -44,6 +44,20 @@ describe("parent native offer control", () => {
     await expect(readDialogueAdmission("wrun_01JTESTPARENT0000000000000", "missing", first.runId)).resolves.toBe("parent_terminal");
   });
 
+  it("recovers legacy checkpoint order from durable appends, including after a redelivery", async () => {
+    const base = { type: "work_checkpoint", runId: "parent", sourceInputId: "input", workId: "work",
+      acceptedAt: "2026-11-22T00:00:00.000Z", text: "supported detail" };
+    const older = { ...base, updateId: "z-first" };
+    const newer = { ...base, updateId: "a-second", locale: "en" };
+    h.getRun.mockReturnValue(parent("running", [older, older, newer,
+      { ...base, type: "work_completed", updateId: "final", publicSeq: 1 }]));
+    const offers = await listDialogueOffers("parent");
+    expect(offers.map(offer => [offer.offerId, offer.publicSeq])).toEqual([
+      ["z-first", 1], ["a-second", 2], ["final", 3],
+    ]);
+    expect(offers[1]?.locale).toBe("en");
+  });
+
   it("cancels a live snapshot reader after the captured tail", async () => {
     const cancel = vi.fn();
     const readable = new ReadableStream<unknown>({
@@ -74,12 +88,16 @@ describe("parent native offer control", () => {
       return result;
     };
     expect(await sample()).toEqual([first]);
+    // A partial discovery read cannot certify absence for a publication or
+    // reconciliation decision, including against the same captured tail.
+    await expect(listDialogueOffers("completed")).rejects.toThrow("before its observed tail");
     chunks = [first, second];
+    await expect(listDialogueOffers("completed")).resolves.toEqual([first, second]);
     expect(await sample()).toEqual([first, second]);
     expect(await sample()).toEqual([first, second]);
-    expect(fetches).toBe(2);
+    expect(fetches).toBe(4);
     tail = 2; chunks.push(third);
     expect(await sample()).toEqual([first, second, third]);
-    expect(fetches).toBe(3);
+    expect(fetches).toBe(5);
   });
 });

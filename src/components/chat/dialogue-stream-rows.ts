@@ -16,11 +16,13 @@ export interface DialogueMessageMetadata extends Record<string, unknown> {
   thoughtsUrl?: string;
   offersUrl?: string;
   publicationId?: string;
+  replyPreview?: { actorRunId: string; utteranceId: string; text: string };
 }
 
 export interface DialogueWorkSeat {
   work: DialogueWorkView;
   replying: boolean;
+  preview?: string;
   replies?: Exclude<ManuscriptEntry, { kind: "input" }>[];
 }
 
@@ -38,6 +40,27 @@ export function dialogueMetadata(message: UIMessage): DialogueMessageMetadata {
   return message.metadata && typeof message.metadata === "object"
     ? message.metadata as DialogueMessageMetadata
     : {};
+}
+
+/** Keep renderer-only bytes out of subsequent turns. Publication blocks and
+ * references, native replay, and user-supplied attachments remain on the wire. */
+export function chatRequestMessages(messages: readonly UIMessage[]): UIMessage[] {
+  return messages.map(message => {
+    if (message.role !== "assistant") return message;
+    let metadata = message.metadata;
+    if (metadata && typeof metadata === "object" && "replyPreview" in metadata) {
+      const copy = { ...dialogueMetadata(message) };
+      delete copy.replyPreview;
+      metadata = copy;
+    }
+    const parts = message.parts.map(part => {
+      if (part.type !== "data-dialogue-artifact" || !part.data || typeof part.data !== "object" || !("body" in part.data)) return part;
+      const data: Record<string, unknown> = { ...part.data };
+      delete data.body;
+      return { ...part, data };
+    });
+    return { ...message, parts, metadata };
+  });
 }
 
 export function appendDialogueTurn(messages: readonly UIMessage[], user: UIMessage, assistantId: string, acceptedAt = new Date().toISOString()): UIMessage[] {
@@ -89,13 +112,20 @@ export function applyDialoguePublication(
   messages: readonly UIMessage[],
   utterance: PublicUtterance,
   work?: { workId: string; inputId: string },
+  artifactBodies?: ReadonlyMap<string, string>,
 ): UIMessage[] {
   const id = `dialogue-publication:${utterance.utteranceId}`;
   if (messages.some(message => message.id === id || publicationIdOf(message) === utterance.utteranceId)) return [...messages];
   const message: UIMessage = {
     id,
     role: "assistant",
-    parts: [{ type: "data-dialogue-publication", id: utterance.utteranceId, data: utterance }],
+    parts: [{ type: "data-dialogue-publication", id: utterance.utteranceId, data: utterance },
+      ...utterance.blocks.flatMap<UIMessagePart>(block => {
+        if (block.kind !== "artifact_ref") return [];
+        const body = artifactBodies?.get(block.artifact.artifactId);
+        return body === undefined ? [] : [{ type: "data-dialogue-artifact", id: block.artifact.artifactId,
+          data: { blockId: block.blockId, artifact: block.artifact, body } }];
+      })],
     metadata: {
       acceptedAt: utterance.committedAt,
       publicationId: utterance.utteranceId,
@@ -190,28 +220,31 @@ function parsePublicationBlocks(value: unknown): ContentBlockV1[] | null {
   return blocks;
 }
 
-function publicationFromMessage(message: UIMessage): { utterance: PublicUtterance; artifactBodies: ReadonlyMap<string, string> } | undefined {
-  const artifactBodies = new Map<string, { ref: DialogueArtifactRef; body: string }>();
+export function publicationFromMessage(message: UIMessage, actorRunId?: string): { utterance: PublicUtterance; artifactBodies: ReadonlyMap<string, string> } | undefined {
+  const artifactBodies = new Map<string, { ref: DialogueArtifactRef; blockId: string; body: string }>();
   let utterance: PublicUtterance | undefined;
   for (const part of message.parts) {
     if (part.type === "data-dialogue-artifact" && part.data && typeof part.data === "object") {
       const data = part.data as Record<string, unknown>;
       const artifact = parseArtifactRef(data.artifact);
-      if (artifact && nonEmpty(data.blockId) && typeof data.body === "string") {
-        artifactBodies.set(artifact.artifactId, { ref: artifact, body: data.body });
+      if (artifact && (!actorRunId || (artifact.sourceOwnerId === actorRunId && part.id === artifact.artifactId)) &&
+          nonEmpty(data.blockId) && typeof data.body === "string") {
+        artifactBodies.set(artifact.artifactId, { ref: artifact, blockId: data.blockId, body: data.body });
       }
     }
     if (part.type !== "data-dialogue-publication" || !part.data || typeof part.data !== "object") continue;
     const data = part.data as Record<string, unknown>;
     const blocks = parsePublicationBlocks(data.blocks);
     if (!nonEmpty(data.utteranceId) || !Number.isSafeInteger(data.publicSeq) || !nonEmpty(data.committedAt) ||
-        !Array.isArray(data.inputIds) || !data.inputIds.every(nonEmpty) || !Array.isArray(data.sourceResults) || !blocks) continue;
+        !Array.isArray(data.inputIds) || !data.inputIds.every(nonEmpty) || !Array.isArray(data.sourceResults) ||
+        !data.sourceResults.every(result => result && nonEmpty(result.resultId)) || !blocks) continue;
     utterance = {
       utteranceId: data.utteranceId,
       publicSeq: data.publicSeq as number,
       committedAt: data.committedAt,
       inputIds: data.inputIds,
       sourceResults: data.sourceResults as PublicUtterance["sourceResults"],
+      ...(data.phase === "commentary" || data.phase === "final_answer" ? { phase: data.phase } : {}),
       blocks,
     };
   }
@@ -220,16 +253,16 @@ function publicationFromMessage(message: UIMessage): { utterance: PublicUtteranc
   for (const block of utterance.blocks) {
     if (block.kind !== "artifact_ref") continue;
     const candidate = artifactBodies.get(block.artifact.artifactId);
-    if (candidate && sameArtifactIdentity(candidate.ref, block.artifact)) {
+    if (candidate && candidate.blockId === block.blockId && sameArtifactIdentity(candidate.ref, block.artifact)) {
       bodies.set(block.artifact.artifactId, candidate.body);
     }
   }
   return { utterance, artifactBodies: bodies };
 }
 
-function hasPublicContent(message: UIMessage): boolean {
-  return message.parts.some(part => part.type === "text" ? part.text.length > 0
-    : part.type === "file" || part.type === "data-dialogue-publication");
+export function hasPublicReply(message: UIMessage, publication = publicationFromMessage(message)): boolean {
+  return message.parts.some(part => part.type === "text" && part.text.trim() || part.type === "file") ||
+    Boolean(publication?.utterance.blocks.some(block => block.kind !== "markdown" || block.text.trim()));
 }
 
 function workForMessage(message: UIMessage, user: UIMessage | undefined, userSeq: number): DialogueWorkView {
@@ -251,6 +284,7 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
   const items: LiveStreamItem[] = [];
   const workSeats = new Map<string, DialogueWorkSeat>();
   const utterances = new Map<string, DialogueUtteranceSeat>();
+  const standalone = new Map<UIMessage, NonNullable<ReturnType<typeof publicationFromMessage>>>();
   let latestUser: UIMessage | undefined;
   let userSeq = 0;
   for (const message of messages) {
@@ -262,14 +296,19 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
       items.push({ kind: "live", key: `dialogue-input:${message.id}`, message, timeIso, startedAt: timeIso, isStreaming: false });
       continue;
     }
-    if (message.role !== "assistant" || (publicationIdOf(message) && !metadata.thoughtRunId)) continue;
+    if (message.role !== "assistant") continue;
+    const publication = publicationFromMessage(message);
+    if (publication && !metadata.thoughtRunId) {
+      standalone.set(message, publication);
+      continue;
+    }
     const work = workForMessage(message, latestUser, userSeq);
     const key = `dialogue-work:${message.id}`;
     const replying = metadata.workStatus === "running" && Boolean(metadata.dialogueRunId);
-    const streaming = replying && hasPublicContent(message);
+    const hasReply = hasPublicReply(message, publication);
+    const streaming = replying && hasReply;
     let replies: DialogueWorkSeat["replies"];
-    if (hasPublicContent(message)) {
-      const publication = publicationFromMessage(message);
+    if (hasReply) {
       if (publication) {
         replies = [{ kind: "utterance", id: publication.utterance.utteranceId, utterance: publication.utterance,
           artifactBodies: publication.artifactBodies }];
@@ -279,14 +318,13 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
       }
     }
     items.push({ kind: "live", key, timeIso, startedAt: timeIso, isStreaming: streaming, message });
-    workSeats.set(key, { work, replying, ...(replies ? { replies } : {}) });
+    const preview = work.status !== "failed" && work.status !== "cancelled" && metadata.replyPreview?.text;
+    workSeats.set(key, { work, replying: replying || Boolean(preview), ...(preview ? { preview } : {}), ...(replies ? { replies } : {}) });
     latestUser = undefined;
   }
-  for (const message of messages) {
+  const savedReplies = new Map<string, DialogueUtteranceSeat>();
+  for (const [message, publication] of [...standalone].sort(([, a], [, b]) => a.utterance.publicSeq - b.utterance.publicSeq)) {
     const metadata = dialogueMetadata(message);
-    if (message.role !== "assistant" || !publicationIdOf(message) || metadata.thoughtRunId) continue;
-    const publication = publicationFromMessage(message);
-    if (!publication) continue;
     const seats = [...workSeats.values()];
     const byWork = publication.utterance.inputIds.length === 1
       ? seats.find(seat => seat.work.workId === metadata.workId &&
@@ -302,10 +340,22 @@ export function dialogueStreamRows(messages: readonly UIMessage[]) {
       target.replies = [...(target.replies ?? []), reply];
       continue;
     }
+    // The archived input still owns one reply when its local work caption is gone.
+    const inputId = publication.utterance.inputIds.length === 1 ? publication.utterance.inputIds[0] : undefined;
+    const saved = inputId ? savedReplies.get(inputId) : undefined;
+    if (saved) {
+      saved.publications.push(publication);
+      continue;
+    }
     const key = `dialogue-utterance:${publication.utterance.utteranceId}`;
-    utterances.set(key, { publications: [{ utterance: publication.utterance, artifactBodies: publication.artifactBodies }] });
+    const seat = { publications: [publication] };
+    if (inputId) savedReplies.set(inputId, seat);
+    utterances.set(key, seat);
     const timeIso = publication.utterance.committedAt;
     items.push({ kind: "live", key, timeIso, startedAt: timeIso, isStreaming: false, message });
+  }
+  for (const seat of workSeats.values()) {
+    seat.replies?.sort((a, b) => a.kind === "utterance" && b.kind === "utterance" ? a.utterance.publicSeq - b.utterance.publicSeq : 0);
   }
   return { items, utterances, workSeats };
 }
@@ -375,23 +425,34 @@ export function dialogueHistoryMessages(turns: readonly Turn[]): UIMessage[] {
  * input identities dedupe them without comparing prose or changing seat ids. */
 export function mergeDialogueHistory(messages: readonly UIMessage[], turns: readonly Turn[]): UIMessage[] {
   const users = new Set<string>();
-  const publications = new Set<string>();
-  for (const message of messages) {
+  const assistants = new Map<string, number>();
+  const merged = [...messages];
+  for (const [index, message] of messages.entries()) {
     const metadata = dialogueMetadata(message);
     if (message.role === "user") {
       users.add(message.id);
       if (metadata.sourceInputId) users.add(metadata.sourceInputId);
     } else if (message.role === "assistant") {
-      publications.add(message.id);
+      assistants.set(message.id, index);
+      if (typeof metadata.recoveryTurnId === "string") assistants.set(metadata.recoveryTurnId, index);
       const publicationId = publicationIdOf(message);
-      if (publicationId) publications.add(publicationId);
+      if (publicationId) assistants.set(publicationId, index);
     }
   }
   const fresh = dialogueHistoryMessages(turns).filter(message => {
     const metadata = dialogueMetadata(message);
     if (message.role === "user") return !users.has(message.id) && (!metadata.sourceInputId || !users.has(metadata.sourceInputId));
     const publicationId = publicationIdOf(message);
-    return !publications.has(message.id) && (!publicationId || !publications.has(publicationId));
+    const index = (publicationId ? assistants.get(publicationId) : undefined) ?? assistants.get(message.id);
+    if (index === undefined) return true;
+    const existing = merged[index]!;
+    // A recovered work id or publication id locates a seat; only real public parts can replace the saved answer.
+    if (!hasPublicReply(existing) && hasPublicReply(message)) {
+      const privateParts = existing.parts.filter(part => part.type === "reasoning" || part.type === "data-dialogue-thought");
+      merged[index] = { ...existing, parts: [...privateParts, ...message.parts],
+        metadata: { ...metadata, ...dialogueMetadata(existing), ...(publicationId ? { publicationId } : {}) } };
+    }
+    return false;
   });
-  return fresh.length ? [...fresh, ...messages] : [...messages];
+  return [...fresh, ...merged];
 }

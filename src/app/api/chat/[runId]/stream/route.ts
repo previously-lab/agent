@@ -18,16 +18,19 @@ import { type UIMessageChunk } from "@/lib/chat/protocol";
 import { getRun } from "workflow/api";
 import { createMixedStreamTransform } from "../../mixed-stream-transform";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
+import { DIALOGUE_SESSION_MS } from "@/lib/dialogue/orchestrator";
 
 const NATIVE_DIALOGUE_WORKFLOW = "/dialogue-workflow//dialogueWorkflow";
+const DIALOGUE_ACTOR_WORKFLOW = "/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
 const NATIVE_STREAM_IDLE_MS = 1_000;
 
-/** Resume a v2 child whose first GET opened before any chunk existed. */
+/** Resume a public dialogue reader when durable chunks exist past its live cursor. */
 function resumeNativeDialogueStream(
   run: ReturnType<typeof getRun>,
   initial: ReturnType<ReturnType<typeof getRun>["getReadable"]>,
   startIndex: number,
   signal: AbortSignal,
+  actor: boolean,
 ): ReadableStream<unknown> {
   return new ReadableStream<unknown>({
     async start(controller) {
@@ -36,6 +39,7 @@ function resumeNativeDialogueStream(
       let nextIndex = startIndex;
       let pending: Promise<ReadableStreamReadResult<unknown>> | undefined;
       let closed = false;
+      let idleActor = false;
       const abort = () => { closed = true; void reader.cancel().catch(() => undefined); };
       if (signal.aborted) closed = true;
       else signal.addEventListener("abort", abort, { once: true });
@@ -43,7 +47,10 @@ function resumeNativeDialogueStream(
         while (!closed) {
           pending ??= reader.read();
           let timer: ReturnType<typeof setTimeout> | undefined;
-          const idle = new Promise<"idle">((resolve) => { timer = setTimeout(() => resolve("idle"), NATIVE_STREAM_IDLE_MS); });
+          // A sleeping Actor has no owed output. Its next native chunk wakes
+          // this read immediately. Check a parked reader at session expiry.
+          const timeout = idleActor ? DIALOGUE_SESSION_MS : NATIVE_STREAM_IDLE_MS;
+          const idle = new Promise<"idle">((resolve) => { timer = setTimeout(() => resolve("idle"), timeout); });
           const outcome = await Promise.race([pending.then((result) => ({ result }) as const), idle]);
           clearTimeout(timer);
           if (outcome === "idle") {
@@ -66,6 +73,7 @@ function resumeNativeDialogueStream(
           pending = undefined;
           if (outcome.result.done) break;
           nextIndex++;
+          idleActor = actor && (outcome.result.value as { type?: string } | null)?.type === "data-dialogue-exit_intent";
           controller.enqueue(outcome.result.value);
         }
         if (!closed) controller.close();
@@ -169,10 +177,11 @@ export async function GET(
       }
     }
 
-    const liveNativeDialogue = (status === "pending" || status === "running")
-      && (await run.workflowName).includes(NATIVE_DIALOGUE_WORKFLOW);
+    const liveWorkflow = status === "pending" || status === "running" ? await run.workflowName : "";
+    const actor = liveWorkflow.includes(DIALOGUE_ACTOR_WORKFLOW);
+    const liveNativeDialogue = liveWorkflow.includes(NATIVE_DIALOGUE_WORKFLOW) || actor;
     const readable = liveNativeDialogue
-      ? resumeNativeDialogueStream(run, initialReadable, startIndex, request.signal)
+      ? resumeNativeDialogueStream(run, initialReadable, startIndex < 0 ? Math.max(0, tailIndex + 1 + startIndex) : startIndex, request.signal, actor)
       : initialReadable;
     return createUIMessageStreamResponse({
       // Same transform as the POST path: the raw run stream mixes our

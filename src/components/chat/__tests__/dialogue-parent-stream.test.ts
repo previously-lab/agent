@@ -8,7 +8,7 @@ import {
   parseSubmittedUserMessage,
   type DialogueAcceptedV2,
 } from "../dialogue-parent-stream";
-import { appendDialogueTurn, dialogueMetadata, dialogueStreamRows } from "../dialogue-stream-rows";
+import { appendDialogueTurn, chatRequestMessages, dialogueMetadata, dialogueStreamRows } from "../dialogue-stream-rows";
 import { findDialogueThoughtRuns } from "@/lib/chat/dialogue-run-recovery";
 
 vi.mock("@/lib/chat/dialogue-run-recovery", () => ({ findDialogueThoughtRuns: vi.fn(async () => []) }));
@@ -41,6 +41,12 @@ function sse(events: Array<Record<string, unknown>>) {
   }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
+function channel() {
+  let wire!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { wire = controller; } });
+  return { stream, emit: (chunk: unknown) => wire.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)) };
+}
+
 function publicationStream(values: PublicUtterance[]) {
   const events = values.flatMap(value => [
     { type: "start", messageId: value.utteranceId },
@@ -65,14 +71,21 @@ function memoryStorage() {
 function harness(request: typeof fetch, storage = memoryStorage(), initial: UIMessage[] = []) {
   const scope = new AbortController();
   let messages = initial;
+  const previews: string[] = [];
   const published = vi.fn();
   const controller = new DialogueParentController({
     persona: "fixture", signal: scope.signal, request, storage, retryDelayMs: 1,
     getMessages: () => messages,
-    setMessages: update => { messages = update(messages); },
+    setMessages: update => {
+      messages = update(messages);
+      for (const message of messages) {
+        const text = dialogueMetadata(message).replyPreview?.text;
+        if (text && text !== previews.at(-1)) previews.push(text);
+      }
+    },
     onPublication: published,
   });
-  return { controller, scope, storage, published, get messages() { return messages; } };
+  return { controller, scope, storage, published, previews, get messages() { return messages; } };
 }
 
 function acceptedSeat(id = "A") {
@@ -81,7 +94,222 @@ function acceptedSeat(id = "A") {
   }, `assistant-${id}`, "2026-11-15T00:00:00.000Z");
 }
 
+function liveActor() {
+  let wire!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { wire = controller; } });
+  const request: typeof fetch = async url => {
+    if (String(url) === acceptance.offersUrl) return sse([{ type: "done", status: "running", retryAfterMs: 60000 }]);
+    if (String(url).includes("/orchestrator?")) return Response.json({ runId: "actor", status: "running" });
+    if (String(url) === "/api/chat/actor/stream?startIndex=0") return new Response(stream);
+    throw new Error(String(url));
+  };
+  const chat = harness(request, memoryStorage(), acceptedSeat());
+  chat.controller.accept(acceptance, "assistant-A", chat.messages[0]);
+  const emit = (chunk: unknown) => wire.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`));
+  const source = (extra: Record<string, unknown> = {}) => {
+    emit({ type: "start", messageId: "final" });
+    emit({ type: "data-dialogue-source", id: "final", data: { actorRunId: "actor", phase: "final_answer",
+      offerId: "final", utteranceId: "final", inputIds: ["input-A"], sourceInputId: "input-A", workId: "work-A",
+      parentRunId: "thought-A", ...extra } });
+  };
+  const wording = (text: string) => {
+    emit({ type: "start-step" });
+    emit({ type: "text-start", id: "block" });
+    emit({ type: "text-delta", id: "block", delta: text });
+  };
+  const seat = () => dialogueStreamRows(chat.messages).workSeats.get("dialogue-work:assistant-A");
+  return { chat, emit, source, wording, seat, disconnect: () => wire.close() };
+}
+
 describe("dialogue v2 Workflow publication history", () => {
+  it("keeps active work across the record boundary and never restores an old or answered terminal parent as an empty reply", () => {
+    const key = "previously:dialogue:parents:v2:fixture";
+    const storage = memoryStorage();
+    const cached = (name: string, done: boolean, acceptedAt: string) => ({
+      ...acceptance, parentRunId: "thought-" + name, workId: "work-" + name, sourceInputId: "input-" + name,
+      assistantId: "assistant-" + name, userMessage: acceptedSeat(name)[0], done, acceptedAt,
+    });
+    const old = "2026-11-22T06:30:00.000Z", boundary = "2026-11-22T08:32:00.000Z";
+    storage.setItem(key, JSON.stringify([cached("outside", true, old), cached("active", false, old),
+      cached("answered", true, boundary)]));
+    const request = vi.fn(async () => Response.json({ runId: null, status: "idle" }));
+    const client = harness(request, storage);
+    client.controller.start({ since: boundary, savedPublications: new Set(["input-answered:call-final"]), answeredInputs: new Set(["input-answered"]) });
+    expect(client.messages.map(message => message.id)).toEqual(["active", "assistant-active"]);
+    expect(dialogueMetadata(client.messages[1]!).workStatus).toBe("running");
+    client.scope.abort();
+    const emptyWindow = harness(request, storage);
+    emptyWindow.controller.start({ savedPublications: new Set(), answeredInputs: new Set() });
+    expect(emptyWindow.messages.map(message => message.id)).toEqual(["active", "assistant-active"]);
+    emptyWindow.scope.abort();
+  });
+  it("submits user attachments, committed content and native replay without tentative text or inline artifact bytes", () => {
+    const user: UIMessage = { id: "user", role: "user", parts: [
+      { type: "text", text: "My HTML is <b>user text</b>" }, { type: "file", mediaType: "image/png", url: "data:image/png;base64,fixture" },
+    ], metadata: { attachments: ["upload"] } };
+    const pub = utterance("final", ["input-A"], "Committed answer");
+    const shared: UIMessage["parts"] = [{ type: "text", text: "Public words" }, { type: "data-dialogue-publication", data: pub },
+      { type: "data-deepseek-step", data: { messages: [{ role: "assistant", content: "Native replay" }] } }];
+    const assistant: UIMessage = { id: "assistant", role: "assistant", metadata: { workId: "work-A", replyPreview: {
+      actorRunId: "actor", utteranceId: "next", text: "Tentative words" } }, parts: [...shared,
+      { type: "data-dialogue-artifact", id: "html", data: { blockId: "chart", artifact: { artifactId: "html" }, body: "<p>Inline bytes</p>" } }] };
+    const wire = JSON.parse(JSON.stringify(chatRequestMessages([assistant, user])));
+    expect(wire).toEqual([{ id: "assistant", role: "assistant", metadata: { workId: "work-A" }, parts: [...shared,
+      { type: "data-dialogue-artifact", id: "html", data: { blockId: "chart", artifact: { artifactId: "html" } } }] }, user]);
+    expect(JSON.stringify(assistant)).toContain("Tentative words");
+    expect(JSON.stringify(assistant)).toContain("<p>Inline bytes</p>");
+  });
+
+  it("keeps the current Actor's final preview across a delayed older wake and lease replay", async () => {
+    const parent = channel(), older = channel(), current = channel();
+    const request: typeof fetch = async url => {
+      if (String(url) === acceptance.offersUrl) return new Response(parent.stream);
+      if (String(url).includes("/orchestrator?")) return Response.json({ runId: "current", status: "running" });
+      if (String(url) === "/api/chat/current/stream?startIndex=0") return new Response(current.stream);
+      if (String(url) === "/api/chat/older/stream?startIndex=0") return new Response(older.stream);
+      throw new Error(String(url));
+    };
+    const chat = harness(request, memoryStorage(), acceptedSeat());
+    const begin = (wire: ReturnType<typeof channel>, runId: string, at: string) => {
+      wire.emit({ type: "data-dialogue-lease_acquired", data: { at } });
+      wire.emit({ type: "start", messageId: "candidate" });
+      wire.emit({ type: "data-dialogue-source", data: { phase: "final_answer", actorRunId: runId, utteranceId: "candidate", offerId: "candidate",
+        inputIds: ["input-A"], sourceInputId: "input-A", parentRunId: "thought-A", workId: "work-A" } });
+      wire.emit({ type: "text-start", id: "words" });
+    };
+    const delta = (delta: string) => ({ type: "text-delta", id: "words", delta });
+    const seat = () => dialogueStreamRows(chat.messages).workSeats.get("dialogue-work:assistant-A");
+    try {
+      chat.controller.accept(acceptance, "assistant-A", chat.messages[0]);
+      begin(current, "current", "2026-11-15T00:02:00Z");
+      current.emit(delta("Current"));
+      await vi.waitFor(() => expect(seat()?.preview).toBe("Current"));
+      parent.emit({ type: "dialogue_wake", runId: "older" });
+      begin(older, "older", "2026-11-15T00:01:00Z");
+      older.emit(delta("Stale words"));
+      // A different final for the same input can precede a regeneration.
+      older.emit({ type: "data-dialogue-publication", data: utterance("previous-final", ["input-A"], "Prior public answer") });
+      await vi.waitFor(() => expect(chat.published).toHaveBeenCalledOnce());
+      expect(seat()?.preview).toBe("Current");
+      expect(chat.previews).not.toContain("Stale words");
+      current.emit(delta(" answer"));
+      await vi.waitFor(() => expect(seat()?.preview).toBe("Current answer"));
+      current.emit({ type: "data-dialogue-publication", data: utterance("candidate", ["input-A"], "Current answer") });
+      await vi.waitFor(() => expect(chat.published).toHaveBeenCalledTimes(2));
+      expect(seat()?.preview).toBeUndefined();
+    } finally { chat.scope.abort(); }
+  });
+
+  it("reopens an idle Actor for a newer parent wake and renders its first final words before commit", async () => {
+    const parent = channel(), first = channel(), replay = channel();
+    let reads = 0;
+    const request: typeof fetch = async url => {
+      if (String(url) === acceptance.offersUrl) return new Response(parent.stream);
+      if (String(url).includes("/orchestrator?")) return Response.json({ runId: null, status: "absent", runs: [] });
+      if (String(url).includes("/actor/stream?")) return new Response(++reads === 1 ? first.stream : replay.stream);
+      throw new Error(String(url));
+    };
+    const chat = harness(request, memoryStorage(), acceptedSeat());
+    try {
+      chat.controller.accept(acceptance, "assistant-A", chat.messages[0]);
+      parent.emit({ type: "dialogue_wake", runId: "actor", wakeAt: "2026-11-22T13:29:23Z" });
+      await vi.waitFor(() => expect(reads).toBe(1));
+      first.emit({ type: "data-dialogue-exit_intent", data: { at: "2026-11-22T13:29:24Z" } });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      parent.emit({ type: "dialogue_wake", runId: "actor", wakeAt: "2026-11-22T13:29:25Z" });
+      await vi.waitFor(() => expect(reads).toBe(2));
+      replay.emit({ type: "start", messageId: "final" });
+      replay.emit({ type: "data-dialogue-source", data: { phase: "final_answer", actorRunId: "actor", utteranceId: "final", offerId: "final",
+        inputIds: ["input-A"], sourceInputId: "input-A", parentRunId: "thought-A", workId: "work-A" } });
+      replay.emit({ type: "text-start", id: "text" });
+      replay.emit({ type: "text-delta", id: "text", delta: "First words" });
+      await vi.waitFor(() => expect(chat.previews).toContain("First words"));
+      expect(chat.published).not.toHaveBeenCalled();
+    } finally { chat.scope.abort(); }
+  });
+
+  it("shows attributed final words before commit, replaces a retried attempt, and commits the verified artifact once", async () => {
+    const { chat, emit, source, wording, seat } = liveActor();
+    try {
+      source();
+      wording("First attempt.");
+      await vi.waitFor(() => expect(seat()?.preview).toBe("First attempt."));
+      expect(chat.published).not.toHaveBeenCalled();
+      expect(chat.messages[1]?.parts).toEqual([]);
+      wording("Final prefix");
+      emit({ type: "reasoning-delta", id: "private", delta: "private reasoning" });
+      emit({ type: "text-delta", id: "other", delta: "unattributed" });
+      await vi.waitFor(() => expect(seat()?.preview).toBe("Final prefix"));
+      const value = utterance("final", ["input-A"], "Final prefix and tail.");
+      const artifact = { artifactId: "a", sourceOwnerId: "actor", revision: 1 as const, kind: "native_html" as const,
+        mediaType: "text/html", byteSize: 4, sha256: "hash" };
+      value.blocks.push({ kind: "artifact_ref", blockId: "html", artifact });
+      emit({ type: "data-dialogue-artifact", id: "a", data: { blockId: "html", artifact, body: "<p/>" } });
+      emit({ type: "data-dialogue-publication", data: value });
+      emit({ type: "data-dialogue-publication", data: value });
+      await vi.waitFor(() => expect(chat.published).toHaveBeenCalledOnce());
+      expect(seat()?.preview).toBeUndefined();
+      const reply = seat()?.replies?.[0];
+      expect(reply?.kind === "utterance" && reply.artifactBodies?.get("a")).toBe("<p/>");
+      expect(chat.messages).toHaveLength(3);
+    } finally { chat.scope.abort(); }
+  });
+
+  it.each([
+    { phase: "commentary" }, { phase: undefined }, { actorRunId: "other" }, { parentRunId: "another-thought" },
+    { workId: "other-work" }, { inputIds: ["input-A", "input-B"] }, { offerId: "other" },
+  ])("holds unbound or interim wording until an attributed final begins (%j)", async extra => {
+    const { chat, emit, source, wording, seat } = liveActor();
+    try {
+      source(extra);
+      wording("Never displayed.");
+      emit({ type: "reasoning-delta", id: "reason", delta: "Private." });
+      // An acknowledged publication is an ordering barrier for the assertions.
+      emit({ type: "data-dialogue-publication", data: utterance("opening", ["input-A"], "Earlier", "commentary") });
+      await vi.waitFor(() => expect(chat.published).toHaveBeenCalledOnce());
+      expect(seat()?.preview).toBeUndefined();
+      expect(JSON.stringify(chat.messages)).not.toContain("Never displayed.");
+      expect(chat.previews).toEqual([]);
+      source();
+      wording("Attributed.");
+      await vi.waitFor(() => expect(seat()?.preview).toBe("Attributed."));
+      emit({ type: "data-turn-status", data: { status: "error", offerId: "final" } });
+      await vi.waitFor(() => expect(seat()?.preview).toBeUndefined());
+      expect(chat.published).toHaveBeenCalledOnce();
+    } finally { chat.scope.abort(); }
+  });
+
+  it("discards artifact bodies from another owner or a different publication block", async () => {
+    const { chat, emit, source, seat } = liveActor();
+    try {
+      source();
+      const value = utterance("final", ["input-A"], "Summary");
+      for (const [id, actor] of [["cross-owner", "other"], ["wrong-block", "actor"]]) {
+        const artifact = { artifactId: id!, sourceOwnerId: actor!, revision: 1 as const, kind: "native_html" as const,
+          mediaType: "text/html", byteSize: 4, sha256: "hash" };
+        value.blocks.push({ kind: "artifact_ref", blockId: id!, artifact });
+        emit({ type: "data-dialogue-artifact", id, data: { blockId: actor === "other" ? id : "another", artifact, body: "<p/>" } });
+      }
+      emit({ type: "data-dialogue-publication", data: value });
+      await vi.waitFor(() => expect(chat.published).toHaveBeenCalledOnce());
+      const reply = seat()?.replies?.[0];
+      expect(reply?.kind === "utterance" && reply.artifactBodies?.size).toBe(0);
+      expect(JSON.stringify(chat.messages)).not.toContain("<p/>");
+    } finally { chat.scope.abort(); }
+  });
+
+  it("removes a truncated final preview and starts with an empty durable replay", async () => {
+    const { chat, source, wording, seat, disconnect } = liveActor();
+    try {
+      source();
+      wording("Incomplete");
+      await vi.waitFor(() => expect(seat()?.preview).toBe("Incomplete"));
+      disconnect();
+      await vi.waitFor(() => expect(seat()?.preview).toBeUndefined());
+      expect(chat.published).not.toHaveBeenCalled();
+      expect(chat.messages).toHaveLength(2);
+    } finally { chat.scope.abort(); }
+  });
   it("validates envelopes and the submitted user", () => {
     expect(parseDialogueAcceptedV2(acceptance)).toEqual(acceptance);
     expect(() => parseDialogueAcceptedV2({ ...acceptance, version: 1 })).toThrow("Invalid dialogue acceptance");

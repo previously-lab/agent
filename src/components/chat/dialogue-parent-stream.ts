@@ -2,7 +2,7 @@
 
 import { readChatEvents } from "@/lib/chat/client-stream";
 import type { PublicUtterance } from "@/lib/chat/dialogue-contract";
-import type { UIMessage } from "@/lib/chat/protocol";
+import type { UIMessage, UIMessagePart } from "@/lib/chat/protocol";
 import type { DialogueOffersDoneEvent, DialogueOfferStage } from "@/lib/dialogue/transport";
 import { findDialogueThoughtRuns, type DialogueThoughtRecovery } from "@/lib/chat/dialogue-run-recovery";
 import {
@@ -10,6 +10,7 @@ import {
   applyDialoguePublication,
   dialogueMetadata,
   patchDialogueAssistant,
+  publicationFromMessage,
   type DialogueMessageMetadata,
 } from "./dialogue-stream-rows";
 
@@ -38,7 +39,7 @@ export interface DialogueParentDone {
 }
 
 export type DialogueParentEvent = ({ type: "offer" } & DialogueOffer) |
-  { type: "dialogue_wake"; runId: string } | DialogueParentDone;
+  { type: "dialogue_wake"; runId: string; wakeAt?: string } | DialogueParentDone;
 
 export interface DialogueParentRecord extends DialogueAcceptedV2 {
   acceptedAt: string;
@@ -58,6 +59,7 @@ export interface DialogueParentRecord extends DialogueAcceptedV2 {
 type ParentStorage = Pick<Storage, "getItem" | "setItem">;
 type Fetch = typeof fetch;
 type HistorySetter = (update: (previous: UIMessage[]) => UIMessage[]) => void;
+type FinalPreview = { actorRunId: string; utteranceId: string; offerId: string; record: DialogueParentRecord; text: string };
 
 const STORAGE_PREFIX = "previously:dialogue:parents:v2:";
 const STORED_COMPLETED_PARENTS = 8;
@@ -109,7 +111,8 @@ export function parseDialogueParentEvent(value: unknown): DialogueParentEvent {
     return { type: "offer", offerId: event.offerId, runId: event.runId, sourceInputId: event.sourceInputId,
       ...(event.stage === "checkpoint" || event.stage === "final" ? { stage: event.stage } : {}) };
   }
-  if (event.type === "dialogue_wake" && nonEmpty(event.runId)) return { type: "dialogue_wake", runId: event.runId };
+  if (event.type === "dialogue_wake" && nonEmpty(event.runId)) return { type: "dialogue_wake", runId: event.runId,
+    ...(typeof event.wakeAt === "string" && Number.isFinite(Date.parse(event.wakeAt)) ? { wakeAt: event.wakeAt } : {}) };
   throw new Error("Invalid parent stream event");
 }
 
@@ -216,14 +219,18 @@ export class DialogueParentController {
   private readonly parentCursors = new Map<string, number>();
   private readonly parentTasks = new Map<string, Promise<void>>();
   private readonly published = new Set<string>();
+  private readonly publishedCandidates = new Set<string>();
+  private readonly previews = new Map<string, FinalPreview>();
   private readonly request: Fetch;
   private readonly storage?: ParentStorage;
   private readonly retryDelayMs: number;
   private registryTask?: Promise<void>;
   private publicationTask?: Promise<void>;
   private readonly orchestratorTasks = new Map<string, Promise<void>>();
+  private readonly idleActorReads = new Map<string, { at: number; controller: AbortController }>();
   private readonly completedOrchestrators = new Set<string>();
   private orchestratorRunId?: string;
+  private latestLeaseAt = -Infinity;
 
   constructor(private readonly options: {
     persona: string;
@@ -241,14 +248,17 @@ export class DialogueParentController {
     this.records = readDialogueParentRecords(this.options.persona, this.storage);
   }
 
-  start(since?: string, savedPublications: ReadonlySet<string> = new Set()) {
-    for (const id of savedPublications) this.published.add(id);
-    this.records = this.records.filter(record => !record.publicationId || !savedPublications.has(record.publicationId));
-    const current = new Set(this.records.map(record => record.parentRunId));
-    const restored = readDialogueParentRecords(this.options.persona, this.storage)
-      .filter(record => !current.has(record.parentRunId) && (!since || record.acceptedAt >= since))
-      .filter(record => !record.publicationId || !savedPublications.has(record.publicationId));
-    this.records = [...restored, ...this.records];
+  start(window?: { since?: string; savedPublications: ReadonlySet<string>; answeredInputs: ReadonlySet<string> }) {
+    if (window) for (const id of window.savedPublications) this.published.add(id);
+    const records = new Map([...readDialogueParentRecords(this.options.persona, this.storage), ...this.records]
+      .map(record => [record.parentRunId, record]));
+    this.records = [...records.values()].filter(record => {
+      if (!window || (!record.done && !record.cancelled && !record.failed)) return true;
+      // Old local parents contain a prompt and a status, never the public answer.
+      // A terminal shell cannot represent a saved reply or a slice outside the opened window.
+      if (!window.since || Date.parse(record.acceptedAt) < Date.parse(window.since)) return false;
+      return !window.answeredInputs.has(record.sourceInputId) && (!record.publicationId || !window.savedPublications.has(record.publicationId));
+    });
     for (const record of this.records) this.restoreSeat(record);
     this.resumeRecords(true);
     this.startPublications();
@@ -384,6 +394,10 @@ export class DialogueParentController {
   }
 
   private patch(record: DialogueParentRecord, metadata: DialogueMessageMetadata) {
+    if (metadata.workStatus === "cancelled" || metadata.workStatus === "failed") {
+      this.previews.delete(record.assistantId);
+      metadata = { ...metadata, replyPreview: undefined };
+    }
     this.options.setMessages(previous => patchDialogueAssistant(previous, record.assistantId, metadata));
   }
 
@@ -417,7 +431,9 @@ export class DialogueParentController {
             signal: this.options.signal,
             request: this.request,
             onEvent: event => {
-              if (!recheckFailure && (event.type === "offer" || event.type === "dialogue_wake")) void this.attachOrchestrator(event.runId);
+              if (!recheckFailure && (event.type === "offer" || event.type === "dialogue_wake")) {
+                void this.attachOrchestrator(event.runId, event.type === "dialogue_wake" ? event.wakeAt : undefined);
+              }
             },
           });
           if (!done) throw new Error("Parent stream ended before done");
@@ -489,7 +505,9 @@ export class DialogueParentController {
       }
       const runs = discovered.filter(run => nonEmpty(run.runId) && (run.status === "pending" || run.status === "running"))
         .sort((a, b) => (a.createdAt ?? a.triggeredAt ?? "").localeCompare(b.createdAt ?? b.triggeredAt ?? ""));
-      if (runs.length) this.orchestratorRunId = runs.at(-1)!.runId;
+      if (runs.length && (!this.orchestratorRunId || this.completedOrchestrators.has(this.orchestratorRunId))) {
+        this.selectOrchestrator(runs.at(-1)!.runId);
+      }
       for (const run of runs) void this.attachOrchestrator(run.runId);
     })().catch(() => undefined).finally(() => {
       if (this.publicationTask === task) this.publicationTask = undefined;
@@ -497,11 +515,27 @@ export class DialogueParentController {
     this.publicationTask = task;
   }
 
-  private attachOrchestrator(runId: string): Promise<void> {
-    const existing = this.orchestratorTasks.get(runId);
-    if (existing) return existing;
-    if (this.completedOrchestrators.has(runId)) return Promise.resolve();
+  private selectOrchestrator(runId: string) {
+    if (this.orchestratorRunId === runId) return;
     this.orchestratorRunId = runId;
+    for (const preview of this.previews.values()) {
+      if (preview.actorRunId !== runId) this.discardPreview(preview);
+    }
+  }
+
+  private attachOrchestrator(runId: string, wakeAt?: string): Promise<void> {
+    if (this.completedOrchestrators.has(runId)) return Promise.resolve();
+    // A wake may be replayed from an older thought. Subscribe for committed
+    // publications, but only lease or handoff evidence can unseat a live Actor.
+    if (!this.orchestratorRunId || this.completedOrchestrators.has(this.orchestratorRunId)) {
+      this.selectOrchestrator(runId);
+    }
+    const existing = this.orchestratorTasks.get(runId);
+    if (existing) {
+      const idle = this.idleActorReads.get(runId);
+      if (idle && wakeAt && Date.parse(wakeAt) > idle.at) idle.controller.abort();
+      return existing;
+    }
     const task = this.followOrchestrator(runId).catch(() => undefined).finally(() => {
       this.orchestratorTasks.delete(runId);
     });
@@ -509,21 +543,46 @@ export class DialogueParentController {
     return task;
   }
 
+  private discardPreview(preview: FinalPreview) {
+    if (this.previews.get(preview.record.assistantId) !== preview) return;
+    this.previews.delete(preview.record.assistantId);
+    if (preview.text) this.patch(preview.record, { replyPreview: undefined });
+  }
+
+  private bindFinalPreview(runId: string, messageId: string | undefined, data?: Record<string, unknown>): FinalPreview | undefined {
+    if (this.orchestratorRunId !== runId || data?.phase !== "final_answer" || data.actorRunId !== runId ||
+        !nonEmpty(messageId) || data.offerId !== messageId || this.publishedCandidates.has(messageId) ||
+        !nonEmpty(data.utteranceId) || this.published.has(data.utteranceId) || !Array.isArray(data.inputIds) ||
+        data.inputIds.length !== 1 || data.inputIds[0] !== data.sourceInputId) return;
+    const record = this.records.find(item => !item.done && !item.cancelled && !item.failed &&
+      item.parentRunId === data.parentRunId && item.workId === data.workId && item.sourceInputId === data.sourceInputId);
+    if (!record) return;
+    const previous = this.previews.get(record.assistantId);
+    if (previous) this.discardPreview(previous);
+    const preview = { actorRunId: runId, utteranceId: data.utteranceId, offerId: messageId, record, text: "" };
+    this.previews.set(record.assistantId, preview);
+    return preview;
+  }
+
   private async followOrchestrator(runId: string): Promise<void> {
     const { signal } = this.options;
     let delay = this.retryDelayMs;
     while (!signal.aborted && !this.completedOrchestrators.has(runId)) {
-      await this.readOrchestrator(runId).catch(() => undefined);
+      const attempt = new AbortController();
+      await this.readOrchestrator(runId, attempt).catch(() => undefined);
       if (signal.aborted || this.completedOrchestrators.has(runId)) return;
+      // A newer parent wake after exit_intent restarts an idle reader now.
+      if (attempt.signal.aborted) { delay = this.retryDelayMs; continue; }
       await waitForReconnect(delay, signal);
       delay = Math.min(delay * 2, 30_000);
     }
   }
 
-  private async readOrchestrator(runId: string): Promise<void> {
+  private async readOrchestrator(runId: string, attempt: AbortController): Promise<void> {
+    const signal = AbortSignal.any([this.options.signal, attempt.signal]);
     const response = await this.request(`/api/chat/${encodeURIComponent(runId)}/stream?startIndex=0`, {
       credentials: "same-origin", cache: "no-store", redirect: "error",
-      headers: { Accept: "text/event-stream" }, signal: this.options.signal,
+      headers: { Accept: "text/event-stream" }, signal,
     });
     if ([401, 403, 404, 410].includes(response.status)) {
       this.completedOrchestrators.add(runId);
@@ -531,28 +590,102 @@ export class DialogueParentController {
     }
     if (!response.ok || !response.body) throw new Error("Dialogue stream unavailable");
     const markComplete = () => { this.completedOrchestrators.add(runId); };
-    for await (const value of readChatEvents(response.body, this.options.signal, markComplete)) {
-      const chunk = value as { type?: string; data?: Record<string, unknown> };
-      if (chunk.type === "data-dialogue-publication" && chunk.data) {
-        this.publish(chunk.data as unknown as PublicUtterance);
-        continue;
+    let messageId: string | undefined;
+    let preview: FinalPreview | undefined;
+    let textId: string | undefined;
+    let artifacts: UIMessagePart[] = [];
+    const discard = () => {
+      if (preview) this.discardPreview(preview);
+      preview = undefined;
+      textId = undefined;
+    };
+    try {
+      for await (const chunk of readChatEvents(response.body, signal, markComplete)) {
+        const data = chunk.data as Record<string, unknown> | undefined;
+        if (chunk.type === "data-dialogue-exit_intent" && typeof data?.at === "string") {
+          this.idleActorReads.set(runId, { at: Date.parse(data.at), controller: attempt });
+        } else this.idleActorReads.delete(runId);
+        if (chunk.type === "start") {
+          discard();
+          messageId = chunk.messageId;
+          artifacts = [];
+        } else if (chunk.type === "data-dialogue-lease_acquired" && typeof data?.at === "string") {
+          const at = Date.parse(data.at);
+          if (!this.completedOrchestrators.has(runId) && at > this.latestLeaseAt) {
+            this.latestLeaseAt = at;
+            this.selectOrchestrator(runId);
+          }
+        } else if (chunk.type === "data-dialogue-source") {
+          discard();
+          preview = this.bindFinalPreview(runId, messageId, data);
+        } else if (chunk.type === "start-step" || chunk.type === "reset-step") {
+          // A new attempt may reuse the provider's text block ID.
+          textId = undefined;
+          if (preview && this.previews.get(preview.record.assistantId) === preview && preview.text) {
+            preview.text = "";
+            this.patch(preview.record, { replyPreview: undefined });
+          }
+        } else if (chunk.type === "text-start") {
+          textId = chunk.id;
+        } else if (chunk.type === "text-delta" && preview && textId && chunk.id === textId && typeof chunk.delta === "string" &&
+            this.previews.get(preview.record.assistantId) === preview && !preview.record.cancelled && !preview.record.failed) {
+          preview.text += chunk.delta;
+          if (preview.text.trim()) this.patch(preview.record, { replyPreview: {
+            actorRunId: runId, utteranceId: preview.utteranceId, text: preview.text,
+          } });
+        } else if (chunk.type === "text-end") {
+          if (chunk.id === textId) textId = undefined;
+        } else if (chunk.type === "data-dialogue-artifact" && globalThis.crypto?.subtle) {
+          // On insecure origins the existing artifact GET verifies SHA-256
+          // server-side. Inline bytes require the renderer's Web Crypto check.
+          artifacts.push({ type: chunk.type, id: chunk.id, data });
+        } else if (chunk.type === "data-dialogue-publication") {
+          const publication = publicationFromMessage({ role: "assistant", id: runId,
+            parts: [...artifacts, { type: chunk.type, id: chunk.id, data }] }, runId);
+          if (publication) this.publish(runId, publication.utterance, publication.artifactBodies);
+          discard();
+          artifacts = [];
+        } else if (chunk.type === "data-dialogue-continued" || chunk.type === "data-dialogue-delegated") {
+          discard();
+          const target = data?.nextRunId ?? data?.holderRunId;
+          if (nonEmpty(target) && target !== runId) {
+            this.completedOrchestrators.add(runId);
+            if (this.orchestratorRunId === runId && !this.completedOrchestrators.has(target)) this.selectOrchestrator(target);
+            void this.attachOrchestrator(target);
+          }
+        } else if (chunk.type === "data-turn-status" || chunk.type === "data-dialogue-expression_outcome" ||
+            chunk.type === "error" || chunk.type === "abort" || chunk.type === "finish") {
+          discard();
+          if (chunk.type === "finish") markComplete();
+        }
       }
-      if (chunk.type === "data-dialogue-continued" || chunk.type === "data-dialogue-delegated") {
-        const target = chunk.data?.nextRunId ?? chunk.data?.holderRunId;
-        if (nonEmpty(target)) void this.attachOrchestrator(target);
-      }
-      if (chunk.type === "finish") markComplete();
+    } finally {
+      // Truncation, reconnect from zero, and abort cannot leave an orphan.
+      this.idleActorReads.delete(runId);
+      discard();
     }
   }
 
-  private publish(utterance: PublicUtterance) {
-    if (this.published.has(utterance.utteranceId)) return;
+  private publish(runId: string, utterance: PublicUtterance, artifactBodies: ReadonlyMap<string, string>) {
+    for (const result of utterance.sourceResults) this.publishedCandidates.add(result.resultId);
+    const known = this.published.has(utterance.utteranceId);
+    const replaced = [...this.previews.values()].filter(preview => preview.utteranceId === utterance.utteranceId ||
+      utterance.sourceResults.some(result => result.resultId === preview.offerId) ||
+      (!known && runId === preview.actorRunId && utterance.phase === "final_answer" && utterance.inputIds.includes(preview.record.sourceInputId)));
+    if (known) {
+      for (const preview of replaced) this.discardPreview(preview);
+      return;
+    }
     this.published.add(utterance.utteranceId);
     const work = this.records
       .filter(record => utterance.inputIds.includes(record.sourceInputId))
       .sort((a, b) => b.acceptedAt.localeCompare(a.acceptedAt))[0];
-    this.options.setMessages(previous => applyDialoguePublication(previous, utterance,
-      work ? { workId: work.workId, inputId: work.sourceInputId } : undefined));
+    for (const preview of replaced) this.previews.delete(preview.record.assistantId);
+    this.options.setMessages(previous => {
+      let messages = previous;
+      for (const preview of replaced) messages = patchDialogueAssistant(messages, preview.record.assistantId, { replyPreview: undefined });
+      return applyDialoguePublication(messages, utterance, work ? { workId: work.workId, inputId: work.sourceInputId } : undefined, artifactBodies);
+    });
     this.options.onPublication();
   }
 }

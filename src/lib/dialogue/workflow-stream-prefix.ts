@@ -14,14 +14,21 @@ class IncompletePrefix<T> extends Error {
 /** Each namespace has one projection. Cache only selected dialogue records,
  * never raw stream chunks, model output deltas, or an unverified tail.
  * A terminal run can still own an open namespace, so obtain its tail on
- * every read. An append selects a new immutable prefix immediately.
+ * every read. An append selects a new immutable prefix immediately. With
+ * requireComplete, reject an early EOF. A bounded snapshot must also be complete.
  */
 export async function readWorkflowStreamPrefix<T>(
   runId: string, namespace: string | undefined, select: (chunk: unknown) => T | undefined,
-  cacheScope?: string,
+  { cacheScope, maxChunks, requireComplete = false }: { cacheScope?: string; maxChunks?: number; requireComplete?: boolean } = {},
 ): Promise<StreamPrefix<T>> {
   const readable = getRun(runId).getReadable({ namespace, startIndex: 0 });
   const tail = await readable.getTailIndex();
+  if ((requireComplete || maxChunks !== undefined) && (!Number.isSafeInteger(tail) || tail < -1)) {
+    throw new Error("Workflow stream has an invalid tail");
+  }
+  if (maxChunks !== undefined && tail >= maxChunks) {
+    throw new Error("Workflow stream exceeds the bounded snapshot");
+  }
   if (tail < 0) return { entries: [], nextStreamIndex: 0 };
   const read = async (): Promise<StreamPrefix<T>> => {
     const reader = readable.getReader();
@@ -45,7 +52,7 @@ export async function readWorkflowStreamPrefix<T>(
     return await cachedFetch(["workflow", "dialogue-prefix-v1", cacheScope, runId, namespace ?? "", String(tail)],
       CACHE_TTLS.BLOB_SECONDS, [], read);
   } catch (error) {
-    if (error instanceof IncompletePrefix) return error.prefix;
+    if (error instanceof IncompletePrefix && !requireComplete && maxChunks === undefined) return error.prefix;
     throw error;
   }
 }

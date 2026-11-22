@@ -99,6 +99,7 @@ import { buildDialogueRegenerationRequest } from "@/lib/chat/dialogue-regenerate
 import { DialogueDisabled, useDialogueManuscript } from "./use-dialogue-manuscript";
 import {
   appendDialogueTurn,
+  chatRequestMessages,
   dialogueMetadata,
   dialogueStreamRows,
   removeDialogueTurn,
@@ -655,7 +656,7 @@ function Inner({
       const documentContext = documentContextFromMetadata(lastUser?.metadata);
       const stagedAttachments = stagedImageReferences(messageImageAttachments(lastUser?.metadata));
       return {
-        messages: messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW),
+        messages: chatRequestMessages(messagesWithNativeReplay(workingMessages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW)),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         locale,
         persona,
@@ -1175,7 +1176,7 @@ function Inner({
           body: JSON.stringify({
             // Same window + fields the transport sends (see
             // prepareSendMessagesRequest) plus the new message.
-            messages: [...messagesWithNativeReplay(messages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW), userMsg],
+            messages: [...chatRequestMessages(messagesWithNativeReplay(messages, resumeBlock?.turns ?? []).slice(-SEND_MESSAGE_WINDOW)), userMsg],
             timezone:
               typeof Intl !== "undefined"
                 ? Intl.DateTimeFormat().resolvedOptions().timeZone

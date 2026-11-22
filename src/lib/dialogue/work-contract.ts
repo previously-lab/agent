@@ -24,6 +24,8 @@ interface WorkEventBase {
   sourceInputId: string;
   workId: string;
   acceptedAt: string;
+  publicSeq?: number;
+  locale?: string;
   relation?: WorkRelation;
   dependsOnInputIds?: string[];
   record?: DialogueRecordEnvironment;
@@ -89,6 +91,9 @@ function base(value: Record<string, unknown>): WorkEventBase | null {
   return {
     updateId: value.updateId, runId: value.runId, sourceInputId: value.sourceInputId,
     workId: value.workId, acceptedAt: value.acceptedAt,
+    ...(typeof value.publicSeq === "number" && Number.isSafeInteger(value.publicSeq) && value.publicSeq > 0
+      ? { publicSeq: value.publicSeq } : {}),
+    ...(nonEmpty(value.locale) ? { locale: value.locale } : {}),
     ...(related ? { relation: related } : {}),
     ...(depends ? { dependsOnInputIds: depends } : {}),
     ...(value.record && typeof value.record === "object" ? { record: value.record as DialogueRecordEnvironment } : {}),
@@ -126,6 +131,9 @@ export function workUpdateAsDialogueCandidate(update: WorkUpdateEvent): Dialogue
     sourceInputId: update.sourceInputId,
     parentRunId: update.runId,
     workId: update.workId,
+    acceptedAt: update.acceptedAt,
+    publicSeq: update.publicSeq,
+    locale: update.locale,
     stage: update.type === "work_checkpoint" ? "checkpoint" : "final",
     text: update.text,
     ...(update.type === "work_completed" && update.event ? { event: update.event, eventKind: update.event.kind } : {}),
@@ -170,5 +178,6 @@ export function projectWorkSnapshot(input: {
 }
 
 export type WorkUpdateResult =
-  | { ok: true; kind: "work-update"; updateId: string; runId: string; sourceInputId: string }
+  // A durable update may precede acknowledgement by its public Actor.
+  | { ok: true; kind: "work-update"; updateId: string; runId?: string; sourceInputId: string }
   | { ok: false; kind: "work-update"; updateId: string; reason: string };

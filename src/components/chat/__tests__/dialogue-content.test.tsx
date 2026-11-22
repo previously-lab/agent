@@ -4,6 +4,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ContentBlockV1, DialogueArtifactRef } from "@/lib/chat/dialogue-contract";
 import type { ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
+import { encodeDialogueRecordTurn } from "@/lib/episodic/dialogue-record";
+import { parseSlice } from "@/lib/episodic/manager";
+import { getRecordDoc } from "@/lib/archive/actions";
+
+const readSavedSlice = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/episodic/actions", () => ({ getSliceContent: readSavedSlice }));
 
 vi.mock("next-intl", () => ({ useTranslations: (namespace: string) => (key: string) => `${namespace}.${key}`, useLocale: () => "en" }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
@@ -26,6 +32,25 @@ const descriptor = (body: string): DialogueArtifactRef => ({
 const artifact = descriptor(htmlSource);
 
 describe("direct artifact reuse", () => {
+  it("opens an older slice through the document action and renders both stored reply formats", async () => {
+    const timestamp = "2026-01-09T08:00:00.000Z", sliceId = "2026-01-09-0800";
+    const record = encodeDialogueRecordTurn({ kind: "public_utterance", publicationId: "input-one:call-12",
+      publicSeq: 1, inputIds: ["input-one"], sourceResults: [],
+      blocks: [{ kind: "markdown", blockId: "published", text: "The dock opens at nine." }] });
+    const raw = ["## Turn 1 — " + timestamp + " (agent)", "The old timetable is in the foyer.",
+      "## Turn p0123456789 — " + timestamp + " (agent) [reply-to input-one] [dialogue " + record + "] [body-escaped v1]",
+      "The dock opens at nine."].join("\n\n");
+    const turns = parseSlice(raw).turns;
+    readSavedSlice.mockResolvedValue({ turns, totalTurns: 2, timezone: "UTC" });
+    const doc = await getRecordDoc("records/" + sliceId, { user: "User", agent: "Previously", unknown: "Unknown" });
+    expect(readSavedSlice).toHaveBeenCalledWith(sliceId, undefined, { full: true });
+    const html = doc!.turns.map(turn => renderToStaticMarkup(React.createElement(RecordTurnView, {
+      docRef: doc!.ref, turn, speaker: "Previously", focused: false,
+    }))).join("");
+    expect(html).toContain("The old timetable is in the foyer.");
+    expect(html).toContain("The dock opens at nine.");
+    expect(html).toContain('data-public-utterance="input-one:call-12"');
+  });
   it("reads the same authorized ref and preserves every original body character without a fence", async () => {
     const request = vi.fn(async () => Response.json({ artifact, body: htmlSource }));
     await expect(readDialogueArtifact(artifact, "user", new AbortController().signal, request)).resolves.toBe(htmlSource);

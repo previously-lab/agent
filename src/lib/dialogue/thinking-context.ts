@@ -30,7 +30,7 @@ export function buildNativeThinkingMessages(
     relation: "A relation (new, related, continuation or unclear) describes how this input relates to existing work. Each input retains its own task.",
     responseModeSelection: "Choose the responseMode for the current request. Include it in completeWork.",
     snapshots: "Read a snapshot with readWorkSnapshot only when its public handoff could fill a material gap or avoid repeating needed work. A related title alone needs no lookup.",
-    completion: "Complete only this input and hand off its result. Do not repeat or complete other inputs. The single dialogue Actor decides how to integrate and phrase the public answer.",
+    completion: "Hand off a useful partial answer with workCheckpoint while investigating the rest. When this input is answered, use completeWork. Do not repeat or complete other inputs. The single dialogue Actor decides how to integrate and phrase the public answer.",
   };
   return [...checkpointHistory, { role: "user", content: `## Current task contract\n${JSON.stringify(contract)}` }];
 }

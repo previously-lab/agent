@@ -1,6 +1,6 @@
 import type { UIMessage } from "@/lib/chat/protocol";
 import type { ChatStreamItem, HistoryStreamItem } from "@/lib/chat/stream-items";
-import { recoveredTurnIds } from "@/lib/chat/reconnect";
+import { dialogueMetadata, hasPublicReply } from "./dialogue-stream-rows";
 import type { ManuscriptEntry } from "./dialogue-projection";
 
 /** The legacy projection can predate the newest v2 record. Source order is
@@ -36,17 +36,22 @@ export function unrepresentedHistory(
   messages: readonly UIMessage[],
   entries: readonly ManuscriptEntry[],
 ): HistoryStreamItem[] {
-  const restored = new Set(recoveredTurnIds(messages));
-  const users = new Set(messages.filter(message => message.role === "user").map(message => message.id));
-  for (const message of messages) {
-    if (message.role === "assistant") restored.add(message.id);
-    if (message.metadata && typeof message.metadata === "object") {
-      const metadata = message.metadata as Record<string, unknown>;
-      if (typeof metadata.sourceInputId === "string") users.add(metadata.sourceInputId);
+  const restored = new Set<string>();
+  const users = new Set<string>();
+  const remember = (message: UIMessage) => {
+    const metadata = dialogueMetadata(message);
+    if (message.role === "user") {
+      users.add(message.id);
+      if (metadata.sourceInputId) users.add(metadata.sourceInputId);
+      if (typeof metadata.recoveryTurnId === "string") users.add(metadata.recoveryTurnId);
+    } else if (message.role === "assistant" && hasPublicReply(message)) {
+      restored.add(message.id);
+      if (typeof metadata.recoveryTurnId === "string") restored.add(metadata.recoveryTurnId);
       if (typeof metadata.utteranceId === "string") restored.add(metadata.utteranceId);
-      if (typeof metadata.publicationId === "string") restored.add(metadata.publicationId);
+      if (metadata.publicationId) restored.add(metadata.publicationId);
     }
-  }
+  };
+  messages.forEach(remember);
   for (const entry of entries) {
     if (entry.kind === "input") {
       users.add(entry.input.clientMessageId);
@@ -54,18 +59,13 @@ export function unrepresentedHistory(
     } else if (entry.kind === "utterance") {
       restored.add(entry.utterance.utteranceId);
     } else {
-      restored.add(entry.message.id);
-      if (entry.message.metadata && typeof entry.message.metadata === "object") {
-        const metadata = entry.message.metadata as Record<string, unknown>;
-        if (typeof metadata.utteranceId === "string") restored.add(metadata.utteranceId);
-        if (typeof metadata.publicationId === "string") restored.add(metadata.publicationId);
-      }
+      remember(entry.message);
     }
   }
   return history.filter(item => {
     if (item.kind !== "history-turn") return true;
     const { turn } = item;
-    if (turn.turnId && restored.has(turn.turnId)) return false;
+    if (turn.turnId && (turn.role === "user" ? users : restored).has(turn.turnId)) return false;
     if (turn.dialogue?.kind === "public_utterance" && restored.has(turn.dialogue.publicationId)) return false;
     if (turn.role === "user") {
       if (turn.clientMessageId && users.has(turn.clientMessageId)) return false;

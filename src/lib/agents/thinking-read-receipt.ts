@@ -18,6 +18,8 @@ const reading = z.object({
   turnId: z.string().min(1).max(128).optional(),
   turnIndex: z.number().int().nonnegative().optional(),
   excerpt: z.string().max(1200).optional(),
+  /** Host verified the excerpt's original section before the search window removed headings. */
+  partialEvidenceEligible: z.literal(true).optional(),
   /** Record IDs mentioned in the document text. Navigation only. */
   mentionedSliceIds: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/)).max(100).optional(),
   range: z.object({ start: z.number().int().positive(), end: z.number().int().positive() }).strict().optional(),

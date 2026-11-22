@@ -68,13 +68,22 @@ export function selectDialogueOffer(
   const finalizedInputs = new Set(world.publications
     .filter(publication => publication.phase !== "commentary")
     .flatMap(publication => publication.inputIds));
+  const silentCheckpoints = new Set(world.dialogueRuns?.flatMap(run => run.events.flatMap(event =>
+    event.type === "expression_outcome" && event.status === "intentionally_silent" ? event.candidateIds : [])));
   const finalWorkIds = new Set(world.offers
     .filter(offer => !publishedResultIds.has(offer.offerId) && !handled.has(offer.offerId) && isFinal(offer.stage))
     .map(workKey));
+  const latestCheckpointSeq = new Map<string, number>();
+  for (const offer of world.offers) {
+    if (offer.stage !== "checkpoint" || offer.publicSeq === undefined) continue;
+    const key = workKey(offer);
+    latestCheckpointSeq.set(key, Math.max(latestCheckpointSeq.get(key) ?? 0, offer.publicSeq));
+  }
   const pending = world.offers.filter(offer => {
     if (handled.has(offer.offerId) || publishedResultIds.has(offer.offerId)) return false;
     if (!isFinal(offer.stage)) {
-      if (finalWorkIds.has(workKey(offer)) || finalizedInputs.has(offer.sourceInputId)) return false;
+      if (silentCheckpoints.has(offer.offerId) || finalWorkIds.has(workKey(offer)) || finalizedInputs.has(offer.sourceInputId)) return false;
+      if ((offer.publicSeq ?? 0) < (latestCheckpointSeq.get(workKey(offer)) ?? 0)) return false;
     }
     return true;
   });

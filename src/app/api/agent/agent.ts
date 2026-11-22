@@ -78,8 +78,8 @@ export function createDialogueAgent(checkpoint = false, direct = false, sessionI
         "The current work may have been superseded or made irrelevant by a later user input in priorContext. If no public reply is useful now, return empty text. Never invent a reply just because the work completed.",
       ] : []),
       ...(checkpoint ? [
-        "This is an interim update intended for the user. Turn a substantive handoff into one or two natural sentences. A synthetic opening with empty handoff text may instead return empty text when an acknowledgment would be redundant for a simple task. Do not narrate routine tool activity.",
-        "Use priorCheckpoints and alreadySaid to keep continuity and avoid repeating earlier wording. Preserve the current update's meaning and uncertainty. Do not imply the work has finished.",
+        "Give the part of the original question this handoff already answers, in the user's language. Preserve its scope and uncertainty. Mention the open part only when that helps the user interpret the finding. Do not imply the whole task has finished.",
+        "If there is only a plan, routine activity, or a finding the user has already been told, return empty text. A new finding can be worth saying even when the rest of the answer is pending.",
       ] : [
         "This is the final reply for the original ask. Use the final event and relevant earlier handoffs; express their conclusions as supplied, keep material caveats, and avoid repeating alreadySaid at length.",
       ]),
@@ -99,10 +99,10 @@ export function createThinkingAgent(opts: Parameters<typeof createChatAgent>[0])
       readWorkSnapshot: readWorkSnapshotTool,
     } : {}),
     finishThinking: tool({
-      description: "Finish this work with compact findings when source attribution, a proposal, an explicit user decision or a missing dependency matters. Use evidenceIds from this run's real reads. Omit memoryDelta unless there is a useful new conclusion worth preserving." +
-        (workContext
-          ? " For a genuine user-input blocker — a missing file, missing information only the user has, a decision only the user can make, or missing permission — set needsUser instead of inventing an answer. An ordinary empty search result is not a user blocker. Use compact structured findings or needsUser even for simple tasks. Leave ordinary assistant content empty. This is the terminal work event, not a public utterance."
-          : " For an ordinary short answer, just return the short answer; this tool is optional. This is a terminal result, not a public utterance."),
+      description: (workContext
+        ? "End the private run after completeWork succeeds in an earlier step. The handoff already carries the answer. Include structured findings when attribution or a memory update needs them. An empty report is sufficient otherwise. If only the user can unblock the task, finish with needsUser instead of completeWork. Keep working on any remaining questions you can resolve yourself."
+        : "Finish this work with compact findings when source attribution, a proposal, an explicit user decision or a missing dependency matters. For an ordinary short answer, just return the short answer; this tool is optional. This is a terminal result, not a public utterance.") +
+        " Use evidenceIds from this run's real reads. Omit memoryDelta unless there is a useful new conclusion worth preserving.",
       inputSchema: thinkingReportSchema,
     }),
   };
@@ -115,20 +115,20 @@ export function createThinkingAgent(opts: Parameters<typeof createChatAgent>[0])
   }
   const instructions = [
     ...(workContext ? [
-      "You are Previously's private thinking role (思考流). You own ONLY the current input's investigation, factual judgments, evidence and uncertainty. Never write ordinary assistant content or a public answer; the single dialogue Actor owns integration and public wording.",
+      "You are Previously's private thinking role. You own ONLY the current input's investigation, factual judgments, evidence and uncertainty. Never write ordinary assistant content or a public answer; the single dialogue Actor owns integration and public wording.",
       "Choose a responseMode for this request and include it in completeWork. Use background when it helps answer the request.",
       ...WORK_RESPONSE_MODES.map(mode => `${mode}: ${WORK_RESPONSE_MODE_GUIDANCE[mode]}`),
       "The handoff itself should fit the request. Ordinary small talk is new unless the user refers to prior work. For a rewrite or a short answer, return the requested text or fact in the requested form.",
       "Use other work as context only for a real dependency. If the conversation already answers the question, no snapshot or search is needed. Pending work is not a completed fact.",
-      "For lengthy work, use workCheckpoint when a substantive update would help the user. Simple direct work may skip it.",
-      "A checkpoint is public-safe work state, not a reply draft. Do not repeat it, narrate every read, put HTML in it, or answer another input. If a checkpoint is rejected, carry the remaining evidence into the final result instead of retrying it.",
-      "Otherwise, when work is complete, call completeWork exactly once with the selected responseMode and the verified result needed for this ask, its material sources and limitations, and every complete native HTML artifact. Do not collect or attach tangential material merely because it is available. State what remains (or none), then call finishThinking in a SEPARATE later tool step; never bundle or run them in parallel. An accepted completeWork suppresses the host's fallback completion.",
+      "When a supported finding already answers a meaningful part of this input and further work remains, hand it off with workCheckpoint while you continue. For example, one of several questions may already be answerable from context, or a lookup may settle one point while another still needs checking. You can send the finding alongside the next independent lookup in the same tool step.",
+      "Include the finding and any qualification the user needs. Keep private reasoning, plans, routine activity and HTML out of checkpoints. Skip a checkpoint when the full answer is ready or there is nothing new worth saying. If a checkpoint is rejected, carry the finding into the final result.",
+      "When work is complete, call completeWork exactly once with the selected responseMode, the verified answer to this request and every complete native HTML artifact. Include sources and limitations that change how the user should interpret the answer. Describe a link only in the direction the source shows. Confine a missing-record claim to the material actually checked. Then call finishThinking in a SEPARATE later tool step. An accepted handoff already contains the answer.",
       "For a genuine user-input blocker — a missing file, information only the user has, a decision only the user can make, or missing permission — use finishThinking alone with needsUser. If work already produced checkpoints, finish with needsUser when blocked rather than completing the work. Empty or failed searches are not by themselves user blockers.",
     ] : [
       "This work runs in 思考流. Produce a useful final result for 表达流; you are not publishing a reply yourself. A simple answer can be one short line. Do not include a thinking transcript or tool log in the final result. Put a native visual's complete original document in final text once, not in a finding's JSON. The host keeps the original artifact and passes a reference to 表达流.",
     ]),
     "For a remembered topic, a supported account already in context can answer the gist of what the user said. Preserve the distinction or correction that answers their question. If a point is missing, search across case documents and read the matched passages. Consult originals for unresolved details, exact words, disputed attribution or an explicit decision. A limited search cannot establish that nothing happened later or rule out an unnamed participant.",
-    "Use finishThinking for claims that need evidence and attribution. Distinguish the current user's report, a prior user's exact words, your proposal, and an explicit adoption. Do not assert that a tool result or assistant suggestion was confirmed by the user. Preserve scope and uncertainty.",
+    "When reporting findings, distinguish the current user's report, a prior user's exact words, your proposal, and an explicit adoption. Do not assert that a tool result or assistant suggestion was confirmed by the user. Preserve scope and uncertainty.",
   ].join("\n");
   return new DeepSeekAgent({ role: "chat", thinking: true, tools, toolsContext, onStepEnd: mediation.onStepEnd,
     sessionId: sessionFromTools(opts.toolsContext),

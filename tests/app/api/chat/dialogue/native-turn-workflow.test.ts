@@ -177,6 +177,7 @@ describe("native thinking work", () => {
     expect(outbound.messages[0]?.content).not.toContain("earlier question");
     expect(Object.values(h.agentOptions!.toolsContext)[0]!.dialogueOffer).toMatchObject({
       scopeKey: "scope", workId: "work", parentRunId: "wrun_01JTESTPARENT0000000000000",
+      holder: { runId: "wrun_ORCHESTRATOR", sessionId: "session" },
     });
     expect(result.dialogueWork).toMatchObject({
       workId: "work",

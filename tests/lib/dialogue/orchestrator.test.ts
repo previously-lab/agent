@@ -47,6 +47,15 @@ describe("dialogue orchestrator selection", () => {
     expect(selected).toBeUndefined();
   });
 
+  it("never replays a stale checkpoint after publishing a newer one from the same work", () => {
+    const older = { ...offer("z-first", "checkpoint"), publicSeq: 1 };
+    const newer = { ...offer("a-second", "checkpoint"), publicSeq: 2 };
+    const other = offer("independent-first", "checkpoint", "input-B");
+    expect(selectDialogueOffer({ offers: [newer, older], publications: [] })?.offerId).toBe("a-second");
+    expect(selectDialogueOffer({ offers: [other, newer, older], publications: [publication("a-second", "commentary")] })?.offerId)
+      .toBe("independent-first");
+  });
+
   it("skips handled events and continues with another independent result", () => {
     const selected = selectDialogueOffer({
       offers: [offer("A-final", "final"), offer("B-final", "final", "input-B", "work-B")],

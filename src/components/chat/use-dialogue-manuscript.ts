@@ -10,7 +10,7 @@ import {
   parseSubmittedUserMessage,
   type DialogueAcceptedV2,
 } from "./dialogue-parent-stream";
-import { mergeDialogueHistory } from "./dialogue-stream-rows";
+import { chatRequestMessages, mergeDialogueHistory } from "./dialogue-stream-rows";
 
 type DialogueMode = "legacy" | "dialogue";
 type HistoryGetter = () => UIMessage[];
@@ -107,20 +107,22 @@ export function useDialogueManuscript(persona: string) {
     const savedTurns = [...historyWindow.previous.flatMap(slice => slice.turns), ...currentTurns];
     const savedPublications = new Set(savedTurns.flatMap(turn =>
       turn.dialogue?.kind === "public_utterance" ? [turn.dialogue.publicationId] : []));
+    const answeredInputs = new Set(savedTurns.flatMap(turn => turn.dialogue?.kind === "public_utterance"
+      ? turn.dialogue.inputIds : turn.role === "agent" && turn.content.trim() && turn.replyTo ? [turn.replyTo] : []));
     const since = historyWindow.previous[0]?.start ??
       (historyWindow.arrival.mode === "resume" ? historyWindow.arrival.start : undefined);
-    parent.start(since, savedPublications);
+    parent.start({ since, savedPublications, answeredInputs });
     setMessages.current(previous => mergeDialogueHistory(previous, currentTurns));
   }, [historyReady, historyBound, historyWindow, historyFailed]);
 
-  const submit = useCallback(async (body: Record<string, unknown>, assistantId: string): Promise<DialogueAcceptedV2> => {
+  const submit = useCallback(async (body: Record<string, unknown> & { messages: UIMessage[] }, assistantId: string): Promise<DialogueAcceptedV2> => {
     const signal = lifetime.current?.signal;
     const userMessage = parseSubmittedUserMessage(body);
     setSubmission({ phase: "submitting" });
     try {
       const response = await fetch("/api/chat", {
         method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, persona, dialogueVersion: 2 }), signal,
+        body: JSON.stringify({ ...body, messages: chatRequestMessages(body.messages), persona, dialogueVersion: 2 }), signal,
       });
       const payload: unknown = await response.json();
       if (!response.ok) {

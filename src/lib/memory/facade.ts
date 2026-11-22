@@ -2,6 +2,7 @@ import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { mapWithConcurrency } from "@/lib/map-with-concurrency";
 export { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
+import { permitsPartialSearchExcerpt } from "./partial-evidence-prose";
 import { readStoredCaseActivity, type CaseActivitySource } from "./case-activity";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { parseDossierRef } from "@/lib/archive/refs";
@@ -1028,6 +1029,7 @@ interface SemanticSearchPassage {
   excerpt: string;
   revision: string;
   edition: "original" | "current";
+  partialEvidenceEligible?: true;
 }
 
 type ScannedSearchUnit = { failed: true } | {
@@ -1489,7 +1491,9 @@ export async function recallSearch(
       if (!source) continue;
       const excerpt = matchedBodyPassage(source.raw, keywords);
       if (!excerpt) continue;
-      passages.push({ ref: entry.ref, excerpt, revision: caseStorageRevision(source.raw), edition: source.edition });
+      const partialEvidenceEligible = source.edition === "current" && permitsPartialSearchExcerpt(withoutFrontmatter(source.raw), excerpt);
+      passages.push({ ref: entry.ref, excerpt, revision: caseStorageRevision(source.raw), edition: source.edition,
+        ...(partialEvidenceEligible ? { partialEvidenceEligible: true } : {}) });
       if (input.turnLinks) {
         const inExcerpt = new Set(linkedTurns(excerpt).map(target => JSON.stringify(target)));
         const mentioned = new Set(excerpt.match(/\b\d{4}-\d{2}-\d{2}-\d{4}\b/g) ?? []);

@@ -98,6 +98,8 @@ export interface AgentOptions<Tools extends ToolSet = ToolSet> {
   onChunk?: (event: { chunk: ModelCallStreamPart }) => void | Promise<void>;
   onError?: (event: { error: unknown }) => void | Promise<void>;
   onStepEnd?: (step: StepResult<Tools>) => void | Promise<void>;
+  /** Observes the next validated action batch before its tools start executing. */
+  onToolBatchStart?: (calls: readonly ToolCall[], previous?: StepResult<Tools>) => void;
   onToolExecutionResult?: (result: ToolResult) => void | Promise<void>;
   onToolExecutionStart?: (event: { toolCall: ToolCall }) => void | Promise<void>;
   writable?: WritableStream<ModelCallStreamPart>; sendFinish?: boolean; preventClose?: boolean;

@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueOfferEvent } from "@/lib/dialogue/transport";
 import type { DialogueWorldSnapshot } from "@/app/api/chat/dialogue-orchestrator-steps";
+import type { DialogueRuntimeEvent } from "@/lib/dialogue/coordination";
 
 const h = vi.hoisted(() => ({
   world: null as unknown as DialogueWorldSnapshot,
   published: [] as PublicUtterance[],
   prompts: [] as Array<{ checkpoint: boolean; prompt: string }>,
+  wording: vi.fn(),
+  runtime: vi.fn(),
 }));
 
 vi.mock("workflow", () => ({
@@ -30,7 +33,7 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   openDialogueStreamStep: vi.fn(async () => {}),
   closeDialogueRunStreamStep: vi.fn(async () => {}),
   completeDialogueLapStep: vi.fn(async () => {}),
-  writeDialogueRuntimeEventStep: vi.fn(async () => {}),
+  writeDialogueRuntimeEventStep: h.runtime,
   prepareDialogueOfferStep: vi.fn(async (input) => ({
     artifacts: [],
     prompt: JSON.stringify({ stage: input.stage, text: input.text }),
@@ -53,10 +56,10 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
 }));
 vi.mock("@/app/api/agent/agent", () => ({
   createDialogueAgent: (checkpoint: boolean) => ({
-    stream: async ({ prompt }: { prompt: string }) => {
+    stream: async ({ prompt, onStepEnd }: { prompt: string; onStepEnd?: (step: { text: string }) => void }) => {
       h.prompts.push({ checkpoint, prompt });
       const parsed = JSON.parse(prompt) as { text: string };
-      return { text: `公开：${parsed.text}` };
+      return h.wording(parsed.text, onStepEnd);
     },
   }),
 }));
@@ -99,6 +102,8 @@ describe("dialogue orchestrator timed activation", () => {
   beforeEach(() => {
     h.published = [];
     h.prompts = [];
+    h.runtime.mockReset();
+    h.wording.mockReset().mockImplementation((text: string) => ({ text: `公开：${text}`, finishReason: "stop" }));
   });
 
   it("publishes new work on activation, exits when idle, then starts for a final", async () => {
@@ -149,5 +154,49 @@ describe("dialogue orchestrator timed activation", () => {
     ]);
     await dialogueOrchestratorWorkflow({ scope: "scope" });
     expect(h.published.map(item => item.phase)).toEqual(["final_answer"]);
+  });
+
+  it("consumes a redundant checkpoint once, then publishes a new finding and the final answer", async () => {
+    const redundant = offer("same-finding", "input-A", "checkpoint");
+    h.world = world([input("input-A")], [redundant]);
+    h.wording.mockReturnValueOnce({ text: "", finishReason: "stop" });
+    expect(await dialogueOrchestratorWorkflow({ scope: "scope" })).toMatchObject({ status: "idle" });
+    expect(h.published).toHaveLength(0);
+    expect(h.wording).toHaveBeenCalledTimes(1);
+    const events: DialogueRuntimeEvent[] = h.runtime.mock.calls.map(([event]) => event);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "expression_outcome", status: "intentionally_silent", candidateIds: ["same-finding"],
+    }));
+    h.world.dialogueRuns.push({ runId: "previous-actor", sessionId: "session", createdAt: "2026-11-15T00:00:00Z",
+      status: "completed", events });
+    h.world.offers.push(offer("new-finding", "input-A", "checkpoint"));
+    await dialogueOrchestratorWorkflow({ scope: "scope" });
+    h.world.offers.push(offer("answer", "input-A", "final"));
+    await dialogueOrchestratorWorkflow({ scope: "scope" });
+    expect(h.wording.mock.calls.map(([text]) => text)).toEqual(["same-finding", "new-finding", "answer"]);
+    expect(h.published.map(item => item.phase)).toEqual(["commentary", "final_answer"]);
+  });
+
+  it.each(["", "The workshop was moved to"])("retries truncated interim wording without publishing its fragment", async text => {
+    h.world = world([input("input-A")], [offer("finding", "input-A", "checkpoint")]);
+    h.wording.mockReturnValueOnce({ text, finishReason: "length" });
+    await dialogueOrchestratorWorkflow({ scope: "scope" });
+    expect(h.wording).toHaveBeenCalledTimes(2);
+    expect(h.published.map(item => item.phase)).toEqual(["commentary"]);
+    expect(h.published[0]?.blocks[0]).toMatchObject({ text: "公开：finding" });
+  });
+
+  it.each(["error", "length"])("publishes only the completed retry when final wording ends with %s", async reason => {
+    h.world = world([input("input-A")], [offer("answer", "input-A", "final")]);
+    h.wording.mockImplementationOnce((_text: string, onStepEnd?: (step: { text: string }) => void) => {
+      const fragment = "The result is";
+      onStepEnd?.({ text: fragment });
+      if (reason === "error") throw new Error("Stream interrupted");
+      return { text: fragment, finishReason: reason };
+    });
+    expect(await dialogueOrchestratorWorkflow({ scope: "scope" })).toMatchObject({ status: "idle" });
+    expect(h.wording).toHaveBeenCalledTimes(2);
+    expect(h.published).toHaveLength(1);
+    expect(h.published[0]?.blocks[0]).toMatchObject({ text: "公开：answer" });
   });
 });

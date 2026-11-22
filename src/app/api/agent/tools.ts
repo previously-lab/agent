@@ -872,9 +872,10 @@ const workRelationSchema = z.object({
 
 export const workCheckpointTool = tool({
   description:
-    "Report a public-safe WORK checkpoint, not a reply draft. For lengthy work, share a concrete update when it would help the user; simple direct work may stay silent until completion. After meaningful progress, report only new evidence, status and remaining work. Use readWorkSnapshot if a specific related handoff could supply missing evidence or avoid repeating work. Never treat running work as completed, never perform another work item, and leave ordinary assistant content empty. The dialogue Actor independently decides what to say.",
+    "Hand off a new, supported partial answer to this input while work continues. It may come from the supplied context or a completed lookup. You can call this alongside an independent next lookup. The dialogue Actor decides what to say. If the full answer is ready, use completeWork.",
   inputSchema: workRelationSchema.extend({
-    text: z.string().max(2400).refine(text => text.trim().length > 0, "text must not be blank"),
+    text: z.string().max(2400).refine(text => text.trim().length > 0, "text must not be blank")
+      .describe("The finding and its material uncertainty. Identify the outstanding question if useful. Omit plans, tool logs and private reasoning."),
   }).strict(),
   contextSchema: toolContextSchema,
   execute: workCheckpointExecute,

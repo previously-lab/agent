@@ -26,6 +26,7 @@ import { type ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createChatAgent, createThinkingAgent, type ChatAgent, type ChatToolSet } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import { completeWorkExecute, completeWorkEventExecute, type ToolContext } from "@/app/api/agent/tool-executors";
+import { createPartialHandoff } from "@/app/api/agent/partial-handoff";
 import { buildWorkContextSection, extractThinkingReport } from "@/lib/dialogue/product";
 import { buildThinkingProduct, thinkingExpressionClaims, thinkingReportSchema } from "@/lib/agents/thinking-product";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
@@ -1029,6 +1030,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const nativeDialogue = dialogue?.transport === DIALOGUE_TRANSPORT;
   const parentRunId = nativeDialogue ? await ownRunId() : "";
   let dialogueDelivery: TurnRunResult["dialogueDelivery"];
+  let dialogueHolder: DialogueOfferContext["holder"];
   let otherWorkStates: OtherWorkState[] = [];
   if (nativeDialogue) {
     const startContext: DialogueOfferContext = {
@@ -1053,6 +1055,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         candidateKeys: [`${startContext.sourceInputId}:start`],
       });
       otherWorkStates = ensured.otherWorks;
+      dialogueHolder = { runId: ensured.runId, sessionId: ensured.sessionId };
     } catch (error) {
       // A start wake is best-effort; the thought continues and its end wake retries.
       console.warn("[Dialogue] start wake needs recovery", error);
@@ -1304,6 +1307,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   if (nativeDialogue) {
     const offerContext: DialogueOfferContext = {
       scopeKey: dialogue!.scopeKey,
+      ...(dialogueHolder ? { holder: dialogueHolder } : {}),
       parentRunId,
       workId: dialogue!.workId,
       sourceInputId: dialogue!.sourceInputId ?? input.turnId,
@@ -1333,7 +1337,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       });
 
   /** Shared stream options (continuation-safe, see below). No maxOutputTokens. */
+  const partialHandoff = nativeDialogue ? createPartialHandoff(turnToolsContext) : undefined;
   const streamOpts = {
+    onToolBatchStart: partialHandoff?.onBatch,
     writable: getWritable<ModelCallStreamPart>(dialogue ? { namespace: DIALOGUE_THOUGHTS_NAMESPACE } : undefined),
     stopWhen: isStepCount(20),
     sendFinish: false,
@@ -1987,6 +1993,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     };
   }
 
+  partialHandoff?.close();
   // ── Post-turn: ONE finalize step (序 6 主动写入 in a single commit) ──────
   // The explicit-instruction channel rides finalizeTurn's single flush — and
   // with it the episode tail (v0.30 §3.4): every terminal nested bubble as
@@ -2187,6 +2194,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       outcome.finishReason = "error";
     }
   }
+  // The final offer and delivery witness take precedence over any outstanding optional read assessment.
+  await partialHandoff?.settled();
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
   // run retired with its collector): the last survivor judges lastness
   // (burst-exact when the client sent a burstId, else the legacy overlap

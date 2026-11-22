@@ -65,7 +65,7 @@ describe("dialogueWorkflow", () => {
     h.record.mockResolvedValue("wrun_01JTESTRECORD0000000000000");
     h.stream.mockImplementation(async (options: { onStepEnd?: (step: { text: string }) => void }) => {
       options.onStepEnd?.({ text: "可以。" });
-      return { text: "可以。", toolCalls: [] };
+      return { text: "可以。", toolCalls: [], finishReason: "stop" };
     });
   });
 
@@ -98,7 +98,7 @@ describe("dialogueWorkflow", () => {
   });
 
   it("preserves only the user draft when dialogue produces no reply", async () => {
-    h.stream.mockResolvedValue({ text: "" });
+    h.stream.mockResolvedValue({ text: "", finishReason: "stop" });
     const result = await dialogueWorkflow(input);
     expect(h.publish).not.toHaveBeenCalled();
     expect(h.record).toHaveBeenCalledWith(expect.not.objectContaining({ utterance: expect.anything() }));
@@ -106,11 +106,25 @@ describe("dialogueWorkflow", () => {
     expect(result.status).toBe("failed");
   });
 
-  it("publishes and records a checkpoint that only announces the plan", async () => {
-    const opening = { ...input, stage: "checkpoint" as const, text: "Opening | Plan: check the forecast." };
-    const text = "我先查一下明天的天气。";
+  it.each(["error", "length"])("discards tentative final words when the wording ends with %s", async reason => {
+    const fragment = "The result is";
+    h.stream.mockImplementation(async (options: { onStepEnd?: (step: { text: string }) => void }) => {
+      options.onStepEnd?.({ text: fragment });
+      if (reason === "error") throw new Error("Stream interrupted");
+      return { text: fragment, finishReason: reason };
+    });
+    const result = await dialogueWorkflow({ ...input, stage: "final" });
+    expect(result.status).toBe("failed");
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.record).toHaveBeenCalledWith(expect.not.objectContaining({ utterance: expect.anything() }));
+    expect(h.close).toHaveBeenCalledWith(expect.objectContaining({ text: "", error: expect.any(String) }));
+  });
+
+  it("publishes and records a substantive interim answer", async () => {
+    const opening = { ...input, stage: "checkpoint" as const, text: "Saturday is dry. The Sunday forecast is pending." };
+    const text = "周六预计无雨，周日还在核实。";
     const published = { ...utterance, blocks: [{ kind: "markdown" as const, blockId: "reply", text }] };
-    h.stream.mockResolvedValue({ text, toolCalls: [] });
+    h.stream.mockResolvedValue({ text, toolCalls: [], finishReason: "stop" });
     h.publish.mockResolvedValue(published);
     const result = await dialogueWorkflow(opening);
     expect(h.stream).toHaveBeenCalledWith(expect.objectContaining({
@@ -120,6 +134,14 @@ describe("dialogueWorkflow", () => {
     expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ utterance: published }));
     expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text });
     expect(result).toMatchObject({ status: "completed", utterance: published });
+  });
+
+  it("holds a redundant checkpoint when the wording model chooses silence", async () => {
+    h.stream.mockResolvedValue({ text: "", finishReason: "stop" });
+    const result = await dialogueWorkflow({ ...input, stage: "checkpoint" });
+    expect(result).toMatchObject({ status: "completed", held: true });
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
   });
 
   it("drops a draft superseded during checkpoint inference", async () => {
@@ -142,7 +164,7 @@ describe("dialogueWorkflow", () => {
   });
 
   it("allows a direct dialogue to stay silent when later input supersedes its work", async () => {
-    h.stream.mockResolvedValue({ text: "", toolCalls: [] });
+    h.stream.mockResolvedValue({ text: "", toolCalls: [], finishReason: "stop" });
     const result = await dialogueWorkflow({ ...input, direct: true, stage: "final" });
     expect(h.publish).not.toHaveBeenCalled();
     expect(h.close).toHaveBeenCalledWith({ offerId: "work:call", text: "" });

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UIMessage, UIMessageChunk } from "@/lib/chat/protocol";
+import type { DialogueRunInput } from "@/lib/dialogue/transport";
 
 const h = vi.hoisted(() => ({
   chunks: [] as UIMessageChunk[],
   closed: false,
+  getRun: vi.fn(),
 }));
 
 vi.mock("workflow", () => ({
-  getWorkflowMetadata: vi.fn(),
+  getWorkflowMetadata: () => ({ workflowRunId: "wrun_ACTOR" }),
   getWritable: () => ({
     getWriter: () => ({
       write: async (chunk: UIMessageChunk) => { h.chunks.push(chunk); },
@@ -16,9 +18,9 @@ vi.mock("workflow", () => ({
     close: async () => { h.closed = true; },
   }),
 }));
-vi.mock("workflow/api", () => ({ start: vi.fn() }));
+vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: h.getRun }));
 
-import { closeDialogueStreamStep } from "@/app/api/chat/dialogue-transport-steps";
+import { closeDialogueStreamStep, openDialogueStreamStep, publishDialogueResultStep, reconcileDialogueOffersStep } from "@/app/api/chat/dialogue-transport-steps";
 import { createMixedStreamTransform } from "@/app/api/chat/mixed-stream-transform";
 import { createUIMessageStreamResponse } from "@/lib/chat/server-stream";
 import { readDurableChat } from "@/lib/chat/client-transport";
@@ -33,10 +35,50 @@ function response(chunks: readonly unknown[] = h.chunks): Response {
   return createUIMessageStreamResponse({ stream: stream.pipeThrough(createMixedStreamTransform()) });
 }
 
+const context: DialogueRunInput["context"] = { scopeKey: "scope", parentRunId: "thought", workId: "work",
+      sourceInputId: "A", sourceTurnId: "A", priorContext: [], locale: "en",
+      source: { inputId: "A", clientMessageId: "A", acceptedAt: "2026-11-01T00:00:00Z", text: "Q", userSeq: 1, eventSeq: 1 },
+      record: { useGithub: false, useDemo: false, owner: "local", repo: "local", timezone: "UTC",
+        slicing: { idleGapMinutes: 30, maxSliceMinutes: 60, maxTurnsPerSlice: 20 } } };
+
 describe("native dialogue terminal stream protocol", () => {
   beforeEach(() => {
     h.chunks.length = 0;
     h.closed = false;
+  });
+
+  it("attributes only native final laps to their Actor and the exact eventual publication", async () => {
+    const final: DialogueRunInput = { context, offerId: "a", text: "done", stage: "final", publicSeq: 1,
+      publicationId: "a+b", publicationInputIds: ["A", "B"], publicationSourceResults: ["a", "b"].map(resultId =>
+        ({ resultId, productRevision: 1, claimIds: [] })), orchestration: { offers: [], works: [], publications: [] } };
+    await openDialogueStreamStep(final);
+    const committed = await publishDialogueResultStep({ input: final, text: "Answer", artifacts: [] });
+    expect(committed?.utteranceId).not.toBe(final.offerId);
+    expect(h.chunks[1]?.data).toMatchObject({ phase: "final_answer", actorRunId: "wrun_ACTOR", parentRunId: "thought",
+      inputIds: ["A", "B"], offerId: "a", utteranceId: committed?.utteranceId });
+    for (const input of [{ ...final, stage: "checkpoint" as const }, { ...final, orchestration: undefined }]) {
+      await openDialogueStreamStep(input);
+      expect(h.chunks.at(-1)?.data).not.toHaveProperty("phase");
+    }
+  });
+
+  it("withholds checkpoint publication and reconciliation until the newer final can be read", async () => {
+    const checkpoint = { type: "work_checkpoint", updateId: "a", workId: "work", sourceInputId: "A", runId: "thought",
+      acceptedAt: context.source.acceptedAt, text: "Partial" };
+    const final = { ...checkpoint, type: "work_completed", updateId: "b", text: "Complete" };
+    let entries = [checkpoint];
+    h.getRun.mockReturnValue({ getReadable: () => Object.assign(new ReadableStream({ start(controller) {
+      for (const entry of entries) controller.enqueue(entry);
+      controller.close();
+    } }), { getTailIndex: async () => 1 }) });
+    const input: DialogueRunInput = { context, offerId: "a", publicSeq: 1, stage: "checkpoint", text: "Partial" };
+    const publish = () => publishDialogueResultStep({ input, text: input.text, artifacts: [] });
+    await expect(publish()).rejects.toThrow("before its observed tail");
+    await expect(reconcileDialogueOffersStep("thought")).rejects.toThrow("before its observed tail");
+    entries = [checkpoint, final];
+    await expect(publish()).resolves.toBeUndefined();
+    expect((await reconcileDialogueOffersStep("thought")).map(offer => offer.offerId)).toEqual(["a", "b"]);
+    expect(h.chunks).toEqual([]);
   });
 
   it.each([

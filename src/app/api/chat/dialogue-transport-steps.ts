@@ -19,6 +19,7 @@ import {
   type DialogueOfferContext,
   type DialogueThoughtStartedEvent,
   type DialogueWakeEvent,
+  type DialogueParentWritable,
   type DialogueDeliveryEvent,
 } from "@/lib/dialogue/transport";
 import type { DialogueRuntimeEvent } from "@/lib/dialogue/coordination";
@@ -71,16 +72,16 @@ export async function publishThoughtStartedStep(context: DialogueOfferContext): 
   try { await writer.write(event); } finally { writer.releaseLock(); }
 }
 
-export async function publishWorkUpdateStep(update: WorkUpdateEvent): Promise<void> {
+export async function publishWorkUpdateStep(update: WorkUpdateEvent, parentWritable?: DialogueParentWritable): Promise<void> {
   "use step";
   if (!parseWorkUpdateEvent(update)) throw new Error("Invalid work update");
-  const writer = getWritable<WorkUpdateEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  const writer = (parentWritable ?? getWritable<WorkUpdateEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE })).getWriter();
   try { await writer.write(update); } finally { writer.releaseLock(); }
 }
 
-export async function recordDialogueWakeStep(event: DialogueWakeEvent): Promise<void> {
+export async function recordDialogueWakeStep(event: DialogueWakeEvent, parentWritable?: DialogueParentWritable): Promise<void> {
   "use step";
-  const writer = getWritable<DialogueWakeEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE }).getWriter();
+  const writer = (parentWritable ?? getWritable<DialogueWakeEvent>({ namespace: DIALOGUE_OFFERS_NAMESPACE })).getWriter();
   try { await writer.write(event); } finally { writer.releaseLock(); }
 }
 
@@ -246,11 +247,20 @@ export async function openDialogueStreamStep(input: DialogueRunInput): Promise<v
         sourceInputId: input.context.sourceInputId,
         workId: input.context.workId,
         parentRunId: input.context.parentRunId,
+        ...(input.orchestration && input.stage === "final" ? {
+          phase: "final_answer", actorRunId: getWorkflowMetadata().workflowRunId,
+          utteranceId: publicUtteranceId(input), inputIds: input.publicationInputIds ?? [input.context.sourceInputId],
+        } : {}),
       },
     });
   } finally {
     writer.releaseLock();
   }
+}
+
+function publicUtteranceId(input: DialogueRunInput): string {
+  return input.publicationId && (input.publicationSourceResults?.length ?? 0) > 1
+    ? sha256(input.publicationId) : input.offerId;
 }
 
 export async function publishDialogueResultStep(args: {
@@ -265,8 +275,7 @@ export async function publishDialogueResultStep(args: {
   if (input.stage === "checkpoint" &&
       checkpointSuperseded(input, await listDialogueOffers(input.context.parentRunId))) return undefined;
   const utterance: PublicUtterance = {
-    utteranceId: input.publicationId && (input.publicationSourceResults?.length ?? 0) > 1
-      ? sha256(input.publicationId) : input.offerId,
+    utteranceId: publicUtteranceId(input),
     publicSeq: input.publicSeq,
     committedAt: new Date().toISOString(),
     inputIds: input.publicationInputIds ?? [input.context.sourceInputId],

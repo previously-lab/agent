@@ -6,12 +6,14 @@ import { fromNativeAssistant } from "@/lib/deepseek/messages";
 const h = vi.hoisted(() => ({
   publish: vi.fn(async (_update: unknown) => {}),
   ensure: vi.fn(async () => ({ runId: "wrun_ORCHESTRATOR", reused: false })),
+  reconcile: vi.fn(),
   snapshot: vi.fn(),
 }));
 vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: vi.fn() }));
 vi.mock("@/app/api/chat/dialogue-transport-steps", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/api/chat/dialogue-transport-steps")>()),
   publishWorkUpdateStep: h.publish,
+  reconcileDialogueOffersStep: h.reconcile,
 }));
 vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
   ensureDialogueOrchestratorStep: h.ensure,
@@ -71,6 +73,52 @@ describe("work-only handoff", () => {
       { context: ctx(), toolCallId: "call-invalid", messages: [] });
     expect(result).toMatchObject({ ok: false, reason: "Invalid response mode." });
     expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("uses the initial Actor receipt only after the checkpoint or final is durable", async () => {
+    const holder = { runId: "wrun_ORCHESTRATOR", sessionId: "session" };
+    const context = { ...ctx(), dialogueOffer: { ...dialogueOffer, holder } };
+    await workCheckpointExecute({ text: "progress" }, { context, toolCallId: "progress", messages: [] });
+    await completeWorkExecute({ result: "done" }, { context, toolCallId: "final", messages: [] });
+    for (const [index, key] of ["work-B:progress", "work-B:final"].entries()) {
+      expect(h.ensure).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({ triggerKey: key, candidateKeys: [key] }), holder);
+      expect(h.publish.mock.invocationCallOrder[index]).toBeLessThan(h.ensure.mock.invocationCallOrder[index]!);
+    }
+  });
+
+  it("retains the original committed work ID after an ambiguous wake without claiming a holder", async () => {
+    h.ensure.mockRejectedValueOnce(new Error("queue acknowledgement lost"));
+    const result = await completeWorkExecute({ result: "done" }, { context: ctx(), toolCallId: "final", messages: [] });
+    expect(result).toEqual({ ok: true, kind: "work-update", updateId: "work-B:final", sourceInputId: "input-B" });
+    expect(h.ensure).toHaveBeenCalledTimes(1);
+    expect(h.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles a lost work-append acknowledgement before sending its wake", async () => {
+    h.publish.mockRejectedValueOnce(new Error("ack lost")).mockRejectedValueOnce(new Error("no append"));
+    h.reconcile.mockResolvedValueOnce([{ offerId: "work-B:done", stage: "final", parentRunId: "wrun_A",
+      workId: "work-B", sourceInputId: "input-B" }]).mockResolvedValueOnce([]);
+    await expect(completeWorkExecute({ result: "done" }, { context: ctx(), toolCallId: "done", messages: [] }))
+      .resolves.toMatchObject({ ok: true, runId: "wrun_ORCHESTRATOR" });
+    await expect(completeWorkExecute({ result: "missing" }, { context: ctx(), toolCallId: "absent", messages: [] }))
+      .rejects.toThrow("no append");
+    expect(h.ensure).toHaveBeenCalledTimes(1);
+    expect(h.publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("redelivers the same final ID when the append acknowledgement and reconciliation both fail", async () => {
+    const committed = new Set<string>();
+    h.publish.mockImplementationOnce(async update => {
+      committed.add((update as { updateId: string }).updateId);
+      throw new Error("Acknowledgement lost");
+    }).mockImplementationOnce(async update => { committed.add((update as { updateId: string }).updateId); });
+    h.reconcile.mockRejectedValueOnce(new Error("Cannot read the complete stream"));
+    const opts = { context: ctx(), toolCallId: "final", messages: [] };
+    await expect(completeWorkExecute({ result: "done" }, opts)).rejects.toThrow("Cannot read the complete stream");
+    expect(h.ensure).not.toHaveBeenCalled();
+    await expect(completeWorkExecute({ result: "done" }, opts)).resolves.toMatchObject({ ok: true, updateId: "work-B:final" });
+    expect([...committed]).toEqual(["work-B:final"]);
+    expect(h.ensure).toHaveBeenCalledOnce();
   });
 
   it("records a progress checkpoint without a public offer", async () => {

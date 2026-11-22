@@ -85,9 +85,15 @@ export interface DialogueRecordEnvironment {
   images?: ImageAttachmentEvidence[];
 }
 
+export interface DialogueHolderReceipt {
+  runId: string;
+  sessionId: string;
+}
+
 /** Server-owned context carried through the tool boundary by value. */
 export interface DialogueOfferContext {
   scopeKey: string;
+  holder?: DialogueHolderReceipt;
   parentRunId: string;
   workId: string;
   sourceInputId: string;
@@ -149,6 +155,8 @@ export type OfferReplyResult =
 
 export interface DialogueOfferEvent {
   type: "offer";
+  /** Native work handoffs are ordered across inputs by their acceptance time. */
+  acceptedAt?: string;
   offerId: string;
   runId: string;
   sourceInputId: string;
@@ -191,6 +199,9 @@ export interface DialogueWakeEvent {
   wakeAt: string;
   reused: boolean;
 }
+
+/** A Workflow-forwarded writer for the originating thought's offers namespace. */
+export type DialogueParentWritable = WritableStream<WorkUpdateEvent | DialogueWakeEvent>;
 
 export interface DialogueDeliveryEvent {
   type: "thought_delivery_finished";
