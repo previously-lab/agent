@@ -65,6 +65,7 @@ export async function composeExpression(snapshot: ExpressionSnapshot, callId: st
   const controller = new AbortController();
   let chars = 0;
   const response = await requestDeepSeek({
+    publicWording: true,
     sessionId,
     callId, messages: [{ role: "system", content: INSTRUCTIONS }, { role: "user", content: buildExpressionContext(snapshot) }],
     thinking: false, reasoningEffort: "low", temperature: 0.2, timeoutMs: 18_000, maxRetries: 0,

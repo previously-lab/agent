@@ -33,6 +33,7 @@ describe("dialogue DeepSeek profile", () => {
     const result = await createDialogueAgent().stream({ prompt: "fixture" });
     expect(result.text).toBe("好的。");
     expect(h.call).toHaveBeenCalledWith(expect.objectContaining({
+      publicWording: true,
       thinking: false,
       reasoningEffort: "low",
       temperature: 0.2,
@@ -70,6 +71,7 @@ describe("dialogue DeepSeek profile", () => {
       toolsContext: { currentTime: { dialogueOffer: { workId: "work-1" } } } as unknown as ThinkingOptions["toolsContext"],
     }).stream({ prompt: "fixture" });
     const thinkingSystem = h.call.mock.calls[1]![0].messages[0]?.content;
+    expect(h.call.mock.calls[1]![0]).not.toHaveProperty("publicWording");
     expect(thinkingSystem).toContain("Choose a responseMode for this request");
     expect(thinkingSystem).toContain("return the requested text or fact in the requested form");
   });

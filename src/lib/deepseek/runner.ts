@@ -44,6 +44,7 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
       : options.tools;
     const settings = effectiveSettings(options);
     const response = await call({ messages: toNativeMessages(messages), tools: serializeTools(tools),
+      ...(options.publicWording ? { publicWording: true } : {}),
       toolChoice: preparation?.toolChoice ?? options.toolChoice,
       thinking: settings.thinking, reasoningEffort: settings.effort, temperature: options.temperature,
       callId: `${callPrefix}:${stepNumber}`, timeoutMs: options.timeout, maxRetries: options.maxRetries,

@@ -28,6 +28,44 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
+describe("production model transport metrics", () => {
+  it("times meaningful deltas and logs only low-cardinality fields and actual provider counts", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("CHAT_API_HOST", "https://opencode.ai/inference/go/openai/v1/");
+    vi.stubEnv("CHAT_API_KEY", "secret-example");
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(JSON.parse(init!.body as string)).not.toHaveProperty("publicWording");
+      now = 125;
+      return sse([
+        { choices: [{ delta: { role: "assistant", content: "" } }] },
+        { choices: [{ delta: { reasoning_content: "private thought" } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "tool-private", function: { name: "fixture", arguments: "{}" } }] }, finish_reason: "tool_calls" }] },
+        { choices: [], usage: { prompt_tokens: 10, completion_tokens: 7, completion_tokens_details: { reasoning_tokens: 5 } } },
+      ]);
+    });
+    await requestDeepSeek({ ...baseRequest, publicWording: true, sessionId: "private-session" }, event => {
+      if (event.type === "reasoning-delta") now += 80;
+      if (event.type === "tool-input-delta") now += 15;
+    }, { fetch: fetchMock });
+    expect(log.mock.calls).toEqual([[`[model-request] ${JSON.stringify({
+      service: "opencode", phase: "public", elapsedMs: 120, firstDeltaMs: 25, lastDeltaMs: 105,
+      inputTokens: 10, outputTokens: 7, reasoningTokens: 5,
+    })}`]]);
+  });
+
+  it("distinguishes empty output, missing usage fields, and explicitly reported zero", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => sse([{ choices: [{ delta: { content: "" }, finish_reason: "stop" }], usage: { completion_tokens: 0 } }]));
+    await requestDeepSeek(baseRequest, () => {}, { fetch: fetchMock });
+    const metric = JSON.parse((log.mock.calls[0][0] as string).slice("[model-request] ".length));
+    expect(metric).toMatchObject({ phase: "other", firstDeltaMs: null, lastDeltaMs: null, inputTokens: null, outputTokens: 0, reasoningTokens: null });
+  });
+});
+
 describe("selectable OpenAI-compatible Chat transport", () => {
   it("keeps the default DeepSeek endpoint, model and credential unchanged", async () => {
     const calls: Request[] = [];

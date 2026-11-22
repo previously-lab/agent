@@ -54,6 +54,7 @@ export function createChatAgent(opts: {
 /** Public wording only: one-shot, non-thinking DeepSeek Chat Completions. */
 export function createDialogueAgent(checkpoint = false, direct = false, sessionId?: string) {
   return new DeepSeekAgent({
+    publicWording: true,
     role: "chat",
     ...(sessionId ? { sessionId } : {}),
     thinking: false,

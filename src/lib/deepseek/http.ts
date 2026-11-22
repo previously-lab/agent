@@ -29,6 +29,9 @@ function usageFrom(raw: Record<string, unknown>): TokenUsage {
     reasoningTokens: details?.reasoning_tokens ?? 0, cachedInputTokens: cached,
     uncachedInputTokens: typeof raw.prompt_cache_miss_tokens === "number" ? num("prompt_cache_miss_tokens") : num("prompt_tokens") - cached };
 }
+function reportedCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason); return; }
@@ -73,6 +76,11 @@ export async function requestDeepSeek(
     ...(!request.thinking && request.temperature !== undefined ? { temperature: request.temperature } : {}),
   });
   const maxRetries = request.maxRetries ?? 2;
+  const measure = process.env.VERCEL_ENV === "production";
+  const startedAt = performance.now();
+  let firstDeltaAt: number | null = null;
+  let lastDeltaAt: number | null = null;
+  let reportedUsage: Record<string, unknown> | undefined;
   let response: Response | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     signal?.throwIfAborted();
@@ -145,13 +153,21 @@ export async function requestDeepSeek(
       const error = parsed.error as { message?: unknown; status?: number };
       throw new DeepSeekError(typeof error.message === "string" ? safeMessage(error.message) : "DeepSeek stream failed", error.status);
     }
-    if (parsed.usage && typeof parsed.usage === "object") usage = usageFrom(parsed.usage as Record<string, unknown>);
+    if (parsed.usage && typeof parsed.usage === "object") {
+      reportedUsage = parsed.usage as Record<string, unknown>;
+      usage = usageFrom(reportedUsage);
+    }
     const choices = parsed.choices as Array<{ delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }> | undefined;
     const choice = choices?.[0];
     if (!choice) continue;
     if (choice.finish_reason) finishReason = choice.finish_reason;
     const delta = choice.delta;
     if (!delta) continue;
+    if (measure && (delta.content || delta.reasoning_content || delta.tool_calls?.some(call => call.function?.name || call.function?.arguments))) {
+      // This measures delivery to the SSE reader, including any backpressure from the consumer.
+      lastDeltaAt = performance.now();
+      firstDeltaAt ??= lastDeltaAt;
+    }
     if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
       if (!reasoningStarted) { reasoningStarted = true; await emit({ type: "reasoning-start", id: reasoningId }); }
       reasoning += delta.reasoning_content;
@@ -204,6 +220,19 @@ export async function requestDeepSeek(
   if (reasoningStarted) await emit({ type: "reasoning-end", id: reasoningId });
   if (textStarted) await emit({ type: "text-end", id: textId });
   const toolCalls = [...calls].sort(([a], [b]) => a - b).map(([, call]) => call);
+  if (measure) {
+    const details = reportedUsage?.completion_tokens_details as { reasoning_tokens?: unknown } | undefined;
+    console.log(`[model-request] ${JSON.stringify({
+      service: compatible ? (endpoint.startsWith("https://opencode.ai/") ? "opencode" : "compatible") : "deepseek",
+      phase: request.publicWording === true ? "public" : "other",
+      elapsedMs: Math.round(performance.now() - startedAt),
+      firstDeltaMs: firstDeltaAt === null ? null : Math.round(firstDeltaAt - startedAt),
+      lastDeltaMs: lastDeltaAt === null ? null : Math.round(lastDeltaAt - startedAt),
+      inputTokens: reportedCount(reportedUsage?.prompt_tokens),
+      outputTokens: reportedCount(reportedUsage?.completion_tokens),
+      reasoningTokens: reportedCount(details?.reasoning_tokens),
+    })}`);
+  }
   return { message: { role: "assistant", content: text, reasoning_content: reasoning, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
     toolCalls, finishReason, usage };
 }

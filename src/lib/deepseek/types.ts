@@ -83,6 +83,8 @@ export type PrepareStepFunction<Tools extends ToolSet = ToolSet> = (options: {
   stepNumber: number; steps: StepResult<Tools>[]; messages: ModelMessage[];
 }) => void | { system?: string; toolChoice?: ToolChoice; activeTools?: Array<keyof Tools> } | Promise<void | { system?: string; toolChoice?: ToolChoice; activeTools?: Array<keyof Tools> }>;
 export interface AgentOptions<Tools extends ToolSet = ToolSet> {
+  /** Marks the public wording pass in aggregate transport metrics. */
+  publicWording?: true;
   role?: DeepSeekRole; system?: string; instructions?: string;
   prompt?: string; messages?: ModelMessage[];
   tools?: Tools; toolsContext?: Record<string, unknown>;
@@ -102,6 +104,7 @@ export interface AgentOptions<Tools extends ToolSet = ToolSet> {
 }
 export interface SerializedTool { type: "function"; function: { name: string; description?: string; parameters: Record<string, unknown> } }
 export interface ModelRequest {
+  publicWording?: true;
   messages: NativeMessage[]; tools?: SerializedTool[]; toolChoice?: ToolChoice;
   thinking: boolean; reasoningEffort: ReasoningEffort; temperature?: number;
   callId: string; timeoutMs?: number; maxRetries?: number;

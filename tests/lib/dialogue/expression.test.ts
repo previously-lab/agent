@@ -53,7 +53,7 @@ describe("expression artifact projection", () => {
     });
 
     const plan = await composeExpression(input, "mock-expression");
-    expect(captured).toBeDefined();
+    expect(captured?.publicWording).toBe(true);
     const payload = JSON.stringify(captured);
     expect(payload).toContain("artifact-original");
     expect(payload).toContain("calculator");
