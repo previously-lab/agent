@@ -3,6 +3,7 @@ import type { DialogueControlEvent } from "@/lib/dialogue/transport";
 
 const h = vi.hoisted(() => ({
   list: vi.fn(),
+  row: vi.fn(),
   events: vi.fn(async (_runId: string): Promise<DialogueControlEvent[]> => []),
   getRun: vi.fn(),
   start: vi.fn(),
@@ -11,7 +12,7 @@ const h = vi.hoisted(() => ({
   resume: vi.fn(async (_token: string, wake: { runId: string }) => ({ runId: wake.runId })),
 }));
 vi.mock("workflow/api", () => ({ getRun: h.getRun, start: h.start, resumeHook: h.resume }));
-vi.mock("workflow/runtime", () => ({ getWorld: async () => ({ runs: { list: h.list } }) }));
+vi.mock("workflow/runtime", () => ({ getWorld: async () => ({ runs: { list: h.list, get: h.row } }) }));
 vi.mock("@/lib/dialogue/workflow-offers", () => ({ listDialogueEvents: h.events }));
 vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   recordDialogueWakeStep: h.wake,
@@ -19,7 +20,7 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
 }));
 vi.mock("@/app/api/chat/dialogue-orchestrator-workflow", () => ({ dialogueOrchestratorWorkflow: h.workflow }));
 
-import { ensureDialogueOrchestratorStep, readDialogueWorldStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
+import { ensureDialogueOrchestratorStep, forwardDialogueWakeStep, readDialogueWorldStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
 
 const now = Date.parse("2026-11-15T01:00:00.000Z");
 function run(status: string, triggeredAt: string, scope = "scope") {
@@ -85,6 +86,26 @@ describe("API dialogue activation with wake events", () => {
     expect(h.start).not.toHaveBeenCalled();
     expect(h.resume).toHaveBeenCalledWith("dialogue-execution:scope", expect.objectContaining({ runId, reused: true }));
     expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ runId, reused: true, triggerKey: "candidate-A" }));
+  });
+
+  it("records the actual new owner's session if the lease changed after discovery", async () => {
+    h.list.mockResolvedValue({ data: [run("running", new Date(now - 1_000).toISOString())] });
+    h.resume.mockResolvedValueOnce({ runId: "new-owner" });
+    h.row.mockResolvedValueOnce({ attributes: { role: "dialogueOrchestrator", scope: "scope", session: "new-session" } });
+    await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: "new-owner", sessionId: "new-session" });
+    expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ runId: "new-owner", sessionId: "new-session" }));
+  });
+
+  it("only acknowledges a forwarded wake accepted by the observed owner", async () => {
+    const wake = { ...request(), type: "dialogue_wake" as const, runId: "holder", sessionId: "session",
+      wakeAt: new Date(now).toISOString(), reused: true };
+    h.resume.mockResolvedValueOnce({ runId: "holder" }).mockResolvedValueOnce({ runId: "other" })
+      .mockRejectedValueOnce(Object.assign(new Error("missing"), { name: "HookNotFoundError" }))
+      .mockRejectedValueOnce(new Error("queue unavailable"));
+    await expect(forwardDialogueWakeStep("scope", wake)).resolves.toBe(true);
+    await expect(forwardDialogueWakeStep("scope", wake)).resolves.toBe(false);
+    await expect(forwardDialogueWakeStep("scope", wake)).resolves.toBe(false);
+    await expect(forwardDialogueWakeStep("scope", wake)).rejects.toThrow("queue unavailable");
   });
 
   it("waits for the first Actor to register its hook instead of duplicating it", async () => {

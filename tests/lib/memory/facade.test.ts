@@ -1825,6 +1825,21 @@ describe("mapWithConcurrency", () => {
     expect(out).toEqual(Array.from({ length: 25 }, (_, i) => i));
   });
 
+  it("stops scheduling after the first failure and drains in-flight reads before retry", async () => {
+    const started: number[] = [];
+    let drained = false;
+    const problem = new Error("history temporarily unavailable");
+    const reads = mapWithConcurrency([0, 1, 2, 3], 2, async (item) => {
+      started.push(item);
+      if (item === 0) throw problem;
+      await delayed(5)(null);
+      drained = true;
+    });
+    await expect(reads).rejects.toBe(problem);
+    expect(started).toEqual([0, 1]);
+    expect(drained).toBe(true);
+  });
+
   it("caps lanes at the item count and handles empty input", async () => {
     const seen: number[] = [];
     await mapWithConcurrency([1], 8, async (n) => {

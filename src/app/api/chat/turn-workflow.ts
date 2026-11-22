@@ -1226,17 +1226,21 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let latestFinalOfferText = "";
   let acceptedFinalText = "";
   let pendingNeedsUser: DialogueNeedsUser | undefined;
-  const finalDialogueOffers = new Set<string>();
+  // A successful completion already woke an Actor. Keep that receipt so the
+  // delivery witness can follow its handoff chain without waking it twice.
+  const finalDialogueOffers = new Map<string, string | undefined>();
   const onToolExecutionResult = async (result: ToolResult) => {
     if (!nativeDialogue || result.error || result.toolName !== "completeWork") return;
     const output = result.output as { value?: unknown; ok?: unknown; updateId?: unknown } | undefined;
     // Real executors return WorkUpdateResult directly; test/transport envelopes
     // may wrap it in `value`. Both shapes are the same accepted work event.
     const value = (output && typeof output === "object" && "value" in output ? output.value : output) as
-      { ok?: unknown; kind?: unknown; updateId?: unknown; sourceInputId?: unknown } | undefined;
+      { ok?: unknown; kind?: unknown; updateId?: unknown; sourceInputId?: unknown; runId?: unknown } | undefined;
     const updateId = dialogueOfferId(dialogue!.workId, result.toolCallId);
     if (value?.ok === true && value.kind === "work-update" && value.updateId === updateId &&
-        value.sourceInputId === (dialogue!.sourceInputId ?? input.turnId)) finalDialogueOffers.add(updateId);
+        value.sourceInputId === (dialogue!.sourceInputId ?? input.turnId)) {
+      finalDialogueOffers.set(updateId, typeof value.runId === "string" ? value.runId : undefined);
+    }
   };
   const onStepEnd = async (step: StepResult<ChatToolSet>) => {
       if (nativeDialogue) {
@@ -2041,7 +2045,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         { event: { kind: "needs_user", needsUser: pendingNeedsUser } },
         { context: turnToolsContext, toolCallId: DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID, messages: producedMessages },
       );
-      if (completed.ok) finalDialogueOffers.add(completed.updateId);
+      if (completed.ok) finalDialogueOffers.set(completed.updateId, completed.runId);
       else outcome.error ??= completed.reason;
     }
     if (finalDialogueOffers.size === 0 && !pendingNeedsUser && report?.findings?.length) {
@@ -2077,7 +2081,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             },
             { context: turnToolsContext, toolCallId: DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID, messages: producedMessages },
           );
-          if (completed.ok) finalDialogueOffers.add(completed.updateId);
+          if (completed.ok) finalDialogueOffers.set(completed.updateId, completed.runId);
           else outcome.error ??= completed.reason;
         }
       } catch (productError) {
@@ -2090,7 +2094,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         { context: turnToolsContext, toolCallId: DIALOGUE_FALLBACK_TOOL_CALL_ID, messages: producedMessages },
       );
       if (completed.ok) {
-        finalDialogueOffers.add(completed.updateId);
+        finalDialogueOffers.set(completed.updateId, completed.runId);
         acceptedFinalText = latestFinalOfferText;
       }
       else outcome.error ??= completed.reason;
@@ -2156,7 +2160,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     }
   }
   if (nativeDialogue) {
-    const candidateId = [...finalDialogueOffers].at(-1) ?? "";
+    const [candidateId, notifiedRunId] = [...finalDialogueOffers].at(-1) ?? ["", undefined];
     const offerContext = turnToolsContext.dialogueOffer!;
     const request = {
       scope: offerContext.scopeKey,
@@ -2167,9 +2171,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       candidateKeys: candidateId ? [candidateId] : [],
     };
     try {
-      const ensured = await ensureDialogueOrchestratorStep(request);
+      const runId = notifiedRunId || (await ensureDialogueOrchestratorStep(request)).runId;
       if (candidateId) {
-        const status = await witnessDialogueDeliveryStep(request, ensured.runId, candidateId);
+        const status = await witnessDialogueDeliveryStep(request, runId, candidateId);
         dialogueDelivery = { status, candidateId };
         if (status === "failed") {
           outcome.error ??= "The thought result could not be publicly delivered.";

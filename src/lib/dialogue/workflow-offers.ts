@@ -6,30 +6,18 @@ import {
   type DialogueOfferEvent,
 } from "./transport";
 import { workUpdateAsDialogueCandidate } from "./work-contract";
+import { readWorkflowStreamPrefix } from "./workflow-stream-prefix";
 
 /** Read the thought run's replayable lifecycle and work events in one pass. */
-export async function listDialogueEvents(parentRunId: string): Promise<DialogueControlEvent[]> {
-  const readable = getRun(parentRunId).getReadable({
-    namespace: DIALOGUE_OFFERS_NAMESPACE,
-    startIndex: 0,
-  });
-  const tail = await readable.getTailIndex();
-  const reader = readable.getReader();
+export async function listDialogueEvents(parentRunId: string, cacheScope?: string): Promise<DialogueControlEvent[]> {
+  const { entries } = await readWorkflowStreamPrefix(parentRunId, DIALOGUE_OFFERS_NAMESPACE,
+    chunk => parseDialogueControlEvent(chunk) ?? undefined, cacheScope);
   const events = new Map<string, DialogueControlEvent>();
-  try {
-    for (let index = 0; index <= tail; index++) {
-      const next = await reader.read();
-      if (next.done) break;
-      const event = parseDialogueControlEvent(next.value);
-      if (!event) continue;
-      const id = event.type === "offer" ? event.offerId
-        : event.type === "work_checkpoint" || event.type === "work_completed" ? event.updateId
-        : event.type === "dialogue_wake" ? `${event.triggerKey}:${event.runId}` : `${event.type}:${event.runId}`;
-      if (!events.has(id)) events.set(id, event);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    try { reader.releaseLock(); } catch { /* Already released. */ }
+  for (const event of entries) {
+    const id = event.type === "offer" ? event.offerId
+      : event.type === "work_checkpoint" || event.type === "work_completed" ? event.updateId
+      : event.type === "dialogue_wake" ? `${event.triggerKey}:${event.runId}` : `${event.type}:${event.runId}`;
+    if (!events.has(id)) events.set(id, event);
   }
   return [...events.values()];
 }

@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({ getRun: vi.fn() }));
 vi.mock("workflow/api", () => ({ getRun: h.getRun }));
 
-import { listDialogueOffers, readDialogueAdmission } from "@/lib/dialogue/workflow-offers";
 import { DIALOGUE_OFFERS_NAMESPACE } from "@/lib/dialogue/transport";
+import { createNextDataCacheContext } from "../../../../helpers/next-data-cache-context";
+const cache = createNextDataCacheContext();
+const { listDialogueEvents, listDialogueOffers, readDialogueAdmission } = await import("@/lib/dialogue/workflow-offers");
 
 const first = { type: "offer", offerId: "work:call", runId: "wrun_01JTESTCHILD00000000000000", sourceInputId: "input" };
 const duplicate = { ...first, runId: "wrun_01JTESTOTHER00000000000000" };
@@ -51,5 +53,33 @@ describe("parent native offer control", () => {
     h.getRun.mockReturnValue({ getReadable: () => Object.assign(readable, { getTailIndex: async () => 0 }) });
     await expect(listDialogueOffers("wrun_01JTESTPARENT0000000000000")).resolves.toEqual([first]);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("replays a verified prefix, rechecks appends and retries early EOF at the same tail", async () => {
+    const second = { ...first, offerId: "second" }, third = { ...first, offerId: "third" };
+    let chunks = [first], tail = 1, fetches = 0;
+    h.getRun.mockReturnValue({ getReadable: () => ({
+      getTailIndex: async () => tail,
+      getReader: () => {
+        fetches++;
+        return new ReadableStream({ start(controller) {
+          for (const item of chunks) controller.enqueue(item);
+          controller.close();
+        } }).getReader();
+      },
+    }) });
+    const sample = async () => {
+      const result = await cache.run(() => listDialogueEvents("completed", "scope"));
+      await cache.run(() => cache.flush());
+      return result;
+    };
+    expect(await sample()).toEqual([first]);
+    chunks = [first, second];
+    expect(await sample()).toEqual([first, second]);
+    expect(await sample()).toEqual([first, second]);
+    expect(fetches).toBe(2);
+    tail = 2; chunks.push(third);
+    expect(await sample()).toEqual([first, second, third]);
+    expect(fetches).toBe(3);
   });
 });

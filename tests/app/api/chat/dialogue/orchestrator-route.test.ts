@@ -57,6 +57,13 @@ describe("dialogue orchestrator discovery", () => {
     expect(h.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ pagination: { limit: 100, cursor: "next" } }));
   });
 
+  it("finds an actor transitioning from pending to running once without listing terminal history", async () => {
+    h.list.mockImplementation(async ({ status }) => ({ data: [{ ...run(5), status }] }));
+    const result = await (await call()).json();
+    expect(result.runs).toEqual([expect.objectContaining({ runId: "run-5", status: "running" })]);
+    expect(h.list.mock.calls.map(([query]) => query.status)).toEqual(["pending", "running"]);
+  });
+
   it("reports an empty recovery window when no conversation exists", async () => {
     await expect((await call()).json()).resolves.toEqual({ runId: null, status: "absent", runs: [] });
   });

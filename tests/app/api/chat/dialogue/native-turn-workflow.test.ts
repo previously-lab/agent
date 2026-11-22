@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   text: "",
   finishReason: "tool-calls",
   finalOffer: true,
+  notifiedRunId: "wrun_RESULT_ACTOR" as string | undefined,
   extraMessages: [] as ModelMessage[],
   finishThinking: null as null | { toolCallId: string; input: unknown },
 }));
@@ -80,7 +81,7 @@ vi.mock("@/app/api/agent/agent", () => ({
             toolCallId: "offer-1", toolName: "completeWork",
             output: {
               ok: true, kind: "work-update", updateId: "work:offer-1",
-              runId: "wrun_ORCHESTRATOR", sourceInputId: "input",
+              runId: h.notifiedRunId, sourceInputId: "input",
             },
           });
         }
@@ -144,6 +145,7 @@ describe("native thinking work", () => {
     h.text = "";
     h.finishReason = "tool-calls";
     h.finalOffer = true;
+    h.notifiedRunId = "wrun_RESULT_ACTOR";
     h.finishThinking = {
       toolCallId: "finish-1",
       input: { findings: [{ text: "可以交付的结果", kind: "conversation" }] },
@@ -201,11 +203,19 @@ describe("native thinking work", () => {
       parentRunId: "wrun_01JTESTPARENT0000000000000", source: expect.objectContaining({ text: "问题" }),
     }));
     expect(h.ensure.mock.calls.map(call => (call[0] as { triggerKey: string }).triggerKey)).toEqual([
-      "wrun_01JTESTPARENT0000000000000:start", "work:offer-1",
+      "wrun_01JTESTPARENT0000000000000:start",
     ]);
     expect(h.witness).toHaveBeenCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }),
-      "wrun_ORCHESTRATOR", "work:offer-1");
+      "wrun_RESULT_ACTOR", "work:offer-1");
     expect(result.dialogueDelivery).toEqual({ status: "delivered", candidateId: "work:offer-1" });
+  });
+
+  it("recovers delivery when a completion receipt has no Actor run ID", async () => {
+    h.notifiedRunId = undefined;
+    const result = await turnWorkflow(input());
+    expect(h.ensure).toHaveBeenLastCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }));
+    expect(h.witness).toHaveBeenCalledWith(expect.anything(), "wrun_ORCHESTRATOR", "work:offer-1");
+    expect(result.dialogueDelivery?.status).toBe("delivered");
   });
 
   it("hands a genuine user blocker to the dialogue orchestrator without ordinary text", async () => {

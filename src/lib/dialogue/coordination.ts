@@ -7,7 +7,7 @@ export type DialogueRuntimeEvent =
   | { type: "exit_intent"; keys: string[]; at: string }
   | { type: "exit_commit"; at: string }
   | { type: "continued"; nextRunId: string }
-  | { type: "delegated"; holderRunId: string }
+  | { type: "delegated"; holderRunId: string; wake?: DialogueWakeEvent }
   | { type: "expression_outcome"; status: "answered" | "intentionally_silent" | "failed"; candidateIds: string[]; inputIds: string[]; planId: string }
   | { type: "world_degraded"; reason: string };
 
@@ -17,6 +17,14 @@ export interface DialogueRunState {
   createdAt: string;
   sessionId: string;
   events: DialogueRuntimeEvent[];
+  /** First stream chunk not consumed by the snapshot reader. */
+  nextStreamIndex?: number;
+}
+
+/** A startup contender records the wake only after the holder's hook accepts it. */
+export function forwardedDialogueWakes(events: readonly DialogueRuntimeEvent[]): DialogueWakeEvent[] {
+  return events.flatMap(event => event.type === "delegated" && event.wake && event.wake.runId === event.holderRunId
+    ? [event.wake] : []);
 }
 
 export function latestDialogueEvent<T extends DialogueRuntimeEvent["type"]>(

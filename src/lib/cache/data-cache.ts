@@ -394,7 +394,8 @@ function logGhRead(
   if (!target.includes("/") && target.length > 12) {
     target = `${target.slice(0, 8)}…`;
   }
-  console.log(`[gh] ${status} ${Math.round(elapsedMs)}ms ${kind} ${target}`);
+  // Workflow projections share this adapter but are not GitHub traffic.
+  if (identity[0] !== "workflow") console.log(`[gh] ${status} ${Math.round(elapsedMs)}ms ${kind} ${target}`);
 }
 
 // ─── Invalidation ────────────────────────────────────────────────────────

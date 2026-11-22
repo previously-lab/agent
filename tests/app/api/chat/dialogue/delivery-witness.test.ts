@@ -128,6 +128,30 @@ describe("thought-side dialogue delivery witness", () => {
     expect(h.wait).toHaveBeenCalledWith("run-initial", expect.objectContaining({ resolveData: "none" }));
   });
 
+  it("recognizes a matching publication at the snapshot boundary while the Actor is still running", async () => {
+    const actor = row("running", [{ data: { type: "heartbeat", at: new Date().toISOString() } }]);
+    h.rows = [actor];
+    const cancel = vi.fn();
+    const following = new ReadableStream({
+      start(controller) {
+        const other = publication();
+        other.data.sourceResults[0]!.resultId = "another-candidate";
+        controller.enqueue(other);
+        controller.enqueue(publication());
+      },
+      cancel,
+    });
+    h.getRun.mockImplementation(() => ({
+      status: Promise.resolve("running"),
+      getReadable: (options: { startIndex?: number }) => options.startIndex === 1
+        ? following : readable(actor.chunks),
+    }));
+    await expect(witnessDialogueDeliveryStep(request(), actor.runId, candidate)).resolves.toBe("delivered");
+    expect(h.wait).not.toHaveBeenCalled();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("gives a sleeping Actor time to acknowledge each wake and bounds a missing delivery", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);

@@ -1,4 +1,6 @@
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
+import { mapWithConcurrency } from "@/lib/map-with-concurrency";
+export { mapWithConcurrency } from "@/lib/map-with-concurrency";
 import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
 import { readStoredCaseActivity, type CaseActivitySource } from "./case-activity";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
@@ -273,30 +275,6 @@ const READ_CACHE_TTL_MS = 30_000;
 /** Beyond this many cached paths the oldest INSERTED entry is evicted. */
 const READ_CACHE_MAX_ENTRIES = 200;
 
-/**
- * Run `fn` over `items` with at most `limit` calls in flight. Results come
- * back in INPUT order regardless of completion order; the first rejection
- * propagates after the in-flight calls settle.
- */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const i = next;
-      next += 1;
-      if (i >= items.length) return;
-      results[i] = await fn(items[i]!, i);
-    }
-  };
-  const lanes = Math.min(Math.max(1, limit), Math.max(1, items.length));
-  await Promise.all(Array.from({ length: lanes }, worker));
-  return results;
-}
 
 interface ReadCacheEntry {
   content: string;

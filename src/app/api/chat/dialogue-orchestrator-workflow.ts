@@ -3,7 +3,8 @@ import { isStepCount } from "@/lib/deepseek/tools";
 import type { ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createDialogueAgent } from "@/app/api/agent/agent";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
-import { DIALOGUE_SESSION_MS, dialogueRunStale, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
+import { DIALOGUE_SESSION_MS, dialogueRunStale, dialogueRunUsable, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
+import { sessionLastWakeAt } from "@/lib/dialogue/coordination";
 import {
   DIALOGUE_CHECKPOINT_NAMESPACE,
   type DialogueOfferEvent,
@@ -23,6 +24,7 @@ import {
 import {
   cancelDialogueRunStep,
   continueDialogueOrchestratorStep,
+  forwardDialogueWakeStep,
   readDialogueWorldStep,
   recordDialogueUtteranceStep,
   stampDialogueTriggerStep,
@@ -78,35 +80,47 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
   let laps = 0;
   try {
     let conflict = await lease.getConflict();
-    for (let claims = 0; conflict && claims < 3; claims++) {
+    let unsuccessfulClaims = 0;
+    while (conflict) {
       const holderId = conflict.runId;
+      let waitedForPredecessor = false;
       const snapshot = await readDialogueWorldStep(args.scope);
       const holder = snapshot.dialogueRuns.find(run => run.runId === holderId);
-      if (!holder || holder.status === "completed" || holder.status === "failed" || holder.status === "cancelled") {
-        // See below: retrying a conflicted hook cannot acquire the released token.
-        lease.dispose();
-        lease = createHook({ token: `dialogue-execution:${args.scope}` });
-        conflict = await lease.getConflict();
-        continue;
-      }
-      if (dialogueRunStale(holder, snapshot.wakes, Date.now())) {
-        await cancelDialogueRunStep(holderId);
-      } else {
-        const handoff = args.handoffFrom === holderId || sessionId !== holder.sessionId;
-        if (!handoff) {
-          await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId });
-          return { status: "delegated", laps };
+      const now = Date.now();
+      if (holder && (holder.status === "pending" || holder.status === "running")) {
+        if (dialogueRunStale(holder, snapshot.wakes, now)) {
+          await cancelDialogueRunStep(holderId);
+        } else {
+          // Two first wakes can create independent run/session IDs before either
+          // hook is visible. Only an actual handoff needs to outlive the holder.
+          const newSession = sessionId !== holder.sessionId && (args.handoffReason === "session_expiry" ||
+            !dialogueRunUsable(holder.status, sessionLastWakeAt(holder, snapshot.wakes), now));
+          const leaving = holder.events.some(event => event.type === "exit_commit" || event.type === "continued" || event.type === "delegated");
+          if (args.handoffFrom === holderId || newSession || leaving) {
+            await writeDialogueRuntimeEventStep({ type: "handoff_wait", waitingForRunId: holderId, at: new Date(now).toISOString() });
+            await waitForDialogueRunTerminalStep(holderId);
+            // The SDK may return while a healthy predecessor is still running.
+            // A liveness poll is not a failed acquisition of a released lease.
+            waitedForPredecessor = true;
+          } else {
+            const wake = args.initialWake && {
+              ...args.initialWake, runId: holderId, sessionId: holder.sessionId, wakeAt: new Date(now).toISOString(), reused: true,
+            };
+            if (!wake || await forwardDialogueWakeStep(args.scope, wake)) {
+              await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId, ...(wake ? { wake } : {}) });
+              return { status: "delegated", laps };
+            }
+          }
         }
-        await writeDialogueRuntimeEventStep({ type: "handoff_wait", waitingForRunId: holderId, at: new Date().toISOString() });
-        await waitForDialogueRunTerminalStep(holderId);
       }
       // A conflicted hook was never registered and caches that conflict forever.
       // Only a fresh hook can atomically retry the now-released token.
       lease.dispose();
       lease = createHook({ token: `dialogue-execution:${args.scope}` });
       conflict = await lease.getConflict();
+      unsuccessfulClaims = !waitedForPredecessor && conflict?.runId === holderId ? unsuccessfulClaims + 1 : 0;
+      if (unsuccessfulClaims >= 3) throw new Error("Dialogue execution lease still belongs to an unreachable holder");
     }
-    if (conflict) throw new Error("Dialogue execution lease did not converge");
     await writeDialogueRuntimeEventStep({ type: "lease_acquired", at: new Date().toISOString() });
 
     // Hook events are only wake hints. Workflow facts remain authoritative.
