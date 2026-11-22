@@ -148,7 +148,7 @@ export function projectWorkSnapshot(input: {
     .sort((a, b) => a.acceptedAt.localeCompare(b.acceptedAt) || a.updateId.localeCompare(b.updateId));
   const publicHandoffs = updates.flatMap((update): WorkHandoff[] => {
     const texts = update.type === "work_completed" && update.event?.kind === "findings"
-      ? update.event.findings.map(finding => finding.text)
+      ? update.event.findings.map(finding => finding.uncertainty ? `${finding.text}\n${finding.uncertainty}` : finding.text)
       : update.text ? [update.text] : [];
     return texts.map(text => ({
       updateId: update.updateId, stage: update.type === "work_checkpoint" ? "checkpoint" as const : "completed" as const,

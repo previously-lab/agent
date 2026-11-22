@@ -50,4 +50,19 @@ describe("work-only event and snapshot contract", () => {
     expect(snapshot.latestStage).toBe("checkpoint");
     expect(snapshot.completedUpdateId).toBeUndefined();
   });
+
+  it("keeps each finding's uncertainty when another work reads the snapshot", () => {
+    const event: Extract<WorkUpdateEvent, { type: "work_completed" }>["event"] = { kind: "findings", findings: [
+      { kind: "user_report", text: "The committee chose diffuse light.", uncertainty: "The record does not name the deciding member." },
+      { kind: "user_report", text: "The stage crew took the lightbox assignment." },
+    ] };
+    const snapshot = projectWorkSnapshot({
+      workId: completed.workId, inputId: completed.sourceInputId, runId: completed.runId, status: "completed",
+      acceptedAt: completed.acceptedAt, updates: [{ ...completed, event }],
+    });
+    expect(snapshot.publicHandoffs.map(handoff => handoff.text)).toEqual([
+      "The committee chose diffuse light.\nThe record does not name the deciding member.",
+      "The stage crew took the lightbox assignment.",
+    ]);
+  });
 });
