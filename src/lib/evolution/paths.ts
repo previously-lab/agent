@@ -59,6 +59,10 @@ export const LEGACY_PLAYBOOK_DIR = "memory/agent-playbooks";
 export const SELF_AGENTS = ["search", "thinkdeep"] as const;
 export type SelfAgent = (typeof SELF_AGENTS)[number];
 
+export function isCapabilitySopCase(category: string, caseName: string): boolean {
+  return category === "self" && SELF_AGENTS.some(agent => agent === caseName.toLowerCase());
+}
+
 export function selfSopPath(agent: SelfAgent): string {
   return `${SELF_DIR}/${agent}/index.md`;
 }

@@ -210,6 +210,7 @@ vi.mock("@/lib/evolution/store", async (importOriginal) => ({
 }));
 
 import { handleBrief } from "@/app/api/evolution/hq-agent";
+import { CASE_FILING_RULE } from "@/lib/identity/agent-prompt.generated";
 import { dialogueResearchMaterialId, encodeDialogueResearchRecord, type DialogueResearchRecord } from "@/lib/episodic/dialogue-record";
 import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
@@ -432,23 +433,38 @@ describe("HQ evidence, task and learning integration", () => {
     await handleBrief({ ...cardAndResearch, skillReviewError: "unreadable" });
   });
 
-  it("files a new fact from its original while using the focused tools", async () => {
-    io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
+  it("files two perspectives from one original when focused review opens the full filing tools", async () => {
+    const observation = "I could hear the night bus through the closed windows of Cedar House.";
+    const plan = "That is why I want a night viewing before choosing our next home.";
+    const quote = `${observation} ${plan}`;
+    io.files.set(`${SLICE_ID}:core`, `## Turn ${checked.sourceTurnId} — 2026-08-09T13:00:00.000Z (user)\n${quote}\n`);
     io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
     runSubAgentMock.mockImplementation(async opts => {
-      const menu = async () => (await opts.prepareStep!({ stepNumber: 0, steps: [], messages: [] }))?.activeTools;
-      expect(await menu()).not.toContain("recallFind");
-      const source = { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" };
-      await callTool(opts, "assessCard", { source, decision: "needs_work", reason: "The user newly says they want a different phone." });
-      expect(await menu()).toContain("writeCase");
-      expect(await callTool(opts, "writeCase", { action: "open", category: "things", caseName: "手机", body: "用户开始考虑换手机。", sources: [source] })).toContain("OK");
-      expect(await menu()).toContain("hqReport");
+      const step = () => opts.prepareStep!({ stepNumber: 0, steps: [], messages: [] });
+      expect((await step())?.activeTools).toEqual(["assessCard"]);
+      const source = { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote };
+      await callTool(opts, "assessCard", { source, decision: "needs_work", reason: "A condition at home shaped a new viewing plan." });
+      const filing = await step();
+      expect(filing?.activeTools).toContain("writeCase");
+      expect(filing?.system).toContain(CASE_FILING_RULE);
+      expect(await callTool(opts, "writeCase", { action: "open", category: "places", caseName: "Cedar House", body: observation, sources: [source] })).toContain("OK");
+      expect((await step())?.activeTools).toContain("writeCase");
+      expect(await callTool(opts, "writeCase", { action: "open", category: "events", caseName: "House search", body: plan, sources: [source] })).toContain("OK");
+      expect((await step())?.activeTools).toContain("hqReport");
       return { ok: true, report: { actions: [], note: "Filed." }, text: "" };
     });
     const outcome = await handleBrief({ ...cardAndResearch, evolutionDue: false });
+    expect(outcome.error).toBeUndefined();
     expect(outcome.deferredCards).toBeUndefined();
-    expect(outcome.actions).toContain("things/手机/index.md");
-    expect(io.files.get("memory/things/手机/index.md")).toContain("turn=a1b2c3");
+    const citation = `previously:records/${SLICE_ID}?turn=${checked.sourceTurnId}&role=user`;
+    const place = io.files.get("memory/places/Cedar House/index.md");
+    const event = io.files.get("memory/events/House search/index.md");
+    expect(place).toContain(observation);
+    expect(place).not.toContain(plan);
+    expect(event).toContain(plan);
+    expect(event).not.toContain(observation);
+    expect(place).toContain(citation);
+    expect(event).toContain(citation);
   });
 
   it("keeps the failed-round checkpoint even after the focused card and profile produced receipts", async () => {
@@ -785,6 +801,23 @@ describe("handleBrief (v0.21 §5)", () => {
     const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
     const trailer = parseReflectionRoundMessage(vi.mocked(commitReflectionRound).mock.calls[0][1])?.trailer;
     expect(trailer?.seen).toEqual([{ sliceId: SLICE_ID, turnIds: [source.turnId] }]);
+  });
+
+  it("keeps the capability SOP byte-identical when a verified card is linked through the generic tool", async () => {
+    const source = { sliceId: SLICE_ID, turnId: "a1b2c3", quote: "想换手机" };
+    const sopPath = "memory/self/search/index.md";
+    const sop = "# Search procedure\n\nRead the primary evidence.\n";
+    io.files.set(sopPath, sop);
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await readEvidence(opts);
+      await callTool(opts, "readCase", { ref: "self/search" });
+      expect(await callTool(opts, "linkCard", { ref: "self/search", source })).toContain("writeSelfSop");
+      return { ok: true, report: { actions: [], note: "" }, text: "" };
+    });
+    const outcome = await handleBrief({ ...DOCKET, scope: [{ ...DOCKET.scope[0], userTurnIds: [source.turnId] }] });
+    expect(outcome.actions).toEqual([]);
+    expect(outcome.deferredCards).toBe(1);
+    expect(io.files.get(sopPath)).toBe(sop);
   });
 
   it("requires sources for native-only case writes and does not run the legacy scribe", async () => {
@@ -1940,11 +1973,13 @@ describe("queued vs committed wording + the memory-is-git contract (v0.37 §7-1,
       llmRan: true,
       written: ["research/手机话题/index.md"],
       skipped: [],
+      reasoning: "Check the separate commitment in turn user-2.",
     });
     passes.runScribePass.mockResolvedValue({ ran: true, written: [], skipped: [] });
     runSubAgentMock.mockImplementation(async (opts) => {
       const r = await callTool(opts, "archiveRound", { sliceId: SLICE_ID });
       expect(r).toContain("queued (lands when this round commits): research/手机话题/index.md");
+      expect(r).toContain("writer assessment (verify sources before acting): Check the separate commitment in turn user-2.");
       expect(r).not.toMatch(/^written:/m);
       return { ok: true, report: { actions: [], note: "x" }, text: "" };
     });

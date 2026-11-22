@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { archiveCaseDirPath, caseIndexPath, isArchivedCaseName, isCaseCategory, type CaseCategory } from "./paths";
-import { parseCaseRef } from "./case-refs";
+import { archiveCaseDirPath, caseIndexPath, isArchivedCaseName, isCaseCategory, isUserModelCase, type CaseCategory } from "./paths";
+import { ARCHIVE_NOTE_NAME } from "./archive-ref";
 import { flushBatch, fsDeleteFile, fsReadBinaryFile, fsReadFile, fsWriteBinaryFile, fsWriteFile, type WriteBatch } from "@/lib/episodic/io-helpers";
 import { enumerateTreeFiles } from "@/lib/episodic/timeline/enumerate";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
@@ -12,17 +12,7 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { seedGitHubReadHead, withGitHubReadView } from "@/lib/github/read-view";
 
-export const ARCHIVE_NOTE_NAME = "_ARCHIVED.md";
-
-/** A direct old ref reports archival without exposing it to default discovery. */
-export function archivedCaseRefPaths(ref: string): string[] {
-  const parsed = parseCaseRef(ref);
-  if (!parsed || parsed.kind === "legacy") return [];
-  const directory = archiveCaseDirPath(parsed.category, parsed.caseName);
-  return parsed.kind === "case"
-    ? [`${directory}/index.md`]
-    : [`${directory}/${parsed.pieceFileName}`, `${directory}/index.md`];
-}
+export { ARCHIVE_NOTE_NAME, archivedCaseRefPaths } from "./archive-ref";
 
 export interface ArchiveCaseResult {
   ok: true;
@@ -39,7 +29,7 @@ export async function archiveCaseDocument(input: {
   date: string;
 }, options: { batch?: WriteBatch; readScope?: CaseReadScope } = {}): Promise<ArchiveCaseResult> {
   const { category, caseName } = input;
-  if (!isCaseCategory(category) || (category === "people" && caseName.toLowerCase() === "user")) {
+  if (!isCaseCategory(category) || isUserModelCase(category, caseName)) {
     throw new Error("The live user model cannot be archived");
   }
   const reason = input.reason.trim();

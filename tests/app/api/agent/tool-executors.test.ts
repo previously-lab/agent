@@ -5,6 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { unwrapCaseReadEnvelope } from "@/lib/chat/case-read-receipt";
+import { readReceipt } from "@/lib/agents/thinking-read-receipt";
+import { caseStorageRevision } from "@/lib/docs/case-doc";
 
 const local = vi.hoisted(() => {
   const files = new Map<string, string>();
@@ -164,6 +166,15 @@ function opts(overrides: Partial<ToolContext> = {}): {
 describe("recallReadExecute — semantic reads and record mediation", () => {
   beforeEach(() => {
     local.files.clear();
+  });
+
+  it("gives a dossier mention a receipt for exactly the half shown on the desk", async () => {
+    const direction = "# Portrait\n\n# Hypotheses\n\n- A possible preference.";
+    local.files.set("memory/people/user/index.md", `# Previously On\n\nA documented move.\n\n---\n\n${direction}`);
+    const result = await recallReadExecute({ ref: "dossier/direction" }, opts({ thinkingFlow: true, readScopeId: "test-dossier" }));
+    expect(readReceipt(result)?.reads).toMatchObject([{ ref: "dossier/direction", edition: "current", coverage: "full",
+      revision: caseStorageRevision(direction) }]);
+    expect(result).not.toContain("A documented move.");
   });
 
   it("people/user → the LIVE user model's card (people/user/index.md)", async () => {

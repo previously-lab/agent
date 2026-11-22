@@ -28,11 +28,11 @@ import {
   parseCaseDoc,
   parseCaseRef,
   parsePieceFileName,
-  resolveCaseRefPaths,
   type CaseCategory,
 } from "@/lib/docs";
+import { casePaperLookup } from "@/lib/docs/archive-ref";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
-import { fsListFiles, fsReadFile, fsFileModifiedDate } from "@/lib/episodic/io-helpers";
+import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
 import { enumerateSliceIds, enumerateTreePaths } from "@/lib/episodic/timeline/enumerate";
 import { sliceEntryFromDisk } from "@/lib/episodic/timeline/store";
 import {
@@ -49,6 +49,9 @@ import {
 import { stampSliceIds } from "./ref-tokens";
 import { HOTEL_WINDOW_DOORS } from "@/lib/game/hotel-data";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
+import { PEOPLE_USER_INDEX_PATH } from "@/lib/evolution/paths";
+import { dossierViews } from "@/lib/evolution/user-model-format";
+import { absentDocumentError } from "@/lib/docs/write-validation";
 
 /** One pile in the archive field — one case. */
 export interface ArchivePile {
@@ -366,10 +369,14 @@ export async function getRecordDoc(
 // these files are the evolution loop's to write, never this surface's.
 // The ref grammar (`dossier/<name>`, DossierDocName) lives in ./refs.
 
-const DOSSIER_PATHS: Record<DossierDocName, string> = {
-  previously: "memory/episodic/current-previously.md",
-  direction: "memory/evolution/direction.md",
-};
+async function readDossierViews() {
+  try {
+    return dossierViews(await fsReadFile(PEOPLE_USER_INDEX_PATH, undefined, { fresh: true }));
+  } catch (error) {
+    if (absentDocumentError(error)) return null;
+    throw error;
+  }
+}
 
 /** One Dossier row in the library: the open ref and whether the document
  *  exists on disk (a missing one renders dimmed and never opens a dead
@@ -385,22 +392,12 @@ export interface DossierEntry {
 export async function getDossierList(persona?: string): Promise<DossierEntry[]> {
   if (persona) setDemoPersona(persona);
   const names: DossierDocName[] = ["previously", "direction"];
-  return Promise.all(
-    names.map(async (name) => {
-      const raw = await fsReadFile(DOSSIER_PATHS[name]).catch(() => null);
-      return {
-        name,
-        ref: `dossier/${name}`,
-        available: raw !== null && raw.trim().length > 0,
-      };
-    }),
-  );
+  const views = await readDossierViews();
+  return names.map((name) => ({ name, ref: `dossier/${name}`, available: Boolean(views?.[name]) }));
 }
 
 /**
- * Open a Dossier document: the file's content, verbatim (no frontmatter
- * strip — these two files carry none). A missing document is null, the
- * desk's not-found paper.
+ * Open the selected view of the live user model. A missing half has no paper.
  */
 export async function getDossierDoc(
   refText: string,
@@ -409,19 +406,14 @@ export async function getDossierDoc(
   if (persona) setDemoPersona(persona);
   const parsed = parseDossierRef(refText);
   if (!parsed) return null;
-  // The letterhead's date line is the file's last write where the backend
-  // has one (local mtime; null on GitHub/demo — the line is then omitted,
-  // never a placeholder).
-  const [raw, modified] = await Promise.all([
-    fsReadFile(DOSSIER_PATHS[parsed.name]).catch(() => null),
-    fsFileModifiedDate(DOSSIER_PATHS[parsed.name]),
-  ]);
-  if (raw === null || raw.trim().length === 0) return null;
+  const views = await readDossierViews();
+  const raw = views?.[parsed.name];
+  if (!raw) return null;
   return {
     ref: refText,
-    opened: modified ?? "",
+    opened: "", // The shared file's timestamp cannot date either view on its own.
     closed: null,
-    markdown: raw.trim(),
+    markdown: raw,
     observedRevision: caseStorageRevision(raw),
     warnings: [],
   };
@@ -473,6 +465,8 @@ export async function verifyRefs(
     await enumerateTreePaths("memory").catch(() => [] as string[]),
   );
 
+  const dossierViewsForRefs = unique.some(ref => parseDossierRef(ref))
+    ? await readDossierViews().catch(() => null) : null;
   const results = await Promise.all(
     unique.map(async (ref): Promise<VerifiedRef> => {
       const record = parseRecordRef(ref);
@@ -492,19 +486,20 @@ export async function verifyRefs(
       }
       const dossier = parseDossierRef(ref);
       if (dossier) {
-        const raw = await fsReadFile(DOSSIER_PATHS[dossier.name]).catch(() => null);
         return {
           ref,
           kind: "dossier",
-          alive: raw !== null && raw.trim().length > 0,
+          alive: Boolean(dossierViewsForRefs?.[dossier.name]),
         };
       }
       const parsed = parseCaseRef(ref);
       if (!parsed) return { ref, kind: "case", alive: false };
+      const { paths, missingPieceMarker } = casePaperLookup(parsed);
+      const hit = paths.find((path) => pathSet.has(path));
       return {
         ref,
         kind: parsed.kind,
-        alive: resolveCaseRefPaths(parsed).some((p) => pathSet.has(p)),
+        alive: Boolean(hit && hit !== missingPieceMarker),
       };
     }),
   );

@@ -49,6 +49,8 @@ import {
 import { opaqueContentRevision } from "./skill-revision";
 import { casePieceCatalog, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { formatDocumentLink } from "@/lib/documents/document-link";
+import { splitUserModel } from "./user-model-format";
+export { splitUserModel } from "./user-model-format";
 
 /** Discovery only: preserves the runtime card grammar and does not inject piece bodies as facts. */
 async function userModelReadingLinks(batch?: WriteBatch): Promise<string> {
@@ -109,16 +111,6 @@ export function composeUserModel(card: string, direction: string | null): string
   return c || d;
 }
 
-/** Split a stored index.md back into its halves (first separator wins). */
-export function splitUserModel(full: string): { card: string; direction: string | null } {
-  const idx = full.indexOf(USER_MODEL_DIRECTION_SEPARATOR.trim());
-  if (idx < 0) return { card: full, direction: null };
-  return {
-    card: full.slice(0, idx).trim(),
-    direction: full.slice(idx + USER_MODEL_DIRECTION_SEPARATOR.trim().length).trim() || null,
-  };
-}
-
 /**
  * Read the only live folded user model. Absence returns null; a transient or
  * deterministic read failure rejects with the current path and original cause
@@ -141,7 +133,7 @@ export async function readUserModel(batch?: WriteBatch): Promise<UserModel | nul
   if (!full.trim()) return null;
   const { card, direction } = splitUserModel(full);
   const readingLinks = await userModelReadingLinks(batch);
-  return { card, direction, full: full.trim(), ...(readingLinks ? { readingLinks } : {}) };
+  return { card, direction, full, ...(readingLinks ? { readingLinks } : {}) };
 }
 
 /**

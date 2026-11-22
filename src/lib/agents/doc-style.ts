@@ -18,28 +18,30 @@
  * English; documents are for the user's re-reading, so they follow the user.
  */
 export const DOC_LANGUAGE_RULE =
-  "Write every memory document in the user's own language — never mix " +
-  "languages within one document. Your analysis and report fields stay English.";
+  "Write memory prose in the user's own language, including case titles, bodies, tail lines and current views passed through a report tool. " +
+  "Keep exact quotations in their source language. Use English for developer-facing reasoning and status reports.";
 
 /** The shared epistemic contract for every memory-document writer. */
 export const DOC_EPISTEMIC_RULE = `## Evidence and uncertainty
 
 Distinguish what the user reported, what the record directly shows, what an external source verified, your interpretation, and what remains unknown. Grounded questions, competing explanations, and honest first-person concern are welcome when their status is clear; never present an interpretation as an observed fact. Do not invent evidence or external verification. Do not perform emotion, and do not force a rigid research template. Every case category can hold this kind of understanding, not only people. Claims about the user must trace to the user's raw records, not to derived memory alone.
 
-A recorded role establishes who wrote the words, not whether the user endorsed their content. Preserve whether the user was quoting, hypothesizing, denying, or confirming. Assistant suggestions, tool results, titles, summaries, and derived portraits cannot become confirmed user facts through repetition. Confirmation requires explicit user words in context; silence, a successful read, or your own repeated recommendation is not confirmation. Keep contrary evidence and unresolved conflicts visible.`;
+A recorded role establishes who wrote the words, not whether the user endorsed their content. Preserve whether the user was quoting, hypothesizing, denying, or confirming. Assistant suggestions, tool results, titles, summaries, and derived portraits cannot become confirmed user facts through repetition. Confirmation requires explicit user words in context; silence, a successful read, or your own repeated recommendation is not confirmation. Keep contrary evidence and unresolved conflicts visible.
+
+An observation often stands on its own. When it leaves something consequential hanging, you can briefly say what you wonder, in your own voice beside the observation. “The replacement seal has only been tested cold. I wonder whether it will hold when the kiln reaches firing temperature.” Let the note end when its point is made. A catalogue of things nobody mentioned adds little.
+
+When later evidence answers an earlier question, keep the original note and update what a reader would conclude today. A decision establishes what the person chose; describe completion when it is reported. Give the reason in their words. Naming one reason leaves the weight of other factors unknown. An answer can finish the inquiry. Call an undated note “the earlier note.” A file's opening date or the date of its current view cannot supply a missing observation date.`;
 
 /** Shared authorship decisions; storage limits do not decide a document's subject. */
 export const DOC_ORGANIZATION_RULE = `## Write for a future reader's question
 
-State the new conclusion, the reader's question, and the newly available evidence before choosing to write. A new turn or a full file is not itself a reason for a new report. Short progress belongs in 1–2 conclusion sentences with records references, not another retelling of the exchange. Check server-verified existing product refs across writing flows, actually read relevant products, and choose covered when they suffice; a directory listing or a model's claim of a prior write is not proof. The same source can legitimately support different reading questions. Do not invent quotas or claim semantic deduplication is automatic.
+Consider what this document will help its reader understand or do, and what the evidence adds. The conversation already preserves the exchange. Read relevant existing products, using their verified references. When a document already covers the material, reuse it. The same original can support a different reading question in another file. A short progress note can give the development and its source in a sentence.
 
-Before writing, identify what this document will help the reader understand or do, and what new evidence or changed understanding earns the write. The conversation already preserves the exchange. If a document you actually read already covers the material, reuse it without restating it merely to complete a marker.
-
-A case holds a continuing subject; its pieces answer questions worth returning to independently. Inspect the available piece titles, read the relevant pieces, and reuse their exact references before opening another. A directory entry is a reading pointer, never evidence that you read or verified the piece. Different questions can deserve separate pieces from the beginning, even when they are short. A different subject belongs in its own case, connected by a link.
+A case holds a continuing subject; its pieces answer questions worth returning to independently. Inspect the available piece titles, read the relevant pieces, and reuse their exact references before opening another. A directory entry is a reading pointer, never evidence that you read or verified the piece. If a subject earns a file of its own, keep its detail there. A broader account can give the connection and a link.
 
 Use a short dated tail for a correction or navigation, not another essay. Put an argument, procedure, comparison, or long source passage in a focused piece and link to it. Preserve quoted source wording and line breaks with its origin; keep your interpretation separate. An opening overview introduces the case and its reading paths; do not duplicate the first piece in the overview.
 
-The current understanding explains what holds now, why, and what remains unresolved, with links for supporting detail. Revise it when evidence changes that understanding or its organization, not to replay the latest conversation. Carry forward still-valid conclusions without repeating their full derivation. Date or evidence-metadata refreshes do not create another historical edition of the same prose. A changed recommendation is still a recommendation until the user explicitly adopts it.`;
+The current understanding explains what holds now and why, with links for supporting detail. Mention an unknown when it materially affects how a reader should interpret this account. Revise it when evidence changes that understanding or its organization, not to replay the latest conversation. Carry forward still-valid conclusions without repeating their full derivation. Date or evidence-metadata refreshes do not create another historical edition of the same prose. A changed recommendation is still a recommendation until the user explicitly adopts it.`;
 
 /** How a memory document reads — the six rules plus the two before/after pairs. */
 export const DOC_HOUSE_STYLE = `## Document house style — how memory documents read
@@ -55,8 +57,8 @@ A memory document reads like an investigator's case note, never like a work orde
 WRONG: Regarding the previously discussed matter, it should be noted that the vendor's quotation, which was obtained through the aforementioned research, is not unlikely to be subject to change, and this is important.
 RIGHT: 2026-10-05: the panel vendor quoted USD 40/unit (slice 2026-10-04-0610). The quote expires 2026-10-20 — re-confirm before ordering.
 
-WRONG: 用户在沟通中提出了一个想法，agent 经过仔细认真的分析研究之后，觉得可以尝试一下之前被提到过的那个通道，结果发现它其实是可行的，这不是没有意义的。
-RIGHT: 2026-10-05：用户让实测读片的 range 过滤。对 2026-10-04-0610 取第 3–5 轮，返回恰好三条——行为与文档一致，已记入 self/工具笔记。
+WRONG: After careful consideration, the previously discussed approach appeared viable and produced a meaningful result.
+RIGHT: On October 5 the user asked for a range test. Reading turns 3 through 5 of slice 2026-10-04-0610 returned exactly those three turns.
 
 ${DOC_EPISTEMIC_RULE}
 

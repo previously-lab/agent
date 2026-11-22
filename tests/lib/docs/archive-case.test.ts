@@ -108,7 +108,8 @@ describe("case archival", () => {
     seed("research/旧主题/2026-11-01-原报告.md", "完整报告\n");
     seed("research/旧主题/attachments/evidence.bin", Buffer.from([0, 1, 2, 255]));
     const { archiveCaseDocument } = await import("@/lib/docs/archive-case");
-    const result = await archiveCaseDocument({ category: "research", caseName: "旧主题", reason: "已被新研究取代", date: "2026-11-18" });
+    const reason = "已被新研究取代，见[依据整理](previously:events/田野考察)。";
+    const result = await archiveCaseDocument({ category: "research", caseName: "旧主题", reason, date: "2026-11-18" });
     expect(result).toMatchObject({ ok: true, files: 3, path: "memory/research/旧主题-archived" });
     // Git tracks files, not empty directories; local empty shells are harmless.
     for (const path of ["index.md", "2026-11-01-原报告.md", "attachments/evidence.bin"]) {
@@ -127,13 +128,36 @@ describe("case archival", () => {
     const { recallRead, recallRecent } = await import("@/lib/memory/facade");
     const { readFileLocal, walkPathsLocal } = await import("@/lib/tools/local-fs");
     const backend = { readFile: readFileLocal, listMemoryFiles: () => walkPathsLocal("memory") };
-    expect(await recallRead(backend, { ref: "research/旧主题" })).toMatchObject({ kind: "archived" });
+    seed("events/田野考察/index.md", "独立的新档案。");
+    const rootRef = "research/旧主题";
+    const pieceRef = rootRef + "/2026-11-01-原报告";
+    const missing = rootRef + "/2026-11-01-缺篇";
+    seed("docs/research/2026-11-01-缺篇.md", "unrelated file with a matching title");
+    expect(await recallRead(backend, { ref: rootRef })).toMatchObject({ kind: "archived", note: reason, content: "主题概览\n" });
     expect(await recallRecent(backend, { category: "research" })).toEqual({ kind: "empty" });
-    expect(await recallRead(backend, { ref: "research/旧主题/2026-11-01-原报告" })).toMatchObject({ kind: "archived" });
+    expect(await recallRead(backend, { ref: pieceRef })).toMatchObject({ kind: "archived", note: reason, content: "完整报告\n" });
+    expect(await recallRead(backend, { ref: missing })).toEqual({ kind: "not_found" });
 
-    const { makeCaseReadTool } = await import("@/lib/episodic/flash/librarian");
-    const read = await makeCaseReadTool().execute!({ ref: "research/旧主题" }, { toolCallId: "archived", messages: [], context: undefined });
+    const { getCaseDoc, getCaseDetail, getCaseShelf } = await import("@/lib/episodic/actions");
+    const { verifyRefs, getArchiveIndex } = await import("@/lib/archive/actions");
+    expect((await getCaseDoc(rootRef))?.markdown).toContain(reason);
+    expect((await getCaseDoc(pieceRef))?.markdown).toContain("完整报告");
+    expect(await getCaseDoc(missing)).toBeNull();
+    expect(await getCaseDoc(rootRef + "-ARCHIVED")).toBeNull();
+    const detail = await getCaseDetail("research", "旧主题");
+    expect(detail?.pieces.map(p => p.title)).toContain("原报告");
+    expect(detail?.current).toBeUndefined();
+    expect((await getArchiveIndex()).cases.map(c => c.name)).toEqual(["田野考察"]);
+    expect((await getCaseShelf()).categories.find(c => c.category === "research")?.cases).toEqual([]);
+    expect((await verifyRefs([rootRef, pieceRef, missing, "events/田野考察"])).map(r => r.alive)).toEqual([true, true, false, true]);
+
+    const { makeCaseReadTool, createCaseReadScope } = await import("@/lib/episodic/flash/librarian");
+    const scope = createCaseReadScope();
+    const read = await makeCaseReadTool(undefined, scope).execute!({ ref: rootRef }, { toolCallId: "archived", messages: [], context: undefined });
     expect(read).toContain("archived: research/旧主题");
+    expect(read).toContain(reason);
+    expect(read).toContain("主题概览");
+    expect(scope.getIndexRead("research", "旧主题")).toBeUndefined();
   });
 
   it("refuses to overwrite an existing archive or archive the live user model", async () => {

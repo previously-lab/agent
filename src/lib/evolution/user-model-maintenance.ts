@@ -49,6 +49,31 @@ export async function maintainUserModelHypothesisTtl(
   }, { fresh: true }));
 }
 
+/** Queue an exact source snapshot and its navigation together with the user's model write. */
+async function stageUserModelHistory(old: string, date: string, evidence: string[], pending: WriteBatch) {
+  let previousHead: string | null = null;
+  try {
+    const metadata = JSON.parse(await fsReadFile(USER_MODEL_HISTORY_PATH, pending, { fresh: true }));
+    if (metadata.v === 1 && typeof metadata.history_head === "string") previousHead = metadata.history_head;
+  } catch (error) { if (!absentDocumentError(error)) throw error; }
+  const archive = planHistoryArchive({ category: "people", caseName: "user", source: "index.md", sourceRaw: old,
+    date, updated: date, kind: "source-snapshot", previousHead });
+  for (const entry of archive.entries) await fsWriteFile(entry.path, entry.content, pending);
+  await fsWriteFile(USER_MODEL_HISTORY_PATH, JSON.stringify({ v: 1, history_head: archive.headRef, evidence }) + "\n", pending);
+  return archive;
+}
+
+/** Called only when a real mutation would replace a retired model format. */
+export async function replaceLegacyUserModel(source: string, sliceId: string, batch: WriteBatch | undefined, write: (pending: WriteBatch) => Promise<void>) {
+  const pending = forkWriteBatch(batch);
+  const old = await fsReadFile("memory/people/user/index.md", pending, { fresh: true });
+  if (old !== source) throw new WriteRefusal("rewrite_conflict", "The legacy user model changed; re-read it before migrating.");
+  await stageUserModelHistory(old, sliceId.slice(0, 10), [`records/${sliceId}`], pending);
+  await write(pending);
+  if (batch) mergeWriteBatch(batch, pending);
+  else await flushBatch(pending, "Preserve the historical user model and update its live view");
+}
+
 export async function reorganizeUserModel(input: {
   card: string; direction: string | null; pieces: { title: string; body: string }[]; evidence: string[]; date: string;
 }, scope: CaseReadScope, batch: WriteBatch): Promise<{ path: string; pieces: string[] }> {
@@ -67,13 +92,8 @@ export async function reorganizeUserModel(input: {
     const next = composeUserModel(input.card, input.direction);
     if (!next.trim() || exceededSize(documentSize(next)).length) throw new Error("The reorganized card plus direction must fit the document budget; move independently useful evidence to pieces");
     assertDocumentWrite(path, next, old, true);
-    let previousHead: string | null = null;
-    try {
-      const metadata = JSON.parse(await fsReadFile(USER_MODEL_HISTORY_PATH, pending, { fresh: true }));
-      if (metadata.v === 1 && typeof metadata.history_head === "string") previousHead = metadata.history_head;
-    } catch (error) { if (!absentDocumentError(error)) throw error; }
-    const archive = planHistoryArchive({ category: "people", caseName: "user", source: "index.md", sourceRaw: old,
-      date: input.date, updated: input.date, kind: "source-snapshot", previousHead });
+    const archive = await stageUserModelHistory(old, input.date, input.evidence, pending);
+    pending.maintenance!.set(path, { sourceRevision: archive.sourceRevision, archiveHeadRef: archive.headRef });
     const pieces: string[] = [];
     for (const piece of input.pieces) {
       const doc = createDoc({ category: "people", caseName: "user", date: input.date, ...piece });
@@ -85,10 +105,7 @@ export async function reorganizeUserModel(input: {
       if (previous === null) await fsWriteFile(piecePath, serializeCaseDoc(doc), pending);
       pieces.push(piecePath);
     }
-    for (const entry of archive.entries) await fsWriteFile(entry.path, entry.content, pending);
-    pending.maintenance!.set(path, { sourceRevision: archive.sourceRevision, archiveHeadRef: archive.headRef });
     await fsWriteFile(path, next, pending);
-    await fsWriteFile(USER_MODEL_HISTORY_PATH, JSON.stringify({ v: 1, history_head: archive.headRef, evidence: input.evidence }) + "\n", pending);
     mergeWriteBatch(batch, pending);
     return { path, pieces };
   });

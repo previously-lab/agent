@@ -220,6 +220,16 @@ describe("POST /api/companion narration", () => {
   // H5: the L1 card layer reads only the live folded user model. Legacy
   // card/direction documents remain historical and never become a fallback.
   describe("L1 user-model layer (single live root)", () => {
+    it("keeps a tentative user interpretation visibly separate from retrospective facts", async () => {
+      hoisted.files.set("memory/people/user/index.md",
+        "# Previously On\n\n## Past\n\nA documented move.\n\n---\n\n# Portrait\n\n# Hypotheses\n\n- A possible preference.");
+      await POST(companionReq(validBody()));
+      const call = hoisted.streamText.mock.calls.at(-1)?.[0] as { system: string };
+      expect(call.system).toContain("UNVERIFIED GUESSES");
+      expect(call.system).toContain("A possible preference.");
+      expect(call.system).toContain("A documented move.");
+    });
+
     it("prefers the folded model at people/user/index.md over the legacy card", async () => {
       hoisted.files.set(
         "memory/people/user/index.md",

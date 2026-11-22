@@ -51,7 +51,6 @@ import {
   currentUnderstandingSchema,
   extractDocMarkers,
   extractProcessedMarkerIds,
-  hasFalsificationCondition,
   makeCaseReadTool,
   makeCrossSliceReadTool,
   renderManifest,
@@ -75,6 +74,9 @@ const writeOpSchema = z.object({
   caseName: z.string().describe("The case name — permanent at birth; legal per the red-line rule."),
   /** open/updateIndex/addPiece: the historical body (updateIndex = the WHOLE new body). */
   body: z.string().optional(),
+  disconfirmingObservation: z.string().trim().min(1).optional().describe(
+    "For a new hypothesis, give a concrete observation that would count against its explanation. Write it in the user's language.",
+  ),
   /** appendTail only. */
   line: z.string().optional(),
   /** addPiece only — the piece title. */
@@ -98,7 +100,7 @@ const researchSchema = z.object({
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
-const RESEARCH_SYSTEM = buildSubAgentSystem(`You are the question-run researcher of a personal memory system (v0.19). The user asked questions a quick answer could not settle; you investigate ACROSS the record and leave durable CASES (research/ = answered questions, hypotheses/ = guesses with falsification conditions).
+const RESEARCH_SYSTEM = buildSubAgentSystem(`You investigate questions that a quick answer could not settle. Preserve a comparison or investigation that a future reader can use, including a meaningful partial result. A testable explanation about the world can warrant a hypothesis case of its own.
 
 ${MEMORY_IS_GIT_RULE}
 
@@ -107,8 +109,8 @@ You are shown: the triggering question markers, a compact slice excerpt, and the
 ## Task
 
 Per question, judge: is there enough in the record to write something durable?
-- research: answer a question a reader can return to. Use a distinct opening overview, focused dated pieces for independently useful questions, and short tails for corrections or navigation. Read relevant existing pieces before writing another. Never replay the entire argument in the overview or tail.
-- hypothesis: a guess WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused.
+- research: keep a reusable investigation, the evidence considered, its findings and any limits. A lookup that answered the immediate question can stay in the conversation. Use a distinct opening overview, focused dated pieces for independently useful questions, and short tails for corrections or navigation. Read relevant existing pieces before adding another.
+- hypothesis: keep a provisional explanation of the subject when the evidence gives a reader a reason to test it independently. The user's possible tendencies across settings belong to their dedicated Direction review. An open outcome in a particular case can stay with that case. When opening the case, supply disconfirmingObservation in the user's language. State what you could observe that would count against this particular explanation.
 - current understanding: use reviseUnderstanding with currentUnderstanding { body, evidence }, or attach that field to another write. It changes only free-prose _current.md; changed prose preserves its previous view, while metadata-only refreshes do not duplicate history. It works for any category without a trait template.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
@@ -302,23 +304,16 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
       skipped.push({ id: "?", reason: `question run may only open research/ or hypotheses/ cases, not ${category}/` });
       continue;
     }
-    // A hypothesis without a falsification condition is not a hypothesis.
-    if (
-      category === "hypotheses" &&
-      op.action === "open" &&
-      !hasFalsificationCondition(op.body ?? "")
-    ) {
-      skipped.push({ id: "?", reason: `hypothesis ${identity} lacks a falsification condition` });
-      continue;
-    }
-
     try {
       let applied: { path: string; noop?: boolean } | null = null;
       switch (op.action) {
         case "open": {
           if (!op.body?.trim()) throw new Error("open requires a body");
           applied = await applyCaseWriteIntent(
-            { action: "open", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
+            {
+              action: "open", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})`,
+              ...(category === "hypotheses" ? { disconfirmingObservation: op.disconfirmingObservation } : {}),
+            },
             date, batch, scope,
           );
           break;

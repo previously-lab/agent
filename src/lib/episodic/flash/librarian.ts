@@ -41,20 +41,24 @@ import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { CASE_FILING_RULE } from "@/lib/identity/agent-prompt.generated";
 import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semantics";
 import { conversationRole, RECORD_ATTRIBUTION_RULE } from "../record-attribution";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { isCapabilitySopCase } from "@/lib/evolution/paths";
 import { caseOpeningBody, casePieceCatalog, casePieceNavigation, renderCasePieceCatalog } from "@/lib/docs/organization";
 import { assertDocumentWrite, assertTailBudget, documentSize, exceededSize, TAIL_TOTAL_LIMITS, DOCUMENT_SOFT_LIMITS, DocumentFullRefusal, DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 import { isHistoryArchiveFileName, planHistoryArchive } from "@/lib/docs/history-archive";
-import { archivedCaseRefPaths } from "@/lib/docs/archive-case";
+import { archivedCaseRefPaths, archiveNoteBody, archiveNotePath } from "@/lib/docs/archive-ref";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { confirmedDocumentProducts, stageDocumentProduct } from "../document-products";
 import {
   cardLinkSourceSchema,
+  type CardLinkSource,
   isCaseCardCitation,
   preserveCaseCardCitationsOnSameBody,
   stageCaseCardCitation,
+  validateCardSource,
 } from "../card-evidence";
 import type { DialogueResearchRecord } from "../dialogue-record";
 import type { ModelConfig } from "@/lib/models/registry";
@@ -69,6 +73,7 @@ import {
   createCase,
   createDoc,
   isCaseCategory,
+  isUserModelCase,
   isValidCaseName,
   isWithinWriteWindow,
   parseCaseDoc,
@@ -309,6 +314,8 @@ const sliceEvidencePageSchema = z.object({
 
 export type SliceRawReader = (sliceId: string, batch?: WriteBatch) => Promise<string>;
 
+type WriterSourcePassage = { handle: string; turnId: string; start: number; end: number };
+
 const defaultSliceRawReader: SliceRawReader = (sliceId, batch) =>
   readSlicePart(sliceId, "core", batch);
 
@@ -317,7 +324,7 @@ export interface SliceEvidenceToolOptions {
   scope?: CaseReadScope;
   reader?: SliceRawReader;
   /** Receipts are limited to the attributed text actually returned by a page. */
-  onPageRead?: (page: SliceEvidencePage, raw: string) => void;
+  onPageRead?: (page: SliceEvidencePage, raw: string) => WriterSourcePassage[] | void;
 }
 
 async function executeSliceEvidenceRead(
@@ -342,8 +349,8 @@ async function executeSliceEvidenceRead(
         rangeKey: JSON.stringify(args.range ?? null),
         start: page.start, end: page.end, totalChars: page.totalChars,
       });
-      options.onPageRead?.(page, raw);
     }
+    const passages = options.onPageRead?.(page, raw);
     const continuation = page.nextCursor === null
       ? "COMPLETE: the selected evidence has been returned in full"
       : `INCOMPLETE: call readSlice with the same range, revision=${page.revision} and cursor=${page.nextCursor}`;
@@ -352,6 +359,7 @@ async function executeSliceEvidenceRead(
       `Selected ${page.selectedTurns} of ${page.totalTurns} turns. Page characters [${page.start}, ${page.end}) of ${page.totalChars}.\n` +
       `Source revision: ${page.revision}.\n` +
       `Source ref: records/${sliceId}. Page-local speech ranges: ${JSON.stringify(page.attribution)}. Text outside these ranges is archive metadata/header material, not speech.\n` +
+      (passages?.length ? `Verified user source passages: ${JSON.stringify(passages)}\n` : "") +
       `${RECORD_ATTRIBUTION_RULE}\n` +
       `${continuation}.\n\n${page.content}`
     );
@@ -395,7 +403,15 @@ function stampEvidence(body: string, sliceId: string): string {
 
 /** Does this hypothesis body carry a falsification condition? (§B.6) */
 export function hasFalsificationCondition(body: string): boolean {
-  return body.includes("证伪") || /falsif/i.test(body);
+  if (body.includes("证伪") || /falsif/i.test(body)) return true;
+  // Writers also use a question as the section heading. Require an answer in
+  // that section so a heading by itself does not establish a condition.
+  const sections = body.split(/^#{1,6}[ \t]+/m).slice(1);
+  return sections.some((section) => {
+    const [heading, ...lines] = section.split("\n");
+    return /^(?:什么.*推翻|what (?:would|could) (?:refute|disprove)\b)/i.test(heading.trim())
+      && lines.some((line) => line.trim().length > 0);
+  });
 }
 
 /**
@@ -555,7 +571,7 @@ export interface CaseReadScope {
   getEvidenceReads(ref: string): CaseEvidenceRead[];
 }
 
-export function createCaseReadScope(): CaseReadScope {
+export function createCaseReadScope(parent?: CaseReadScope): CaseReadScope {
   const reads = new Map<string, CaseIndexRead>();
   const evidence = new Set<string>();
   const proofs = new Map<string, CaseEvidenceRead[]>();
@@ -566,7 +582,7 @@ export function createCaseReadScope(): CaseReadScope {
       proofs.set(`${read.category}/${read.caseName}`, [{ revision: read.revision, coverage: "full", path: read.path }]);
     },
     getIndexRead(category, caseName) {
-      return reads.get(`${category}/${caseName}`);
+      return reads.get(`${category}/${caseName}`) ?? parent?.getIndexRead(category, caseName);
     },
     recordEvidence(ref, proof) {
       const normalized = normalizeEvidenceRef(ref);
@@ -580,11 +596,11 @@ export function createCaseReadScope(): CaseReadScope {
     },
     hasEvidence(ref) {
       const normalized = normalizeEvidenceRef(ref);
-      return normalized !== null && evidence.has(normalized);
+      return normalized !== null && (evidence.has(normalized) || parent?.hasEvidence(normalized) === true);
     },
     getEvidenceReads(ref) {
       const normalized = normalizeEvidenceRef(ref);
-      return normalized ? [...(proofs.get(normalized) ?? [])] : [];
+      return normalized ? [...(proofs.get(normalized) ?? parent?.getEvidenceReads(normalized) ?? [])] : [];
     },
   };
 }
@@ -718,7 +734,7 @@ function currentReadBasis(read: CaseIndexRead, scope?: CaseReadScope): CaseCurre
 
 export type CaseWriteIntent =
   | { action: "reorganize"; category: CaseCategory; caseName: string; body: string; evidence: string[] }
-  | { action: "open"; category: CaseCategory; caseName: string; body: string }
+  | { action: "open"; category: CaseCategory; caseName: string; body: string; disconfirmingObservation?: string }
   | {
       action: "rewriteIndex";
       category: CaseCategory;
@@ -836,6 +852,12 @@ async function applyCaseWriteIntentStaged(
   if (!isValidCaseName(caseName)) {
     throw new Error(`illegal case name: ${JSON.stringify(caseName)}`);
   }
+  if (isUserModelCase(category, caseName)) {
+    throw new Error("people/user is maintained by evolveProfile and reorganizeUserModel.");
+  }
+  if (isCapabilitySopCase(category, caseName)) {
+    throw new Error("Capability SOPs require readSelfSop/writeSelfSop with the source revision and evidence.");
+  }
   const identity = `${category}/${caseName}`;
   const indexPath = caseIndexPath(category, caseName);
 
@@ -888,14 +910,18 @@ async function applyCaseWriteIntentStaged(
             `case ${identity} already exists — re-read it (readCase) and use rewriteIndex (inside the write window) / appendTail / addPiece instead of open.`,
           );
         }
-        if (category === "hypotheses" && !hasFalsificationCondition(intent.body)) {
+        const observation = category === "hypotheses" ? intent.disconfirmingObservation?.trim() : undefined;
+        if (category === "hypotheses" && !observation && !hasFalsificationCondition(intent.body)) {
           throw new WriteRefusal(
             "falsification_missing",
             `hypotheses case refused: ${identity} carries no falsification condition — ` +
-              "state it in the body as 'falsify if: …' / a 证伪 condition, then retry the open.",
+              "supply disconfirmingObservation in the document's language, or state it in the body as 'falsify if: …' / a 证伪 condition.",
           );
         }
-        const doc = createCase({ category, caseName, opened: date, body: intent.body });
+        const body = observation && !intent.body.includes(observation)
+          ? `${intent.body.trimEnd()}\n\n${observation}`
+          : intent.body;
+        const doc = createCase({ category, caseName, opened: date, body });
         await fsWriteFile(indexPath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), batch);
         return { path: indexPath, created: true };
       }
@@ -1113,16 +1139,27 @@ export async function applyCaseCurrentUnderstanding(input: {
     throw new Error("reviseUnderstanding requires a canonical case identity before any storage access");
   }
   await ensureCaseBatchBasis(input.batch);
+  let scope = input.scope;
+  let companionRead: CaseIndexRead | undefined;
   if (input.refreshRead) {
-    await readCaseIndexForScope({
+    const original = scope.getIndexRead(input.category, input.caseName);
+    const refreshed = await readCaseIndexForScope({
       category: input.category,
       caseName: input.caseName,
       batch: input.batch,
-      scope: input.scope,
       fresh: true,
     });
+    // The primary updates historical material only. Keep the current view the
+    // writer actually saw (absent for a new case) for the usual conflict check.
+    companionRead = {
+      ...refreshed,
+      currentContent: original?.currentContent ?? null,
+      currentRevision: original?.currentRevision,
+    };
+    scope = createCaseReadScope(input.scope);
+    scope.recordIndexRead(companionRead);
   }
-  return applyCaseWriteIntent(
+  const outcome = await applyCaseWriteIntent(
     {
       action: "reviseUnderstanding",
       category: input.category,
@@ -1132,8 +1169,10 @@ export async function applyCaseCurrentUnderstanding(input: {
     },
     input.date,
     input.batch,
-    input.scope,
+    scope,
   );
+  if (companionRead) input.scope.recordIndexRead(companionRead);
+  return outcome;
 }
 
 /**
@@ -1168,8 +1207,10 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
             return renderWriterCaseRead(read, scope);
           }
           const content = await fsReadFile(path, batch);
-          if (archived.includes(path)) {
-            return `(archived: ${ref} — preserved outside active memory and excluded from default discovery; do not cite or update it as current.)`;
+          if (path === archived[1]) return `(dead link: ${ref} — this piece was not found in the archived case.)`;
+          if (path === archived[0]) {
+            const note = await readOptionalCaseFile(archiveNotePath(path), batch, true);
+            return [`(archived: ${ref} — historical evidence only; no active-case write receipt.)`, archiveNoteBody(note ?? ""), content].filter(Boolean).join("\n\n");
           }
           if (isHistoryArchiveFileName(path)) return `HISTORICAL SOURCE — preserved earlier writing, not a new active conclusion or automatic evidence receipt.\n\n${content}`;
           if (parsed.kind === "case") {
@@ -1256,21 +1297,21 @@ const caseWriterSchema = z.object({
           .describe(
             "skip: nothing worth writing (a legal answer; may still carry currentUnderstanding). " +
             "open: create a NEW case. updateIndex: rewrite an existing in-window index. " +
-            "appendTail: ONE dated supplement that never reopens the settled body. " +
+            "appendTail: put one short correction or link in line. " +
             "addPiece: a dated piece. reviseUnderstanding: change only _current.md (requires currentUnderstanding).",
           ),
         category: z.enum(CASE_CATEGORIES),
-        caseName: z.string().describe("The case name — legal: no 4-digit lead, no separators/traversal/edge whitespace."),
-        /** open/updateIndex/addPiece: the historical body (updateIndex = the WHOLE new body). */
-        body: z.string().optional(),
-        /** appendTail only. */
-        line: z.string().optional(),
-        /** addPiece only — the piece title (date is stamped mechanically). */
-        title: z.string().optional(),
+        caseName: z.string().describe("For an existing case, copy the exact name from its successful readCase call. No 4-digit lead, separators, traversal or edge whitespace."),
+        body: z.string().optional().describe("Required for open, updateIndex and addPiece. For updateIndex provide the whole revised body."),
+        line: z.string().optional().describe("Required for appendTail: the short text to append to the existing case."),
+        title: z.string().optional().describe("Required for addPiece: the bare piece title. The host stamps the date."),
+        disconfirmingObservation: z.string().trim().min(1).optional().describe(
+          "For a new hypothesis, give the specific observation that would count against it as a sentence in the user's language. The host includes this sentence in the opening account.",
+        ),
         /** Optional independent current view; may accompany any historical action or skip. */
         currentUnderstanding: currentUnderstandingSchema.optional(),
-        sources: z.array(cardLinkSourceSchema).min(1).max(20).optional().describe(
-          "For a write derived from an eligible user record card, give its sliceId, turnId and exact quote actually returned by readSlice. Omit for unrelated writes.",
+        sources: z.array(z.union([z.string().min(1).max(128).meta({ pattern: "^s[0-9a-f]{16}$" }), cardLinkSourceSchema])).min(1).max(20).optional().describe(
+          "Select the supporting handles returned by readSlice, or supply exact {sliceId, turnId, quote} citations from that page. Omit for unrelated writes.",
         ),
       }),
     )
@@ -1278,19 +1319,43 @@ const caseWriterSchema = z.object({
   reasoning: z.string().describe("1-2 sentences for the developer log, incl. why cases were skipped."),
 });
 
-const CASE_WRITER_SYSTEM = buildSubAgentSystem(`You are the case writer of a personal memory system (v0.19). Memory is a tree of CASES — one directory per case under a closed category (people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/), each with an index.md (what it is, where it stands) and dated pieces.
+// Advertise the stricter native-card contract on the wire. At intake a mixed
+// report still reaches per-case validation so one missing source cannot
+// discard its independently sourced siblings.
+const caseWriterDecision = caseWriterSchema.shape.cases.element;
+const nativeCaseWriterDecision = caseWriterDecision.extend({
+  sources: caseWriterDecision.shape.sources.describe("The original user passages supporting this write. Copy their handles from readSlice or supply exact {sliceId, turnId, quote} citations. Case references belong in currentUnderstanding.evidence. A skip with no current understanding can omit sources."),
+}).meta({
+  anyOf: [
+    { required: ["sources"] },
+    { properties: { action: { const: "skip" } }, not: { required: ["currentUnderstanding"] } },
+  ],
+});
+const nativeCaseWriterSchema = caseWriterSchema.extend({
+  cases: z.array(nativeCaseWriterDecision).max(20),
+}).refine(({ cases }) => {
+  const writes = cases.filter((op) => op.action !== "skip" || op.currentUnderstanding);
+  return writes.length === 0 || writes.some((op) => op.sources?.length);
+}, {
+  path: ["cases"],
+  message: "Each write needs sources on that decision. Use readSlice and select the supporting source handle or supply the sliceId, turnId and exact quote. Return an empty cases list if no write is warranted.",
+});
+
+const CASE_WRITER_SYSTEM = buildSubAgentSystem(`You are the case writer of a personal memory system. Each case has a directory with an opening index.md and may contain dated pieces.
+
+${CASE_FILING_RULE}
 
 ${MEMORY_IS_GIT_RULE}
 
-A conversation slice just closed. You have a compact excerpt plus readSlice for its original semantic evidence, and the case manifest for discovery. readSlice is bound to this slice: use zero-based turn ranges and follow every continuation cursor when a turning point or long message matters. Judge WHICH cases this slice touched, but call readCase successfully on every existing target BEFORE naming it in a write. Manifest membership is not a read receipt. You return write-intents; engineering validates and applies them.
+A conversation slice just closed. You have a compact excerpt plus readSlice for its original semantic evidence, and the case manifest for discovery. readSlice is bound to this slice: use zero-based turn ranges and follow every continuation cursor when a turning point or long message matters. Read each existing target with readCase before proposing a write to it. Manifest membership is not a read receipt. You return write-intents; engineering validates and applies them.
 
 ## Task
 
-Per case you judge touched:
-- A new durable home → open (body = its opening overview; a focused piece gets its own distinct body).
+Choose the operation that fits the contribution:
+- A subject that warrants its own case → open (body = its opening overview; a focused piece gets its own distinct body).
 - An existing in-window index → updateIndex with the whole new historical body.
-- A settled index → appendTail for a short correction/link, or addPiece for a question worth revisiting independently. Read relevant existing pieces before adding another. A piece and its index navigation land together; neither reopens historical prose.
-- Revise the independent current view → reviseUnderstanding with currentUnderstanding { body, evidence }. You may also attach currentUnderstanding to another action or skip. This writes free-prose _current.md, never the frozen index. Its as-of date is mechanical. Changed prose preserves its previous view; metadata-only refreshes do not duplicate history.
+- A settled index → appendTail with line for a short correction/link, or addPiece with title and body for a question worth revisiting independently. Read relevant existing pieces before adding another. A piece and its index navigation land together; neither reopens historical prose.
+- When a historical write also changes today's understanding, include currentUnderstanding { body, evidence } on that same action so the two land together. For a current-view change alone, use reviseUnderstanding. This writes free-prose _current.md, never the frozen index. Its as-of date is mechanical. Changed prose preserves its previous view; metadata-only refreshes do not duplicate history.
 - Nothing worth writing → skip (an empty run is legal).
 
 ## Rules
@@ -1298,12 +1363,13 @@ Per case you judge touched:
 1. Ground facts in evidence actually returned by readSlice/readCase. Interpretations, questions, and competing explanations are allowed when labeled; do not invent evidence.
 2. currentUnderstanding.evidence must name only records/... or case refs you actually read in this run. It works for every category, not only people; use free prose, not a trait template.
 3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping. Cite evidence refs explicitly for a current view.
-4. Names are permanent: content beyond a case's scope → open a NEW case, never stretch a name.
+4. Case names are permanent. Keep each account within the scope of its name.
 5. ${DOC_WRITE_WINDOW_RULE} ${DOCUMENT_BUDGET_RULE} Tail supplements and current-view revisions never reopen a settled index.
+6. HQ owns task registration and lifecycle, the user portrait and capability SOPs. In your reasoning, flag any work for those tools with its source turn. You can supplement an existing task case with narrative context or file a separate observation about your own practice.
 
 ## Output
 
-Call \`caseWriterOutput\` with one decision per case + a short reasoning note.
+Call \`caseWriterOutput\` with your proposed decisions and a short reasoning note. An empty cases list is sufficient when there is no contribution.
 
 ${DOC_HOUSE_STYLE}`);
 
@@ -1343,6 +1409,7 @@ export interface LibrarianPassResult {
   llmRan: boolean;
   written: string[];
   skipped: Array<{ name: string; reason: string }>;
+  reasoning?: string;
 }
 
 /**
@@ -1363,14 +1430,39 @@ export async function runLibrarianPass(
   const legacySourceIds = (input.sourceTurnIds ?? []).filter((id) => !cardTurnIds.has(id));
   const cardSourcesRequired = cardTurnIds.size > 0 && legacySourceIds.length === 0;
   const cardReads = new Map<string, Array<{ text: string; raw: string }>>();
+  // A report accepts up to 20 decisions with 20 sources each. Other read
+  // passages can still be cited by verbatim quote.
+  const sourceHandles = new Map<string, { source: CardLinkSource; raw: string }>();
+  let observedRevision: string | undefined;
   const onPageRead = cardTurnIds.size > 0
     ? (page: SliceEvidencePage, raw: string) => {
+      if (page.revision !== observedRevision) {
+        sourceHandles.clear();
+        cardReads.clear();
+        observedRevision = page.revision;
+      }
+      const passages: WriterSourcePassage[] = [];
       for (const span of page.attribution) {
         if (span.role !== "user" || !span.turnId || !cardTurnIds.has(span.turnId)) continue;
+        const text = page.content.slice(span.start, span.end);
         const reads = cardReads.get(span.turnId) ?? [];
-        reads.push({ text: page.content.slice(span.start, span.end), raw });
+        reads.push({ text, raw });
         cardReads.set(span.turnId, reads);
+
+        const source = { sliceId: closedSliceId, turnId: span.turnId, quote: text.trim() };
+        const handle = "s" + caseStorageRevision(JSON.stringify([page.revision, source])).slice(0, 16);
+        const previous = sourceHandles.get(handle);
+        if (previous) {
+          if (previous.raw !== raw || previous.source.turnId !== source.turnId || previous.source.quote !== source.quote) continue;
+        } else {
+          if (sourceHandles.size >= 400) continue;
+          try { validateCardSource(source, raw); } catch { continue; }
+          sourceHandles.set(handle, { source, raw });
+        }
+        const start = span.start + text.length - text.trimStart().length;
+        passages.push({ handle, turnId: span.turnId, start, end: start + source.quote.length });
       }
+      return passages;
     }
     : undefined;
   // Manifest + batch are used only to reject an accidental open of an existing
@@ -1391,17 +1483,17 @@ ${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
 ${cardTurnIds.size ? `## Eligible user record cards
 ${JSON.stringify([...cardTurnIds])}
-${cardSourcesRequired ? "Every case write in this pass requires card sources; skip without currentUnderstanding is legal." : "Include card sources when a write draws on one of these user turns. Omit them for independent legacy or derived writes."}
-For each source give sliceId ${closedSliceId}, the specific turnId, and a verbatim quote contained in a readSlice page for that user turn. The host adds the source citation to the case itself. The excerpt, metadata, assistant text, or a quote from a different turn cannot authorize a citation. A card need not lead to a write.` : ""}
+${cardSourcesRequired ? "Every write in this pass needs a user source. If nothing warrants a write, return an empty cases list." : "Cite each eligible user record you use. Independent legacy or derived writes may omit card sources."}
+Before reporting a write based on a card, call readSlice for its original turn. When the excerpt supplies a zero-based turnIndex, use range: {type: "turns", indices: [turnIndex]}; otherwise locate the eligible turn in the bound slice. Select the verified passage that supports this decision and put its handle in sources. You may use the same handle for two decisions when it supports both. If the page has no handle for the passage you need, supply {sliceId: "${closedSliceId}", turnId, quote} with a continuous, verbatim passage from the returned user speech.` : ""}
 
-${input.researchProducts?.length ? `## 思考流 final result references\nThese are bounded candidate deltas from the exact result versions shared with 表达流. They are not user words, published speech, or your own read receipts. Read the original sources and target cases before reusing anything; preserve the proposal, uncertainty, and entity scope. No new document is owed just because a work produced a result.\n${JSON.stringify(input.researchProducts)}` : ""}
+${input.researchProducts?.length ? `## Research results shared with the reply writer\nThese are proposed updates from the exact versions passed to the reply writer. They are not user words, published speech, or your own read receipts. Read the original sources and target cases before reusing anything; preserve the proposal, uncertainty, and entity scope. A research result alone does not require a new document.\n${JSON.stringify(input.researchProducts)}` : ""}
 
 ## Case manifest (paths are discovery only, never read receipts; readCase every existing target)
 
 ${renderManifest(manifest.tree)}
 ${await confirmedDocumentProducts([{ sliceId: closedSliceId, turnIds: legacySourceIds }], batch)}
 ${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
-Report one decision per case as instructed.`;
+Report your filing decisions.`;
 
   const result = await runSubAgent({
     role: "recall",
@@ -1415,7 +1507,7 @@ Report one decision per case as instructed.`;
       readSlice: makeSliceReadTool({ sliceId: closedSliceId, batch, scope, onPageRead }),
       caseWriterOutput: tool({
         description: "Report the per-case write decisions.",
-        inputSchema: caseWriterSchema,
+        inputSchema: cardSourcesRequired ? nativeCaseWriterSchema : caseWriterSchema,
       }),
     },
     toolChoice: "required",
@@ -1437,6 +1529,10 @@ Report one decision per case as instructed.`;
     if (op.action === "skip" && !op.currentUnderstanding) continue;
     const caseName = sanitizeCaseSegment(op.caseName);
     const identity = `${op.category}/${caseName}`;
+    if (op.category === "tasks" && op.action === "open") {
+      skipped.push({ name: identity, reason: "Use createTask to register the user's commitment and open its task case together." });
+      continue;
+    }
     if (cardSourcesRequired && !op.sources?.length) {
       skipped.push({ name: identity, reason: "A case write in a native-card-only pass requires an exact user card source read with readSlice" });
       continue;
@@ -1450,7 +1546,10 @@ Report one decision per case as instructed.`;
       switch (op.action) {
         case "open":
           if (!op.body?.trim()) throw new Error("open requires a body (the index.md body)");
-          primary = { action: "open", category: op.category, caseName, body: op.sources?.length ? op.body : stampEvidence(op.body, closedSliceId) };
+          primary = {
+            action: "open", category: op.category, caseName, body: op.sources?.length ? op.body : stampEvidence(op.body, closedSliceId),
+            disconfirmingObservation: op.disconfirmingObservation,
+          };
           break;
         case "updateIndex":
           if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new body)");
@@ -1476,6 +1575,11 @@ Report one decision per case as instructed.`;
       }
       if (op.sources?.length) {
         const sources = op.sources.map((source) => {
+          if (typeof source === "string") {
+            const read = sourceHandles.get(source);
+            if (!read) throw new Error("Unknown source handle: select a verified user passage returned by readSlice in this pass");
+            return read;
+          }
           const read = source.sliceId === closedSliceId
             ? cardReads.get(source.turnId)?.find(({ text }) => text.includes(source.quote))
             : undefined;
@@ -1542,7 +1646,7 @@ Report one decision per case as instructed.`;
     }
   }
 
-  return { voided: [], llmRan: true, written, skipped };
+  return { voided: [], llmRan: true, written, skipped, reasoning: result.report.reasoning };
 }
 
 // ─── The scribe pass (书记段序 7) ──────────────────────────────────────────
@@ -1568,7 +1672,7 @@ const scribeSchema = z.object({
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
-const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memory system. A conversation slice left MARKERS — one-line notes the reply segment dropped when it judged something worth sedimenting (something to keep, a task the user stated). Your job: write each marker into its CASE.
+const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memory system. A marker proposes material for a particular case. Judge what the source adds about that subject. A passing mention can stay in the conversation.
 
 ${MEMORY_IS_GIT_RULE}
 
@@ -1770,7 +1874,7 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
         `title: ${marker.title}\nnote: ${marker.note || "(none)"}` +
         `${marker.dateAnchor ? `\ndateAnchor: ${marker.dateAnchor}` : ""}\n` +
         `${marker.body?.trim() ? "sourceMaterial: preserved separately; use addPiece or verified covered, never a tail\n" : ""}` +
-        `target case: ${category}/${caseName} (${existed ? "exists — full index and current view below" : "to be opened"})`;
+        `target case: ${category}/${caseName} (${existed ? "exists — full index and current view below" : "no existing case at this path"})`;
       return displayText ? `${head}\n\n${displayText.trim()}` : head;
     })
     .join("\n\n");
@@ -1786,7 +1890,7 @@ ${sliceExcerptNotice(excerpt)}
 
 ${await confirmedDocumentProducts([{ sliceId, turnIds: input.sourceTurnIds ?? [] }], batch)}
 
-## Markers to write (targets read before writing)
+## Markers to assess
 
 ${markerBlocks}
 

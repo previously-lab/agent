@@ -3,8 +3,8 @@
  * that name papers which are not cases:
  *
  *   records/<sliceId>      → a slice's transcript (原文级, the turns as said)
- *   dossier/previously     → memory/episodic/current-previously.md
- *   dossier/direction      → memory/evolution/direction.md
+ *   dossier/previously     → the retrospective half of memory/people/user/index.md
+ *   dossier/direction      → the portrait and hypotheses half of that same document
  *
  * `records` and `dossier` are NOT case categories, so a ref in either kind
  * can never parse as a case — but `parseCaseRef`'s legacy fallback WOULD

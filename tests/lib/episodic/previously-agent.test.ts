@@ -439,10 +439,10 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
     const opts = runSubAgentMock.mock.calls[0][0];
     // The static role prompt carries the investigator's-account discipline…
     expect(opts.system).toContain("investigator's account");
-    expect(opts.system).toContain("工程侧");
+    expect(opts.system).toContain("Keep implementation commentary out of the case");
     // …and the dynamic section offering the SOP writes repeats it.
     expect(opts.prompt).toContain("## self/ SOPs writable this run");
-    expect(opts.prompt).toContain("工程侧");
+    expect(opts.prompt).toContain("Keep implementation commentary out of the case");
   });
 });
 
@@ -480,7 +480,7 @@ describe("the merged direction half (directionEval)", () => {
     });
     await runPreviouslyAgent(baseInput({ directionEval: DIRECTION_EVAL }));
     const opts = runSubAgentMock.mock.calls[0][0];
-    expect(opts.prompt).toContain("## Direction evaluation (FIRST");
+    expect(opts.prompt).toContain("## Direction evaluation (alongside the retrospective card)");
     expect(opts.prompt).toContain("Mode: steady");
     expect(opts.prompt).toContain("The user prefers concrete answers.");
     expect(opts.prompt).toContain("Don't decompose emotional venting");
@@ -491,12 +491,14 @@ describe("the merged direction half (directionEval)", () => {
     expect(opts.system).not.toContain("The user prefers concrete answers.");
   });
 
-  it("direction MUTATION tools edit the working copy; a moved direction rides the output", async () => {
+  it("direction MUTATION tools use original user evidence and preserve earlier entries", async () => {
+    const refs = ["2026-08-12-1430", "2026-08-15-1015"];
     runSubAgentMock.mockImplementation(async (opts) => {
+      for (const sliceId of refs) await callTool(opts, "readSlice", { sliceId });
       await callTool(opts, "addPortraitEntry", {
         dimension: "## Communication preferences",
         text: "The user prefers concrete, evidence-anchored answers",
-        refs: ["2026-08-20-1430", "2026-08-22-1015"],
+        refs,
       });
       await callTool(opts, "addHypothesis", {
         text: "The user may think better late at night",
@@ -512,17 +514,36 @@ describe("the merged direction half (directionEval)", () => {
         text: "",
       };
     });
-    const out = await runPreviouslyAgent(baseInput({ directionEval: DIRECTION_EVAL }));
+    const out = await runPreviouslyAgent(baseInput({
+      directionEval: DIRECTION_EVAL,
+      readSliceFn: async (id) => JSON.stringify({ source: { kind: "conversation_record", ref: `records/${id}` },
+        turns: [{ role: "user", sourceRole: "user", content: "I used the figures in that comparison." }] }),
+    }));
     expect(out.direction?.summary).toBe("Direction: new portrait entry + one guess");
     // The old doc's lines survive untouched (mutation, not a rewrite).
     expect(out.direction?.doc).toContain("The user prefers concrete answers.");
     expect(out.direction?.doc).toContain(
-      "- The user prefers concrete, evidence-anchored answers — refs: 2026-08-20-1430, 2026-08-22-1015",
+      "- The user prefers concrete, evidence-anchored answers — refs: 2026-08-12-1430, 2026-08-15-1015",
     );
     // Engineering stamps the [proposed] pointer with the current slice.
     expect(out.direction?.doc).toContain(
       `- [proposed ${SLICE}] The user may think better late at night — falsify if: late-slice energy stays flat`,
     );
+  });
+
+  it("requires a verified user quotation for a confirmed claim from one situation", async () => {
+    runSubAgentMock.mockImplementation(async opts => {
+      const entry = { dimension: "## Triggers & rhythms", text: "More prone to waking at sudden sounds.", refs: [SLICE] };
+      expect(await callTool(opts, "addPortraitEntry", entry)).toContain("REJECTED");
+      expect(await callTool(opts, "addPortraitEntry", { ...entry, selfDescription: "Loud music never bothers me" })).toContain("REJECTED");
+      expect(await callTool(opts, "addPortraitEntry", { ...entry, selfDescription: "Sudden sounds wake me up wherever I sleep." })).toContain("OK");
+      return { ok: true, report: { reasoning: "Stated sleep pattern.", summary: "Updated." }, text: "" };
+    });
+    const result = await runPreviouslyAgent(baseInput({ directionEval: DIRECTION_EVAL, recentTurns: [
+      { role: "assistant", content: "Loud music never bothers me" },
+      { role: "user", content: "Sudden sounds wake me up wherever I sleep." },
+    ] }));
+    expect(result.direction?.doc).toContain("More prone to waking at sudden sounds.");
   });
 
   it("direction tools are NOT mounted when no directionEval was requested (explicit-request path)", async () => {

@@ -66,6 +66,35 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+describe("retired user model migration", () => {
+  it("writes the replacement and byte-exact historical source as one batch", async () => {
+    const { replaceLegacyUserModel } = await import("@/lib/evolution/user-model-maintenance");
+    const { writeUserModelCard } = await import("@/lib/evolution/store");
+    const { createBatch, flushBatch } = await import("@/lib/episodic/io-helpers");
+    const { parseHistoryArchive } = await import("@/lib/docs/history-archive");
+    const source = "# Previously On\r\n\r\n## Horizon\r\n- Historical promise.\r\n\r\n## Self-model\r\n- Reopen sources before citing them.  \r\n";
+    writeModel(source);
+    const batch = createBatch();
+    await replaceLegacyUserModel(source, "2026-11-13-1200", batch, pending => writeUserModelCard("Reviewed card.", pending));
+    const archive = [...batch.entries.entries()].find(([key]) => key.includes("-history-v1-"));
+    expect(parseHistoryArchive(archive![1]!)?.payload).toBe(source);
+    expect(readModel()).toBe(source);
+    await flushBatch(batch, "Review legacy source");
+    expect(readModel()).toBe("Reviewed card.");
+    expect(fs.existsSync(path.join(tmpDir, archive![0]))).toBe(true);
+  });
+
+  it("rejects a changed legacy source before replacing or archiving it", async () => {
+    const { replaceLegacyUserModel } = await import("@/lib/evolution/user-model-maintenance");
+    const { createBatch } = await import("@/lib/episodic/io-helpers");
+    const batch = createBatch();
+    const write = vi.fn();
+    await expect(replaceLegacyUserModel("outdated model", "2026-11-13-1200", batch, write)).rejects.toThrow("changed");
+    expect(write).not.toHaveBeenCalled();
+    expect(batch.entries.size).toBe(0);
+  });
+});
+
 describe("maintainUserModelHypothesisTtl", () => {
   it("persists expired-hypothesis retirement without requiring an agent pass", async () => {
     const result = await maintain("2026-11-13-1200");

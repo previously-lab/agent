@@ -12,7 +12,7 @@ import { findCaseReadReceipt, parseCaseReadEnvelope, unwrapCaseReadEnvelope } fr
 import { parseRecallOutput } from "@/lib/chat/recall-output";
 import { mediateReplayedRecordReads, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
 import type { ScenarioRecallEvidence, ScenarioRecallResult } from "@/lib/agents/scenario-recall";
-import { collectThinkingReads } from "@/lib/agents/thinking-read-receipt";
+import { collectThinkingReads, readReceipt } from "@/lib/agents/thinking-read-receipt";
 import { buildThinkingProduct, permitsThinkingClaim } from "@/lib/agents/thinking-product";
 import type { ModelMessage } from "@/lib/deepseek/types";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
@@ -288,6 +288,14 @@ describe("recallFindExecute", () => {
 });
 
 describe("recallSearchExecute", () => {
+  it("puts the named case's actual passage on the first work receipt for a keyword pair", async () => {
+    io.files.set("memory/research/河岸墙体施工/index.md", "现场那段砌体仍需施工，南端已量完。");
+    io.files.set("memory/research/其他街区/index.md", "河岸那头的施工已经结束。");
+    const out = await recallSearchExecute({ category: "research", query: ["河岸", "施工"], limit: 1 },
+      opts({ ...makeCtx("2026-09-10-1000"), thinkingFlow: true }));
+    expect(readReceipt(out)?.reads).toMatchObject([{ ref: "research/河岸墙体施工", excerpt: "现场那段砌体仍需施工，南端已量完。" }]);
+  });
+
   it("passes the requested conversation date and timezone through to later-filed case search", async () => {
     const ref = "things/回复阶段";
     const raw = "---\nopened: '2026-11-15'\n---\n实际收到多流回执。\n" +

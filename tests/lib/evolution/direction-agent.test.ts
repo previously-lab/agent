@@ -158,6 +158,12 @@ describe("validateDirectionProposal", () => {
     if (!res.ok) expect(res.reason).toContain("malformed hypothesis line");
   });
 
+  it("can withdraw the last refuted entry without inventing new supporting evidence", () => {
+    const shell = ["# Portrait", ...DIMENSIONS, "# Hypotheses"].join("\n\n");
+    expect(validateDirectionProposal(shell, shell + "\n" + hypLine("2026-08-20-1430", "May prefer mornings."), { mode: "steady", checkedMutations: true })).toEqual({ ok: true });
+    expect(validateDirectionProposal(shell, null, { mode: "bootstrap", checkedMutations: true }).ok).toBe(false);
+  });
+
   it("steady state needs ≥2 DISTINCT slice pointers (cross-slice bar)", () => {
     // The SAME pointer twice still counts once.
     const onePointer = VALID_PROPOSAL.replace(
@@ -518,6 +524,11 @@ describe("directionSubstance (the shared placeholder rule)", () => {
 });
 
 describe("buildDirectionBlock", () => {
+  it("keeps established entries visible when another section still has an old placeholder", () => {
+    const current = VALID_PROPOSAL.replace(/# Hypotheses[\s\S]*$/, "# Hypotheses\n\n_(Not set yet.)_");
+    expect(detectDirectionMode(current)).toBe("steady");
+    expect(buildDirectionBlock(current)).toContain("## Traits & cognitive style");
+  });
   it("is empty for a missing doc and for the untouched template", () => {
     expect(buildDirectionBlock(null)).toBe("");
     expect(

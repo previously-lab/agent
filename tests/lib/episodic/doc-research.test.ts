@@ -290,6 +290,32 @@ describe("runDocResearchPass — case model", () => {
     expect(raw).toContain(`(refs: ${SLICE_ID})`);
   });
 
+  it("preserves the researcher's concrete counter-observation in its original language", async () => {
+    seedQuestions();
+    const observation = "Si el consumo sigue igual al bajar el brillo en la misma prueba, la pantalla no explica la diferencia.";
+    mockResearchRun([{
+      action: "open", category: "hypotheses", caseName: "Pantalla",
+      body: "Explicación provisional: el brillo podría explicar la diferencia de consumo.",
+      disconfirmingObservation: observation,
+    }]);
+    const result = await runDocResearchPass({ model, sliceId: SLICE_ID, excerpt: EXCERPT, date: DATE });
+    expect(result.written).toEqual(["hypotheses/Pantalla/index.md"]);
+    expect(io.files.get("memory/hypotheses/Pantalla/index.md")).toContain(observation);
+    expect(researchRecords()).toEqual([{ id: "q-1", docs: ["hypotheses/Pantalla/index.md"] }]);
+  });
+
+  it("leaves the question pending when the structured counter-observation is blank", async () => {
+    seedQuestions();
+    mockResearchRun([{
+      action: "open", category: "hypotheses", caseName: "Screen power",
+      body: "The observed difference might be due to brightness.", disconfirmingObservation: "   ",
+    }]);
+    const result = await runDocResearchPass({ model, sliceId: SLICE_ID, excerpt: EXCERPT, date: DATE });
+    expect(result.written).toEqual([]);
+    expect(io.files.has("memory/hypotheses/Screen power/index.md")).toBe(false);
+    expect(researchRecords()).toEqual([]);
+  });
+
   it("the question run may only OPEN research/ or hypotheses/ cases", async () => {
     seedQuestions();
     ai.streamText.mockResolvedValue(

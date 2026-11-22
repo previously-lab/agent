@@ -63,6 +63,7 @@ import {
   SCRIBE_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
 import { CaseWriteRefusal, WriteRefusal, parseCaseDoc } from "@/lib/docs";
+import { CASE_FILING_RULE } from "@/lib/identity/agent-prompt.generated";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { RunSubAgentOptions } from "@/lib/agents/sub-agent-runner";
 
@@ -375,6 +376,26 @@ describe("applyCaseWriteIntent", () => {
     );
   });
 
+  it("accepts an answered disconfirmation question in a hypothesis section", async () => {
+    const entry = { action: "open", category: "hypotheses", caseName: "开裂与温度" } as const;
+    await expect(applyCaseWriteIntent({
+      ...entry, body: "## 什么会推翻它\n\n## 观察\n这次出现了裂纹。",
+    }, DATE)).rejects.toThrow(/no falsification condition/);
+    const body = "降温过快可能导致开裂。\n\n## 什么会推翻它\n\n如果放慢降温后仍开裂，就得推翻这个解释。";
+    const result = await applyCaseWriteIntent({ ...entry, body }, DATE);
+    expect(io.files.get(result.path)).toContain(body);
+  });
+
+  it.each([false, true])("keeps the structured observation once when the overview already contains it: %s", async (included) => {
+    const observation = "Si el esmalte se agrieta al enfriarlo lentamente, descartaremos esa explicación.";
+    const overview = "No sabemos si el enfriamiento rápido produjo las grietas.";
+    const body = included ? `${overview}\n\n${observation}` : overview;
+    const result = await applyCaseWriteIntent({
+      action: "open", category: "hypotheses", caseName: "Esmalte", body, disconfirmingObservation: observation,
+    }, DATE);
+    expect(io.files.get(result.path)?.split(observation)).toHaveLength(2);
+  });
+
   it("appendTail collapses a multi-line line to ONE line and records the collapse as a warning", async () => {
     io.files.set(
       "memory/research/旧案/index.md",
@@ -408,6 +429,32 @@ describe("applyCaseWriteIntent", () => {
 // ─── The case-writer pass (边界 run ①) ─────────────────────────────────────
 
 describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
+  it("keeps new commitments and capability SOPs with their owners while filing ordinary case context", async () => {
+    const existingTask = "memory/tasks/Book the venue/index.md";
+    const oldSop = "memory/self/search/index.md";
+    const existingDoc = "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\nOriginal.\n";
+    io.files.set(existingTask, existingDoc);
+    io.files.set(oldSop, existingDoc);
+    mockWriterRun([
+      { action: "open", category: "tasks", caseName: "Call the venue", body: "I will call tomorrow." },
+      { action: "appendTail", category: "self", caseName: "search", line: "Change the search procedure." },
+      { action: "open", category: "self", caseName: "ThinkDeep", body: "Change the reasoning procedure." },
+      { action: "appendTail", category: "tasks", caseName: "Book the venue", line: "The venue sent its access details." },
+      { action: "open", category: "self", caseName: "Attribution", body: "I confused the speaker and corrected the attribution." },
+    ], ["self/search", "tasks/Book the venue"]);
+    const result = await runLibrarianPass({ model, closedSliceId: SLICE_ID, excerpt: EXCERPT, manifest: MANIFEST, date: DATE });
+    expect(result.skipped).toEqual([
+      { name: "tasks/Call the venue", reason: expect.stringContaining("createTask") },
+      { name: "self/search", reason: expect.stringContaining("writeSelfSop") },
+      { name: "self/ThinkDeep", reason: expect.stringContaining("writeSelfSop") },
+    ]);
+    expect(io.files.has("memory/tasks/Call the venue/index.md")).toBe(false);
+    expect(io.files.has("memory/self/ThinkDeep/index.md")).toBe(false);
+    expect(io.files.get(oldSop)).toBe(existingDoc);
+    expect(io.files.get(existingTask)).toContain("The venue sent its access details.");
+    expect(result.written).toEqual(["tasks/Book the venue/index.md", "self/Attribution/index.md"]);
+  });
+
   it("opens a NEW case the writer judges this slice touched", async () => {
     ai.streamText.mockResolvedValue(
       streamWith([
@@ -549,6 +596,9 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
       manifest: MANIFEST,
       date: DATE,
     });
+    expect(ai.streamText).toHaveBeenCalledWith(expect.objectContaining({
+      system: expect.stringContaining(CASE_FILING_RULE),
+    }));
     expect(result.llmRan).toBe(true);
     expect(result.written).toEqual([]);
     expect(io.files.size).toBe(0);

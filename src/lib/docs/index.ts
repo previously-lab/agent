@@ -41,6 +41,7 @@ export { normalizeDocRef, docPathCandidates } from "./references";
 export {
   CASE_CATEGORIES,
   isCaseCategory,
+  isUserModelCase,
   caseDirPath,
   caseIndexPath,
   casePiecePath,

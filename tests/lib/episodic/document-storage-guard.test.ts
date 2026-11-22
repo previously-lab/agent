@@ -132,6 +132,33 @@ describe("real local document publication", () => {
 });
 
 describe("writer recovery and shared batches", () => {
+  it("preserves the user model and its self-description when generic case writers or citation tools target it", async () => {
+    const { createBatch } = await import("@/lib/episodic/io-helpers");
+    const { applyCaseWriteIntent } = await import("@/lib/episodic/flash/librarian");
+    const { stageCaseCardCitation } = await import("@/lib/episodic/card-evidence");
+    const date = "2026-11-03";
+    const source = { sliceId: "2026-11-03-1200", turnId: "contact", quote: "Ari restores instruments." };
+    const raw = `## Turn contact — 2026-11-03T12:00:00Z (user) [body-escaped v1]\n\n${source.quote}`;
+    const userPath = "memory/people/user/index.md";
+    const profilePath = "memory/people/user/profile.md";
+    seed(userPath, "# Previously On\nA reflection-owned portrait.");
+    seed(profilePath, "My own description.");
+    const batch = createBatch();
+    for (const caseName of ["user", "User"]) {
+      await expect(applyCaseWriteIntent({ action: "appendTail", category: "people", caseName, line: source.quote }, date, batch))
+        .rejects.toThrow(/evolveProfile/);
+      await expect(stageCaseCardCitation(batch, `memory/people/${caseName}/index.md`, source, raw, date))
+        .rejects.toThrow(/evolveProfile/);
+    }
+    expect(batch.entries.size).toBe(0);
+    expect(disk(userPath)).toBe("# Previously On\nA reflection-owned portrait.");
+    expect(disk(profilePath)).toBe("My own description.");
+
+    const contact = await applyCaseWriteIntent({ action: "open", category: "people", caseName: "Ari", body: source.quote }, date, batch);
+    await stageCaseCardCitation(batch, contact.path, source, raw, date);
+    expect(batch.entries.get(contact.path)).toContain("turn=contact&role=user");
+  });
+
   it("merges a case delta without restoring an unrelated non-case writer's old pending bytes", async () => {
     seed(target, rawIndex);
     const io = await import("@/lib/episodic/io-helpers");

@@ -5,7 +5,7 @@ import {
   appendContextSuffix,
   SPACE_FICTION_BLOCK,
 } from "@/app/api/chat/turn-workflow";
-import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
+import { CASE_FILING_RULE, CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
 
 const IDENTITY = "THE CHARTER";
 const PREVIOUSLY = "# Previously card";
@@ -183,10 +183,10 @@ describe("the Previously charter", () => {
     expect(CHARTER_MD).not.toContain("yours is the only mouth");
   });
 
-  it("carries the v0.30 write discipline: the pen is the exception — only a user-named task earns a write, and the revisit bar is gone", () => {
+  it("routes an explicit documentation request to its subject and an action to the ledger", () => {
     expect(CHARTER_MD).toContain("Your pen is the exception; your voice is the rule");
-    expect(CHARTER_MD).toContain("the user explicitly asks you to write something down");
-    expect(CHARTER_MD).toContain("write it first, then answer from what you wrote");
+    expect(CHARTER_MD).toContain("the user explicitly asks you to document a subject");
+    expect(CHARTER_MD).toContain("a request to track an action goes to the task ledger");
     expect(CHARTER_MD).toContain("you never announce a write");
     // R6: the read-back-before-mentioning discipline stays.
     expect(CHARTER_MD).toContain("never tell the user a document exists until you have read it back with `recallRead`");
@@ -199,8 +199,9 @@ describe("the Previously charter", () => {
   it("positions writeCase as the field's single-job write (a user-named task), with the tasks naming discipline", () => {
     expect(CHARTER_MD).toContain("stays on your tool surface for one job");
     expect(CHARTER_MD).toContain("Categories `people/user` and `self/` still refuse you");
-    // The category semantics: what the case IS decides, not what it mentions.
-    expect(CHARTER_MD).toContain("what the case IS, not what it mentions");
+    expect(CASE_FILING_RULE).toMatch(/\bplaces\//i);
+    expect(CASE_FILING_RULE).toMatch(/\bevents\//i);
+    expect(build({ identityPrompt: CHARTER_MD })).toContain(CASE_FILING_RULE);
     // §6(f): hypotheses carry their falsification condition.
     expect(CHARTER_MD).toContain("`hypotheses/` (state what would falsify it)");
     // The naming discipline: a task case is named specific to one action.
@@ -241,10 +242,11 @@ describe("the Previously charter", () => {
     expect(CHARTER_MD).toContain("a search-desk copy of yourself");
   });
 
-  it("pins the language rule: prompts are English, memory documents are the user's language and never mixed", () => {
+  it("uses English instructions, the user's language for authored prose and the source language for quotations", () => {
     expect(CHARTER_MD).toContain("The languages of your work");
     expect(CHARTER_MD).toContain("Prompts and instructions are English");
-    expect(CHARTER_MD).toContain("written in the user's own language, and one document never mixes languages");
+    expect(CHARTER_MD).toContain("prose of each memory document in the user's own language");
+    expect(CHARTER_MD).toContain("quotations in their original language");
   });
 
   it("teaches the write-window lifecycle, not the retired closed/draft one (v0.21 §12)", () => {

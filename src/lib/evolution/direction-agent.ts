@@ -60,6 +60,7 @@
  */
 import { z } from "zod";
 import { isDirectionTemplate } from "./store";
+import { canonicalScenarioFromRef } from "./slice-ref";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 
 // ─── Proposal validation (the code-level half of the writing discipline) ────
@@ -171,8 +172,6 @@ export function retireExpiredHypotheses(
 // (validateDirectionProposal — skeleton / substance / evidence bar) and the
 // engineering TTL (retireExpiredHypotheses) before writeUserModelDirection.
 
-/** A refs entry: a slice id, optionally turn-qualified (2026-08-07-0709-abc123). */
-const SLICE_REF_RE = /^\d{4}-\d{2}-\d{2}-\d{4}(-[0-9a-z]{4,})?$/i;
 
 export const directionOpSchema = z.discriminatedUnion("op", [
   z.object({
@@ -287,7 +286,7 @@ function validatePortraitPayload(
   }
   const cleanRefs = refs.map((r) => r.trim()).filter(Boolean);
   if (cleanRefs.length === 0) return "a Portrait entry needs ≥1 evidence ref (slice id)";
-  const bad = cleanRefs.find((r) => !SLICE_REF_RE.test(r));
+  const bad = cleanRefs.find((ref) => ref.startsWith("records/") || !canonicalScenarioFromRef(ref));
   if (bad) return `ref "${bad}" is not a slice id (YYYY-MM-DD-HHMM)`;
   return null;
 }
@@ -488,7 +487,9 @@ export type DirectionMode = "bootstrap" | "migrate" | "steady";
  * from the first portrait skeleton) → migrate; anything else → steady.
  */
 export function detectDirectionMode(current: string | null): DirectionMode {
-  if (isDirectionTemplate(current)) return "bootstrap";
+  if (isDirectionTemplate(current) &&
+    !directionSubstance(extractDirectionSection(current ?? "", "# Portrait")) &&
+    !directionSubstance(extractDirectionSection(current ?? "", "# Hypotheses"))) return "bootstrap";
   if (/^# (Direction|Anti-goals|Evidence|Log)\s*$/m.test(current ?? "")) {
     return "migrate";
   }
@@ -572,7 +573,7 @@ export function directionSubstance(section: string | null): string {
 export function validateDirectionProposal(
   proposed: string,
   current: string | null,
-  opts?: { mode?: DirectionMode },
+  opts?: { mode?: DirectionMode; checkedMutations?: boolean },
 ): DirectionValidation {
   const text = proposed.trim();
   if (!text) return { ok: false, reason: "proposal is empty" };
@@ -604,7 +605,9 @@ export function validateDirectionProposal(
   const hypSubstance = directionSubstance(
     extractDirectionSection(text, "# Hypotheses"),
   );
-  if (!portraitSubstance && !hypSubstance) {
+  const removingLastEntry = opts?.checkedMutations && current &&
+    (directionSubstance(extractDirectionSection(current, "# Portrait")) || directionSubstance(extractDirectionSection(current, "# Hypotheses")));
+  if (!portraitSubstance && !hypSubstance && !removingLastEntry) {
     return {
       ok: false,
       reason:
@@ -663,7 +666,9 @@ export function validateDirectionProposal(
   // refs tails + hypothesis proposed markers).
   const pointers = new Set(text.match(SLICE_ID_RE) ?? []);
   const lowered = opts?.mode === "bootstrap" || opts?.mode === "migrate";
-  const minPointers = lowered ? 1 : 2;
+  // Verified entry mutations already checked the evidence for each changed claim.
+  // Removing the final unsupported entry needs no replacement evidence.
+  const minPointers = opts?.checkedMutations ? (portraitSubstance || hypSubstance ? 1 : 0) : lowered ? 1 : 2;
   if (pointers.size < minPointers) {
     return {
       ok: false,
@@ -689,7 +694,6 @@ export function validateDirectionProposal(
  * migration) — the layer is then omitted entirely.
  */
 export function buildDirectionBlock(direction: string | null): string {
-  if (isDirectionTemplate(direction)) return "";
   // The emptiness decision is the strict substance rule (headings/placeholder
   // lines are not content); the RENDER keeps the raw body so the Portrait's
   // six-dimension structure survives into the prompt.

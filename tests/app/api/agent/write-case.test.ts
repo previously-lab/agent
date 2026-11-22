@@ -97,7 +97,7 @@ async function actualRead(ref: string, context = ctx): Promise<{ messages: Model
 }
 
 async function call(
-  input: { category?: string; caseName: string; body: string; pieceTitle?: string; overviewBody?: string },
+  input: Parameters<typeof writeCaseExecute>[0],
   toolCallId = "call-1",
 ) {
   const ref = `${input.category ?? "research"}/${input.caseName}`;
@@ -113,6 +113,20 @@ beforeEach(() => {
 });
 
 describe("writeCase — open", () => {
+  it("accepts a counter-observation in the user's own words in a new hypothesis overview with a first piece", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const observation = "如果换了另一块电池仍然重启，就需要重新考虑电池故障这个判断。";
+    const input = {
+      category: "hypotheses", caseName: "重启与电池", pieceTitle: "第一次试机",
+      overviewBody: `旧电池可能导致重启。${observation}`, body: "记录了本次重启时的电量。",
+      disconfirmingObservation: observation,
+    };
+    const schema = chatTools.writeCase.inputSchema;
+    expect(schema.parse(input)).toHaveProperty("disconfirmingObservation", observation);
+    expect(await call(input)).toMatchObject({ ok: true, action: "addPiece" });
+    expect(io.files.get("memory/hypotheses/重启与电池/index.md")).toContain(observation);
+  });
+
   it("opens a new research case; the body lands verbatim (no machine fields)", async () => {
     const r = await call({ caseName: "手机调研", body: "调研正文。" }, "call-1");
     expect(r).toEqual({

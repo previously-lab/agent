@@ -55,7 +55,7 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
   flushBatch: vi.fn(),
 }));
 
-import { getRecordDoc, getRoomPapers, verifyRefs } from "@/lib/archive/actions";
+import { getDossierDoc, getDossierList, getRecordDoc, getRoomPapers, verifyRefs } from "@/lib/archive/actions";
 
 describe("getRecordDoc attribution", () => {
   it("preserves neutral roles and the same attachment metadata without relabeling it as speech", async () => {
@@ -172,12 +172,24 @@ describe("verifyRefs", () => {
     // The dossier's rule is a non-empty BODY, not mere existence — the one
     // kind that still reads (blob-cached by sha on GitHub).
     mocks.fsReadFile.mockImplementation(async (path: string) => {
-      if (path === "memory/episodic/current-previously.md") return "card";
+      if (path === "memory/people/user/index.md") return "card";
+      if (path === "memory/evolution/direction.md") return "old direction";
       throw new Error("ENOENT");
     });
     const [alive, dead] = await verifyRefs(["dossier/previously", "dossier/direction"]);
     expect(alive.alive).toBe(true);
     expect(dead.alive).toBe(false);
+  });
+
+  it("opens each current half under its own stable reference and revision", async () => {
+    mocks.fsReadFile.mockResolvedValue("current card\n\n---\n\n# Portrait\n\nconfirmed pattern");
+    expect((await getDossierList()).map(row => row.available)).toEqual([true, true]);
+    const card = await getDossierDoc("dossier/previously");
+    const portrait = await getDossierDoc("dossier/direction");
+    expect(card?.markdown).toBe("current card");
+    expect(portrait?.markdown).toBe("# Portrait\n\nconfirmed pattern");
+    expect(card?.observedRevision).not.toBe(portrait?.observedRevision);
+    expect(mocks.fsReadFile.mock.calls.every(([path]) => path === "memory/people/user/index.md")).toBe(true);
   });
 
   it("a failed path-set enumeration fails dead, never throws", async () => {

@@ -10,6 +10,7 @@ import {
   serializeCard,
   parseCard,
   newCardTemplate,
+  projectLivePreviously,
   migrateV3ToCard,
   isCardFormat,
   findOverdueHorizonItems,
@@ -18,6 +19,13 @@ import {
   type PreviouslyBelief,
   type CardDocument,
 } from "@/lib/episodic/previously-format";
+
+it("keeps archived commitments and assistant lessons off the live retrospective without erasing intervening current sections", () => {
+  const card = "# Previously On\r\n\r\n## Horizon\r\n- Old promise\r\n## Past\r\nAn established milestone.\r\n## Self-model\r\n### Notes\r\nA search lesson.";
+  expect(projectLivePreviously(card)).toBe("# Previously On\r\n\r\n## Past\r\nAn established milestone.\r\n");
+  expect(projectLivePreviously("## User profile\nOld inference.\n## Self-model\nOld instruction.")).toBe("");
+  expect(projectLivePreviously("## Past\nA plain card.\n")).toBe("## Past\nA plain card.\n");
+});
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 

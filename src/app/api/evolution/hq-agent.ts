@@ -50,6 +50,7 @@ import { settleHistoryCheckpoint } from "@/lib/chat/reflection-history";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { CASE_FILING_RULE } from "@/lib/identity/agent-prompt.generated";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import {
   applyCaseWriteIntent,
@@ -60,7 +61,7 @@ import {
   runScribePass,
   type CaseWriteIntent,
 } from "@/lib/episodic/flash/librarian";
-import type { CaseCategory } from "@/lib/docs";
+import { isUserModelCase, type CaseCategory } from "@/lib/docs/paths";
 import { sanitizeCaseSegment } from "@/lib/docs/case-naming";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
@@ -88,7 +89,7 @@ import { buildReflectionTaskTools } from "./reflection-task-tools";
 import { RECORD_ATTRIBUTION_RULE, renderAttributedRecord } from "@/lib/episodic/record-attribution";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
-import { PEOPLE_USER_PROFILE_PATH } from "@/lib/evolution/paths";
+import { isCapabilitySopCase, PEOPLE_USER_PROFILE_PATH } from "@/lib/evolution/paths";
 import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
 import { archiveCaseDocument } from "@/lib/docs/archive-case";
 import {
@@ -191,19 +192,21 @@ The record is the channel. You are woken mechanically with a docket — a date, 
 - This round's material is the turn(s) named below — a slice may still be open; you owe the TURNS, not a seal. The cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
 - For each listed native user card, read the exact user message. Cite its exact words in writeCase sources when filing it, or use linkCard after reading the existing case if only a source citation is needed. After createTask/updateTask, readCase the task and linkCard its source. A single message can be cited in several cases. If you actually read a card and decide it warrants no case link, call skipArchiveTurn with its exact quote and a short reason. Do not skip a failed read or write; leave that card owed. hqReport itself does not settle a card.
 
+${CASE_FILING_RULE}
+
 Store RESULTS ONLY:
 - An idle round is a legal, often correct outcome — when the records show nothing substantive to store, write NOTHING and say why in your report. There is no ledger; do not record that you ran.
 - Dedup is writer-is-reader: you judge duplication by READING the current case state, not by consulting any log of past runs.
-- A substantive VETO (you checked and decided against a write the brief implied) leaves its REASON as prose — in self/ (your own craft) or in the relevant case body. Never a tally, never a counter.
+- When you rule out a substantive proposal, preserve the reason if it teaches the reader something about the case or your own practice. Routine skips need only their settlement reason.
 
 You decide what to do and in what order. The natural order, when several things are due:
 1. Verify first (reads before any write).
-2. Cases usually before people/user — the user model should cite the cases the round just wrote, not speak in generalities.
+2. File evidence with its subject. Consider a user-model change when it adds lasting background, a useful thread to pick up, or a supported pattern about the user. Someone else's proposal can belong entirely in a case. A due review can finish with both halves untouched.
 3. self/ comes last — craft reflections are informed by everything else the round did.
 
 Tasks are user commitments with lifecycle, not merely another prose directory. Every commitment, deadline, awaited reply, next action and task outcome belongs to this task system, never to a Horizon section in people/user. Query the task ledger for existing identities before creating an action. Use the supplied original user card or readRound for its exact words; createTask/updateTask quote that turn as evidence. An agent suggestion or a task document's old wording is not user authorization to complete, cancel or reopen anything. needs_review means the current state is unconfirmed; only direct user evidence resolves it, and the field agent may ask the user without treating silence as an answer. Task documents may deepen the account; their prose never replaces the ledger's status. Handle task writes before evolveProfile so the user-model pass remains background compression rather than a second task system.
 
-Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Keep competing interpretations, unanswered questions and what would change your mind in natural investigative prose. A substantive case must not be an empty folder or a quote-only copy of the record: give the future reader a concise interpretation, its limits and a path to evidence. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
+Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Where an open question or competing interpretation matters to that case, explain what evidence would help settle it. A substantive case must not be an empty folder or a quote-only copy of the record: give the future reader a concise interpretation, its limits and a path to evidence. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
 
 Procedural learning uses readSkillSource/querySkills/manageSkill. New or revised guidance is a candidate until explicitly adopted. Read the current source and raw evidence; preserve a stable id when revising. Expected benefit is a hypothesis, not proof of improvement. Only a later observed applicable scenario can support a positive review; absent one, defer or review inconclusively. Direct SOP rewrites separately require readSelfSop and its baseRevision. A worker's reads are its own, never receipts you may borrow.
 
@@ -215,11 +218,11 @@ Craft notes:
 - ${MEMORY_IS_GIT_RULE}
 - Mailbox marker lines in a slice's agent.md are prose CLUES, not triggers — read them, judge them, ignore them when stale.
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
-- research/ hypotheses must carry a falsification condition (the write tooling enforces it).
+- When opening a hypotheses/ case about the world, state what observation would count against the proposed explanation. A research/ case can report findings and open questions. A prediction about one case can wait there. A possible tendency across the user's situations goes to Direction only with evidence about the user.
 - ${DOC_LANGUAGE_RULE}
 
 Your agenda — notes to yourself:
-- memory/self/agenda.md is your own work pad: hypotheses to re-check, judgments to revisit, questions you left for yourself. One line per item: \`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）\` — the [due:] prefix is the only mechanical contract, and every item carries its source (the slice id that motivated it).
+- memory/self/agenda.md is your own work pad for a review that has a reason to happen on a particular date. A case question that awaits new evidence belongs with its subject. One line per agenda item: \`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）\` — the [due:] prefix is the only mechanical contract, and every item carries its source (the slice id that motivated it).
 - Due items ride WITH the round: any item whose due date has arrived is listed in your docket. Work it, reschedule it (rewrite its due date), or consume it (drop its line) — every change is a full rewrite through setAgenda.
 - The agenda is a work pad, not a ledger — keep it short.
 
@@ -230,7 +233,7 @@ How your prose reads — the investigator's account, never the work order:
 
 ${DOC_HOUSE_STYLE}`;
 
-const CARD_REVIEW_ROLE = `You maintain the agent's memory after it answered the user. Read the original and use assessCard to decide whether the message adds anything that needs work in memory. A question recalling an existing detail is usually complete in itself. The old detail it asks about is not a new user observation. A correction, commitment, new decision, or a genuine uncertainty about how to file it can require work. The user's exact words are evidence; a guess about their interests is not.
+const CARD_REVIEW_ROLE = `You maintain the agent's memory after it answered the user. Read the original and use assessCard to decide what a reader returning to the subject would learn. A greeting, a name mentioned in passing, or a question recalling an existing detail can stay in the conversation. A change in a person's responsibilities, an observation about life in a place, a tentative plan or a reversal can matter at once. Open full review when understanding a consequential detail requires nearby context. Ground this judgment in the user's words.
 
 Assess all the obligations the message actually introduces, including task or procedural work. The separately due profile pass reads the slice and user model itself. Finish with hqReport from actual tool receipts.`;
 
@@ -673,12 +676,15 @@ function buildHqTools(
           ])
           .optional()
           .describe(
-            "What the case IS decides the category (see the tool description). " +
+            "Choose the category for the subject a reader comes to this case to understand. " +
             "Defaults to research — same schema as the field side's writeCase. " +
             "self/ is the reflection unit's own and is refused to the field agent.",
           ),
         caseName: z.string(),
         body: z.string().optional(),
+        disconfirmingObservation: z.string().trim().min(1).optional().describe(
+          "For a new hypothesis, state a concrete observation that would count against it. This is saved in the opening overview. Use the document's language.",
+        ),
         line: z.string().optional(),
         title: z.string().optional(),
         evidence: z.array(z.string().min(1)).min(1).max(20).optional(),
@@ -697,13 +703,6 @@ function buildHqTools(
           return `REJECTED: ${reason}`;
         };
         if (nativeOnly && !args.sources?.length) return reject("Native-only filing requires exact user card sources from readRound");
-        // people/user/index.md is the USER MODEL — pure prose maintained by
-        // the merged card pass (evolveProfile), every byte of it injected
-        // into each turn. Routing it through the case machinery would stamp
-        // case frontmatter into that prose; refuse mechanically instead.
-        if (args.category === "people" && args.caseName === "user") {
-          return reject("people/user is the user model, not a case — use evolveProfile (other people/* cases stay legal).");
-        }
         // The runtime category check lives in applyCaseWriteIntent
         // (isCaseCategory throws on an unknown category) — one enforcement point.
         // Names come from the model — normalize before anything else touches
@@ -712,7 +711,10 @@ function buildHqTools(
         // writeCase (one schema, two posts).
         const category = (args.category ?? "research") as CaseCategory;
         const base = { category, caseName: sanitizeCaseSegment(args.caseName) };
-        if (category === "self" && ["search", "thinkdeep"].includes(base.caseName)) {
+        if (isUserModelCase(category, base.caseName)) {
+          return reject("people/user is the user model, not a case — use evolveProfile (other people/* cases stay legal).");
+        }
+        if (isCapabilitySopCase(category, base.caseName)) {
           return reject("capability SOPs use readSelfSop/writeSelfSop; generic case writes cannot bypass their revision and evidence gates");
         }
         if (category === "tasks" && args.action === "open") {
@@ -727,7 +729,7 @@ function buildHqTools(
             break;
           case "open":
             if (!args.body) return reject("open requires body");
-            intent = { action: "open", ...base, body: args.body };
+            intent = { action: "open", ...base, body: args.body, disconfirmingObservation: args.disconfirmingObservation };
             break;
           case "rewriteIndex":
             if (!args.body) return reject("rewriteIndex requires body");
@@ -778,8 +780,7 @@ function buildHqTools(
 
     archiveRound: tool({
       description:
-        "Run the case-writer pass AND the scribe pass over a slice: which cases did this slice touch, " +
-        "and which sediment/task markers in its mailbox are still unwritten? " +
+        "Run the case-writer and scribe over a slice to decide whether its evidence or pending markers warrant archival work. " +
         "The writer judges over the manifest + its own readCase reads; the scribe over the mailbox markers + " +
         "their target cases; engineering applies the intents. " +
         "An empty result is legal — writer-is-reader dedup lives inside the passes.",
@@ -831,6 +832,7 @@ function buildHqTools(
           // round's flush lands (v0.37 §7-1).
           `queued (lands when this round commits): ${result.written.join(", ") || "(none)"}\n` +
           `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}\n` +
+          (result.reasoning ? `writer assessment (verify sources before acting): ${result.reasoning}\n` : "") +
           `scribe queued (lands when this round commits): ${scribe.written.join(", ") || "(none)"}` +
           (scribe.skipped.length > 0
             ? `\nscribe skipped: ${scribe.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}`

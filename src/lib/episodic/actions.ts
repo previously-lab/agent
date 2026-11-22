@@ -29,14 +29,14 @@ import {
   isCaseCategory,
   isValidCaseName,
   caseIndexPath,
-  caseDirPath,
   parseCaseRef,
-  resolveCaseRefPaths,
+  type CaseRef,
   parseCaseDoc,
   isValidPieceFileName,
   parsePieceFileName,
   type CaseCategory,
 } from "@/lib/docs";
+import { archiveNoteBody, archiveNotePath, casePaperLookup } from "@/lib/docs/archive-ref";
 import {
   CASE_CURRENT_FILE_NAME,
   caseCurrentPath,
@@ -998,15 +998,15 @@ export async function getCaseDetail(
   if (!isCaseCategory(category) || !isValidCaseName(caseName)) return null;
 
   const ref = { kind: "case" as const, category, caseName };
-  const hit = await readFirstExisting(resolveCaseRefPaths(ref));
+  const hit = await readCasePaper(ref);
   if (!hit) return null;
 
   // Pieces live in the new root only — a legacy-hit case has no case dir.
   let pieces: CasePieceRef[] = [];
   let attachments: CaseAttachmentRef[] = [];
   let current: CaseCurrentRead | undefined;
-  if (hit.path === caseIndexPath(category, caseName)) {
-    const dirEntries = await fsListFiles(caseDirPath(category, caseName)).catch(
+  if (hit.path === caseIndexPath(category, caseName) || hit.archiveNotice) {
+    const dirEntries = await fsListFiles(hit.path.slice(0, -"/index.md".length)).catch(
       () => [],
     );
     pieces = dirEntries
@@ -1024,7 +1024,7 @@ export async function getCaseDetail(
       .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
     // Attachments (§C.1): names only — the browser pulls bytes through
     // /api/attachments, the client never carries base64.
-    attachments = (
+    attachments = hit.archiveNotice ? [] : (
       await fsListFiles(caseAttachmentsDir(category, caseName)).catch(() => [])
     )
       .filter((e) => e.type === "file")
@@ -1033,7 +1033,7 @@ export async function getCaseDetail(
     // The dated current view, one point read — only when the dir listing says
     // the file exists (the common no-current case costs nothing).
     if (
-      dirEntries.some(
+      !hit.archiveNotice && dirEntries.some(
         (e) => e.type === "file" && e.name === CASE_CURRENT_FILE_NAME,
       )
     ) {
@@ -1048,7 +1048,7 @@ export async function getCaseDetail(
       name: caseName,
       opened: doc.opened,
       closed: doc.closed,
-      markdown: caseDocMarkdown(doc),
+      markdown: [hit.archiveNotice, caseDocMarkdown(doc)].filter(Boolean).join("\n\n"),
       pieces,
       attachments,
       current,
@@ -1098,7 +1098,7 @@ export async function getCaseDoc(
   const ref = parseCaseRef(refText);
   if (!ref) return null;
 
-  const hit = await readFirstExisting(resolveCaseRefPaths(ref));
+  const hit = await readCasePaper(ref);
   if (!hit) return null;
 
   if (ref.kind !== "legacy" && hit.path.startsWith(`memory/${ref.category}/`)) {
@@ -1111,14 +1111,14 @@ export async function getCaseDoc(
     // A CASE-index read may carry the dated current view — one point read,
     // after the index hit. Pieces stay original-only.
     const current =
-      ref.kind === "case"
+      ref.kind === "case" && !hit.archiveNotice
         ? await readCaseCurrent(ref.category, ref.caseName, hit.raw)
         : undefined;
     return {
       ref: refText,
       opened: doc.opened,
       closed: doc.closed,
-      markdown: caseDocMarkdown(doc),
+      markdown: [hit.archiveNotice, caseDocMarkdown(doc)].filter(Boolean).join("\n\n"),
       observedRevision: caseStorageRevision(hit.raw),
       current,
       warnings: doc.warnings,
@@ -1136,12 +1136,18 @@ export async function getCaseDoc(
   };
 }
 
-/** First readable path of a candidate list, or null (a dead link). */
-async function readFirstExisting(  paths: string[],
-): Promise<{ path: string; raw: string } | null> {
+/** Exact live and historical papers take precedence over unqualified legacy paths. */
+async function readCasePaper(ref: CaseRef): Promise<{ path: string; raw: string; archiveNotice?: string } | null> {
+  const { paths, historicalPath, missingPieceMarker } = casePaperLookup(ref);
   for (const path of paths) {
     const raw = await fsReadFile(path).catch(() => null);
-    if (raw !== null) return { path, raw };
+    if (raw === null) continue;
+    if (path === missingPieceMarker) return null;
+    if (path === historicalPath) {
+      const note = archiveNoteBody(await fsReadFile(archiveNotePath(path)).catch(() => ""));
+      return { path, raw, archiveNotice: ["**Archived**", note].filter(Boolean).join("\n\n") };
+    }
+    return { path, raw };
   }
   return null;
 }

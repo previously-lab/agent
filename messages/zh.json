@@ -766,6 +766,8 @@
     "openLoops": "还欠着的事",
     "pickUp": "可以接着聊",
     "viewFull": "查看完整前情提要",
+    "noPreviously": "还没有前情提要。",
+    "unavailable": "暂时无法读取前情提要。",
     "chipContinue": "继续:{topic}",
     "chipLoops": "看看我的待办清单",
     "chipTopic": "聊聊 {topic}",

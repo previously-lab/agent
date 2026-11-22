@@ -690,6 +690,24 @@ describe("recallSearch", () => {
     expect(second.entries.map((entry) => entry.ref)).toEqual(["research/Second"]);
   });
 
+  it("finds a specifically named subject on the first scan when its account uses a different word for part of the title", async () => {
+    const files: Record<string, string> = {
+      "memory/research/Stone bridge clearance/index.md": "Who can cross? The clearance needed is six metres.",
+      "memory/research/Stone bridge clearance glossary/index.md": "A reference to be written.",
+    };
+    for (let i = 0; i < 55; i++) {
+      files[`memory/research/Z-notice-${i}/index.md`] = "A bridge has clearance in this district.";
+    }
+    const result = await recallSearch(makeBackend(files), {
+      category: "research", query: ["bridge", "clearance"], limit: 5, includeSemanticPassages: true,
+    });
+    if (result.kind !== "entries") throw new Error("expected search hits");
+    expect(result.entries[0].ref).toBe("research/Stone bridge clearance");
+    expect(result.passages?.[0].excerpt).toContain("six metres");
+    expect(result.entries.some(entry => entry.ref.endsWith("glossary"))).toBe(false);
+    expect(result.nextOffset).toBe(5);
+  });
+
   it("ranks only matching names on a content miss and does not read unrelated records", async () => {
     const files = makeBackend({
       "memory/research/AirJelly/index.md": "---\nopened: 2026-10-01\n---\n\n部署计划",
@@ -1077,6 +1095,19 @@ describe("recallRead", () => {
     const profile = await recallRead(backend, { ref: "people/user/profile" });
     if (profile.kind !== "content") throw new Error("expected content");
     expect(profile.content).toBe(PROFILE);
+  });
+
+  it("reads a dossier mention from the matching live half and leaves its absent sibling missing", async () => {
+    const portrait = "# Portrait\n\nConfirmed observation.\n\n# Hypotheses\n\nOpen guess.";
+    const store = makeBackend({
+      "memory/people/user/index.md": portrait,
+      "memory/episodic/current-previously.md": "retired card",
+      "memory/evolution/direction.md": "retired direction",
+    });
+    expect(await recallRead(store, { ref: "dossier/direction" })).toMatchObject({
+      kind: "content", path: "dossier/direction", content: portrait, storageRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(await recallRead(store, { ref: "dossier/previously" })).toEqual({ kind: "not_found" });
   });
 
   it("slice range: search returns matched turns with ±1 turn context", async () => {

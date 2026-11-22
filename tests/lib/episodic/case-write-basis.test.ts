@@ -105,6 +105,47 @@ describe("case write HEAD basis", () => {
     expect(batch.entries.has("memory/research/共享案/_current.md")).toBe(true);
   });
 
+  it.each([null, "Earlier understanding."])("keeps a companion current write on the originally read view (%s)", async (original) => {
+    const target = { category: "research" as const, caseName: "共享案" };
+    const currentPath = "memory/research/共享案/_current.md";
+    if (original !== null) h.files.set(currentPath, original);
+    const scope = createCaseReadScope();
+    const read = await readCaseIndexForScope({ ...target, scope });
+
+    // A different writer changes only the current view before this writer's historical update.
+    h.files.set(currentPath, "Another writer confirmed the cause.");
+    h.head = "head-b";
+    const batch = createBatch();
+    await applyCaseWriteIntent({ ...target, action: "appendTail", line: "A new observation." }, date, batch, scope);
+    const companion = { ...target, date, batch, scope, refreshRead: true,
+      current: { body: "The cause remains unknown.", evidence: ["research/共享案"] } };
+    await expect(applyCaseCurrentUnderstanding(companion)).rejects.toMatchObject({ code: "rewrite_conflict" });
+    expect(batch.entries.has(currentPath)).toBe(false);
+    expect(h.files.get(currentPath)).toBe("Another writer confirmed the cause.");
+    expect(scope.getIndexRead(target.category, target.caseName)).toBe(read);
+  });
+
+  it.each(["new", "existing"])("accepts a companion on its own historical write for a %s case", async (kind) => {
+    const target = { category: "research" as const, caseName: "共享案" };
+    const currentPath = "memory/research/共享案/_current.md";
+    const scope = createCaseReadScope();
+    const batch = createBatch();
+    const record = "records/2026-10-26-1000";
+    scope.recordEvidence(record);
+    if (kind === "new") {
+      h.files.delete(index);
+      await applyCaseWriteIntent({ ...target, action: "open", body: "A new case." }, date, batch, scope);
+    } else {
+      h.files.set(currentPath, "Previous view.");
+      await readCaseIndexForScope({ ...target, scope });
+      await applyCaseWriteIntent({ ...target, action: "addPiece", title: "Inspection", body: "The rain arrived." }, date, batch, scope);
+    }
+    await applyCaseCurrentUnderstanding({ ...target, date, batch, scope, refreshRead: true,
+      current: { body: "A new observation.", evidence: [record] } });
+    expect(batch.entries.get(currentPath)).toContain("A new observation.");
+    expect(scope.getIndexRead(target.category, target.caseName)?.content).toBe(batch.entries.get(index));
+  });
+
   it("fails closed before reading or queueing content if HEAD lookup fails", async () => {
     h.headError = new Error("GitHub unavailable"); const batch = createBatch();
     await expect(applyCaseWriteIntent({ action: "appendTail", category: "research", caseName: "共享案", line: "补充" }, date, batch))

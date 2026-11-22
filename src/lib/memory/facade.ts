@@ -1,6 +1,9 @@
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { nameSimilarity, navigationNameScore, normalizeRecallName } from "./name-match";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
+import { parseDossierRef } from "@/lib/archive/refs";
+import { PEOPLE_USER_INDEX_PATH } from "@/lib/evolution/paths";
+import { dossierViews } from "@/lib/evolution/user-model-format";
 import { sliceIdToIso } from "@/lib/chat/slice-id-time";
 import { localDateKey } from "@/lib/time/relative";
 export { nameSimilarity, normalizeRecallName } from "./name-match";
@@ -68,7 +71,7 @@ import { annotateSliceWithLocalTime, sliceLocalBanner } from "@/lib/episodic/tim
 import { splitParagraphs, segmentSearch, textLines, searchResultToString } from "@/lib/retrieval/doc-segments";
 import { extractMarkdownRefs, extractSemanticDocumentLinks } from "@/lib/archive/ref-tokens";
 import { canonicalConversationRecordRef, withoutConversationEntryContent, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
-import { archivedCaseRefPaths } from "@/lib/docs/archive-case";
+import { archivedCaseRefPaths, archiveNoteBody, archiveNotePath } from "@/lib/docs/archive-ref";
 import { parseTimelineEntries, timelinePathForSlice, type TimelineEntry } from "@/lib/episodic/timeline/projection";
 
 // ─── Categories (the leaf module owns the enum; re-exported here) ─────────
@@ -198,7 +201,7 @@ export type RecallReadResult =
     }
   | { kind: "not_found"; nearMisses?: MemoryEntry[] }
   | { kind: "no_matching_turns" }
-  | { kind: "archived"; ref: string; note: string }
+  | { kind: "archived"; ref: string; note: string; content: string }
   | { kind: "unavailable"; note: string };
 
 /** One heading span in a document outline (1-based line numbers). */
@@ -1392,16 +1395,15 @@ export async function recallSearch(
   });
   if (units.length === 0) return { kind: "empty" };
 
-  // Path matches prioritize verification only. A dated hit still requires both
-  // matching prose and a citation in the requested slice-start window.
+  // Verify named documents within the scan budget. A name alone never matches
+  // prose. A dated hit also needs a citation in the requested slice-start window.
   const named = new Set<SearchUnit>();
-  if (byConversation) {
-    const terms = keywords.map(term => term.toLowerCase());
-    for (const unit of units) {
-      if (unit.sliceId) continue;
-      const name = unit.docPath.split("/").slice(2).join("/").replace(/\/(?:index|_current)\.md$|\.md$/, "").toLowerCase();
-      if (terms.every(term => name.includes(term))) named.add(unit);
-    }
+  const literalTerms = keywords.map(term => term.toLowerCase());
+  for (const unit of units) {
+    if (unit.sliceId) continue;
+    const path = unit.docPath.split("/").slice(2).join("/").replace(/\/(?:index|_current)\.md$/, "");
+    const name = (byConversation ? path.replace(/\.md$/, "") : pieceTitle(path)).toLowerCase();
+    if (literalTerms.every(term => name.includes(term))) named.add(unit);
   }
   units.sort((a, b) => Number(Boolean(a.sliceId)) - Number(Boolean(b.sliceId)) ||
     Number(named.has(b)) - Number(named.has(a)) ||
@@ -1446,10 +1448,12 @@ export async function recallSearch(
     const entry = unit.sliceId ? withoutConversationEntryContent(built.entry)
       : { ...built.entry, excerpt: searchExcerpt(strongest.content, strongest.keywords),
         ...(citedSliceStartDay ? { citedSliceStartDay } : {}) };
-    // Within each source group, term coverage wins over name proximity.
+    // A named subject with a genuine prose hit leads other accounts that
+    // mention the terms. Within each group, body coverage wins over fuzzy names.
     const terms = new Set(found.flatMap((hit) => hit.keywords)).size;
     const name = unit.sliceId ? 0 : searchNameScore(built.entry, keywords);
-    const score = strongest.keywords.length + terms / (keywords.length + 1) + name / (keywords.length + 1) ** 2;
+    const subject = !byConversation && named.has(unit) ? keywords.length + 1 : 0;
+    const score = subject + strongest.keywords.length + terms / (keywords.length + 1) + name / (keywords.length + 1) ** 2;
     const canonical = unit.edition && parseCanonicalDocumentRef(entry.ref);
     const exactFile = canonical && (unit.docPath === `memory/${canonical}/index.md` || unit.docPath === `memory/${canonical}.md`);
     const source = input.includeSemanticPassages && unit.edition && exactFile &&
@@ -1461,7 +1465,7 @@ export async function recallSearch(
   // so a misleading filename costs no extra model decision. All candidates
   // remain reachable via the same cursor and offset protocol.
   const firstUnnamed = scanUnits.findIndex(unit => !named.has(unit));
-  const firstBatch = firstUnnamed > 0 ? scanUnits.slice(0, firstUnnamed) : scanUnits;
+  const firstBatch = byConversation && firstUnnamed > 0 ? scanUnits.slice(0, firstUnnamed) : scanUnits;
   const scannedUnits = await mapWithConcurrency(firstBatch, RECALL_READ_CONCURRENCY, readUnit);
   if (firstBatch.length < scanUnits.length && !scannedUnits.some(hit => !hit.failed && hit.matchedAllTerms)) {
     scannedUnits.push(...await mapWithConcurrency(scanUnits.slice(firstBatch.length), RECALL_READ_CONCURRENCY, readUnit));
@@ -1929,6 +1933,16 @@ async function recallReadBody(
       ...(input.publicRecordOnly && input.includePieceCatalog ? { storageRevision: caseStorageRevision(raw) } : {}) };
   }
 
+  const dossier = parseDossierRef(ref);
+  if (dossier) {
+    const model = await readBareFile(backend, PEOPLE_USER_INDEX_PATH);
+    if (model.kind !== "content") return model;
+    const content = dossierViews(model.content)[dossier.name];
+    return content
+      ? { kind: "content", path: ref, content, storageRevision: caseStorageRevision(content) }
+      : { kind: "not_found" };
+  }
+
   // The two reserved bare-file refs (ruling #3).
   if (ref === "self/agenda") {
     return readBareFile(backend, "memory/self/agenda.md");
@@ -1944,8 +1958,14 @@ async function recallReadBody(
   if (direct.kind === "allAbsent") {
     const archived = archivedCaseRefPaths(ref);
     direct = await readFirstCandidate(backend, [...archived, ...fallbacks]);
-    if (direct.kind === "content" && archived.includes(direct.path)) {
-      return { kind: "archived", ref, note: "This case is archived and excluded from active memory; its content remains preserved, not current." };
+    if (direct.kind === "content" && direct.path === archived[1]) return { kind: "not_found" };
+    if (direct.kind === "content" && direct.path === archived[0]) {
+      const note = await readBareFile(backend, archiveNotePath(direct.path));
+      if (note.kind === "unavailable") return note;
+      const content = input.outline
+        ? renderOutlineResult({ kind: "outline", ref, ...parseDocumentOutline(direct.content) })
+        : input.range ? applySemanticDocumentRange(ref, direct.content, input.range) : direct.content;
+      return { kind: "archived", ref, content, note: note.kind === "content" ? archiveNoteBody(note.content) : "" };
     }
   }
   if (direct.kind === "content") {
@@ -2519,7 +2539,7 @@ export function renderRecallReadResult(result: RecallReadResult, ref: string): s
         : `Nothing named "${ref}" exists in memory — and nothing similar.`;
     }
     case "archived":
-      return `ARCHIVED — ${result.ref} is excluded from active memory. ${result.note}`;
+      return [`ARCHIVED — ${result.ref} (historical document)`, result.note, result.content].filter(Boolean).join("\n\n");
     case "unavailable":
       return `This could not be read right now (${result.note}). That is a read failure, not absence — it may still exist.`;
   }

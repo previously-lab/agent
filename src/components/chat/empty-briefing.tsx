@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Brain } from "lucide-react";
-import { getBriefingIdentity, getPreviously } from "@/lib/episodic/actions";
+import { getBriefingIdentity } from "@/lib/episodic/actions";
+import { getDossierDoc } from "@/lib/archive/actions";
 import type { BriefingIdentity, SliceSummary } from "@/lib/episodic/actions";
 import { MarkdownRenderer } from "./markdown";
 import { PersonaDialog } from "@/components/persona/persona-dialog";
@@ -18,9 +19,7 @@ interface EmptyBriefingProps {
   /**
    * The resolved identity, when the parent already has it. The chat page needs
    * the display name for its own "PREVIOUSLY ON" eyebrow and fetches it at
-   * mount, so the briefing takes it as a prop rather than asking a second
-   * time — in GitHub mode each ask can walk a month of day directories
-   * looking for a previously.md.
+   * mount, so the briefing takes it as a prop rather than asking a second time.
    */
   identity?: BriefingIdentity | null;
   /** The most recent slice (its focus / open_loops seed the briefing). May be
@@ -100,7 +99,7 @@ function LedgerRow({
  * contextual suggestion chips), then a quiet footer. Every section only
  * renders when it has real data — nothing says "上次聊到" followed by nothing.
  * The name doubles as the persona switcher in demo mode; "view full previously"
- * opens the same Previously On dialog used by the historical slice view.
+ * opens the live Previously On paper.
  *
  * Since §1.2 Rev 2 the briefing has two seats: "card" rides the unified
  * message stream's tail in briefing mode (history scrolls in above it); the
@@ -119,7 +118,7 @@ export function EmptyBriefing({
   const identity = provided ?? fetched;
   const [personaOpen, setPersonaOpen] = useState(false);
   const [prevOpen, setPrevOpen] = useState(false);
-  const [prevContent, setPrevContent] = useState<string | null>(null);
+  const [previously, setPreviously] = useState<{ content?: string; error?: boolean } | null>(null);
 
   // Resolve the display name (+ persona list in demo mode) — only when the
   // caller did not already have it.
@@ -136,19 +135,20 @@ export function EmptyBriefing({
     };
   }, [persona, provided]);
 
-  // Lazily fetch the active slice's previously.md only when the dialog opens.
+  // Reopen on the live model, including when reflection updated it during this slice.
   useEffect(() => {
-    if (!prevOpen || !active?.slice_id || prevContent !== null) return;
+    if (!prevOpen) return;
     let cancelled = false;
-    getPreviously(active.slice_id)
-      .then((md) => {
-        if (!cancelled) setPrevContent(md);
+    setPreviously(null);
+    getDossierDoc("dossier/previously", persona)
+      .then((doc) => {
+        if (!cancelled) setPreviously({ content: doc?.markdown });
       })
-      .catch(() => {});
+      .catch(() => { if (!cancelled) setPreviously({ error: true }); });
     return () => {
       cancelled = true;
     };
-  }, [prevOpen, active, prevContent]);
+  }, [prevOpen, persona]);
 
   const name = identity?.name ?? "";
   const focus = active?.focus?.trim() || "";
@@ -286,19 +286,15 @@ export function EmptyBriefing({
           )}
 
           {/* ── View the full previously — a quiet footer row. ── */}
-          {active?.slice_id && (
-            <>
-              <Hairline className="mt-2" />
-              <div className="flex items-center justify-between pt-3">
-                <button
-                  onClick={() => setPrevOpen(true)}
-                  className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
-                >
-                  {t("viewFull")} →
-                </button>
-              </div>
-            </>
-          )}
+          <Hairline className="mt-2" />
+          <div className="flex items-center justify-between pt-3">
+            <button
+              onClick={() => setPrevOpen(true)}
+              className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
+            >
+              {t("viewFull")} →
+            </button>
+          </div>
         </div>
       </div>
 
@@ -322,11 +318,11 @@ export function EmptyBriefing({
             </DialogTitle>
           </DialogHeader>
           <div className="text-sm leading-relaxed">
-            {prevContent ? (
-              <MarkdownRenderer content={prevContent} />
+            {previously?.content ? (
+              <MarkdownRenderer content={previously.content} />
             ) : (
               <div className="py-6 text-center text-sm text-muted-foreground">
-                {t("loading")}
+                {t(previously === null ? "loading" : previously.error ? "unavailable" : "noPreviously")}
               </div>
             )}
           </div>

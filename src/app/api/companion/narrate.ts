@@ -28,6 +28,8 @@ import {
   parseIdentityFromPreviously,
 } from "@/lib/identity";
 import { readUserModel } from "@/lib/evolution/store";
+import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
+import { projectLivePreviously } from "@/lib/episodic/previously-format";
 import { formatLocalTime } from "@/lib/turn-priming";
 import {
   buildCompanionTools,
@@ -88,15 +90,15 @@ function capPlaybook(content: string): string {
 /** L1 — the only live folded user model (people/user/index.md). Historical
  *  card/direction files are not fallbacks. An unavailable model is logged and
  *  degrades to no card layer — it must not silence the mouth. */
-async function readLiveCard(): Promise<string> {
+async function readLiveModel() {
   try {
-    return (await readUserModel())?.full ?? "";
+    return await readUserModel();
   } catch (error) {
     console.warn(
       "[Companion] current user model unavailable; no historical fallback used:",
       error instanceof Error ? error.message : error,
     );
-    return "";
+    return null;
   }
 }
 
@@ -156,7 +158,8 @@ export async function narrateSlice(
   };
 
   // ── System prompt layers (stable first, event context last) ────────────
-  const card = await readLiveCard();
+  const userModel = await readLiveModel();
+  const card = projectLivePreviously(userModel?.card ?? "");
   const playbook = await readPlaybookLayer(toolCtx);
 
   // L0 — charter + who you're assisting; the profile is parsed from the same
@@ -173,6 +176,7 @@ export async function narrateSlice(
 
   const system = [
     identityPrompt,
+    buildDirectionBlock(userModel?.direction ?? null),
     card
       ? `## What I know about the user — the living card\n\n${card}`
       : "",

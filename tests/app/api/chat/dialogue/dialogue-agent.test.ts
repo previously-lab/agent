@@ -89,8 +89,9 @@ describe("dialogue DeepSeek profile", () => {
     expect(thought).toContain("For exact wording, speaker attribution");
     expect(thought).toContain("May test exact recall");
     expect(thought).toContain("A guess supplies no reason to investigate");
-      expect(thought).toContain("Read the matched passages");
-    expect(thought).toContain("Hand off the answer when it covers the ask");
+    expect(thought).toContain("a supported account already in context can answer the gist");
+    expect(thought).toContain("If a point is missing, search across case documents");
+    expect(thought).toContain("A limited search cannot establish that nothing happened later");
 
     await createDialogueAgent().stream({ prompt: "We have a reliable case account of the topic. Chronology is incomplete." });
     const publicRequest = h.call.mock.calls[1]![0] as CapturedRequest;

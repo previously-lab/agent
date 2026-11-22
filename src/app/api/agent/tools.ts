@@ -433,22 +433,19 @@ export const chatTools = {
   writeCase: tool({
     description:
       "Write a case document — for ONE job: the user explicitly asks you to " +
-      "write something down. That is a task (v0.30 §2.6): call writeCase " +
-      "FIRST, write it, then answer from what you wrote. Nothing else earns " +
+      "document a subject. File an explicitly requested case note under its subject. " +
+      "Use the task ledger for a requested future action; a personal preference goes to the user-model review. Nothing else earns " +
       "a write from you — the record carries the turn, and the reflection " +
       "unit reads it. The case is your own memory, not a delivery to the " +
       "user — never announce the write or cite its path in the reply; when " +
       "the user asks where something is recorded, answer in your own words. " +
-      "Categories — what the case IS decides: people/ a person, events/ " +
-      "something that happened (date-anchored), things/ an object or work, " +
-      "places/ a place, orgs/ an organization, research/ an investigation, " +
-      "hypotheses/ a judgment still to be verified (state what would " +
-      "falsify it), tasks/ a commitment to " +
-      "carry out. people/user and self/ are the reflection unit's alone — " +
+      "Choose the subject the user wants to return to. A place case gathers life and conditions " +
+      "at that location. An event case follows an undertaking or consequential occurrence. " +
+      "Use the filing guidance in your charter for the other categories. " +
+      "people/user and self/ are the reflection unit's alone — " +
       "it reads the record and keeps those; your pen never lands there. Semantics: if " +
       "the case does not exist yet it is OPENED — body becomes the case's " +
-      "index.md (the case name is permanent; name it for the QUESTION, " +
-      "specific enough that a scope change means a new case). If it ALREADY " +
+      "index.md (the case name is permanent; name the subject a reader would look up). If it ALREADY " +
       "exists, pass pieceTitle to ADD one dated piece (the date prefix is " +
       "stamped mechanically — pass the bare title); a pieceTitle on the OPEN " +
       "call also lands that first piece in the same call (one commit), but " +
@@ -474,17 +471,15 @@ export const chatTools = {
         ])
         .optional()
         .describe(
-          "What the case IS decides the category (see the tool description). " +
+          "Choose the category of the subject this case is about. " +
           "Defaults to research.",
         ),
       caseName: z
         .string()
         .min(1)
         .describe(
-          "The case's name (no category prefix): specific enough that a " +
-          "scope change means a NEW case. Undated names ('手机调研') and dated " +
-          "names ('2026-11-05-屏幕供应商') both legal; never start a title " +
-          "with four digits.",
+          "The case's stable subject name without a category prefix. Undated names ('Phone research') and dated " +
+          "names ('2026-11-05-Screen supplier') are both legal. The title after any date prefix cannot start with four digits.",
         ),
       body: z
         .string()
@@ -498,12 +493,15 @@ export const chatTools = {
         .optional()
         .describe(
           "The dated piece's title (the date prefix is stamped " +
-          "mechanically — pass the bare title, e.g. '报价篇'). On an existing " +
+          "mechanically — pass the bare title, e.g. 'Vendor quotes'). On an existing " +
           "case it adds the piece; on the OPEN call it also lands that first " +
           "piece in the same call; provide overviewBody for that new case. Omit for a bare open.",
         ),
       overviewBody: z.string().min(1).optional().describe(
         "Required when opening a NEW case with pieceTitle. A distinct overview of the case and its reading purpose; body is the piece's full text. Never copy the piece into the overview. Existing cases do not need this field.",
+      ),
+      disconfirmingObservation: z.string().trim().min(1).optional().describe(
+        "For a new hypothesis, state a concrete observation that would count against it. This is saved in the opening overview. Use the document's language.",
       ),
     }),
     contextSchema: toolContextSchema,
@@ -623,27 +621,13 @@ export const chatTools = {
   // and the scribe/research passes at slice close — a clue, not an order.
   noteForSediment: tool({
     description:
-      "Make THIS conversation leave something behind — your one way to turn " +
-      "what just happened into a document that outlives this chat. Call it the " +
-      "moment any of these happens (do not wait for the conversation to end):\n" +
-      "1. The user mentions something that will come up again — a project, a " +
-      "decision, a thing or person in their world that deserves its own " +
-      "entity or research document (kind 'sediment').\n" +
-      "2. You dug something up that is worth keeping — a search result, a " +
-      "comparison, a conclusion reached across several turns that should " +
-      "become a research document (kind 'sediment').\n" +
-      "3. The user states a date-anchored commitment or arrangement — " +
-      "\"我 8 号要去 on-site\", \"下周三提醒我…\" — which must become a tracked " +
-      "task document (kind 'task', ALWAYS pass dateAnchor).\n" +
-      "4. An open thread surfaces that deserves a proper investigation later — " +
-      "a question too big for this reply (kind 'question').\n" +
-      "It appends ONE marker line to THIS slice's mailbox; the document itself " +
-      "is written later, when HQ archives this slice (the passes that read " +
-      "these markers run on HQ's archive) — so after calling it, keep " +
-      "answering and treat the matter as NOT yet recorded. Not for things belonging to the current conversation (they " +
-      "already live in this slice), and not for one-off trivia that will never " +
-      "be mentioned again. Title = the document's title: specific enough that " +
-      "a scope change would mean a NEW document.",
+      "Leave a marker for reflection when the conversation provides a finding worth keeping, " +
+      "such as a change in a decision or a comparison someone would want to consult (kind 'sediment'). " +
+      "Use the existing case as the target when the new evidence belongs there. " +
+      "A passing reference can stay in the conversation. For a date-anchored commitment the user " +
+      "actually made, use 'task' and pass dateAnchor. For an open question worth investigating later, " +
+      "use 'question'. This appends one marker to the current slice's mailbox. " +
+      "Reflection evaluates it when archiving the slice. Continue answering; the marker itself does not file a document.",
     inputSchema: z.object({
       kind: z
         .enum(["sediment", "task", "question"])
@@ -656,7 +640,7 @@ export const chatTools = {
         .string()
         .min(1)
         .describe(
-          "The document's title (naming discipline: specific enough that a scope change means a new document).",
+          "Name the subject or question the marker is about.",
         ),
       note: z
         .string()
@@ -691,7 +675,7 @@ export const chatTools = {
         .optional()
         .describe(
           "sediment only: the FULL pasted text when sedimenting a long text the user sent " +
-          "('存下这个') — the scribe opens the case with this verbatim, origin stamped. " +
+          "('save this') — the scribe preserves the source wording and origin. " +
           "Omit for ordinary markers.",
         ),
     }),

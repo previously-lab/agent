@@ -766,6 +766,8 @@
     "openLoops": "Open threads",
     "pickUp": "Pick up where you left off",
     "viewFull": "View full previously",
+    "noPreviously": "There is no recap yet.",
+    "unavailable": "The recap is currently unavailable.",
     "chipContinue": "Continue: {topic}",
     "chipLoops": "Show my open threads",
     "chipTopic": "Talk about {topic}",

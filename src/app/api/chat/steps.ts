@@ -100,6 +100,7 @@ import {
   readUserProfile,
 } from "@/lib/evolution/store";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
+import { projectLivePreviously } from "@/lib/episodic/previously-format";
 import {
   acknowledgeTaskFollowups,
   confirmTaskResultDelivery,
@@ -819,7 +820,7 @@ export async function housekeeping(
   }
   const userProfile = await readUserProfile(batch).catch(() => null);
   // The card half drives the identity head parse and the L1 injection block.
-  const previouslyContent = userModel?.card ?? "";
+  const previouslyContent = projectLivePreviously(userModel?.card ?? "");
 
   // ── 5. NO commit in the entry beat (v0.42 §0/§2) — 被动存盘 belongs to
   // the summary stream: the user turn, the ended page's seal (`sealed` on

@@ -6,7 +6,8 @@ import {
 } from "@/lib/docs/case-doc";
 import { isValidCaseName, isValidPieceFileName } from "@/lib/docs/case-naming";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
-import { isCaseCategory } from "@/lib/docs/paths";
+import { isCaseCategory, isUserModelCase } from "@/lib/docs/paths";
+import { isCapabilitySopCase } from "@/lib/evolution/paths";
 import { assertDocumentWrite, assertTailBudget } from "@/lib/docs/write-limits";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
@@ -67,6 +68,8 @@ export async function stageCaseCardCitation(
     || (fileName !== "index.md" && fileName !== "_current.md" && !isValidPieceFileName(fileName))) {
     throw new Error("Card citations require a canonical case document");
   }
+  if (isUserModelCase(category, caseName)) throw new Error("Use evolveProfile to connect evidence to the user model.");
+  if (isCapabilitySopCase(category, caseName)) throw new Error("Use writeSelfSop to connect evidence to a capability SOP.");
   validateCardSource(source, raw);
   const ref = `records/${source.sliceId}`;
   const href = formatDocumentLink(ref, { turnId: source.turnId, role: "user" });

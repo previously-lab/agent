@@ -80,6 +80,7 @@ import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { archiveCaseDocument } from "@/lib/docs/archive-case";
 import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 import { replaceMainCraftBlock } from "@/lib/chat/craft-prompt";
+import { PEOPLE_USER_INDEX_PATH } from "@/lib/evolution/paths";
 import {
   readSkillLedger,
   readSkillSource,
@@ -103,6 +104,7 @@ import {
   isValidCaseName,
   sanitizeCaseSegment,
   isCaseCategory,
+  isUserModelCase,
 } from "@/lib/docs";
 import {
   recallRecent,
@@ -312,7 +314,8 @@ async function readRawBackend(
 
 /** Build the facade's read backend from the tool context's storage flags. */
 function createRecallBackend(ctx: ToolContext): RecallBackend {
-  const readFile = (path: string): Promise<string> => readRawBackend(ctx, path);
+  const readFile = (path: string): Promise<string> => readRawBackend(ctx, path,
+    path === PEOPLE_USER_INDEX_PATH ? { fresh: true } : undefined);
   return {
     readFile,
     listMemoryFiles: async (scope): Promise<string[]> => {
@@ -545,7 +548,7 @@ function observeThinkingRead(result: RecallReadResult, ref: string, ctx: ToolCon
       : result.kind !== "content" || text.startsWith("ERROR:") ? "failed" : input.range ? "range" : "full";
     reads.push({ ref, sourceKind: "original_turn", edition: "original", asOf, coverage,
       revision: result.kind === "content" ? result.storageRevision ?? null : null });
-  } else if (result.kind === "content" && result.path.startsWith("memory/")) {
+  } else if (result.kind === "content" && (result.path.startsWith("memory/") || result.path.startsWith("dossier/"))) {
     const actualRef = parseCanonicalDocumentRef(result.path.replace(/^memory\//, "").replace(/(?:\/index)?\.md$/, ""));
     if (actualRef && result.storageRevision) {
       const coverage = text.startsWith("ERROR:") ? "failed" as const : input.range ? "range" as const : "full" as const;
@@ -1013,7 +1016,7 @@ function userLocalDate(timezone: string | undefined): string {
  * to say where it came from says so in prose). records get zero write-back.
  */
 export async function writeCaseExecute(
-  input: { category?: string; caseName: string; body: string; pieceTitle?: string; overviewBody?: string },
+  input: { category?: string; caseName: string; body: string; pieceTitle?: string; overviewBody?: string; disconfirmingObservation?: string },
   { context: ctx, messages }: ExecuteOpts<ToolContext>,
 ): Promise<WriteCaseResult> {
   "use step";
@@ -1044,7 +1047,7 @@ export async function writeCaseExecute(
         `with a title not starting with four digits.`,
     };
   }
-  if (category === "people" && caseName === "user") {
+  if (isUserModelCase(category, caseName)) {
     return {
       ok: false,
       reason:
@@ -1100,7 +1103,7 @@ export async function writeCaseExecute(
       const { caseOpeningBody } = await import("@/lib/docs/organization");
       const indexBody = caseOpeningBody({ category, caseName, date, body, pieceTitle, overviewBody: input.overviewBody });
       const applied = await applyCaseWriteIntent(
-        { action: "open", category, caseName, body: indexBody },
+        { action: "open", category, caseName, body: indexBody, disconfirmingObservation: input.disconfirmingObservation },
         date,
         batch,
       );

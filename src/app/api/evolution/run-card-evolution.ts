@@ -35,7 +35,8 @@
  * client — no idle wait.
  */
 import { runPreviouslyAgent, type DirectionEvalInput, type PreviouslySignal } from "@/lib/episodic/flash/previously-agent";
-import { parseCard } from "@/lib/episodic/previously-format";
+import { isCardFormat, parseCard, projectLivePreviously } from "@/lib/episodic/previously-format";
+import { replaceLegacyUserModel } from "@/lib/evolution/user-model-maintenance";
 import { sameCardSubstance } from "@/lib/episodic/card-session";
 import { diffCardLines, summarizeCardChanges, type CardChangeSummary, type CardMutation } from "@/lib/episodic/card-diff";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
@@ -241,7 +242,19 @@ export async function runCardEvolution(
     };
   }
 
-  // ── v1.1 direction half — the merged run edits direction.md through ATOMIC
+  const updatingLegacyCard = model && baseCard.trim() && result.mutations.length > 0 &&
+    (!isCardFormat(baseCard) || projectLivePreviously(baseCard) !== baseCard || /^## (?:Profile|Recent)\s*$/m.test(baseCard));
+  let preserveLegacySource = Boolean(updatingLegacyCard || (model?.direction && input.directionEval?.mode === "migrate" && result.direction));
+  const writeHalf = async (writer: (value: string, batch?: WriteBatch) => Promise<void>, value: string) => {
+    if (preserveLegacySource && model) {
+      await replaceLegacyUserModel(model.full, input.sliceId, input.batch, pending => writer(value, pending));
+      preserveLegacySource = false;
+    } else {
+      await writer(value, input.batch);
+    }
+  };
+
+  // ── v1.1 direction half — a proposal and its evidence gate precede persistence.
   // mutation ops (per-op validation in applyDirectionOps; `proposed` pointers
   // code-stamped). The resulting doc still passes the whole-doc gate here
   // (validateDirectionProposal, mode-aware) and the engineering TTL
@@ -275,7 +288,7 @@ export async function runCardEvolution(
         const aged = retireExpiredHypotheses(currentDir.trim(), sliceIds, input.sliceId);
         if (aged.retired.length > 0) {
           try {
-            await writeUserModelDirection(aged.doc, input.batch);
+            await writeHalf(writeUserModelDirection, aged.doc);
             directionMoved = true;
             directionOutcome = {
               outcome: "updated",
@@ -298,7 +311,7 @@ export async function runCardEvolution(
       const validation = validateDirectionProposal(
         proposal.doc,
         currentDir,
-        { mode: input.directionEval.mode },
+        { mode: input.directionEval.mode, checkedMutations: proposal.checkedMutations },
       );
       if (!validation.ok) {
         console.warn(`[Evolution] direction proposal rejected: ${validation.reason}`);
@@ -315,7 +328,7 @@ export async function runCardEvolution(
               `[Evolution] direction: retired ${aged.retired.length} expired hypothesis(es)`,
             );
           }
-          await writeUserModelDirection(aged.doc, input.batch);
+          await writeHalf(writeUserModelDirection, aged.doc);
           directionMoved = true;
           directionOutcome = withTtlDiagnostic({ outcome: "updated", summary });
           console.log(`[Evolution] direction updated: ${summary}`);
@@ -344,7 +357,7 @@ export async function runCardEvolution(
   if (changed) {
     // The folded model — the next turn's conversation reads this. The
     // direction half is preserved inside index.md by the store helper.
-    try { await writeUserModelCard(result.updatedCard, input.batch); }
+    try { await writeHalf(writeUserModelCard, projectLivePreviously(result.updatedCard)); }
     catch (error) {
       return { ran: true, changed: directionMoved, droppedRecent: 0, note: "The proposed card was not saved",
         error: error instanceof Error ? error.message : String(error), ...(directionOutcome ? { direction: directionOutcome } : {}) };

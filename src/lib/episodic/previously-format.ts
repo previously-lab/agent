@@ -586,10 +586,8 @@ export function migrateToV3(content: string, currentSliceId?: string): string {
  * The card is a PURE dynamic semantic memory pool — what the user did and is
  * doing. It carries NO rules and NO analysis: patterns/tendencies
  * about the user live in the evolution direction's Portrait and guesses in its
- * Hypotheses (memory/evolution/direction.md, see src/lib/evolution/). The old
- * Self-model section (5.) is GONE from the writer — serializeCard never emits
- * it — but parseCard still TOLERATES it on read so old snapshots render (and
- * the evolution agent can migrate the legacy lines into the Portrait).
+ * Hypotheses in the Direction half of people/user/index.md. Retired sections
+ * are available to historical readers and omitted from the live projection.
  *
  * The card is the stable, byte-identical-within-a-slice snapshot that keeps
  * the main agent's prompt prefix cacheable; slices remain the lossless source
@@ -653,10 +651,7 @@ export interface CardDocument {
   };
   now: CardNowItem[];
   horizon: CardHorizonItem[];
-  /** LEGACY read tolerance: parseCard still fills this from an old card's
-   *  `## Self-model` section so old snapshots render and the evolution agent
-   *  can migrate the lines into the direction Portrait — but serializeCard
-   *  NEVER writes the section back. */
+  /** Historical Self-model notes may describe either the assistant or the user. */
   selfModel: string[];
 }
 
@@ -668,6 +663,28 @@ export function isCardFormat(content: string): boolean {
     (content.includes("## Identity") &&
       (content.includes("## Profile") || content.includes("## Past")))
   );
+}
+
+/** Live conversations carry the retrospective account; retired sections remain historical sources. */
+export function projectLivePreviously(card: string): string {
+  if (!card || isV3Format(card) || isV2Format(card)) return "";
+  if (!/^##[ \t]+(?:Self-model|Horizon)[ \t]*\r?$/m.test(card)) return card;
+  // Keep the original bytes of each live section. Headings in fenced examples
+  // cannot end a retired section or hide an unrelated part of the current one.
+  let retired = false;
+  let fence = "";
+  const visible: string[] = [];
+  for (const line of card.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    const marker = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)/.exec(line);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1].startsWith(fence) && !marker[2].trim()) fence = "";
+    } else if (!fence && /^#{1,2}[ \t]+/.test(line)) {
+      retired = /^##[ \t]+(?:Self-model|Horizon)[ \t]*\r?(?:\n|$)/.test(line);
+    }
+    if (!retired) visible.push(line);
+  }
+  return visible.join("");
 }
 
 /** Create an empty user-card template. */
@@ -718,8 +735,7 @@ export function serializeCard(doc: CardDocument): string {
       lines.push(`- ${stripInlineComments(h.text)}${by}${refs}`, "");
     }
   }
-  // The Self-model section is gone from the writer (patterns live in the
-  // direction Portrait now); parseCard still reads it on legacy cards.
+  // Historical Self-model notes are not authored into new accounts.
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
@@ -810,9 +826,8 @@ export function findOverdueHorizonItems(
  * Best-effort fold of a v3 (or legacy) document into the card format. Identity
  * → head; personality/communication/cognition/knowledge/values/work_style/goals
  * → the Past profile paragraph; current_state/boundaries → Now. The v3
- * self-model dimensions are deliberately DROPPED — operating lessons are
- * direction-Portrait material now, never card content. The evolution agent
- * refines on later passes.
+ * self-model dimensions remain in the historical source. Old authoring
+ * instructions and interpretations require the original evidence to adopt.
  */
 export function migrateV3ToCard(content: string, currentSliceId?: string): string {
   if (isCardFormat(content)) return content;

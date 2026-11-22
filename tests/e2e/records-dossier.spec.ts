@@ -135,7 +135,6 @@ test.describe("Records are papers", () => {
     await seedSlices([makeSlice(daysAgoIso(40), { tag: "OLD" })]);
     await seedDossier();
     await page.goto("/en/app?view=field");
-    await page.locator("[data-library-toggle]").click();
 
     const dossier = page.locator("[data-dossier]");
     await expect(dossier).toBeVisible({ timeout: 30_000 });
@@ -149,6 +148,10 @@ test.describe("Records are papers", () => {
     await expect(
       page.getByText(dossierSentinel("previously")).first(),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(dossierSentinel("direction"))).toHaveCount(0);
+    await page.goto("/en/app?doc=dossier%2Fdirection");
+    await expect(page.getByText(dossierSentinel("direction")).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(dossierSentinel("previously"))).toHaveCount(0);
   });
 
   test("with no Dossier documents on disk the section hides", async ({
@@ -156,10 +159,7 @@ test.describe("Records are papers", () => {
   }) => {
     await seedSlices([makeSlice(daysAgoIso(40), { tag: "OLD" })]);
     await page.goto("/en/app?view=field");
-    await page.locator("[data-library-toggle]").click();
-    await expect(
-      page.locator("[data-library-panel]"),
-    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("button", { name: /Open the .* record/ }).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-dossier]")).toHaveCount(0);
   });
 

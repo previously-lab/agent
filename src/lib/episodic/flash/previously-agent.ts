@@ -1,63 +1,10 @@
 /**
- * Previously Agent — the merged SELF-EVOLUTION agent (v1.1): ONE run covers
- * both evolution domains, in a fixed order:
- *
- *   (a) DIRECTION FIRST — evaluate direction.md, the loop's USER PORTRAIT +
- *       HYPOTHESIS POOL (see src/lib/evolution/direction-agent.ts), including
- *       any legacy Self-model migration from the card. The agent edits a
- *       working copy through the direction MUTATION tools (addPortraitEntry /
- *       addHypothesis / promoteHypothesis / … — atomic ops, validated per op,
- *       `proposed` pointers code-stamped); the caller runs the whole-doc gate
- *       (validateDirectionProposal) + the engineering hypothesis TTL
- *       (retireExpiredHypotheses) and applies through writeUserModelDirection
- *       (the direction half of the folded people/user/index.md, §B.7).
- *   (b) CARD + SOPs under the (possibly new) direction — evolve
- *       previously.md (the v5 user card) and the allowed self/ SOPs.
- *
- * The card is a PURE dynamic semantic background pool:
- *   1. Identity head — structured, machine-parsed (Name / Address them as / Pronouns / Alias).
- *   2. Past          — ONE rolling third-person profile paragraph (updated IN
- *      PLACE) + durable "anchor facts" (still true in 3 years).
- *   3. Now           — current-state hooks. EXPIRY IS AGENT-OWNED: items older
- *      than 7 days are surfaced with their age; the agent promotes the durable
- *      substance to Past or drops the hook. Nothing is removed mechanically.
- *
- * Commitments, deadlines, awaited replies and task lifecycle belong to the
- * authoritative task ledger and tasks/ cases, never to this card.
- *
- * The card carries NO rules and NO analysis — ONE FACT, ONE HOME: background
- * facts and states go to the card; patterns/tendencies about the user go to the
- * direction Portrait; guesses go to the Hypotheses pool. The card's old
- * Self-model section is gone: when the card the agent reads still contains
- * one, the run folds those lines into the Portrait (descriptive phrasing,
- * keeping their slice refs) and the serializer drops the section.
- *
- * WRITING IS MUTATION-BASED: the agent never outputs the whole card. It edits
- * an in-memory copy through per-entry write tools (addNow / updatePastProfile /
- * …) that validate each write and REJECT with compression
- * instructions. The session's LOOP BRAKE (card-session.ts) bounds the
- * re-submission failure mode: the 2nd identical rejection escalates with the
- * exact arithmetic, the 3rd force-lands length violations (truncated) or skips
- * the write with a finish-now instruction. Untouched entries are preserved by
- * construction. The direction side's frequency protection is likewise in code:
- * the proposal is validated before being applied, the card mutations keep the
- * CardSession caps, and writeSop stays hard-gated on the run's allowlist,
- * recorded full-read basis, and nonempty evidence / benefit / applicability.
- *
- * Each evolution pass is INCREMENTAL: it evaluates only the new evidence (the
- * recent exchange, or the just-closed slice) against the current card and
- * direction. Past slices are immutable evidence; their reading may be revised
- * by NEW evidence, never re-derived from re-reading the same history.
- *
- * Runs on the turn's MAIN model through the shared sub-agent runner
- * (src/lib/agents/sub-agent-runner.ts): thinking ON at low effort, a 240s
- * budget, a 50-step anti-loop fuse (the wall clock is the real budget — the
- * run does both domains), and the `finish` tool as the report channel. When
- * the pass exhausts its steps without calling finish, the mutations that
- * already landed are returned as a PARTIAL result instead of failing.
- * The runner streams the model's thinking/writing live; since this agent does
- * NOT run as a tool call, the lines flow through the optional `onLine`
- * callback (wired by housekeeping onto the `data-evolution` channel).
+ * One writer maintains the two views in people/user/index.md. Previously keeps
+ * established personal history and current threads. Direction keeps supported
+ * patterns and optional hypotheses about the user's response in other contexts.
+ * Both can stay unchanged. The pass edits working copies through tools; the
+ * caller validates and persists the result. Allowed self/ SOPs describe the
+ * agent's own practice. Historical notes are reviewed in their original scope.
  */
 
 import { tool } from "@/lib/deepseek/tools";
@@ -84,6 +31,7 @@ import {
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import {
   parseCard,
+  projectLivePreviously,
   CARD_NOW_EXPIRY_DAYS,
   CARD_PROFILE_MAX_CHARS,
   NOW_ITEM_MAX_CHARS,
@@ -172,14 +120,12 @@ export interface PreviouslyAgentInput {
   // ── Evolution context (v1.0/v1.1) ────────────────────────────────────────
 
   /**
-   * The direction half of the merged run — see DirectionEvalInput. When
-   * present, the run evaluates direction.md FIRST and may propose a new one
-   * on `finish`; the card phase then works under the (possibly new) portrait.
+   * When available, this pass may revise case-independent user patterns and hypotheses.
    */
   directionEval?: DirectionEvalInput;
   /**
    * Orientation-only direction content (the explicit-request path, where no
-   * direction evaluation runs): the CRITERIA the card evolves under.
+   * direction evaluation runs). It supplies context only.
    * Ignored when `directionEval` is set (its `current` is used instead).
    */
   direction?: string | null;
@@ -259,7 +205,7 @@ export interface PreviouslyAgentOutput {
    * rejection
    * is logged and skipped, never fatal.
    */
-  direction?: { doc: string; summary: string };
+  direction?: { doc: string; summary: string; checkedMutations?: true };
 }
 
 // ─── Prompt ────────────────────────────────────────────────────────────
@@ -269,19 +215,18 @@ export interface PreviouslyAgentOutput {
 // card, the direction evidence, the recent conversation) goes in the USER
 // prompt.
 
-const PREVIOUSLY_ROLE = `You are the Previously Agent — the merged SELF-EVOLUTION agent. You do NOT talk to users. You work autonomously. ONE run, two domains, IN THIS ORDER:
+const PREVIOUSLY_ROLE = `You are the Previously Agent. You maintain two complementary views of the user for future conversations.
 
 ${MEMORY_IS_GIT_RULE}
 
-1. **Direction first** (when the task carries a "Direction evaluation" section): evaluate direction.md — the loop's USER PORTRAIT + HYPOTHESIS POOL — and, if it should move, edit it through the direction MUTATION tools (addPortraitEntry / updatePortraitEntry / removePortraitEntry / addHypothesis / promoteHypothesis / removeHypothesis), then note what moved on \`finish\`'s \`directionSummary\`.
-2. **Then the card** (+ allowed self/ SOPs) — evolved UNDER the direction as it stands AFTER your proposal (your own accepted changes apply).
+The task may offer tools for both views and for an applicable self/ SOP. Each view can stay unchanged independently. Direction interprets evidence; its hypotheses are never evidence for the card.
 
 ## What the card is
 
-The card half of \`people/user/index.md\` — the agent's compact background understanding of the user: who they are and what is happening in their world. NOT an event log, NOT an additive archive, NOT a task list, and NOT a rulebook:
-1. **Identity** — structured head: name, how to address them, pronouns, aliases.
-2. **Past** — ONE rolling third-person paragraph describing the user, updated IN PLACE — plus durable anchor facts.
-3. **Now** — current-state semantic compression: short hooks into what is happening right now, each carrying \`since\`. Expiry is YOURS: items past ${CARD_NOW_EXPIRY_DAYS} days are listed in the task — promote durable substance to Past or drop the hook.
+Previously is the retrospective half of people/user/index.md. It gives a future conversation just enough factual background to pick up the user's story.
+1. **Identity** records the user's name, form of address, pronouns and aliases.
+2. **Past** is a compact account of established experiences, background and turning points that still help explain the user's situation today. Keep self-reports in the user's terms. A description of what they do does not establish a purpose they never gave. Cite the underlying records for anchors. Keep a short paragraph or leave it empty.
+3. **Now** may point to an ongoing thread worth carrying across conversations. A passing activity can live entirely in its subject's case. Review hooks older than ${CARD_NOW_EXPIRY_DAYS} days for continuing relevance.
 
 Commitments, deadlines, awaited replies, next actions, and task outcomes belong EXCLUSIVELY to the task ledger and \`tasks/\` cases. Never create or maintain a Horizon section. A Now hook may point to a task as a current thread, but must not restate its deadline, lifecycle status, or next action.
 
@@ -291,14 +236,10 @@ The raw evidence lives in the time slices; the card only summarizes and points a
 
 **THE USER'S SELF-DESCRIPTION WINS**: when the task carries a "User's self-description" section (people/user/profile.md — written by the user themselves, never by you), treat it as authoritative. On any conflict between it and the model you maintain, fold YOUR model toward the self-description.
 
-## One fact, one home
+## Choosing the subject
 
-- **Background facts and states** (what the user did / is doing) → the CARD.
-- **Commitments and future action** (deadlines / awaited replies / task outcomes) → the TASK LEDGER and \`tasks/\` cases.
-- **Patterns and tendencies** (what kind of person the user is, what works/fails with them) → the direction **Portrait**.
-- **Guesses** → the direction **Hypotheses** pool.
-
-The card must NEVER carry rules, lessons, or analysis. If the card you are reading still has a \`## Self-model\` section (legacy), you MUST migrate it this run: fold each line into the Portrait — DESCRIPTIVE phrasing about the user, keeping its slice refs — and do not re-create the section (the writer drops it).
+An isolated visit can update a place. A major relocation may also change the user's life story. A difficult night belongs with the place; a question about whether they will leave belongs there too. Previously may record a period of disrupted sleep if it became an important part of their history. Looking up a notice once is ordinarily complete in its local account. A personal trait needs separate support.
+Keep commitments in the task ledger. Operating lessons concern the agent's own practice. Legacy Self-model material mixes subjects: identify whose conduct it describes and check the original observations before adopting any personal interpretation. An old instruction to the assistant supplies no evidence of a user trait.
 
 ## Language and house style
 
@@ -308,12 +249,10 @@ ${DOC_HOUSE_STYLE}
 
 ## The direction discipline (portrait + hypothesis pool)
 
-direction.md has a fixed skeleton: \`# Portrait\` (six fixed \`##\` dimensions) / \`# Hypotheses\`. You edit it through MUTATION TOOLS, one targeted op per call — never a whole-doc rewrite; entries you never touch stay exactly as they are, and engineering stamps every hypothesis's \`[proposed …]\` pointer itself.
-
-- **Portrait** — CONFIRMED understanding of the user as a PERSON, in six fixed dimensions (always all present): \`## Traits & cognitive style\`, \`## Triggers & rhythms\`, \`## Patterns & loops\`, \`## Strengths & resilience\`, \`## Communication preferences\`, \`## Values & boundaries\`. An entry is portrait-grade ONLY when it holds across contexts, outlives the event that evidenced it, and predicts ("用户面对不确定时先搭建结构再行动" qualifies; "用户周四聊了面试" is a case note and belongs nowhere here). NEVER imperative — if a line tells you (the agent) what to do, it is misspelled: phrase the USER PATTERN that motivates it instead. Body text carries NO names/dates/events/slice ids — evidence rides ONLY as a trailing \`— refs: YYYY-MM-DD-HHMM, …\` tail.
-- **Hypotheses** hold optional, falsifiable interpretations supported by user evidence across contexts. A single memory question or an unanswered reply establishes no enduring motive or preference. Leave the pool empty or unchanged when the record adds nothing. Expired entries leave room unused.
-- Promote a hypothesis when supported by independent evidence from at least two slices or the user's explicit confirmation. Remove a refuted guess. Engineering retires unverified guesses after four slices. An explicit durable preference may enter the Portrait directly.
-- Mode BOOTSTRAP (never written) or MIGRATE (an old skeleton: \`# Direction\` / \`# Anti-goals\`, or the first portrait skeleton's \`# Evidence\` / \`# Log\`): retain only supported, durable observations when seeding or migrating the doc; a single slice pointer suffices. Steady mode: ≥2 distinct slice pointers across the doc.
+Direction is the interpretive half. It can help anticipate the user's response in comparable circumstances. The six existing Portrait headings are lenses; any of them may stay empty. Describe the conditions under which the pattern holds and carry forward counterexamples that limit it.
+- **Portrait** holds supported patterns and the user's explicit self-descriptions, in their stated scope. Each new claim needs its own evidence. Compare independent situations; several accounts of the same incident describe one situation. If the user explicitly says a preference holds across settings, cite their words. A past write, a case title, a hypothesis and the assistant's wording cannot corroborate one another.
+- **Hypotheses** may hold a conditional, falsifiable expectation when a concrete observation gives a reason to consider it. Someone who reports being disturbed specifically by sudden noises while resting might react similarly in another quiet setting. State what observation would count against that reading. Ordinary discomfort in an exceptionally loud room needs no personal explanation. A single memory question or an unanswered reply establishes no enduring motive or preference. Leave the pool empty or unchanged when the record adds nothing.
+- Revisit a hypothesis when evidence bears on it. Independent observations in different contexts, or an explicit self-description, can justify promotion. Contradictory evidence may narrow or refute it. Engineering retires an unverified guess after four newer slices; expiry says nothing about its truth. Bootstrap and migration follow the same standards.
 
 ## How you write the card — MUTATIONS, never the whole file
 
@@ -323,7 +262,7 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 |------|-------------|
 | \`setIdentity(field, value)\` | field ∈ name / address_as / pronouns / alias. Sets or replaces that line. |
 | \`updatePastProfile(text)\` | Rewrite the rolling profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). |
-| \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Durable fact ("still true in 3 years"), ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
+| \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Established fact of enduring relevance to the user's history, ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
 | \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
 | \`writeSop(agent, content, evidence, expectedBenefit, applicability)\` | Rewrite a self/ colleague's SOP from its recorded full read (agent ∈ search / thinkdeep). GATED by the allowlist and read basis. Evidence, expected benefit, and applicability must each be nonempty. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
@@ -337,9 +276,8 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 
 Compare the conversation in the task against the current card. Incorporate anything NEW and durable; resolve or remove what is stale. **Preserve what is still accurate and well-formed** — do not re-derive content from history, do not rewrite what already reads well.
 
-- New stable fact about the user → fold it into the Past profile paragraph (or Identity head if it is a name/address fact).
-- A durable fact that will ALMOST CERTAINLY still be true in 3 years (a date, a decision, a red line) → a Past anchor. Evolving situations do NOT belong in anchors.
-- Current situation that will fade → a Now hook naming the thread and pointing to its event/task/research case and source slice. Do not duplicate the case's fast-changing status, dates, decisions or details.
+- Add a Past fact or anchor when it earns a place in a brief account of the user's history. Preserve milestones and reversals with their original scope. A case can be enough on its own.
+- Add a Now hook when the conversation benefits from an ongoing thread or a pointer to its case.
 - A commitment, deadline, awaited reply, or task-state report → NO task content in the card; the field/reflection task tools own it. Record only a durable outcome or a minimal current-thread pointer when independently useful.
 - Keep an explicit durable preference in the Portrait. Correct the relevant existing fact when the user corrects it.
 - Fragmented or mixed-language card content → rewrite those entries cleanly in the user's language while preserving substance.
@@ -351,7 +289,7 @@ You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documen
 
 **Evidence discipline**: with fitness scoring gone, your only credential is the record. Cite the records slice ids in the prose itself ("because slice 2026-08-07-0709 showed …") and in the evidence array. An SOP change without slice-id citations is worthless — never propose one. Applicability says exactly when the rule applies; expected benefit is a hypothesis to review, not verified improvement.
 
-**Style discipline — the investigator's account, never the work order**: every SOP rule and every self-assessment line is anchored in ONE thing that happened — the date and the slice, what observably happened (a fact anyone can re-check against the record), and the working rule adopted because of it. The builder's vantage point is banned: no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报, and no English equivalents (engineering, the code, implementation, defect, fix, escalate). When a read or a tool misbehaves, record the reproducible phenomenon and the rule you now follow — "2026-10-05：以全角冒号引用一份中文长名的案件时，清单里看得到，读回却失败；此后引用前先读回，读不回就不引用。" — never a diagnosis of how the agent is built or a request that someone fix it. No architecture explanations, no notes addressed to the agent's makers: the SOP says what you encountered and what you learned.
+**Style discipline — the investigator's account, never the work order**: anchor a procedural observation in what happened, where it can be checked and how that experience changed the agent's practice. For example, a search returned a title but reading it failed. Record the failed check before relying on that source again. Keep implementation commentary out of the case.
 
 **Self-assessment**: dissatisfaction with your own craft ("three searches this week missed, the order is suspect") lands as DATED PROSE at the tail of the relevant self/ case's index.md — no thresholds, no scores. When you rewrite an SOP, fold or supersede the stale self-assessment lines it answers.
 
@@ -370,13 +308,12 @@ Every claim carries refs to its evidence slice — cite the slice id exactly as 
 
 ## Reformat (legacy only)
 
-FIRST check the current card's structure in the task. If it is NOT the v5 card (old stamps, \`## Profile\` / \`## Recent\` / \`## User profile\` / \`### Identity & background\` headers), your working copy starts EMPTY or partially mapped — REBUILD the card through mutations: setIdentity / updatePastProfile / addNow / … carrying over everything still accurate. This wholesale migration is the one case where you re-write existing content. (A legacy \`## Self-model\` section is NOT rebuilt onto the card — migrate it into the direction Portrait instead, see above.)
+Older formats are historical material. Reuse independently supported biographical facts, treat old inferences as interpretations, and leave operational notes and legacy commitments with their own subject. Preserve the user's original meaning and dates.
 
 ## Your Process
 
 1. Read the time context + compare the conversation against the card and the direction. New durable info? Stale lines? Evidence for/against a hypothesis?
-2. Direction first (when the task carries the evaluation section): decide no_change or apply the moves with the direction mutation tools. Verify quotes with \`readSlice\` when unsure.
-3. Apply card mutations — one tool call per entry change — under the direction as it stands after your moves.
+2. Evaluate which view, if either, the evidence changes. Check original utterances with readSlice when needed and apply only the relevant mutations.
 4. \`finish\` LAST — 1-3 sentences of reasoning (developer log) + a one-sentence user-language summary of what changed (shown in the UI; empty when nothing changed) + \`directionSummary\` when the direction moved. Never write after finish.
 
 **Semantic merging:** the same concept across languages (e.g. "self-evolution" and "自我进化") is ONE fact — merge, never duplicate.`;
@@ -418,13 +355,13 @@ function daysBetween(since: string, today: string): number {
 function buildDirectionEvalSection(evalInput: DirectionEvalInput): string {
   const modeLine =
     evalInput.mode === "bootstrap"
-      ? "BOOTSTRAP — the direction has never been written. Establish a baseline only if there is durable evidence (a single slice pointer suffices)."
+      ? "BOOTSTRAP — the direction has never been written. Empty dimensions are expected."
       : evalInput.mode === "migrate"
-        ? "MIGRATE — the doc still uses an OLD skeleton (# Direction / # Anti-goals, or the first portrait skeleton's # Evidence / # Log); re-abstract it wholesale into the new # Portrait (six fixed ## dimensions, refs-tailed pointers) / # Hypotheses skeleton (a single slice pointer suffices)"
-        : "steady — the normal high bar (≥2 distinct slice pointers across the doc)";
+        ? "MIGRATE — review the older structure and carry forward only statements supported at their own evidence level."
+        : "steady — revise individual claims as evidence warrants";
   return `
 
-## Direction evaluation (FIRST — before any card mutation)
+## Direction evaluation (alongside the retrospective card)
 
 Mode: ${modeLine}
 
@@ -432,7 +369,7 @@ Mode: ${modeLine}
 
 ${evalInput.current?.trim() || "(not set yet — this would be the FIRST direction)"}
 
-### Legacy Self-model lines on the card (MIGRATE them into the Portrait — descriptive phrasing, keep their slice refs; the card drops the section)
+### Legacy Self-model notes (historical, with mixed subjects)
 
 ${evalInput.cardSelfModel?.trim() || "(none — the card carries no legacy Self-model lines)"}
 
@@ -444,7 +381,7 @@ ${renderDirectionMarkings(evalInput.recentMarkings)}
 
 ${renderDirectionAnalysis(evalInput.analysis)}
 
-Evaluate the PORTRAIT + HYPOTHESIS POOL against this evidence. "No change" is the common case. When the direction should move, apply the moves with the direction mutation tools (addPortraitEntry / updatePortraitEntry / removePortraitEntry / addHypothesis / promoteHypothesis / removeHypothesis — your working copy starts from the doc above, or from the empty skeleton in BOOTSTRAP/MIGRATE) — then evolve the card under the NEW direction.`;
+Consider each claim independently. Unchanged is a complete outcome. The case record, the retrospective card and Direction can change separately.`;
 }
 
 /** The dynamic USER prompt: time context, signal, current card, conversation. */
@@ -473,7 +410,7 @@ function buildUserPrompt(input: PreviouslyAgentInput): string {
     : input.direction?.trim()
       ? `
 
-## Evolution direction (the criteria — the card is the result)
+## Evolution direction (interpretations for context)
 
 ${input.direction.trim()}`
       : "";
@@ -492,7 +429,7 @@ ${input.direction.trim()}`
 
 ## self/ SOPs writable this run
 
-These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write requires nonempty evidence, expected benefit, and applicability, cites its records slice ids in the prose, and reads as a dated factual account — never builder vocabulary (工程侧 / 代码 / 缺陷 / 修复 / 上报).
+These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. A write cites the source slices, expected benefit and applicability, and uses the complete working copy. Keep implementation commentary out of the case.
 
 ### Complete old working copies (the only recorded write bases)
 
@@ -521,9 +458,9 @@ ${signalLabels[signal]}
 Note: "${note}"
 Current slice: \`${currentSliceId}\`${deepNote}${directionSection}${sopSection}${profileSection}
 
-## Current card (your working copy starts from this)
+${projectLivePreviously(previouslyContent) === previouslyContent ? "## Current card" : "## Legacy source for review — original wording. Only supported current material belongs in the live views."}
 
-${previouslyContent || "(empty — new card. Build it from the structure in your instructions.)"}
+${previouslyContent || "(empty card — leave it empty unless a fact warrants a place in the user's continuing story.)"}
 
 ## Recent Conversation (your window into what changed)
 
@@ -546,17 +483,52 @@ export interface DirectionSession {
   log: string[];
 }
 
+const attributedRecord = z.object({
+  source: z.object({ ref: z.string(), kind: z.literal("conversation_record") }),
+  turns: z.array(z.object({
+    role: z.string(), sourceRole: z.string(), boundary: z.string().optional(),
+    content: z.string(), turnId: z.string().optional(),
+  })),
+});
+
 function buildTools(
   input: PreviouslyAgentInput,
   session: CardSession,
   sopWrites: SopWrite[],
   directionSession: DirectionSession | null,
 ) {
-  /** Apply ONE direction op to the working copy; OK/REJECTED like the card tools. */
-  const applyDirOp = (op: DirectionOp): string => {
+  // Only original, attributed user passages can support a new confirmed entry.
+  const userPassages = new Map<string, Array<{ content: string; turnId?: string }>>();
+  const rememberPassages = (sliceId: string, turns: PreviouslyAgentInput["recentTurns"]) => {
+    const passages = userPassages.get(sliceId) ?? [];
+    for (const turn of turns) {
+      if (turn.role === "user" && turn.content.trim()) passages.push(turn);
+    }
+    userPassages.set(sliceId, passages);
+  };
+  rememberPassages(input.currentSliceId, input.recentTurns);
+
+  const applyDirOp = (op: DirectionOp, selfDescription?: string): string => {
     if (!directionSession) {
       return "REJECTED — this run carries no direction evaluation.";
     }
+    if ("refs" in op) {
+      const situations = new Set<string>();
+      let quoted = false;
+      for (const ref of op.refs) {
+        const sliceId = canonicalScenarioFromRef(ref);
+        if (!sliceId) return "REJECTED — cite a valid slice or slice-turn id.";
+        const turnId = ref.trim().replace(/^records\//, "").slice(sliceId.length + 1);
+        const passages = userPassages.get(sliceId)?.filter(turn => !turnId || turn.turnId === turnId);
+        if (!passages?.length) return "REJECTED — read the original user passage for each cited record before updating the portrait.";
+        situations.add(sliceId);
+        if (selfDescription?.trim() && passages.some(turn => turn.content.includes(selfDescription.trim()))) quoted = true;
+      }
+      if (selfDescription && !quoted) return "REJECTED — copy the user's explicit self-description from a cited passage.";
+      if (situations.size < 2 && !quoted) return "REJECTED — a single situation can support a tentative hypothesis. A confirmed entry needs independent situations or the user's explicit self-description, quoted in selfDescription.";
+    }
+    if (op.op === "add_hypothesis" && !userPassages.get(input.currentSliceId)?.length)
+      return "REJECTED — read the originating user evidence for this hypothesis.";
     const r = applyDirectionOps(directionSession.doc, [op], {
       sliceId: input.currentSliceId,
     });
@@ -577,6 +549,7 @@ function buildTools(
     "## Communication preferences",
     "## Values & boundaries",
   ] as const;
+  const selfDescription = z.string().trim().min(1).optional().describe("With one source, quote the user's explicit self-description verbatim. Keep its scope and meaning; inferred purposes or explanations need independent evidence.");
   const directionTools: Record<string, Tool> = directionSession
     ? {
         addPortraitEntry: tool({
@@ -588,10 +561,11 @@ function buildTools(
           inputSchema: z.object({
             dimension: z.enum(DIMENSIONS_ENUM),
             text: z.string(),
-            refs: z.array(z.string()).describe("Evidence slice ids, e.g. [\"2026-08-07-0709\"]."),
+            refs: z.array(z.string()).describe("Original slices read for this claim. Repeated accounts of one experience are one situation."),
+            selfDescription,
           }),
-          execute: async ({ dimension, text, refs }) =>
-            applyDirOp({ op: "add_portrait", dimension, text, refs }),
+          execute: async ({ dimension, text, refs, selfDescription }) =>
+            applyDirOp({ op: "add_portrait", dimension, text, refs }, selfDescription),
         }),
         updatePortraitEntry: tool({
           description:
@@ -601,9 +575,10 @@ function buildTools(
             match: z.string().describe("A substring of the ONE existing line to replace."),
             text: z.string(),
             refs: z.array(z.string()),
+            selfDescription,
           }),
-          execute: async ({ match, text, refs }) =>
-            applyDirOp({ op: "update_portrait", match, text, refs }),
+          execute: async ({ match, text, refs, selfDescription }) =>
+            applyDirOp({ op: "update_portrait", match, text, refs }, selfDescription),
         }),
         removePortraitEntry: tool({
           description:
@@ -621,8 +596,8 @@ function buildTools(
             "[proposed <slice>] pointer; you supply the guess + its falsification " +
             "condition. Guesses are about the PERSON, never event predictions.",
           inputSchema: z.object({
-            text: z.string().describe("The trait-level guess, no slice ids."),
-            falsify: z.string().describe("The falsification condition."),
+            text: z.string().describe("A conditional expectation grounded in something the user actually noticed, chose or did. Reporting a group decision does not establish that they made it. Omit slice ids."),
+            falsify: z.string().describe("An observation where the proposed condition holds but the expected response differs. Observing the person when the condition is absent cannot test it."),
           }),
           execute: async ({ text, falsify }) =>
             applyDirOp({ op: "add_hypothesis", text, falsify }),
@@ -637,9 +612,10 @@ function buildTools(
             dimension: z.enum(DIMENSIONS_ENUM),
             text: z.string().describe("The portrait-grade re-phrasing."),
             refs: z.array(z.string()),
+            selfDescription,
           }),
-          execute: async ({ match, dimension, text, refs }) =>
-            applyDirOp({ op: "promote_hypothesis", match, dimension, text, refs }),
+          execute: async ({ match, dimension, text, refs, selfDescription }) =>
+            applyDirOp({ op: "promote_hypothesis", match, dimension, text, refs }, selfDescription),
         }),
         removeHypothesis: tool({
           description:
@@ -667,7 +643,7 @@ function buildTools(
     updatePastProfile: tool({
       description:
         `Rewrite the rolling Past profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). ` +
-        "Preserve what is still accurate; fold in new durable substance.",
+        "Keep established background or turning points that help a reader pick up the user's story. A single observation can remain in its case.",
       inputSchema: z.object({
         text: z.string().describe("The full new profile paragraph, in the user's language."),
       }),
@@ -676,7 +652,7 @@ function buildTools(
     addPastAnchor: tool({
       description:
         `Add a durable Past anchor fact (≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total). ` +
-        "Admission test: almost certainly still true in 3 years.",
+        "An anchor is an established fact of lasting relevance to the user's story.",
       inputSchema: z.object({
         text: z.string(),
         refs: z.array(z.string()).describe("Evidence slice ids, e.g. [\"2026-08-07-0709\"]."),
@@ -799,8 +775,18 @@ function buildTools(
         }).optional().describe("Optional range filter."),
       }),
       execute: async ({ sliceId, range }) => {
-        try { return await input.readSliceFn(sliceId, range); }
-        catch { return `(slice not found: ${sliceId})`; }
+        try {
+          const result = await input.readSliceFn(sliceId, range);
+          if (directionSession) {
+            try {
+              const record = attributedRecord.safeParse(JSON.parse(result));
+              if (record.success && record.data.source.ref === `records/${sliceId}`) {
+                rememberPassages(sliceId, record.data.turns.filter(turn => turn.sourceRole === "user" && turn.boundary !== "ambiguous"));
+              }
+            } catch { /* Historical readers can return plain diagnostics without a source receipt. */ }
+          }
+          return result;
+        } catch { return `(slice not found: ${sliceId})`; }
       },
     }),
     readAgentTimeline: tool({
@@ -819,7 +805,7 @@ function buildTools(
     readPreviously: tool({
       description:
         "Read previously.md from a specific past slice. " +
-        "Compare against the current version to check how long a fact has been held.",
+        "This historical, derived account can orient a read of the original conversation.",
       inputSchema: z.object({
         sliceId: z.string().describe("Slice ID in YYYY-MM-DD-HHMM format."),
       }),
@@ -946,7 +932,7 @@ async function attempt(
   // mutations. The staged SOP writes and the direction working copy are
   // likewise per-attempt.
   const session = createCardSession(
-    input.previouslyContent,
+    projectLivePreviously(input.previouslyContent),
     input.currentSliceId,
     today,
   );
@@ -973,7 +959,7 @@ async function attempt(
     directionSession.touched &&
     directionSession.doc.trim() !== (input.directionEval?.current?.trim() ?? "");
   return {
-    updatedCard: failed ? "" : serializeSession(session),
+    updatedCard: failed ? "" : (session.log.length || !input.previouslyContent ? serializeSession(session) : input.previouslyContent),
     reasoning: r.reasoning,
     summary: r.summary,
     mutations: session.log,
@@ -989,6 +975,7 @@ async function attempt(
       ? {
           direction: {
             doc: directionSession.doc,
+            checkedMutations: true as const,
             summary: r.directionSummary ?? "",
           },
         }

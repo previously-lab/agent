@@ -22,6 +22,12 @@
 import { isPortablePathSegment } from "@/lib/portable-path";
 import { isValidDate } from "./naming";
 
+/** Storage-only folder names cannot be opened or written as active case identities. */
+export const ARCHIVED_CASE_SUFFIX = "-archived";
+export function isArchivedCaseName(caseName: string): boolean {
+  return caseName.toLowerCase().endsWith(ARCHIVED_CASE_SUFFIX);
+}
+
 /**
  * Characters/conditions that can never appear in any name component.
  *
@@ -91,7 +97,7 @@ export function startsWithFourDigits(name: string): boolean {
  */
 export function isValidCaseName(caseName: string): boolean {
   if (typeof caseName !== "string") return false;
-  if (hasUnsafeShape(caseName)) return false;
+  if (hasUnsafeShape(caseName) || isArchivedCaseName(caseName)) return false;
   const dated = /^(\d{4}-\d{2}-\d{2})-(.+)$/.exec(caseName);
   if (dated) {
     const [, date, title] = dated;

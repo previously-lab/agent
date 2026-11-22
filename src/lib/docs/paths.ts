@@ -19,7 +19,8 @@
  * compat table lives HERE, in this one module. Writes go to the new root
  * only (enforced by the ops in `case-doc.ts`, never here).
  */
-import { isValidCaseName, isValidPieceFileName } from "./case-naming";
+import { ARCHIVED_CASE_SUFFIX, isArchivedCaseName, isValidCaseName, isValidPieceFileName } from "./case-naming";
+export { ARCHIVED_CASE_SUFFIX, isArchivedCaseName } from "./case-naming";
 
 // ─── The closed category set (§B.6) ────────────────────────────────────────
 
@@ -42,14 +43,15 @@ export function isCaseCategory(segment: string): segment is CaseCategory {
   return (CASE_CATEGORIES as readonly string[]).includes(segment);
 }
 
+/** This folder is read as a case but written by the dedicated user-model tools. */
+export function isUserModelCase(category: CaseCategory, caseName: string): boolean {
+  return category === "people" && caseName.toLowerCase() === "user";
+}
+
 // ─── Roots ─────────────────────────────────────────────────────────────────
 
 export const MEMORY_ROOT_DIR = "memory";
 /** Inactive cases keep their semantic home and gain this suffix in place. */
-export const ARCHIVED_CASE_SUFFIX = "-archived";
-export function isArchivedCaseName(caseName: string): boolean {
-  return caseName.endsWith(ARCHIVED_CASE_SUFFIX);
-}
 export function archiveCaseDirPath(category: CaseCategory, caseName: string): string {
   assertCaseName(caseName);
   return `${MEMORY_ROOT_DIR}/${category}/${caseName}${ARCHIVED_CASE_SUFFIX}`;

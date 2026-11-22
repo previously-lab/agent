@@ -84,6 +84,16 @@ describe("composeUserModel / splitUserModel", () => {
       card: "# Card only",
       direction: null,
     });
+    for (const direction of ["# Portrait\n\n## Traits & cognitive style\n\n# Hypotheses", "# Direction\n\n# Anti-goals"]) {
+      expect(store.splitUserModel(store.composeUserModel("", direction))).toEqual({ card: "", direction });
+    }
+  });
+
+  it("preserves inline hyphens and prose divisions before the Direction title on Windows", async () => {
+    const store = await importFresh();
+    const card = "# Previously On\r\n\r\nA---B\r\n\r\n---\r\n\r\n# Additional context\r\n\r\n~~~md\r\n---\r\n# Portrait\r\n~~~";
+    expect(store.splitUserModel(card)).toEqual({ card, direction: null });
+    expect(store.splitUserModel(card + "\r\n\r\n---\r\n\r\n# Portrait\r\n")).toEqual({ card, direction: "# Portrait" });
   });
 
   it("drops exact duplicate bullets while preserving distinct entries and headings", async () => {
@@ -116,7 +126,7 @@ describe("readUserModel", () => {
     const model = await store.readUserModel();
     expect(model?.card).toBe("# Card\n\nNew root card.");
     expect(model?.direction).toBe("# Direction\n\nNew root direction.");
-    expect(model?.full).toContain("---");
+    expect(model?.full).toBe("# Card\n\nNew root card.\n\n---\n\n# Direction\n\nNew root direction.\n");
   });
 
   it("does not resurrect legacy card or direction documents on a current-model miss", async () => {

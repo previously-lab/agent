@@ -73,6 +73,9 @@ import { flushBatch } from "@/lib/episodic/io-helpers";
 import { slicePartPath } from "@/lib/episodic/paths";
 import { recallRead } from "@/lib/memory/facade";
 import { runScenarioRecall } from "@/lib/agents/scenario-recall";
+import { runAgent, zeroUsage } from "@/lib/deepseek/runner";
+import { serializeTools } from "@/lib/deepseek/tools";
+import type { AgentOptions } from "@/lib/deepseek/types";
 
 const model: ModelConfig = {
   id: "deepseek-v4-flash",
@@ -138,9 +141,9 @@ describe("case writer user card citations", () => {
   const documentPath = "memory/things/battery/index.md";
   const citation = `previously:records/${SLICE_ID}?turn=${turnId}&role=user`;
 
-  function seedUserCard() {
+  function seedUserCard(words = quote, assistantId = "assistant") {
     const meta = encodeDialogueRecordTurn({ kind: "user_input", inputId: turnId, userSeq: 1 });
-    io.files.set(slicePartPath(SLICE_ID, "core"), `## Turn assistant — 2026-08-09T13:00:00Z (agent) [body-escaped v1]\n\n${quote}\n\n## Turn ${turnId} — 2026-08-09T13:01:00Z (user) [dialogue ${meta}] [body-escaped v1]\n\n${quote}`);
+    io.files.set(slicePartPath(SLICE_ID, "core"), `## Turn ${assistantId} — 2026-08-09T13:00:00Z (agent) [body-escaped v1]\n\n${words}\n\n## Turn ${turnId} — 2026-08-09T13:01:00Z (user) [dialogue ${meta}] [body-escaped v1]\n\n${words}`);
   }
 
   const report = { action: "open", category: "things", caseName: "battery", body: "Battery replacement confirmed.", sources: [source] };
@@ -163,6 +166,89 @@ describe("case writer user card citations", () => {
     });
   }
 
+  function sourcePassages(page: string): Array<{ handle: string; turnId: string; start: number; end: number }> {
+    const list = /^Verified user source passages: (\[.*\])$/m.exec(page)?.[1];
+    return list ? JSON.parse(list) : [];
+  }
+
+  async function fileWithPassages(prepare: (read: (input: SliceToolInput) => Promise<string>) => Promise<unknown[]>) {
+    ai.streamText.mockImplementationOnce(async (options: RunSubAgentOptions<unknown>) => {
+      const read = options.tools.readSlice as SliceTool;
+      const cases = await prepare((input) => callSliceTool(read, input));
+      return streamWith([{ toolName: "caseWriterOutput", input: { cases, reasoning: "File the observed change." } }]);
+    });
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const result = await runLibrarianPass({ model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked });
+    return { batch, result, onCardLinked };
+  }
+
+  it("files different place and event accounts from one returned user passage; unissued handles cannot file", async () => {
+    const words = "A bus was audible with the windows shut. Because of that I want an evening viewing.";
+    seedUserCard(words, turnId);
+    const corePath = slicePartPath(SLICE_ID, "core");
+    const raw = io.files.get(corePath)! + "\n\n## Turn unrelated — 2026-08-09T13:02:00Z (user) [body-escaped v1]\n\nUnrelated turn.";
+    io.files.set(corePath, raw);
+    let handle = "";
+    let excerpt = "";
+    const filed = await fileWithPassages(async (read) => {
+      expect(sourcePassages(await read({ range: { type: "turns", indices: [0, 2] } }))).toEqual([]);
+      const range = { type: "turns" as const, indices: [1] };
+      const handles = sourcePassages(await read({ range }));
+      expect(handles).toHaveLength(1);
+      expect(handles[0].turnId).toBe(turnId);
+      handle = handles[0].handle;
+      excerpt = readSliceEvidencePage(raw, { range }).content.slice(handles[0].start, handles[0].end);
+      expect(excerpt.trim()).toBe(words);
+      return [
+        { action: "open", category: "places", caseName: "Birch House", body: "A bus could be heard through the closed windows.", sources: [handle] },
+        { action: "open", category: "events", caseName: "Home search", body: "The resident wants an evening viewing because of traffic noise.", sources: [handle] },
+        { ...report, sources: ["unissued-handle"] },
+      ];
+    });
+    expect(filed.result.written).toEqual(["places/Birch House/index.md", "events/Home search/index.md"]);
+    expect(filed.result.skipped.map(({ name }) => name)).toEqual(["things/battery"]);
+    expect(filed.batch.entries.get("memory/places/Birch House/index.md")).toContain(citation);
+    expect(filed.batch.entries.get("memory/events/Home search/index.md")).toContain(citation);
+    expect(filed.onCardLinked.mock.calls).toEqual([[{ ...source, quote: excerpt }], [{ ...source, quote: excerpt }]]);
+
+    const unread = await fileWithPassages(async () => [{ ...report, sources: [handle] }]);
+    expect(unread.batch.entries.size).toBe(0);
+    expect(unread.onCardLinked).not.toHaveBeenCalled();
+    const changed = await fileWithPassages(async (read) => {
+      const [prior] = sourcePassages(await read({ range: { type: "turns", indices: [1] } }));
+      seedUserCard("The windows are open this time.", turnId);
+      const [fresh] = sourcePassages(await read({ range: { type: "turns", indices: [1] } }));
+      expect(fresh.handle).not.toBe(prior.handle);
+      return [{ ...report, sources: [prior.handle] }];
+    });
+    expect(changed.batch.entries.size).toBe(0);
+    expect(changed.onCardLinked).not.toHaveBeenCalled();
+  });
+
+  it("exposes only bounded, page-local passages for a long user turn", async () => {
+    // Include astral characters so incorrect byte or code-point offsets cannot pass.
+    seedUserCard(Array.from({ length: 800 }, (_, i) => `🟩 observation ${i}.`).join(" "));
+    const raw = io.files.get(slicePartPath(SLICE_ID, "core"))!;
+    const range = { type: "turns" as const, indices: [1] };
+    const first = readSliceEvidencePage(raw, { range, maxChars: 512 });
+    const next = { range, maxChars: 512, cursor: first.nextCursor!, revision: first.revision };
+    const page = readSliceEvidencePage(raw, next);
+    let excerpt = "";
+    const filed = await fileWithPassages(async (read) => {
+      expect(sourcePassages(await read({ range }))).toEqual([]);
+      const [early] = sourcePassages(await read({ range, maxChars: 512 }));
+      const [later] = sourcePassages(await read(next));
+      expect(later.handle).not.toBe(early.handle);
+      excerpt = page.content.slice(later.start, later.end);
+      expect(excerpt).toContain("observation");
+      return [{ ...report, sources: [later.handle] }];
+    });
+    expect(filed.result.written).toEqual(["things/battery/index.md"]);
+    expect(filed.onCardLinked).toHaveBeenCalledExactlyOnceWith({ ...source, quote: excerpt });
+  });
+
   it("queues an exact user citation in the case itself without a second file", async () => {
     seedUserCard();
     mockCardWriter([report], 1);
@@ -180,6 +266,66 @@ describe("case writer user card citations", () => {
     expect(onCardLinked).toHaveBeenCalledExactlyOnceWith(source);
   });
 
+  it("lets the native model read the original and repair a report that omitted every source", async () => {
+    seedUserCard();
+    const batch = { entries: new Map<string, string | null>() };
+    const onCardLinked = vi.fn();
+    const decisions = [
+      { name: "caseWriterOutput", input: { cases: [{ ...report, sources: undefined }], reasoning: "Record replacement." } },
+      { name: "readSlice", input: { range: { type: "turns", indices: [1] } } },
+      { name: "caseWriterOutput", input: { cases: [report], reasoning: "Verified the user's original." } },
+    ];
+    let turn = 0;
+    ai.streamText.mockImplementationOnce(async (options: AgentOptions) => {
+      const result = await runAgent(options, async ({ messages }) => {
+        if (turn === 1) expect(messages.at(-1)).toMatchObject({ role: "tool", content: expect.stringMatching(/source/i) });
+        if (turn === 2) expect(messages.at(-1)).toMatchObject({ role: "tool", content: expect.stringContaining(quote) });
+        const decision = decisions[turn++];
+        if (!decision) throw new Error("Unexpected model invocation after the repaired report.");
+        expect(batch.entries.size).toBe(0);
+        const call = { id: `call-${turn}`, type: "function" as const, function: { name: decision.name, arguments: JSON.stringify(decision.input) } };
+        return { message: { role: "assistant", content: null, tool_calls: [call] },
+          toolCalls: [call], finishReason: "tool_calls", usage: zeroUsage() };
+      });
+      return streamWith(result.toolCalls);
+    });
+    const result = await runLibrarianPass({ model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
+      sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked });
+    expect(turn).toBe(decisions.length);
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(["things/battery/index.md"]);
+    expect(batch.entries.get(documentPath)).toContain(citation);
+    expect(onCardLinked).toHaveBeenCalledExactlyOnceWith(source);
+  });
+
+  it.each([
+    { scope: "native-only", sourceTurnIds: [turnId], requiresSources: true },
+    { scope: "native and derived", sourceTurnIds: [turnId, `${turnId}@research:fixture:1`], requiresSources: false },
+  ])("advertises the filing contract for a $scope pass and accepts a genuine skip", async ({ sourceTurnIds, requiresSources }) => {
+    const emptyReport = { cases: [], reasoning: "Nothing new." };
+    ai.streamText.mockResolvedValueOnce(streamWith([{ toolName: "caseWriterOutput", input: emptyReport }]));
+    await runLibrarianPass({ model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, sourceTurnIds, cardTurnIds: [turnId] });
+    const options = ai.streamText.mock.lastCall![0] as RunSubAgentOptions<unknown>;
+    const definition = options.tools.caseWriterOutput;
+    const wire = serializeTools({ caseWriterOutput: definition })![0].function.parameters;
+    expect(wire).toHaveProperty("properties.cases.items.properties.line.description", expect.stringContaining("appendTail"));
+    const nativeAlternatives = "properties.cases.items.anyOf";
+    if (requiresSources) {
+      expect(wire).toHaveProperty(nativeAlternatives, expect.arrayContaining([
+        { required: ["sources"] },
+        { properties: { action: { const: "skip" } }, not: { required: ["currentUnderstanding"] } },
+      ]));
+    } else {
+      expect(wire).not.toHaveProperty(nativeAlternatives);
+    }
+    const skip = { action: "skip", category: "things", caseName: "battery" };
+    const accepted = (decision: unknown) => definition.inputSchema.safeParse({ ...emptyReport, cases: [decision] }).success;
+    expect(accepted(skip)).toBe(true);
+    expect(accepted({ ...skip, currentUnderstanding: { body: "Battery replaced.", evidence: [`records/${SLICE_ID}`] } })).toBe(!requiresSources);
+    expect(accepted({ ...report, sources: undefined })).toBe(!requiresSources);
+    expect(accepted(report)).toBe(true);
+  });
+
   it("does not write or settle when the quote was read only from an assistant turn", async () => {
     seedUserCard();
     mockCardWriter([report], 0);
@@ -195,13 +341,15 @@ describe("case writer user card citations", () => {
     expect(onCardLinked).not.toHaveBeenCalled();
   });
 
-  it("requires exact card sources for native-only writes while leaving explicit skip alone", async () => {
+  it("keeps a verified native sibling when another decision lacks required content or evidence", async () => {
     seedUserCard();
     io.files.set(documentPath, "---\nopened: '2026-08-09'\n---\n\nExisting case.");
     mockCardWriter([
       { ...report, caseName: "new-battery", sources: undefined },
       { ...report, action: "skip", sources: undefined, currentUnderstanding: { body: "New view.", evidence: [`records/${SLICE_ID}`] } },
       { ...report, action: "skip", caseName: "ignored", sources: undefined },
+      { ...report, action: "appendTail", body: "Wrong field for a tail." },
+      { action: "appendTail", category: "things", caseName: "battery", line: "The user reports fitting the new battery.", sources: [source] },
     ], 1, "things/battery");
     const batch = { entries: new Map<string, string | null>() };
     const onCardLinked = vi.fn();
@@ -209,13 +357,17 @@ describe("case writer user card citations", () => {
       model, closedSliceId: SLICE_ID, excerpt: EXCERPT, date: DATE, batch,
       sourceTurnIds: [turnId], cardTurnIds: [turnId], onCardLinked,
     });
-    expect(result.written).toEqual([]);
+    expect(result.written).toEqual(["things/battery/index.md"]);
     expect(result.skipped).toEqual([
       { name: "things/new-battery", reason: expect.stringContaining("requires an exact user card source") },
       { name: "things/battery", reason: expect.stringContaining("requires an exact user card source") },
+      { name: "things/battery", reason: expect.stringContaining("appendTail requires a line") },
     ]);
-    expect(batch.entries.size).toBe(0);
-    expect(onCardLinked).not.toHaveBeenCalled();
+    expect([...batch.entries.keys()]).toEqual([documentPath]);
+    expect(batch.entries.get(documentPath)).toContain("The user reports fitting the new battery.");
+    expect(batch.entries.get(documentPath)).toContain(citation);
+    expect(batch.entries.get(documentPath)).not.toContain("Wrong field for a tail.");
+    expect(onCardLinked).toHaveBeenCalledExactlyOnceWith(source);
   });
 
   it("retains a derived-only document's exact material receipt without citing a user card", async () => {
