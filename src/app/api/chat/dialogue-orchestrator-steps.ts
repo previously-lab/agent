@@ -97,30 +97,53 @@ async function readDialogueStream(runId: string, cacheScope?: string) {
   return { publications: [...publications.values()], events, nextStreamIndex };
 }
 
-async function listAllRuns() {
+// Keep deployed workflow IDs discoverable across compiler or source-path
+// changes. These are the two entry points that have created thinking/Actor
+// runs since their respective roles were introduced.
+const DEPLOYED_TURN_WORKFLOW = "workflow//./src/app/api/chat/turn-workflow//turnWorkflow";
+const DEPLOYED_ACTOR_WORKFLOW = "workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
+
+async function listDialogueRegistry(includeActors: boolean) {
   const world = await getWorld();
-  const rows: unknown[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await world.runs.list({ pagination: { limit: 100, ...(cursor ? { cursor } : {}) }, resolveData: "none" });
-    rows.push(...page.data);
-    if (!page.hasMore) break;
-    if (!page.cursor || page.cursor === cursor) throw new Error("Workflow registry pagination did not advance");
-    cursor = page.cursor;
-  } while (true);
-  return rows as Array<{
-    runId: string;
-    status: string;
-    createdAt?: Date | string;
-    attributes?: Record<string, string> | null;
-  }>;
+  const { turnWorkflow } = await import("./turn-workflow");
+  const names = new Set([DEPLOYED_TURN_WORKFLOW]);
+  // start() uses this compiler-assigned metadata as the stored workflowName.
+  // Plain TypeScript execution (e.g. tests) has no compiler metadata.
+  const compiledTurnId = Reflect.get(turnWorkflow, "workflowId");
+  if (typeof compiledTurnId === "string" && compiledTurnId) names.add(compiledTurnId);
+  if (includeActors) {
+    const { dialogueOrchestratorWorkflow } = await import("./dialogue-orchestrator-workflow");
+    names.add(DEPLOYED_ACTOR_WORKFLOW);
+    const compiledActorId = Reflect.get(dialogueOrchestratorWorkflow, "workflowId");
+    if (typeof compiledActorId === "string" && compiledActorId) names.add(compiledActorId);
+  }
+  type Row = Awaited<ReturnType<typeof world.runs.list>>["data"][number];
+  const pages = await Promise.all([...names].map(async workflowName => {
+    const rows: Row[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await world.runs.list({
+        workflowName, pagination: { limit: 100, sortOrder: "desc", cursor }, resolveData: "none",
+      });
+      rows.push(...page.data);
+      if (!page.hasMore) break;
+      if (!page.cursor || page.cursor === cursor) throw new Error("Workflow registry pagination did not advance");
+      cursor = page.cursor;
+    } while (true);
+    return rows;
+  }));
+  // Interleave the independent name queries in registry order rather than
+  // letting the order of the queries affect tied publications or wake events.
+  const rows = new Map(pages.flat().map(row => [row.runId, row]));
+  return [...rows.values()].sort((a, b) => iso(b.createdAt).localeCompare(iso(a.createdAt)) ||
+    b.runId.localeCompare(a.runId));
 }
 
 /** Build the world entirely from Workflow registry and durable streams. */
 export async function readDialogueWorldStep(scope: string): Promise<DialogueWorldSnapshot> {
   "use step";
   const startedAt = performance.now();
-  const rows = await listAllRuns();
+  const rows = await listDialogueRegistry(true);
   const registryMs = Math.round(performance.now() - startedAt);
   const works: DialogueWorldSnapshot["works"] = [];
   const inputs = new Map<string, DialogueInput>();
@@ -219,7 +242,7 @@ export async function readDialogueWorldStep(scope: string): Promise<DialogueWorl
 /** Read another work's public handoffs without exposing its private reasoning. */
 export async function readWorkSnapshotStep(scope: string, workId: string): Promise<WorkSnapshot | null> {
   "use step";
-  const row = (await listAllRuns()).find(candidate =>
+  const row = (await listDialogueRegistry(false)).find(candidate =>
     candidate.attributes?.role === "thinking" && candidate.attributes.scope === scope &&
     (candidate.attributes.work ?? candidate.attributes.turn) === workId);
   if (!row) return null;

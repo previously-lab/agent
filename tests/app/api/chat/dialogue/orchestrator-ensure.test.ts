@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   start: vi.fn(),
   wake: vi.fn(async () => {}),
   workflow: vi.fn(),
+  turn: vi.fn(),
   resume: vi.fn(async (_token: string, wake: { runId: string }) => ({ runId: wake.runId })),
 }));
 vi.mock("workflow/api", () => ({ getRun: h.getRun, start: h.start, resumeHook: h.resume }));
@@ -19,8 +20,9 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   publishThoughtDeliveryStep: vi.fn(async () => {}),
 }));
 vi.mock("@/app/api/chat/dialogue-orchestrator-workflow", () => ({ dialogueOrchestratorWorkflow: h.workflow }));
+vi.mock("@/app/api/chat/turn-workflow", () => ({ turnWorkflow: h.turn }));
 
-import { ensureDialogueOrchestratorStep, forwardDialogueWakeStep, readDialogueWorldStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
+import { ensureDialogueOrchestratorStep, forwardDialogueWakeStep, readDialogueWorldStep, readWorkSnapshotStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
 
 const now = Date.parse("2026-11-15T01:00:00.000Z");
 function run(status: string, triggeredAt: string, scope = "scope") {
@@ -65,6 +67,51 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("API dialogue activation with wake events", () => {
+  it("paginates by entry point and observes changed or newly arrived runs on each read", async () => {
+    const turn = "workflow//./src/app/api/chat/turn-workflow//turnWorkflow";
+    const actor = "workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
+    const historical = { runId: "old", status: "running", createdAt: new Date(now - 1000), attributes: {
+      scope: "other", role: "thinking", turn: "old-input", delivery: "orchestrator",
+    } };
+    const recent = { ...historical, runId: "new", status: "pending", createdAt: new Date(now), attributes: {
+      ...historical.attributes, scope: "scope", turn: "new-input",
+    } };
+    const firstPage = [historical];
+    h.list.mockImplementation(async ({ workflowName, pagination: { cursor } }) => {
+      if (workflowName === actor) return { data: [run("running", new Date(now).toISOString())] };
+      if (workflowName !== turn) throw new Error("Unscoped registry enumeration");
+      return cursor ? { data: [historical] } : { data: firstPage, cursor: "older", hasMore: true };
+    });
+    expect((await readDialogueWorldStep("scope")).works).toEqual([]);
+    historical.attributes.scope = "scope";
+    historical.status = "completed";
+    firstPage.splice(0, 1, recent);
+    const next = await readDialogueWorldStep("scope");
+    expect(next.works.map(work => [work.runId, work.status])).toEqual([["new", "pending"], ["old", "completed"]]);
+    expect(next.dialogueRuns).toHaveLength(1);
+    h.list.mockClear();
+    expect(await readWorkSnapshotStep("scope", "old-input")).toMatchObject({ workId: "old-input" });
+    expect(h.list.mock.calls.map(([params]) => [params.workflowName, params.pagination.cursor])).toEqual([
+      [turn, undefined], [turn, "older"],
+    ]);
+  });
+
+  it("retains historical IDs when a compiler assigns new entry point IDs", async () => {
+    const oldTurn = "workflow//./src/app/api/chat/turn-workflow//turnWorkflow";
+    const oldActor = "workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
+    Object.assign(h.turn, { workflowId: "new-turn-id" });
+    Object.assign(h.workflow, { workflowId: "new-actor-id" });
+    try {
+      await readDialogueWorldStep("scope");
+      expect(h.list.mock.calls.map(([params]) => params.workflowName).sort()).toEqual([
+        oldTurn, oldActor, "new-turn-id", "new-actor-id",
+      ].sort());
+    } finally {
+      Reflect.deleteProperty(h.turn, "workflowId");
+      Reflect.deleteProperty(h.workflow, "workflowId");
+    }
+  });
+
   it("leaves legacy reply offers with their original owner after an upgrade", async () => {
     const attributes = { role: "thinking", scope: "scope", turn: "old-input", dialogue: "1" };
     const acceptedAt = new Date(now).toISOString();
