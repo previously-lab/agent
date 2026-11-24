@@ -63,7 +63,6 @@
   },
   "chat": {
     "arrivalError": "读取对话历史失败，请重试。这不代表你的记忆为空。",
-    "arrivalTimeout": "读取对话历史等待过久，请重试。",
     "arrivalRetry": "重试",
     "input": {
       "placeholder": "发送消息…",
@@ -91,9 +90,9 @@
         "uploading": "正在上传…",
         "failed": "上传失败",
         "originalTooLarge": "原始图片不能超过 10 MB。",
-        "tooLarge": "处理后的图片超过 5 MB 上传限制。",
+        "tooLarge": "上传服务拒绝了这张图片的大小。请压缩图片后重试。",
         "retry": "重试上传",
-        "limit": "每条消息最多附带 4 张图片。",
+        "limit": "这份草稿的图片编号已用完。",
         "removed": "已移除 {name}。",
         "undo": "撤销",
         "submitting": "正在发送这份草稿…你可以继续写。"
@@ -249,6 +248,8 @@
         "unavailable": "这条结果没有可打开的文档视图。"
       },
       "currentTime": "看了看表",
+      "webResearchRunning": "正在调研「{query}」…",
+      "webResearchDone": "已调研「{query}」· {count} 个来源",
       "webSearchRunning": "正在搜索「{query}」…",
       "webSearchDone": "搜索了「{query}」· {count} 个来源",
       "webSearchRecommendation": "建议",
@@ -314,6 +315,11 @@
       "tool_noteForSediment": "保存笔记",
       "tool_describeRoom": "查看房间",
       "tool_currentTime": "查看时间",
+      "tool_webResearch": "深度调研",
+      "activity_webResearch": "正在调研「{subject}」…",
+      "tool_webResearch_subject": "调研「{subject}」",
+      "toolOutcome_webResearch": "{count} 个来源",
+      "toolOutcome_webResearch_empty": "未找到来源",
       "tool_webSearch": "搜索网络",
       "tool_webFetch": "读取网页",
       "tool_viewImage": "查看图片",
@@ -352,6 +358,7 @@
       "workLive": "进行中",
       "liveOutput": "实时动态",
       "waitingForOutput": "动态会显示在这里。",
+      "noRecordedActivity": "这条回复没有留下活动记录。",
       "streamUnavailable": "暂时无法查看动态，你仍可继续发送。",
       "tool_running": "运行中",
       "tool_ended": "已结束",

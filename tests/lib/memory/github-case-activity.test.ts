@@ -138,18 +138,17 @@ it("shares the same cold activity catalogue across simultaneous distinct search 
   expect(fixture.peak).toBeLessThanOrEqual(8);
 });
 
-it("keeps simultaneous date builds separate across repositories and read deadlines", async () => {
+it("keeps simultaneous date builds separate across repositories", async () => {
   const path = "memory/events/isolated/index.md";
   const { tree } = snapshot(new Map([[path, "---\nopened: '2026-07-09'\n---\nIndependent domains."]]));
   const nodes = buildTreeIndex([path]).cases;
-  const { withGitHubReadBudget } = await import("@/lib/github/client");
   const load = (owner: string, repo: string) => gitHubCaseActivityDates(tree, nodes, repo, owner);
-  const tables = await ctx.run(() => withGitHubReadBudget(() => Promise.all([
-    load("owner", "isolate"), withGitHubReadBudget(() => load("owner", "isolate"), 5_000),
+  const tables = await ctx.run(() => Promise.all([
+    load("owner", "isolate"), load("owner", "isolate"),
     load("other", "isolate"), load("owner", "sibling"),
-  ]), 20_000));
+  ]));
   expect(tables.map(table => table?.get(path))).toEqual(Array(4).fill("2026-07-09"));
-  expect(fixture.reads).toEqual(Array(4).fill(path));
+  expect(fixture.reads).toEqual(Array(3).fill(path));
 });
 
 it("builds a first-time catalogue from already cached immutable blobs", async () => {

@@ -84,6 +84,7 @@ function toolNameOf(part: AnyPart): string {
 function activityForTool(toolName: string): SubtitleActivityKind {
   if (isMemoryReadTool(toolName)) return "recalling";
   switch (toolName) {
+    case "webResearch":
     case "webSearch":
     case "webFetch":
       return "searching";

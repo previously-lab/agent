@@ -1,5 +1,5 @@
 /** Shared final-write validation; storage adapters supply uncached reads under their commit lock/version. */
-import { assertDocumentWrite, isAuthoredDocumentPath } from "./write-limits";
+import { isAuthoredDocumentPath } from "./write-limits";
 import { historyDigest, isHistoryArchiveFileName, parseHistoryArchive } from "./history-archive";
 import { WriteRefusal } from "./write-window";
 
@@ -72,10 +72,9 @@ export async function validateDocumentEntries(entries: readonly GuardedEntry[], 
         payload += archive.payload;
         next = archive.metadata.next;
         part++;
-      } while (part <= parts && part <= 100_000);
+      } while (part <= parts);
       verifiedMaintenance = part === parts + 1 && payload === before;
     }
     if (proof && !verifiedMaintenance) throw new WriteRefusal("rewrite_conflict", `Maintenance for ${entry.path} requires a complete, byte-identical archive of its fresh source`);
-    assertDocumentWrite(entry.path, entry.content, before, verifiedMaintenance);
   }
 }

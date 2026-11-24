@@ -1,12 +1,4 @@
-/**
- * Per-run search policy: canonical query normalization, dedup of repeated
- * queries, and a hard cap on NEW DeepSeek Search operations per research run.
- *
- * One policy instance lives inside ONE searchViaFlash invocation — there is no
- * module-level or cross-run cache. The cap bounds only new search operations;
- * reusing an already-successful result (or sharing an in-flight one) stays
- * available after the cap, and never consumes a slot.
- */
+/** Coalesce identical search requests within one research task. */
 import { z } from "zod";
 import {
   deepseekWebSearch,
@@ -14,21 +6,12 @@ import {
   type DeepSeekSearchResult,
 } from "@/lib/search/deepseek-web";
 
-/** New search operations a standard research run may start. */
-export const STANDARD_SEARCH_OPERATION_LIMIT = 12;
-
-/** New search operations a scout (parallel fan-out leg) run may start. */
-export const SCOUT_SEARCH_OPERATION_LIMIT = 4;
-
 /** Query-free, secret-free per-run accounting. Not a billing ledger. */
 export interface SearchRunStats {
-  operationLimit: number;
   operationsStarted: number;
   operationsSucceeded: number;
   duplicateHits: number;
   inFlightHits: number;
-  /** True once a NEW request was rejected by the operation cap. */
-  exhausted: boolean;
 }
 
 /** What the policy hands back: the API-shaped result plus an optional note. */
@@ -45,15 +28,6 @@ const REUSE_NOTE =
 const IN_FLIGHT_NOTE =
   "No new Search API operation was performed — this exact query and result " +
   "count are already being searched in this run; sharing that in-flight search.";
-
-function exhaustedNote(limit: number): string {
-  return (
-    `Search operation budget exhausted (${limit} new search operations this run) — ` +
-    "no new search was performed for this query. Synthesize your answer from " +
-    "the evidence already gathered; deeper coverage requires a separate, " +
-    "deliberately scoped follow-up research run."
-  );
-}
 
 /**
  * Canonical form for dedup and for the query actually sent to the API: trim,
@@ -129,32 +103,13 @@ function waitForInFlight<T>(operation: Promise<T>, signal?: AbortSignal): Promis
 export class SearchRunPolicy {
   private readonly completed = new Map<string, DeepSeekSearchResult>();
   private readonly inFlight = new Map<string, Promise<DeepSeekSearchResult>>();
-  private readonly stats: SearchRunStats;
-
-  constructor(
-    private readonly operationLimit: number,
-    private readonly originalQuestion?: string,
-  ) {
-    this.stats = {
-      operationLimit,
-      operationsStarted: 0,
-      operationsSucceeded: 0,
-      duplicateHits: 0,
-      inFlightHits: 0,
-      exhausted: false,
-    };
-  }
+  private readonly stats: SearchRunStats = {
+    operationsStarted: 0, operationsSucceeded: 0, duplicateHits: 0, inFlightHits: 0,
+  };
 
   /** Snapshot of the run's operation accounting. Query-free and secret-free. */
   getStats(): SearchRunStats {
     return { ...this.stats };
-  }
-
-  /** True only when this exact normalized query and effective count would
-   * reuse a completed or in-flight request. Used for progress display only. */
-  hasSeen(query: string, count?: number): boolean {
-    const { key } = requestIdentity(query, count);
-    return this.completed.has(key) || this.inFlight.has(key);
   }
 
   async search(input: SearchInput, signal?: AbortSignal): Promise<PolicySearchOutput> {
@@ -177,17 +132,11 @@ export class SearchRunPolicy {
       return { ...result, note: IN_FLIGHT_NOTE };
     }
 
-    if (this.stats.operationsStarted >= this.operationLimit) {
-      signal?.throwIfAborted();
-      this.stats.exhausted = true;
-      return { results: [], note: exhaustedNote(this.operationLimit) };
-    }
     this.stats.operationsStarted += 1;
 
     const promise = deepseekWebSearch(
       { query, count: parsed.count },
       signal,
-      { originalQuestion: this.originalQuestion },
     );
     this.inFlight.set(key, promise);
     try {

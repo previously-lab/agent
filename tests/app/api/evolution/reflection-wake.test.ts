@@ -74,94 +74,9 @@ describe("deliverReflectionWake — the pure bell (v0.38 §3.3)", () => {
     expect(h.start).not.toHaveBeenCalled();
   });
 
-  it("a live STALE run (age 38m, still holding the token) → the bell challenges it: cancel + start, `tookOver`", async () => {
-    const cancel = vi.fn(async () => {});
-    h.getHookByToken.mockResolvedValue({ runId: "reflection-zombie" });
-    h.getRun.mockReturnValue(runHandle(new Date(Date.now() - 38 * MIN), cancel));
-    h.start.mockResolvedValue({ runId: "reflection-fresh" });
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    try {
-      const r = await deliverReflectionWake();
-
-      expect(r).toEqual({ ok: true, delivered: "tookOver", runId: "reflection-fresh" });
-      expect(cancel).toHaveBeenCalledTimes(1); // the zombie itself
-      expect(h.start).toHaveBeenCalledTimes(1);
-      expect(h.start.mock.calls[0][1]).toEqual([null]); // the range was the dead holder's hint — the fresh unit reads the log (§3.5)
-      const [workflowFn, args, opts] = h.start.mock.calls[0];
-      expect(workflowFn).toBe(h.reflectionRun);
-      expect(args).toEqual([null]); // the range was the dead holder's hint — dropped (§3.5)
-      expect(opts).toEqual({ region: "hkg1" });
-      expect(h.resumeHook).not.toHaveBeenCalled();
-      // the takeover leaves one observable line (age rounded to minutes)
-      const line = log.mock.calls
-        .map((c) => String(c[0]))
-        .find((m) => m.includes("took over a stale unit"));
-      expect(line).toBeDefined();
-      expect(line).toContain("(age 38m)");
-      expect(line).toContain("reflection-zombie");
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("a stale run whose CANCEL throws → still starts, still `tookOver` (the cancel is best-effort)", async () => {
-    const cancel = vi.fn(async () => {
-      throw new Error("cancel raced the platform");
-    });
-    h.getHookByToken.mockResolvedValue({ runId: "reflection-zombie" });
-    h.getRun.mockReturnValue(runHandle(new Date(Date.now() - 40 * MIN), cancel));
-    h.start.mockResolvedValue({ runId: "reflection-fresh" });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const r = await deliverReflectionWake();
-
-      expect(r).toEqual({ ok: true, delivered: "tookOver", runId: "reflection-fresh" });
-      expect(cancel).toHaveBeenCalledTimes(1);
-      expect(h.start).toHaveBeenCalledTimes(1);
-      expect(
-        warn.mock.calls.some((c) =>
-          String(c[0]).includes("takeover cancel of reflection-zombie failed"),
-        ),
-      ).toBe(true);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("the holder's age is UNREADABLE (run handle throws, not in the world list) → conservative `rung`: no cancel, no start", async () => {
-    h.getHookByToken.mockResolvedValue({ runId: "reflection-unknown" });
-    h.getRun.mockImplementation(() => {
-      throw new Error("run handle unavailable");
-    });
-    h.runsList.mockResolvedValue({ data: [] }); // not listed either
-
-    const r = await deliverReflectionWake();
-
-    expect(r).toEqual({ ok: true, delivered: "rung", runId: "reflection-unknown" });
-    expect(h.start).not.toHaveBeenCalled();
-    expect(h.runsList).toHaveBeenCalledTimes(1);
-  });
-
-  it("the run handle has no createdAt but the WORLD LIST knows the run (age 2m) → `rung` via the fallback", async () => {
-    h.getHookByToken.mockResolvedValue({ runId: "reflection-listed" });
-    h.getRun.mockReturnValue({
-      get createdAt(): Promise<Date> {
-        return Promise.reject(new Error("no createdAt on this handle"));
-      },
-    });
-    h.runsList.mockResolvedValue({
-      data: [
-        {
-          runId: "reflection-listed",
-          status: "running",
-          createdAt: new Date(Date.now() - 2 * MIN).toISOString(),
-        },
-      ],
-    });
-
-    const r = await deliverReflectionWake();
-
-    expect(r).toEqual({ ok: true, delivered: "rung", runId: "reflection-listed" });
+  it("keeps a slow live holder without challenging it by age", async () => {
+    h.getHookByToken.mockResolvedValue({ runId: "slow" });
+    expect(await deliverReflectionWake()).toEqual({ ok: true, delivered: "rung", runId: "slow" });
     expect(h.start).not.toHaveBeenCalled();
   });
 

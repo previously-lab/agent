@@ -1,21 +1,13 @@
+import { readTextPage } from "@/lib/retrieval/text-page";
 import { z } from "zod";
 import { deepseekApiKey } from "@/lib/deepseek/credentials";
 
-const SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
-const REQUEST_TIMEOUT_MS = 30_000;
+import { webSearchInputSchema, type WebFetchInput } from "./web-input";
+import { isPrivateHost } from "./fetch-utils";
+import { searchResultToString, segmentSearch, splitParagraphs, textLines } from "@/lib/retrieval/doc-segments";
+export { webSearchInputSchema } from "./web-input";
+
 const MAX_ATTEMPTS = 3;
-const MAX_RETRY_DELAY_MS = 5_000;
-
-/** DeepSeek counts Unicode characters, not JavaScript UTF-16 code units. */
-export const webSearchInputSchema = z.object({
-  query: z.string().refine(
-    (query) => query.trim().length > 0 && Array.from(query).length <= 128,
-    "Search query must contain 1-128 Unicode characters and cannot be all whitespace.",
-  ).describe("Search query, 1-128 Unicode characters. Search operators are preserved."),
-  count: z.number().int().min(1).max(50).optional()
-    .describe("Number of results, 1-50 (default 10)."),
-});
-
 const resultSchema = z.object({
   title: z.string(),
   url: z.string().url().refine((value) => {
@@ -29,18 +21,17 @@ const resultSchema = z.object({
   authority: z.number().optional(),
   rerank_score: z.number().optional(),
 });
-const responseSchema = z.object({ results: z.array(resultSchema).max(50) });
+const responseSchema = z.object({ results: z.array(resultSchema) });
 export type DeepSeekSearchResult = z.infer<typeof responseSchema>;
 
-function retryDelay(response: Response, attempt: number): number | null {
+function retryDelay(response: Response, attempt: number): number {
   const retryAfter = response.headers.get("retry-after");
   if (retryAfter) {
     const seconds = Number(retryAfter);
     const delay = Number.isFinite(seconds)
       ? Math.max(0, seconds * 1_000)
       : Math.max(0, Date.parse(retryAfter) - Date.now());
-    // A long server cooldown is returned to the caller, never shortened.
-    if (Number.isFinite(delay)) return delay <= MAX_RETRY_DELAY_MS ? delay : null;
+    if (Number.isFinite(delay)) return delay;
   }
   return 250 * 2 ** attempt;
 }
@@ -61,69 +52,54 @@ function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Optional per-call hints. `originalQuestion` is sent as `ori_question` —
- * the question that triggered the search, to help the provider rank results.
- * It is whitespace-collapsed and truncated to 128 Unicode characters; blank
- * values are omitted. The actual `query` is never truncated or altered here.
- */
-export interface DeepSeekWebSearchOptions {
-  originalQuestion?: string;
-}
-
-/** Bound the triggering question to what `ori_question` accepts: whitespace
- * collapses to single spaces and the first 128 Unicode characters remain
- * (astral-safe — DeepSeek counts Unicode characters, not UTF-16 units). */
-function boundedOriginalQuestion(question: string | undefined): string | undefined {
-  const collapsed = question?.replace(/\s+/gu, " ").trim() ?? "";
-  if (collapsed.length === 0) return undefined;
-  return Array.from(collapsed).slice(0, 128).join("");
-}
-
-/** Read-only native Search API; credentials are resolved at each HTTP boundary.
- * Contract: https://api-docs.deepseek.com/guides/search/
- * Page content stays behind the researcher's separate guarded webFetch quota.
- * Only explicit retryable HTTP failures are retried. HTTP 200 responses (even
- * malformed ones), network failures and deterministic HTTP failures are not.
- */
-export async function deepseekWebSearch(
-  input: z.infer<typeof webSearchInputSchema>,
-  signal?: AbortSignal,
-  options?: DeepSeekWebSearchOptions,
-): Promise<DeepSeekSearchResult> {
-  const { query, count = 10 } = webSearchInputSchema.parse(input);
-  const oriQuestion = boundedOriginalQuestion(options?.originalQuestion);
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+/** Retry explicit upstream failures only. Never replay an ambiguous 200 or follow a redirect with credentials. */
+async function requestWebTool(operation: "search" | "fetch", body: object, signal?: AbortSignal): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-    const response = await fetch(SEARCH_URL, {
+    const response = await fetch(`https://api.deepseek.com/v1/tools/${operation}`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${deepseekApiKey()}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query,
-        count,
-        need_content: false,
-        ...(oriQuestion === undefined ? {} : { ori_question: oriQuestion }),
-      }),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      // Never forward the credential to a redirected endpoint.
+      headers: { Authorization: `Bearer ${deepseekApiKey()}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
       redirect: "error",
+      signal,
     });
-    if (response.ok) {
-      // Never automatically retry an ambiguous HTTP 200, even with a malformed body.
-      return responseSchema.parse(await response.json());
-    }
-    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-    const delay = retryable && attempt + 1 < MAX_ATTEMPTS ? retryDelay(response, attempt) : null;
+    if (response.ok) return response.json();
     await response.body?.cancel();
-    if (delay === null) {
-      // Provider bodies can contain sensitive diagnostics; keep them out of
-      // tool results and logs. The status is enough for the user to act on.
-      throw new Error(`DeepSeek search failed (HTTP ${response.status}).`);
+    const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+    if (!retryable || attempt + 1 >= MAX_ATTEMPTS) {
+      throw new Error(`DeepSeek ${operation} failed (HTTP ${response.status}).`);
     }
-    await waitForRetry(delay, signal);
+    await waitForRetry(retryDelay(response, attempt), signal);
   }
-  throw new Error("DeepSeek search failed.");
+}
+
+export async function deepseekWebSearch(input: z.infer<typeof webSearchInputSchema>, signal?: AbortSignal): Promise<DeepSeekSearchResult> {
+  const { query, count = 10 } = webSearchInputSchema.parse(input);
+  return responseSchema.parse(await requestWebTool("search", { query, count, need_content: false }, signal));
+}
+
+const fetchedPage = z.object({ title: z.string(), content: z.string() });
+
+export async function deepseekWebFetch({ url, range, offset = 0, revision }: WebFetchInput, signal?: AbortSignal): Promise<string> {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return "ERROR: Invalid URL. Supply an absolute public HTTP(S) URL."; }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "ERROR: Unsupported URL protocol.";
+  if (parsed.username || parsed.password || isPrivateHost(parsed.hostname)) return "ERROR: Cannot fetch private or credentialed URLs.";
+  if (Array.from(url).length > 8192) return "ERROR: The DeepSeek Fetch API accepts URLs up to 8192 characters.";
+  const { content } = fetchedPage.parse(await requestWebTool("fetch", { url }, signal));
+  let selected = content;
+  if (range?.type === "lines") {
+    const start = range.start ?? 1;
+    const end = range.end ?? start;
+    if (end < start) return "ERROR: The last line must follow the first.";
+    selected = textLines(content, start, end).content;
+  } else if (range?.type === "search") {
+    const keywords = range.keywords ?? [];
+    const context = range.context ?? 1;
+    const hits = segmentSearch(splitParagraphs(content), keywords, context, context);
+    selected = searchResultToString(parsed.hostname + parsed.pathname, keywords, hits, content);
+  }
+  const page = readTextPage(selected, { offset, revision }, 15_000);
+  if (!page.ok) return `ERROR: ${page.error}`;
+  return page.end === page.total ? page.text : page.text + `\n\n[Page continues. Call webFetch with the same URL and range, offset ${page.end}, revision "${page.revision}".]`;
 }

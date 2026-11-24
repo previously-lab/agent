@@ -151,47 +151,19 @@ export function decideArrival(
   return { shouldResume: false, initialMessages: [] };
 }
 
-// ─── Arrival gate timeout ─────────────────────────────────────────────────
-
-/**
- * Hard cap on the authoritative history read. The reads underneath carry
- * their own GitHub budget; this gate is
- * the UI-level backstop so a degraded network/server surfaces the retry card
- * instead of an endless skeleton.
- */
-export const ARRIVAL_GATE_TIMEOUT_MS = 15_000;
-
 export type ArrivalGateResult<T> =
   | { kind: "ok"; verdict: T }
-  | { kind: "timeout" }
   | { kind: "failed"; error: unknown };
 
-/**
- * Bound a read without confusing a rejection with a timeout. The promise must
- * be read-only: apply any persistence effects only after accepting its result.
- * A late rejection remains handled, but a late success cannot mutate storage.
- */
-export async function raceArrivalVerdict<T>(
-  verdict: Promise<T>,
-  timeoutMs: number = ARRIVAL_GATE_TIMEOUT_MS,
-): Promise<ArrivalGateResult<T>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+/** Preserve the IO result. Time spent waiting cannot invalidate a saved turn. */
+export async function readArrivalVerdict<T>(verdict: Promise<T>): Promise<ArrivalGateResult<T>> {
   try {
-    return await Promise.race([
-      verdict.then((v): ArrivalGateResult<T> => ({ kind: "ok", verdict: v })),
-      new Promise<ArrivalGateResult<T>>((resolve) => {
-        timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-      }),
-    ]);
+    return { kind: "ok", verdict: await verdict };
   } catch (error) {
     return { kind: "failed", error };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
-/** Old workflow availability must not consume the history read's whole budget. */
-export const ARRIVAL_RECOVERY_TIMEOUT_MS = 3_000;
 /** Discard a dead reconnect session without claiming it was saved. Unknown
  * transport errors retain their identifiers for a later background attempt. */
 export function shouldDiscardRecoveredSession(
@@ -211,10 +183,10 @@ export async function readArrivalWithRecovery<A>(
   arrival: Promise<A>,
   recovery: () => Promise<ChatRecovery>,
 ) {
-  const history = await raceArrivalVerdict(arrival);
+  const history = await readArrivalVerdict(arrival);
   if (history.kind !== "ok") return history;
   // Next may serialize Server Actions. Do not enqueue an optional workflow
-  // read until authoritative history has completed, even with Promise.race.
-  const recoveryRead = await raceArrivalVerdict(Promise.resolve().then(recovery), ARRIVAL_RECOVERY_TIMEOUT_MS);
+  // read until authoritative history has completed.
+  const recoveryRead = await readArrivalVerdict(Promise.resolve().then(recovery));
   return { kind: "ok" as const, verdict: { arrival: history.verdict, recovery: recoveryRead } };
 }

@@ -1,6 +1,6 @@
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
 import type { DialogueOfferEvent, DialogueOfferStage, DialogueThoughtStartedEvent, DialogueWakeEvent } from "./transport";
-import { dialogueHeartbeatAt, dialogueOpeningHandled, sessionLastWakeAt, type DialogueRunState } from "./coordination";
+import { dialogueOpeningHandled, sessionLastWakeAt, type DialogueRunState } from "./coordination";
 
 export interface DialogueOrchestrationWorld {
   scope: string;
@@ -63,6 +63,11 @@ export function selectDialogueOffer(
   world: Pick<DialogueOrchestrationWorld, "offers" | "publications"> & Partial<Pick<DialogueOrchestrationWorld, "inputs" | "works" | "starts" | "dialogueRuns">>,
   handled: ReadonlySet<string> = new Set(),
 ): DialogueOfferEvent | undefined {
+  const stoppedWorks = world.works?.filter(work => work.status === "cancelled") ?? [];
+  const stoppedParents = new Set(stoppedWorks.map(work => work.runId));
+  const stoppedInputs = new Set(stoppedWorks.map(work => work.inputId));
+  const offers = world.offers.filter(offer => !stoppedParents.has(offer.parentRunId ?? offer.runId) &&
+    (offer.parentRunId !== undefined || !stoppedInputs.has(offer.sourceInputId)));
   const publishedResultIds = new Set(world.publications.flatMap(publication =>
     publication.sourceResults.map(result => result.resultId)));
   const finalizedInputs = new Set(world.publications
@@ -70,17 +75,28 @@ export function selectDialogueOffer(
     .flatMap(publication => publication.inputIds));
   const silentCheckpoints = new Set(world.dialogueRuns?.flatMap(run => run.events.flatMap(event =>
     event.type === "expression_outcome" && event.status === "intentionally_silent" ? event.candidateIds : [])));
-  const finalWorkIds = new Set(world.offers
+  const finalWorkIds = new Set(offers
     .filter(offer => !publishedResultIds.has(offer.offerId) && !handled.has(offer.offerId) && isFinal(offer.stage))
     .map(workKey));
   const latestCheckpointSeq = new Map<string, number>();
-  for (const offer of world.offers) {
+  for (const offer of offers) {
     if (offer.stage !== "checkpoint" || offer.publicSeq === undefined) continue;
     const key = workKey(offer);
     latestCheckpointSeq.set(key, Math.max(latestCheckpointSeq.get(key) ?? 0, offer.publicSeq));
   }
-  const pending = world.offers.filter(offer => {
-    if (handled.has(offer.offerId) || publishedResultIds.has(offer.offerId)) return false;
+  const failed = new Set<string>();
+  const permanent = new Set<string>();
+  for (const run of world.dialogueRuns ?? []) {
+    for (const event of run.events) {
+      if (event.type !== "expression_outcome" || event.status !== "failed") continue;
+      for (const id of event.candidateIds) {
+        failed.add(id);
+        if (event.retryable === false) permanent.add(id);
+      }
+    }
+  }
+  const pending = offers.filter(offer => {
+    if (handled.has(offer.offerId) || permanent.has(offer.offerId) || publishedResultIds.has(offer.offerId)) return false;
     if (!isFinal(offer.stage)) {
       if (silentCheckpoints.has(offer.offerId) || finalWorkIds.has(workKey(offer)) || finalizedInputs.has(offer.sourceInputId)) return false;
       if ((offer.publicSeq ?? 0) < (latestCheckpointSeq.get(workKey(offer)) ?? 0)) return false;
@@ -88,13 +104,12 @@ export function selectDialogueOffer(
     return true;
   });
   // Oldest final first avoids starving an earlier input under a live burst.
-  return pending.find(offer => isFinal(offer.stage)) ?? pending.at(-1) ?? selectDialogueOpening(world, handled);
+  return pending.find(offer => isFinal(offer.stage) && !failed.has(offer.offerId)) ?? pending.find(offer => isFinal(offer.stage)) ?? pending.at(-1) ?? selectDialogueOpening(world, handled);
 }
 
 export function publicationText(publication: PublicUtterance): string {
   return publication.blocks.flatMap(block => block.kind === "markdown" ? [block.text] : []).join("\n\n");
 }
-
 export function publicationOfferIds(publications: readonly PublicUtterance[]): Set<string> {
   return new Set(publications.flatMap(publication => publication.sourceResults.map(result => result.resultId)));
 }
@@ -109,19 +124,21 @@ export function dialogueRunUsable(status: string, lastTriggeredAt: string | unde
   return Number.isFinite(stamped) && nowMs - stamped < DIALOGUE_SESSION_MS;
 }
 
-/** A sleeping hook emits no heartbeat. Once woken it again owes progress
- * within the active heartbeat window; repeated wake hints cannot extend it. */
+/** An idle actor that missed a wake can be signalled again. Elapsed time
+ * never revokes a live lease or interrupts work that has already started. */
 export function dialogueRunStale(
   run: DialogueRunState,
   wakes: readonly DialogueWakeEvent[],
   nowMs: number,
   awaitingDeliverySince?: number,
 ): boolean {
+  // Quiet model calls and their publication step have no progress clock.
+  // The Workflow registry reports an actual terminated run separately.
+  const attempt = run.events.findLast(event => event.type === "wording_started" || event.type === "expression_outcome");
+  if (attempt?.type === "wording_started") return false;
   const phase = run.events.findLast(event => event.type === "heartbeat" || event.type === "handoff_wait" ||
     event.type === "exit_intent" || event.type === "exit_commit");
-  if (phase?.type !== "exit_intent") {
-    return nowMs - Date.parse(dialogueHeartbeatAt(run)) >= DIALOGUE_HEARTBEAT_MS;
-  }
+  if (phase?.type !== "exit_intent") return false;
   if (!dialogueRunUsable(run.status, sessionLastWakeAt(run, wakes), nowMs)) return true;
   const idleAt = Date.parse(phase.at);
   let firstPendingWake = awaitingDeliverySince === undefined ? Infinity : Math.max(idleAt, awaitingDeliverySince);

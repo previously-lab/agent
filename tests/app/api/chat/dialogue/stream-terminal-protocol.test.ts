@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   chunks: [] as UIMessageChunk[],
   closed: false,
   getRun: vi.fn(),
+  getRow: vi.fn(),
 }));
 
 vi.mock("workflow", () => ({
@@ -18,6 +19,7 @@ vi.mock("workflow", () => ({
     close: async () => { h.closed = true; },
   }),
 }));
+vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: { get: h.getRow } }) }));
 vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: h.getRun }));
 
 import { closeDialogueStreamStep, openDialogueStreamStep, publishDialogueResultStep, reconcileDialogueOffersStep } from "@/app/api/chat/dialogue-transport-steps";
@@ -45,6 +47,7 @@ describe("native dialogue terminal stream protocol", () => {
   beforeEach(() => {
     h.chunks.length = 0;
     h.closed = false;
+    h.getRow.mockReset().mockResolvedValue({ status: "running" });
   });
 
   it("attributes only native final laps to their Actor and the exact eventual publication", async () => {
@@ -60,6 +63,20 @@ describe("native dialogue terminal stream protocol", () => {
       await openDialogueStreamStep(input);
       expect(h.chunks.at(-1)?.data).not.toHaveProperty("phase");
     }
+  });
+
+  it("rechecks every contributing parent after wording and before writing a public chunk", async () => {
+    const final: DialogueRunInput = { context, offerId: "a", stage: "final", text: "done", publicSeq: 1,
+      publicationParentRunIds: ["thought", "thoughtB"] };
+    h.getRow.mockImplementation(async id => id === "thoughtB"
+      ? { status: "completed", attributes: { dialogueStopped: "1" } } : { status: "running" });
+    await expect(publishDialogueResultStep({ input: final, text: "Merged answer", artifacts: [] })).resolves.toBeUndefined();
+    expect(h.chunks).toEqual([]);
+    h.getRow.mockRejectedValueOnce(new Error("status unavailable"));
+    await expect(publishDialogueResultStep({ input: final, text: "Merged answer", artifacts: [] })).rejects.toThrow("status unavailable");
+    expect(h.chunks).toEqual([]);
+    await expect(publishDialogueResultStep({ input: { ...final, publicationParentRunIds: ["thought"] }, text: "A alone", artifacts: [] }))
+      .resolves.toMatchObject({ blocks: [{ text: "A alone" }] });
   });
 
   it("withholds checkpoint publication and reconciliation until the newer final can be read", async () => {

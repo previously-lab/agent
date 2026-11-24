@@ -1,9 +1,9 @@
 import { createHook, getWritable, sleep } from "workflow";
-import { isStepCount } from "@/lib/deepseek/tools";
 import type { ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createDialogueAgent } from "@/app/api/agent/agent";
+import { streamDialogueWording } from "@/lib/dialogue/wording-stream";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
-import { DIALOGUE_SESSION_MS, dialogueRunStale, dialogueRunUsable, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
+import { DIALOGUE_SESSION_MS, dialogueRunUsable, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
 import { sessionLastWakeAt } from "@/lib/dialogue/coordination";
 import {
   DIALOGUE_CHECKPOINT_NAMESPACE,
@@ -22,18 +22,32 @@ import {
   writeDialogueRuntimeEventStep,
 } from "./dialogue-transport-steps";
 import {
-  cancelDialogueRunStep,
-  continueDialogueOrchestratorStep,
   forwardDialogueWakeStep,
   readDialogueWorldStep,
   recordDialogueUtteranceStep,
   stampDialogueTriggerStep,
+  stoppedDialogueParentsStep,
   waitForDialogueRunTerminalStep,
   type DialogueOrchestratorArgs,
+  type DialogueWorldSnapshot,
 } from "./dialogue-orchestrator-steps";
 
-const MAX_LAPS = 4;
-const MAX_MODEL_ATTEMPTS = 2;
+/** Authentication and invalid requests need a configuration change. A transport
+ * failure leaves the durable candidate available to its own delivery witness. */
+function canRetryWording(cause: unknown): boolean {
+  const visited = new Set<unknown>();
+  let status: number | undefined;
+  for (let error = cause; error && !visited.has(error);) {
+    visited.add(error);
+    const entry = error as { statusCode?: number; quotaExceeded?: boolean; message?: string; cause?: unknown };
+    const message = typeof error === "string" ? error : entry.message ?? "";
+    if (entry.quotaExceeded || /invalid credential|invalid api key|unauthorized|forbidden|insufficient[_ -]?quota|(?:quota|allowance)[_ -]?(?:exceeded|exhausted)|(?:hourly|weekly|monthly)[_ -](?:quota|limit)|content[_ -]?filter/i.test(message)) return false;
+    const embedded = message.match(/(?:request failed\s*\(|HTTP\s+)([45]\d\d)\b/i);
+    status ??= entry.statusCode ?? (embedded ? Number(embedded[1]) : undefined);
+    error = entry.cause;
+  }
+  return status === undefined || status === 408 || status === 409 || status === 429 || status >= 500;
+}
 
 function priorMessages(input: {
   inputs: Array<{ inputId: string; acceptedAt: string; text: string }>;
@@ -56,14 +70,20 @@ function priorMessages(input: {
 
 function relatedFinalOffers(
   primary: DialogueOfferEvent,
-  offers: DialogueOfferEvent[],
-  publications: PublicUtterance[],
+  world: DialogueWorldSnapshot,
   handled: ReadonlySet<string>,
 ): DialogueOfferEvent[] {
   if (primary.stage === "checkpoint") return [primary];
-  const published = publicationOfferIds(publications);
+  const published = publicationOfferIds(world.publications);
+  const unavailable = new Set(world.dialogueRuns.flatMap(run => run.events.flatMap(event =>
+    event.type === "expression_outcome" && event.status === "failed" && event.retryable === false ? event.candidateIds : [])));
+  const stopped = world.works.filter(work => work.status === "cancelled");
+  const stoppedParents = new Set(stopped.map(work => work.runId));
+  const stoppedInputs = new Set(stopped.map(work => work.inputId));
   const inputIds = new Set(primary.aggregateInputIds ?? [primary.sourceInputId]);
-  return offers.filter(offer => inputIds.has(offer.sourceInputId) && offer.stage !== "checkpoint" &&
+  return world.offers.filter(offer => inputIds.has(offer.sourceInputId) && !stoppedParents.has(offer.parentRunId ?? offer.runId) &&
+    (offer.parentRunId !== undefined || !stoppedInputs.has(offer.sourceInputId)) &&
+    !unavailable.has(offer.offerId) && offer.stage !== "checkpoint" &&
     !handled.has(offer.offerId) && !published.has(offer.offerId));
 }
 
@@ -80,7 +100,7 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
   let laps = 0;
   try {
     let conflict = await lease.getConflict();
-    let unsuccessfulClaims = 0;
+    let claimDelayMs = 1_000;
     while (conflict) {
       const holderId = conflict.runId;
       let waitedForPredecessor = false;
@@ -88,28 +108,24 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       const holder = snapshot.dialogueRuns.find(run => run.runId === holderId);
       const now = Date.now();
       if (holder && (holder.status === "pending" || holder.status === "running")) {
-        if (dialogueRunStale(holder, snapshot.wakes, now)) {
-          await cancelDialogueRunStep(holderId);
+        // Two first wakes can create independent run/session IDs before either
+        // hook is visible. Only an actual handoff needs to outlive the holder.
+        const newSession = sessionId !== holder.sessionId && (args.handoffReason === "session_expiry" ||
+          !dialogueRunUsable(holder.status, sessionLastWakeAt(holder, snapshot.wakes), now));
+        const leaving = holder.events.some(event => event.type === "exit_commit" || event.type === "continued" || event.type === "delegated");
+        if (args.handoffFrom === holderId || newSession || leaving) {
+          await writeDialogueRuntimeEventStep({ type: "handoff_wait", waitingForRunId: holderId, at: new Date(now).toISOString() });
+          await waitForDialogueRunTerminalStep(holderId);
+          // The SDK may return while a healthy predecessor is still running.
+          // A liveness poll is not a failed acquisition of a released lease.
+          waitedForPredecessor = true;
         } else {
-          // Two first wakes can create independent run/session IDs before either
-          // hook is visible. Only an actual handoff needs to outlive the holder.
-          const newSession = sessionId !== holder.sessionId && (args.handoffReason === "session_expiry" ||
-            !dialogueRunUsable(holder.status, sessionLastWakeAt(holder, snapshot.wakes), now));
-          const leaving = holder.events.some(event => event.type === "exit_commit" || event.type === "continued" || event.type === "delegated");
-          if (args.handoffFrom === holderId || newSession || leaving) {
-            await writeDialogueRuntimeEventStep({ type: "handoff_wait", waitingForRunId: holderId, at: new Date(now).toISOString() });
-            await waitForDialogueRunTerminalStep(holderId);
-            // The SDK may return while a healthy predecessor is still running.
-            // A liveness poll is not a failed acquisition of a released lease.
-            waitedForPredecessor = true;
-          } else {
-            const wake = args.initialWake && {
-              ...args.initialWake, runId: holderId, sessionId: holder.sessionId, wakeAt: new Date(now).toISOString(), reused: true,
-            };
-            if (!wake || await forwardDialogueWakeStep(args.scope, wake)) {
-              await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId, ...(wake ? { wake } : {}) });
-              return { status: "delegated", laps };
-            }
+          const wake = args.initialWake && {
+            ...args.initialWake, runId: holderId, sessionId: holder.sessionId, wakeAt: new Date(now).toISOString(), reused: true,
+          };
+          if (!wake || await forwardDialogueWakeStep(args.scope, wake)) {
+            await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId, ...(wake ? { wake } : {}) });
+            return { status: "delegated", laps };
           }
         }
       }
@@ -118,8 +134,13 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       lease.dispose();
       lease = createHook({ token: `dialogue-execution:${args.scope}` });
       conflict = await lease.getConflict();
-      unsuccessfulClaims = !waitedForPredecessor && conflict?.runId === holderId ? unsuccessfulClaims + 1 : 0;
-      if (unsuccessfulClaims >= 3) throw new Error("Dialogue execution lease still belongs to an unreachable holder");
+      if (!waitedForPredecessor && conflict?.runId === holderId) {
+        // Registry and hook deletion can become visible at different times.
+        await sleep(claimDelayMs);
+        claimDelayMs = Math.min(claimDelayMs * 2, 60_000);
+      } else {
+        claimDelayMs = 1_000;
+      }
     }
     await writeDialogueRuntimeEventStep({ type: "lease_acquired", at: new Date().toISOString() });
 
@@ -130,8 +151,7 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
     const knownInputs = new Set<string>();
     let primed = false;
     const handled = new Set<string>();
-    let modelAttempts = 0;
-    while (laps < MAX_LAPS && modelAttempts < MAX_MODEL_ATTEMPTS) {
+    while (true) {
       await writeDialogueRuntimeEventStep({ type: "heartbeat", at: new Date().toISOString() });
       const world = await readDialogueWorldStep(args.scope);
       if (!primed) {
@@ -162,10 +182,12 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
         nextWake = wakes.next();
         continue;
       }
-      const related = relatedFinalOffers(primary, world.offers, world.publications, handled);
+      const related = relatedFinalOffers(primary, world, handled);
+      handled.add(primary.offerId);
       for (const offer of related) handled.add(offer.offerId);
       const source = world.inputs.find(input => input.inputId === primary.sourceInputId);
       if (!source) continue;
+      const publicationInputIds = [...new Set(related.map(offer => offer.sourceInputId))];
       const input: DialogueRunInput = {
         offerId: primary.offerId,
         publicSeq: primary.publicSeq ?? 1,
@@ -194,12 +216,13 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
           },
         },
         stage: primary.stage,
-        publicationInputIds: [...new Set(related.map(offer => offer.sourceInputId))],
+        publicationInputIds,
+        publicationParentRunIds: [...new Set(related.map(offer => offer.parentRunId ?? offer.runId))],
         publicationSourceResults: related.map(offer => ({ resultId: offer.offerId, productRevision: 1, claimIds: [] })),
         orchestration: {
           works: world.works,
           offers: world.offers,
-          publications: world.publications.slice(-8),
+          publications: world.publications.filter(publication => publication.inputIds.some(id => publicationInputIds.includes(id))),
         },
       };
       if (primary.offerId.endsWith(":opening") && !primary.text?.trim()) {
@@ -214,24 +237,23 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       const checkpoint = input.stage === "checkpoint";
       const prepared = await prepareDialogueOfferStep(input, ownRunId);
       if (prepared.superseded) continue;
-      await openDialogueStreamStep(input);
       let text = "";
       let error: unknown;
       let intentionallySilent = false;
-      while (modelAttempts < MAX_MODEL_ATTEMPTS && !text.trim()) {
-        modelAttempts++;
+      await writeDialogueRuntimeEventStep({ type: "wording_started", candidateIds: related.map(offer => offer.offerId), at: new Date().toISOString() });
+      // An immediate retry handles interrupted streams. A durable, independently
+      // scheduled recovery owns further attempts when the service stays down.
+      for (let attempt = 0; attempt < 2 && !text.trim(); attempt++) {
         try {
+          await openDialogueStreamStep(input);
           const agent = createDialogueAgent(checkpoint, true, primary.record?.sliceId ?? primary.workId);
-          const result = await agent.stream({
+          text = await streamDialogueWording(agent, {
             messages,
             prompt: prepared.prompt,
             writable: getWritable<ModelCallStreamPart>(checkpoint ? { namespace: DIALOGUE_CHECKPOINT_NAMESPACE } : undefined),
-            stopWhen: isStepCount(1),
             sendFinish: false,
             preventClose: true,
           });
-          if (result.finishReason !== "stop") throw new Error("Dialogue wording did not finish.");
-          text = result.text;
           error = undefined;
           if (checkpoint && !text.trim()) {
             intentionallySilent = true;
@@ -239,25 +261,46 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
           }
         } catch (cause) {
           error = cause;
+          if (!canRetryWording(cause)) break;
         }
       }
       if (text.trim()) {
+        let utterance: PublicUtterance | undefined;
         try {
-          const utterance = await publishDialogueResultStep({ input, artifacts: prepared.artifacts, text });
-          if (utterance) {
-            if (!knownInputs.has(source.inputId) && source.text.trim()) {
-              messages.push({ role: "user", content: source.text });
-              knownInputs.add(source.inputId);
-            }
-            messages.push({ role: "assistant", content: text });
-            await writeDialogueRuntimeEventStep({
-              type: "expression_outcome", status: "answered", planId: input.publicationId ?? input.offerId,
-              candidateIds: related.map(offer => offer.offerId), inputIds: input.publicationInputIds ?? [input.context.sourceInputId],
-            });
-            await recordDialogueUtteranceStep({ input, utterance, artifacts: prepared.artifacts, inputs: world.inputs });
-          }
+          utterance = await publishDialogueResultStep({ input, artifacts: prepared.artifacts, text });
         } catch (cause) {
-          error ??= cause;
+          error = cause;
+        }
+        if (!utterance && !error && !checkpoint && related.length > 1) {
+          // Consult the owners directly. A lagging registry list must not
+          // resurrect the stopped result or suppress a surviving contributor.
+          const stopped = new Set(await stoppedDialogueParentsStep(input.publicationParentRunIds!));
+          for (const offer of related) {
+            if (!stopped.has(offer.parentRunId ?? offer.runId)) handled.delete(offer.offerId);
+          }
+        }
+        if (utterance) {
+          if (!knownInputs.has(source.inputId) && source.text.trim()) {
+            messages.push({ role: "user", content: source.text });
+            knownInputs.add(source.inputId);
+          }
+          messages.push({ role: "assistant", content: text });
+          await writeDialogueRuntimeEventStep({
+            type: "expression_outcome", status: "answered", planId: input.publicationId ?? input.offerId,
+            candidateIds: related.map(offer => offer.offerId), inputIds: input.publicationInputIds ?? [input.context.sourceInputId],
+          });
+          // A published answer is authoritative even if the background archive
+          // queue is unavailable. Retry its enqueue without calling the model.
+          let recordDelayMs = 1_000;
+          while (true) {
+            try {
+              await recordDialogueUtteranceStep({ input, utterance, inputs: world.inputs, related });
+              break;
+            } catch {
+              await sleep(recordDelayMs);
+              recordDelayMs = Math.min(recordDelayMs * 2, 60_000);
+            }
+          }
         }
       } else if (intentionallySilent) {
         await writeDialogueRuntimeEventStep({
@@ -269,7 +312,7 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       }
       if (error) {
         await writeDialogueRuntimeEventStep({
-          type: "expression_outcome", status: "failed", planId: input.publicationId ?? input.offerId,
+          type: "expression_outcome", status: "failed", retryable: canRetryWording(error), planId: input.publicationId ?? input.offerId,
           candidateIds: related.map(offer => offer.offerId), inputIds: input.publicationInputIds ?? [input.context.sourceInputId],
         });
         await completeDialogueLapStep(input.offerId, error instanceof Error ? error.message : String(error));
@@ -278,16 +321,6 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       await completeDialogueLapStep(input.offerId);
       laps++;
     }
-    const remaining = await readDialogueWorldStep(args.scope);
-    if (selectDialogueOffer(remaining, handled)) {
-      const nextRunId = await continueDialogueOrchestratorStep({
-        scope: args.scope, sessionId, handoffFrom: ownRunId, handoffReason: "budget",
-      });
-      await writeDialogueRuntimeEventStep({ type: "continued", nextRunId });
-      return { status: "continued", laps };
-    }
-    await writeDialogueRuntimeEventStep({ type: "exit_commit", at: new Date().toISOString() });
-    return { status: "idle", laps };
   } finally {
     lease.dispose();
     await closeDialogueRunStreamStep();

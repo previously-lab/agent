@@ -15,8 +15,8 @@ vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
 }));
 
 import { createDialogueAgent, createThinkingAgent } from "@/app/api/agent/agent";
-import { buildChatToolsContext } from "@/app/api/agent/tools";
-import { isStepCount } from "@/lib/deepseek/tools";
+import { buildChatToolsContext, getChatTools } from "@/app/api/agent/tools";
+import { isStepCount, serializeTools } from "@/lib/deepseek/tools";
 
 import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
@@ -41,8 +41,26 @@ beforeEach(() => {
 });
 
 describe("dialogue DeepSeek profile", () => {
-  it("uses non-thinking Chat Completions settings only on the public dialogue", async () => {
-    const result = await createDialogueAgent().stream({ prompt: "fixture" });
+  it("asks for the missing fact in an archive lookup and still accepts earlier calls", () => {
+    const tools = getChatTools();
+    const lookups = [
+      ["recallList", { path: "things" }],
+      ["recallFind", { name: "stage lamp" }],
+      ["recallSearch", { query: ["stage lamp"] }],
+    ] as const;
+    for (const [name, input] of lookups) {
+      const definition = tools[name];
+      const parameters = serializeTools({ [name]: definition })![0].function.parameters;
+      expect(parameters.required).toContain("missingFact");
+      const legacy = definition.inputSchema.parse(input);
+      expect(definition.inputSchema.parse({ ...input, missingFact: "Which filter was ordered?" })).toEqual(legacy);
+      expect(legacy).not.toHaveProperty("missingFact");
+    }
+    expect(tools.recallFind.inputSchema.safeParse({ missingFact: "Which filter?" }).success).toBe(false);
+  });
+
+  it.each([false, true])("uses non-thinking wording and expects a final reply with direct=%s", async (direct) => {
+    const result = await createDialogueAgent(false, direct).stream({ prompt: "fixture" });
     expect(result.text).toBe("好的。");
     expect(h.call).toHaveBeenCalledWith(expect.objectContaining({
       publicWording: true,
@@ -53,13 +71,13 @@ describe("dialogue DeepSeek profile", () => {
     }), undefined);
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     const system = request.messages.find(message => message.role === "system")?.content;
-    expect(system).toContain("sourceInput.text is the original user ask");
-    expect(system).toContain("priorCheckpoints and alreadySaid");
-    expect(system).toContain("You own how to say it.");
-    expect(system).toContain("Do not investigate, fact-check");
-    expect(system).toContain("Preserve the event's attribution, corrections, and confidence level.");
-    expect(system).toContain("A work_update event");
-    expect(system).toContain("Do not ask the user a question unless the current event is needs_user");
+    expect(system).toContain("sourceInput.text");
+    expect(system).toContain("A greeting, thanks or personal observation can be a whole exchange");
+    expect(system).toContain("Keep attribution, corrections and uncertainty intact");
+    expect(system).toContain("alreadySaid contains previous publications");
+    expect(system).toContain("ask the specific question that unblocks the work");
+    expect(system).toContain("receive it and leave the next turn to them");
+    expect(system).not.toContain("return empty text");
     expect(system).not.toContain("Keep ordinary replies to one or two short sentences");
   });
 
@@ -68,15 +86,14 @@ describe("dialogue DeepSeek profile", () => {
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     expect(request.tools).toBeUndefined();
     expect(request.messages[0]?.content).toContain("Give the part of the original question this handoff already answers");
-    expect(request.messages[0]?.content).toContain("a finding the user has already been told, return empty text");
+    expect(request.messages[0]?.content).toContain("a finding already published, return empty text");
   });
 
   it("matches each input to a response mode instead of expanding all available context", async () => {
     await createDialogueAgent().stream({ prompt: "fixture" });
     const publicSystem = (h.call.mock.calls[0]![0] as CapturedRequest).messages[0]?.content;
-    expect(publicSystem).toContain("chat: Give a brief natural social reply");
-    expect(publicSystem).toContain("focused: Answer the exact ask directly and only that");
-    expect(publicSystem).toContain("rewrite: Transform only the referenced material");
+    expect(publicSystem).toContain("Follow currentTaskContract.modeGuidance");
+    expect(publicSystem).not.toMatch(/^(chat|focused|research|rewrite):/m);
 
     type ThinkingOptions = Parameters<typeof createThinkingAgent>[0];
     await createThinkingAgent({
@@ -104,9 +121,9 @@ describe("dialogue DeepSeek profile", () => {
     expect(thought).toContain("For exact wording, speaker attribution");
     expect(thought).toContain("May test exact recall");
     expect(thought).toContain("A guess supplies no reason to investigate");
-    expect(thought).toContain("a supported account already in context can answer the gist");
-    expect(thought).toContain("If a point is missing, search across case documents");
-    expect(thought).toContain("A limited search cannot establish that nothing happened later");
+    expect(thought).toContain("Use the conversation to resolve who or what the user means");
+    expect(thought).toContain("a particular fact absent from the exchange");
+    expect(thought).toContain("another plausible occasion would give a different answer");
 
     await createDialogueAgent().stream({ prompt: "We have a reliable case account of the topic. Chronology is incomplete." });
     const publicRequest = h.call.mock.calls[1]![0] as CapturedRequest;
@@ -128,19 +145,16 @@ describe("dialogue DeepSeek profile", () => {
     const request = h.call.mock.calls[0]![0] as CapturedRequest;
     const system = request.messages.find(message => message.role === "system")?.content;
     expect(system?.startsWith("BASE PROMPT")).toBe(true);
-    expect(system).toContain("You own ONLY the current input's investigation");
-    expect(system).toContain("Never write ordinary assistant content or a public answer");
+    expect(system).toContain("Work on what the user brings up in the current input");
+    expect(system).toContain("The dialogue role writes the public reply");
     expect(system).toContain("If the conversation already answers the question, no snapshot or search is needed");
-    expect(system).toContain("Pending work is not a completed fact");
-    expect(system).toContain("one of several questions may already be answerable from context");
     expect(system).toContain("alongside the next independent lookup in the same tool step");
-    expect(system).toContain("Skip a checkpoint when the full answer is ready");
-    expect(system).toContain("Keep private reasoning, plans, routine activity and HTML out of checkpoints");
+    expect(system).toContain("If the whole answer is ready, go straight to completion");
     expect(system).toContain("call completeWork exactly once");
     expect(system).toContain("Describe a link only in the direction the source shows");
     expect(system).toContain("Confine a missing-record claim to the material actually checked");
     expect(system).toContain("every complete native HTML artifact");
-    expect(system).toContain("SEPARATE later tool step");
+    expect(system).toContain("separate later step");
     expect(system).toContain("finishThinking alone with needsUser");
     expect(system).not.toContain("offerReply");
 

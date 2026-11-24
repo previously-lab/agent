@@ -245,6 +245,14 @@ describe("recallListExecute", () => {
     expect(await recallReadExecute({ ref: "research/手机调研" }, context)).toContain("倾向小屏旗舰");
   });
 
+  it("reaches the last page of an inventory with more than fifty thousand paths", async () => {
+    const paths = Array.from({ length: 50_002 }, (_, i) => `memory/events/case-${String(i).padStart(5, "0")}/index.md`);
+    vi.mocked(walkPathsLocal).mockResolvedValueOnce(paths);
+    const out = await recallListExecute({ path: "events", offset: 50_000, limit: 2 }, opts(makeCtx("2026-09-10-1000")));
+    expect(out).toMatchObject({ kind: "entries", total: 50_002, entries: [{ path: "events/case-50000" }, { path: "events/case-50001" }] });
+    expect(readFileLocal).not.toHaveBeenCalled();
+  });
+
   it("rejects storage paths and non-public directories", async () => {
     const context = opts(makeCtx("2026-09-10-1000"));
     for (const path of ["memory/research", "records", "config", "research/手机调研/attachments"]) {
@@ -358,15 +366,16 @@ describe("recallSearchExecute", () => {
     expect(encoded).not.toContain("我想换手机，预算 5000。");
   });
 
-  it("keeps bracketed literal keywords and enforces native limits on encoded arrays", async () => {
+  it("preserves bracketed literals and accepts long terms and lists in either encoding", async () => {
     const { recallSearch } = (await import("@/app/api/agent/tools")).chatTools;
     const parse = (query: unknown) => recallSearch.inputSchema.safeParse({ query });
     for (const literal of [" 通勤 ", "[tag]", "[1,2]"]) {
       expect(parse(literal)).toMatchObject({ success: true, data: { query: literal.trim() } });
     }
-    const full = Array.from({ length: 8 }, () => "字".repeat(256));
+    const full = Array.from({ length: 12 }, () => "字".repeat(512));
+    expect(parse(full)).toMatchObject({ success: true, data: { query: full } });
     expect(parse(JSON.stringify(full))).toMatchObject({ success: true, data: { query: full } });
-    for (const invalid of [[], [...full, "ninth"], [" "], ["字".repeat(257)]]) {
+    for (const invalid of [[], [" "]]) {
       expect(parse(invalid).success).toBe(false);
       expect(parse(JSON.stringify(invalid)).success).toBe(false);
     }
@@ -509,7 +518,24 @@ describe("recallReadExecute", () => {
     expect(unwrapCaseReadEnvelope(out)).toBe(INDEX_RAW);
   });
 
-  it("semantic line ranges stay bounded and never issue a full-read receipt", async () => {
+  it("returns the rest of a single very long line by offset and detects edits between pages", async () => {
+    const ref = "research/long", path = "memory/research/long/index.md";
+    const base = { ref, range: { type: "lines" as const, start: 1, end: 1 } };
+    io.files.set(path, "z".repeat(18_000) + "END");
+    io.dirs.set("memory/research", ["long"]);
+    io.dirs.set("memory/research/long", ["index.md"]);
+    const options = opts(makeCtx("2026-09-10-1000"));
+    const first = await recallReadExecute(base, options);
+    expect(typeof first).toBe("string");
+    const next = /offset (\d+), revision "([a-f0-9]+)"/.exec(String(first));
+    expect(next).toBeTruthy();
+    const continued = { ...base, offset: Number(next![1]), revision: next![2] };
+    expect(String(await recallReadExecute(continued, options))).toMatch(/END$/);
+    io.files.set(path, "updated");
+    expect(String(await recallReadExecute(continued, options))).toMatch(/selection changed/);
+  });
+
+  it("semantic line selections remain readable to the end and never issue a full-index receipt", async () => {
     const sentinel = "FULL_SEMANTIC_DOCUMENT_SENTINEL_NEVER_RETURN";
     const longRaw = Array.from({ length: 450 }, (_, index) =>
       index === 449 ? sentinel : `line ${index + 1}`).join("\n");
@@ -533,10 +559,10 @@ describe("recallReadExecute", () => {
       { ref: "research/long", range: { type: "lines", start: 1, end: 450 } },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(capped).toContain("bounded to 400 lines/16000 chars");
+    expect(capped).toContain("Lines 1-450");
     expect(capped).toContain("line 400");
-    expect(capped).not.toContain("line 401");
-    expect(capped).not.toContain(sentinel);
+    expect(capped).toContain("line 401");
+    expect(capped).toContain(sentinel);
 
     const wrongRange = await recallReadExecute(
       { ref: "research/long", range: { type: "turns", indices: [0] } },
@@ -567,7 +593,7 @@ describe("recallReadExecute", () => {
     );
   });
 
-  it("holds a whole conversation requested beside the first case passage, while a targeted read still works", async () => {
+  it("allows a whole public record read alongside a case read", async () => {
     const ref = "records/2026-09-04-2130";
     const input = { ref, direct: true };
     const ctx = { ...makeCtx("2026-09-10-1000"), thinkingFlow: true };
@@ -576,9 +602,7 @@ describe("recallReadExecute", () => {
       { type: "tool-call" as const, toolName: "recallRead", toolCallId: "case", input: { ref: "research/手机调研" } },
     ] }] };
     const result = await recallReadExecute(input, options);
-    expect(result).toMatchObject({ kind: "public_record_v1", status: "deferred" });
-    expect(result).not.toHaveProperty("thinkingReceipt");
-    expect(JSON.stringify(result)).not.toContain("预算 5000");
+    expect(result).toMatchObject({ kind: "public_record_v1", text: expect.stringContaining("预算 5000") });
     expect(await recallReadExecute({ ...input, range: { type: "turns", indices: [0] } }, options))
       .toMatchObject({ kind: "public_record_v1", text: expect.stringContaining("预算 5000") });
   });

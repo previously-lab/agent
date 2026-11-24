@@ -33,10 +33,17 @@ describe("buildDialoguePrompt semantic event field", () => {
   it("carries the selected per-input response mode into public wording", () => {
     const chat = runInput();
     chat.responseMode = "chat";
-    expect(JSON.parse(buildDialoguePrompt(chat, [], "你好")).currentTaskContract).toMatchObject({
-      responseMode: "chat",
-      modeGuidance: expect.stringContaining("Do not recap memory"),
+    chat.context.source.text = "以后终于能在家睡午觉了。";
+    chat.context.priorContext = [{ role: "assistant", text: "记得你提过以前那套房的噪声。" }];
+    const handoff = "The user is looking forward to being able to nap at home.";
+    const payload = JSON.parse(buildDialoguePrompt(chat, [], handoff));
+    expect(payload).toMatchObject({
+      sourceInput: { text: chat.context.source.text },
+      priorContext: chat.context.priorContext,
+      currentTaskContract: { responseMode: "chat", modeGuidance: expect.stringContaining("Let familiar context inform it") },
+      event: { kind: "work_update", notes: handoff },
     });
+    expect(payload.currentTaskContract.instruction).not.toMatch(/only new information|return empty/i);
     const legacy = JSON.parse(buildDialoguePrompt(runInput(), [], "结果"));
     expect(legacy.currentTaskContract.responseMode).toBe("focused");
     const rewrite = runInput();
@@ -67,6 +74,24 @@ describe("buildDialoguePrompt semantic event field", () => {
     const parsed = JSON.parse(buildDialoguePrompt(runInput(), [], "普通结果"));
     expect(parsed.event).toEqual({ kind: "work_update", notes: "普通结果" });
     expect(parsed).not.toHaveProperty("result");
+  });
+
+  it("continues after published answers to this input and lets another input ask the same question", () => {
+    const input = runInput();
+    input.stage = "final";
+    const publication = {
+      utteranceId: "spoken", publicSeq: 1, committedAt: "2026-11-07T00:01:00Z", sourceResults: [],
+      inputIds: ["input-1"], blocks: [{ kind: "markdown" as const, blockId: "time", text: "下午三点开始。" }],
+    };
+    input.orchestration = { works: [], offers: [], publications: [publication] };
+    const followUp = JSON.parse(buildDialoguePrompt(input, [], "下午三点开始。请从东门进。"));
+    expect(followUp.alreadySaid).toEqual(["下午三点开始。"]);
+    expect(followUp.currentTaskContract.instruction).toContain("remaining answer or correction");
+
+    input.orchestration.publications = [{ ...publication, inputIds: ["older-input"] }];
+    const fresh = JSON.parse(buildDialoguePrompt(input, [], "下午三点开始。"));
+    expect(fresh.alreadySaid).toEqual([]);
+    expect(fresh.currentTaskContract.instruction).not.toContain("remaining answer");
   });
 
   it("keeps other inputs out of the current wording task by default", () => {

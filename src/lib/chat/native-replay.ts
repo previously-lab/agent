@@ -4,8 +4,6 @@ import { mergeSavedTurns } from "./reconnect";
 import { visibleAssistantText } from "./assistant-text";
 
 const KEY = "previously:deepseek-replay:v1";
-const MAX_ENTRIES = 24;
-const MAX_BYTES = 1024 * 1024;
 type ReplayPart = Extract<UIMessagePart, { type: `data-${string}` }>;
 export interface NativeReplayEntry {
   userId: string;
@@ -21,9 +19,9 @@ const replayParts = (message: UIMessage) => message.parts.filter((part): part is
 export function readNativeReplay(): NativeReplayEntry[] {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw || raw.length * 2 > MAX_BYTES) return [];
+    if (!raw) return [];
     const value: unknown = JSON.parse(raw);
-    if (!Array.isArray(value) || value.length > MAX_ENTRIES) return [];
+    if (!Array.isArray(value)) return [];
     return value.filter((entry): entry is NativeReplayEntry => Boolean(entry && typeof entry === "object"
       && typeof entry.userId === "string" && typeof entry.userText === "string" && typeof entry.assistantText === "string"
       && Array.isArray(entry.parts) && entry.parts.every((part: ReplayPart) => part && part.type === "data-deepseek-step"
@@ -31,7 +29,7 @@ export function readNativeReplay(): NativeReplayEntry[] {
   } catch { return []; }
 }
 
-/** Only finished answers enter the bounded archive; quota/private-mode failures
+/** Only finished answers enter the replay cache. Quota/private-mode failures
  * silently fall back to the authoritative visible transcript. */
 export function rememberNativeReplay(messages: readonly UIMessage[]): void {
   try {
@@ -45,11 +43,8 @@ export function rememberNativeReplay(messages: readonly UIMessage[]): void {
       const entry: NativeReplayEntry = { userId: user.id, userText: text(user), assistantText: assistantText(message), parts };
       const previous = entries.findIndex((item) => item.userId === entry.userId && item.assistantText === entry.assistantText);
       if (previous >= 0) entries.splice(previous, 1);
-      // One oversized turn must not evict all smaller, useful entries.
-      if (JSON.stringify([entry]).length * 2 > MAX_BYTES) continue;
       entries.push(entry);
     }
-    while (entries.length > MAX_ENTRIES || JSON.stringify(entries).length * 2 > MAX_BYTES) entries.shift();
     localStorage.setItem(KEY, JSON.stringify(entries));
   } catch { /* Optional replay cache, never block a conversation. */ }
 }

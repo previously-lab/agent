@@ -21,8 +21,6 @@ import {
   newCardTemplate,
   parseCard,
   serializeCard,
-  CARD_NOW_MAX,
-  PAST_ANCHORS_MAX,
 } from "@/lib/episodic/previously-format";
 
 const SLICE = "2026-08-17-0515";
@@ -67,11 +65,11 @@ describe("setIdentity", () => {
     expect(s.doc.identity).toEqual(["Name: 袁艺"]);
   });
 
-  it("rejects over-length values and says the limit", () => {
+  it("preserves a full identity value", () => {
     const s = session();
     const res = sessionSetIdentity(s, "name", "x".repeat(301));
-    expect(res).toContain("REJECTED");
-    expect(res).toContain("301");
+    expect(res).toMatch(/^OK/);
+    expect(s.doc.identity[0]).toBe("Name: " + "x".repeat(301));
   });
 });
 
@@ -82,14 +80,12 @@ describe("updatePastProfile", () => {
     expect(s.doc.past.profile).toContain("full-stack engineer");
   });
 
-  it("rejects over-cap text with the ACTUAL count — nothing is truncated", () => {
+  it("round-trips the paragraph beyond the old cap", () => {
     const s = session();
     const long = "a".repeat(2500);
     const res = sessionUpdatePastProfile(s, long);
-    expect(res).toContain("REJECTED");
-    expect(res).toContain("2500");
-    expect(res).toContain("2400");
-    expect(s.doc.past.profile).toBe(""); // untouched
+    expect(res).toMatch(/^OK/);
+    expect(parseCard(serializeSession(s))?.past.profile).toBe(long);
   });
 
   it("rejects emptying the profile", () => {
@@ -132,12 +128,12 @@ describe("addNow / removeNow / promoteNowToPast", () => {
     expect(sessionAddNow(s, "Prepping the Friday interview", REFS)).toContain("already on the card");
   });
 
-  it("rejects when full and points at remove/promote", () => {
+  it("keeps all sourced items beyond the old count", () => {
     const s = session();
-    for (let i = 0; i < CARD_NOW_MAX; i++) sessionAddNow(s, `hook ${i}`, REFS);
+    for (let i = 0; i < 5; i++) sessionAddNow(s, `hook ${i}`, REFS);
     const res = sessionAddNow(s, "one too many", REFS);
-    expect(res).toContain("REJECTED");
-    expect(res).toContain("Remove a stale item or promote");
+    expect(res).toMatch(/^OK/);
+    expect(s.doc.now).toHaveLength(6);
   });
 
   it("removeNow no-match error lists the current entries", () => {
@@ -156,12 +152,13 @@ describe("addNow / removeNow / promoteNowToPast", () => {
     expect(s.doc.past.anchors[0]).toEqual({ text: "interview done — offered the role", refs: REFS });
   });
 
-  it("promotion respects the anchor cap", () => {
+  it("promotion preserves anchors beyond the old cap", () => {
     const s = session();
-    for (let i = 0; i < PAST_ANCHORS_MAX; i++) sessionAddPastAnchor(s, `durable fact ${i}`, REFS);
+    for (let i = 0; i < 8; i++) sessionAddPastAnchor(s, `durable fact ${i}`, REFS);
     sessionAddNow(s, "a hook", REFS);
-    expect(sessionPromoteNowToPast(s, "a hook")).toContain("REJECTED");
-    expect(s.doc.now).toHaveLength(1); // untouched on rejection
+    expect(sessionPromoteNowToPast(s, "a hook")).toMatch(/^OK/);
+    expect(s.doc.past.anchors).toHaveLength(9);
+    expect(s.doc.now).toHaveLength(0);
   });
 
   it("promotion moves a legacy OVER-LENGTH Now item — a move is not a new write", () => {
@@ -250,71 +247,9 @@ describe("serialization + substance comparison", () => {
   });
 });
 
-describe("loop brake", () => {
-  it("passes the 1st rejection through untouched, escalates the 2nd with exact arithmetic", () => {
-    const s = session();
-    const long = "a".repeat(2500);
-    const first = sessionUpdatePastProfile(s, long);
-    expect(first).toContain("REJECTED");
-    expect(first).not.toContain("LOOP BRAKE");
-    const second = sessionUpdatePastProfile(s, long);
-    expect(second).toContain("LOOP BRAKE (attempt 2)");
-    // The original checkLength text is kept, with the escalation PREFIXED.
-    expect(second).toContain("the limit is 2400");
-    expect(second).toContain("DELETE at least 100");
-    expect(s.doc.past.profile).toBe(""); // still untouched
-  });
-
-  it("force-applies a truncated write on the 3rd identical length violation", () => {
-    const s = session();
-    const long = "b".repeat(2500);
-    sessionUpdatePastProfile(s, long);
-    sessionUpdatePastProfile(s, long);
-    const third = sessionUpdatePastProfile(s, long);
-    expect(third).toMatch(/^OK — FORCED/);
-    expect(s.doc.past.profile).toHaveLength(2400);
-    expect(s.log.some((l) => l.startsWith("forced:"))).toBe(true);
-  });
-
-  it("whitespace and casing tweaks do not bypass the brake", () => {
-    const s = session();
-    sessionUpdatePastProfile(s, "x".repeat(2500));
-    const res = sessionUpdatePastProfile(s, `  ${"X".repeat(2500)} `);
-    expect(res).toContain("LOOP BRAKE (attempt 2)");
-  });
-
-  it("skips a non-length violation on the 3rd attempt with a finish-now instruction", () => {
-    const s = session();
-    const first = sessionAddNow(s, "hook", []);
-    expect(first).toContain("refs are required");
-    const second = sessionAddNow(s, "hook", []);
-    expect(second).toContain("LOOP BRAKE (attempt 2)");
-    const third = sessionAddNow(s, "hook", []);
-    expect(third).toContain("LOOP BRAKE (attempt 3)");
-    expect(third).toContain("SKIPPED");
-    expect(third).toContain("finish NOW");
-    expect(s.doc.now).toEqual([]); // nothing force-applied for non-length classes
-    // 4th attempt: still skipped, never applied.
-    expect(sessionAddNow(s, "hook", [])).toContain("SKIPPED");
-    expect(s.doc.now).toEqual([]);
-  });
-
-  it("different args do not share a rejection count", () => {
-    const s = session();
-    sessionAddNow(s, "hook-a", []);
-    const res = sessionAddNow(s, "hook-b", []);
-    expect(res).not.toContain("LOOP BRAKE");
-  });
-
-  it("forced length landing still runs the remaining validations on the truncated text", () => {
-    const s = session();
-    const long = "h".repeat(400); // Now cap is lower
-    sessionAddNow(s, long, ["not-a-ref"]);
-    sessionAddNow(s, long, ["not-a-ref"]);
-    // 3rd identical attempt: length is force-fixed, but the refs are still
-    // invalid — the write must NOT land with bad refs.
-    const third = sessionAddNow(s, long, ["not-a-ref"]);
-    expect(third).toContain("malformed ref");
-    expect(s.doc.now).toEqual([]);
-  });
+it("keeps rejecting ungrounded writes until corrected without forcing the session to end", () => {
+  const s = session();
+  for (let attempt = 0; attempt < 4; attempt++) expect(sessionAddNow(s, "hook", [])).toContain("refs are required");
+  expect(sessionAddNow(s, "hook", REFS)).toMatch(/^OK/);
+  expect(s.doc.now).toHaveLength(1);
 });

@@ -6,7 +6,6 @@ import { readFileDemo } from "@/lib/demo/demo-fs";
 import { parseSlice } from "@/lib/episodic/manager";
 import { fsReadFile } from "@/lib/episodic/io-helpers";
 import { slicePartPath } from "@/lib/episodic/paths";
-import { withGitHubReadBudget } from "@/lib/github/client";
 import {
   deriveRoomProfile,
   NEUTRAL_ROOM_PROFILE,
@@ -77,9 +76,7 @@ export async function getRoomProfile(
 
   try {
     const source = resolveDataSource();
-    const raw = await withGitHubReadBudget(() =>
-      readCoreForRoomProfile(sliceId, source, requestPersona),
-    );
+    const raw = await readCoreForRoomProfile(sliceId, source, requestPersona);
     const slice = parseSlice(raw);
     const profile = deriveRoomProfile({
       focus: slice.focus,

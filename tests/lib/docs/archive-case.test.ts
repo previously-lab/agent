@@ -69,8 +69,10 @@ describe("case archival", () => {
     const batch = createBatch();
     batch.entries.set("memory/other.txt", "keep me");
     seed("research/retired/index.md", "current\n");
-    seed("research/retired/oversized.bin", Buffer.alloc(5 * 1024 * 1024 + 1));
-    await expect(archiveCaseDocument(request, { batch })).rejects.toThrow(/too large/i);
+    seed("research/retired/sample.bin", Buffer.from([0, 255]));
+    const io = await import("@/lib/episodic/io-helpers");
+    vi.spyOn(io, "fsWriteBinaryFile").mockRejectedValueOnce(new Error("Fixture disk write failed"));
+    await expect(archiveCaseDocument(request, { batch })).rejects.toThrow(/disk write failed/i);
     expect([...batch.entries]).toEqual([["memory/other.txt", "keep me"]]);
     expect(batch.documentBases).toBeUndefined();
   });

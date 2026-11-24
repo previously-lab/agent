@@ -142,6 +142,24 @@ describe("real isolated image staging", () => {
     expect(fs.existsSync(manifest(service.image.assetId).file.replace(/\.json$/, ".bin"))).toBe(false);
     expect((await service.readStagedImage(service.image.assetId)).data).toEqual(PNG);
   });
+  it("keeps five staged images in order through reservation, archive and verified readback", async () => {
+    const service = await setup();
+    const snapshots = [service.image];
+    for (let i = 2; i <= 5; i++) snapshots.push(await service.stageImage({ data: PNG, name: `photo-${i}.png` }));
+    const refs = snapshots.map((item, i) => ({ assetId: item.assetId, ordinal: i + 1 }));
+    const reserved = await service.reserveStagedImages(refs, "all-images");
+    await reserved.confirm();
+    const io = await import("@/lib/episodic/io-helpers");
+    const { persistImageAttachments, readRecordImage } = await import("@/lib/tools/attachments");
+    const { encodeImageAttachments, decodeImageAttachments } = await import("@/lib/chat/image-attachments");
+    const batch = io.createBatch();
+    const archived = await persistImageAttachments({ sliceId: "2026-11-02-0800", turnId: "five", images: reserved.attachments, batch });
+    await io.flushBatch(batch, "Store five images");
+    expect(decodeImageAttachments(encodeImageAttachments(archived))).toEqual(archived);
+    expect(archived.map(({ assetId, ordinal }) => ({ assetId, ordinal }))).toEqual(refs);
+    for (const image of archived) expect((await readRecordImage(image.ref)).data).toEqual(PNG);
+  });
+
   it("rejects truncated, disguised and oversized content before writing drafts", async () => {
     const { stageImage } = await import("@/lib/tools/staged-images");
     for (const data of [PNG.subarray(0, 33), Buffer.from('<svg onload="bad()"/>'), Buffer.alloc(5 * 1024 * 1024 + 1)]) {

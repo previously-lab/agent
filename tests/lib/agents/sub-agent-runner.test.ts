@@ -27,9 +27,6 @@ const workflow = vi.hoisted(() => {
   return { writer, getWritable: vi.fn(() => ({ getWriter: () => writer })) };
 });
 vi.mock("workflow", () => ({ getWritable: workflow.getWritable }));
-const deadline = vi.hoisted(() => ({ withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({ ok: true, result: await work(), elapsedMs: 0 })) }));
-vi.mock("@/lib/chat/step-timeout", () => deadline);
-
 import { createProgressEmitter, extractToolReport, resolveSubAgentModel, runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { FIXED_MODEL } from "@/lib/models/registry";
 import { SKILL_LEGACY_ROLE_PROMPT_MAX_CHARS } from "@/lib/evolution/skill-policy";
@@ -130,29 +127,16 @@ describe("native sub-agent runner", () => {
       await opts.onChunk?.({ chunk: { type: "text-delta", delta: "partial answer" } });
       throw new DOMException("fixture timeout", "TimeoutError");
     });
-    expect(await runSubAgent(options({ timeoutMs: 5000 }))).toMatchObject({ ok: false, timedOut: true, text: "partial answer", reasoning: "half a thought", error: "Sub-agent did not finish within 5s." });
+    expect(await runSubAgent(options())).toMatchObject({ ok: false, timedOut: true, text: "partial answer", reasoning: "half a thought", error: "fixture timeout" });
     expect(native.streamText).toHaveBeenCalledTimes(1);
   });
   it("returns provider failures as structured failures", async () => {
     native.streamText.mockRejectedValue(new Error("provider unavailable"));
     expect(await runSubAgent(options())).toMatchObject({ ok: false, text: "", error: "provider unavailable" });
   });
-  it("installs both deadline and backstop only for an explicit wall-clock bound", async () => {
-    fakeStream(); await runSubAgent(options({ timeoutMs: 12000 }));
-    expect(lastCall().timeout).toBe(12000);
-    expect(deadline.withStepTimeout).toHaveBeenCalledWith(expect.any(Function), 15000);
-  });
   it("does not invent a timeout when the caller omitted one", async () => {
     fakeStream(); await runSubAgent(options());
-    expect(lastCall()).not.toHaveProperty("timeout"); expect(deadline.withStepTimeout).not.toHaveBeenCalled();
-  });
-  it("applies the requested round limit", async () => {
-    fakeStream(); await runSubAgent(options({ maxSteps: 4 }));
-    const stop = lastCall().stopWhen;
-    expect(typeof stop).toBe("function");
-    if (typeof stop !== "function") throw new Error("expected stop condition");
-    expect(stop({ steps: new Array(4).fill({}) })).toBe(true);
-    expect(stop({ steps: new Array(3).fill({}) })).toBe(false);
+    expect(lastCall()).not.toHaveProperty("timeout");
   });
   it("leaves unspecified limits to the native call contract", async () => {
     fakeStream(); await runSubAgent(options()); expect(lastCall()).not.toHaveProperty("stopWhen");

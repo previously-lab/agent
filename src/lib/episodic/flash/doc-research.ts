@@ -96,7 +96,7 @@ const writeOpSchema = z.object({
 });
 
 const researchSchema = z.object({
-  writes: z.array(writeOpSchema).max(10),
+  writes: z.array(writeOpSchema),
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
@@ -229,7 +229,6 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
     sessionId: sliceId,
     system: RESEARCH_SYSTEM,
     prompt,
-    maxSteps: 15,
     tools,
     toolChoice: "auto",
     reportToolName: "docResearchOutput",

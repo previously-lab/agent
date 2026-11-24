@@ -22,7 +22,6 @@ import {
   type ReadOptions,
 } from "@/lib/cache/data-cache";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, lstatSync, readdirSync, statSync, rmSync } from "fs";
-import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 import { createHash } from "node:crypto";
 import { join, dirname } from "path";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
@@ -63,7 +62,6 @@ async function simulateLatency(op: string, path: string): Promise<void> {
  */
 export async function walkPathsLocal(
   root: string,
-  maxEntries = 50_000,
   options?: { maxDepth: number; requireRealRoot: boolean; descend?: (path: string) => boolean },
 ): Promise<string[]> {
   await simulateLatency("walk", root);
@@ -78,8 +76,7 @@ export async function walkPathsLocal(
   }
   const out: string[] = [];
   const stack: Array<{ abs: string; rel: string; depth: number }> = [{ abs: base, rel: root, depth: 0 }];
-  let visited = 0;
-  while (stack.length && out.length < maxEntries) {
+  while (stack.length) {
     const { abs, rel, depth } = stack.pop()!;
     let entries;
     try {
@@ -92,7 +89,6 @@ export async function walkPathsLocal(
       throw error;
     }
     for (const e of entries) {
-      if (options && ++visited > maxEntries) throw new Error("Directory walk limit reached");
       const childRel = `${rel}/${e.name}`;
       if (e.isDirectory() && (options === undefined || depth + 1 < options.maxDepth) &&
           (options?.descend?.(childRel) ?? true)) {
@@ -132,10 +128,6 @@ async function readLocalDirect(path: string): Promise<string> {
 
   if (stat.isDirectory()) {
     throw new Error(`"${path}" is a directory, not a file`);
-  }
-  const maxBytes = maxTextFileBytes(path);
-  if (stat.size > maxBytes) {
-    throw new Error(`File too large (${stat.size} bytes). Maximum is ${maxBytes} bytes.`);
   }
 
   return readFileSync(fullPath, "utf-8");
@@ -182,7 +174,6 @@ export async function commitLocalBatch(
     for (const entry of entries) {
       if (!isPathAllowed(entry.path)) throw new Error(`Access denied: path "${entry.path}" is outside allowed directories`);
       assertPortableRepoPath(entry.path);
-      if (entry.content !== null && (entry.encoding === "base64" ? Buffer.from(entry.content, "base64").length > MAX_BINARY_FILE_SIZE_BYTES : Buffer.byteLength(entry.content, "utf8") > maxTextFileBytes(entry.path))) throw new Error("Content too large for storage");
       const full = resolveLocalDataPath(entry.path);
       const original = existsSync(full) ? readFileSync(full) : null;
       before.set(entry.path, original);
@@ -246,9 +237,7 @@ export async function deleteFileLocal(path: string): Promise<void> {
 }
 
 /**
- * Write raw bytes (attachments). Same whitelist and size discipline as the
- * text writer — the caller enforces the binary fuse (5MB) BEFORE calling;
- * this layer enforces it again as the last-resort guard.
+ * Write attachment bytes through the same confined paths as the text writer.
  */
 export async function writeBinaryFileLocal(
   path: string,
@@ -259,12 +248,6 @@ export async function writeBinaryFileLocal(
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
   assertPortableRepoPath(path);
-
-  if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
-    throw new Error(
-      `File too large (${data.byteLength} bytes). Maximum is ${MAX_BINARY_FILE_SIZE_BYTES} bytes.`
-    );
-  }
 
   const fullPath = resolveLocalDataPath(path);
   const dir = dirname(fullPath);
@@ -294,9 +277,6 @@ export async function readBinaryFileLocal(path: string): Promise<Buffer> {
 
   return readFileSync(fullPath);
 }
-
-/** Binary fuse ceiling — attachments above this are REFUSED, never truncated. */
-export const MAX_BINARY_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 
 export async function listFilesLocal(
   path: string,
@@ -340,7 +320,6 @@ async function listLocalDirect(
       name,
       type: entryStat.isDirectory() ? "dir" as const : "file" as const,
       path: `${path.replace(/\/$/, "")}/${name}`,
-      // Present for files; the per-case attachment fuse (25MB) sums these.
       ...(entryStat.isDirectory() ? {} : { size: entryStat.size }),
     };
   });

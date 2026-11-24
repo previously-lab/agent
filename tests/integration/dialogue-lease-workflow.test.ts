@@ -220,11 +220,12 @@ describe("dialogue lease and handoff execution", () => {
     expect(h.published).toHaveLength(1);
   });
 
-  it("surfaces a token repeatedly attributed to a terminal holder", async () => {
+  it("waits for the registry to release a token still attributed to a terminal holder", async () => {
     setup({ ...holder(), status: "completed" });
-    h.conflicts = Array.from({ length: 4 }, () => ({ runId: "holder" }));
-    await expect(dialogueOrchestratorWorkflow({ scope: "scope", initialWake })).rejects.toThrow("unreachable holder");
-    expect(h.prompts).toBe(0);
+    h.conflicts = [...Array.from({ length: 7 }, () => ({ runId: "holder" })), null];
+    await expect(dialogueOrchestratorWorkflow({ scope: "scope", initialWake })).resolves.toMatchObject({ status: "idle" });
+    expect(h.prompts).toBe(1);
+    expect(h.sleep).toHaveBeenCalledWith(32_000);
   });
 
   it("waits for the predecessor before a budget successor publishes", async () => {
@@ -244,7 +245,7 @@ describe("dialogue lease and handoff execution", () => {
     expect(h.runtime).not.toContainEqual({ type: "delegated", holderRunId: "holder" });
   });
 
-  it("rechecks and cancels a predecessor that becomes stale during handoff waiting", async () => {
+  it("keeps waiting for a live predecessor even if its preparation has no recent heartbeat", async () => {
     setup(holder());
     h.conflicts = [{ runId: "holder" }, { runId: "holder" }, null];
     h.wait.mockImplementationOnce(async () => {
@@ -252,7 +253,8 @@ describe("dialogue lease and handoff execution", () => {
     });
     const result = await dialogueOrchestratorWorkflow({ scope: "scope", sessionId: "session", handoffFrom: "holder", handoffReason: "budget" });
     expect(result.status).toBe("idle");
-    expect(h.cancel).toHaveBeenCalledWith("holder");
+    expect(h.cancel).not.toHaveBeenCalled();
+    expect(h.wait).toHaveBeenCalledTimes(2);
     expect(h.published).toHaveLength(1);
   });
 

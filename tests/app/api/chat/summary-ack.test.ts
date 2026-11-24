@@ -160,25 +160,18 @@ describe("summary task acknowledgment", () => {
     expect(h.sleep).not.toHaveBeenCalled();
   });
 
-  it("leaves a bounded pending ack while the source runs, then repairs it on the persisted duplicate path", async () => {
+  it("acknowledges after a prolonged active source completes without needing a second summary", async () => {
     const input = payload({
       sourceRunId: "source-repair",
       taskRef: "tasks/ack-repair",
       resultId: "result-ack-repair",
     });
     await seed("tasks/ack-repair", "result-ack-repair");
-    h.sourceStatus.mockResolvedValue("running");
-
-    const pending = await summaryRun(input);
-    expect(pending.acknowledgements).toEqual([
-      expect.objectContaining({ kind: "source", status: "pending" }),
-    ]);
-    expect(h.sourceStatus).toHaveBeenCalledTimes(5);
-    expect(h.sleep).toHaveBeenCalledTimes(4);
-
-    h.sourceStatus.mockResolvedValue("completed");
-    h.sourceStatus.mockClear();
+    const statuses = ["pending", "running", "unavailable", "running", "running", "running", "running", "completed"];
+    h.sourceStatus.mockImplementation(async () => statuses.shift());
     const repaired = await summaryRun(input);
+    expect(h.sourceStatus).toHaveBeenCalledTimes(8);
+    expect(h.sleep).toHaveBeenCalledTimes(7);
     expect(repaired.acknowledgements).toEqual([
       expect.objectContaining({ kind: "task", status: "acknowledged" }),
       expect.objectContaining({ kind: "result", status: "acknowledged" }),
@@ -195,6 +188,7 @@ describe("summary task acknowledgment", () => {
     { finishReason: "error", sourceStatus: "completed" },
     { finishReason: "length", sourceStatus: "completed" },
     { finishReason: "stop", sourceStatus: "failed" },
+    { finishReason: "stop", sourceStatus: "missing" },
     { finishReason: "stop", sourceStatus: "cancelled" },
   ])("does not consume after finish=$finishReason source=$sourceStatus", async ({ finishReason, sourceStatus }) => {
     const suffix = `${finishReason}-${sourceStatus}`;
@@ -261,6 +255,31 @@ describe("summary task acknowledgment", () => {
     expect(read.ledger.results.find((result) => result.id === "result-burst-sibling")?.delivery).toMatchObject({
       state: "delivered", reply: { sliceId: sibling.reply.sliceId, turnId: sibling.reply.turnId },
     });
+  });
+
+  it("delivers a ready sibling while the other source is still running", async () => {
+    const input = payload({ sourceRunId: "slow", taskRef: "tasks/slow", resultId: "result-slow" });
+    const members: VerifiedTaskReply[] = [];
+    for (const name of ["slow", "ready"]) {
+      await seed(`tasks/${name}`, `result-${name}`);
+      members.push({
+        sourceRunId: name, finishReason: "stop",
+        reply: { status: "persisted", sliceId: input.sliceId, turnId: `reply-${name}` },
+        taskAckIntents: [{ kind: "result", resultId: `result-${name}`, expectedRevision: 1 }],
+      });
+    }
+    h.persist.mockResolvedValue({ ...savedOutcome(input), verifiedTaskReplies: members });
+    let released = false;
+    h.sourceStatus.mockImplementation(async (id: string) => id === "ready" || released ? "completed" : "running");
+    h.sleep.mockImplementationOnce(async () => {
+      const read = await readTaskLedger({ fresh: true });
+      if (read.status !== "ready") throw new Error("ledger not ready");
+      expect(read.ledger.results.find(result => result.id === "result-ready")?.delivery.state).toBe("delivered");
+      expect(read.ledger.results.find(result => result.id === "result-slow")?.delivery.state).toBe("pending");
+      released = true;
+    });
+    const outcome = await summaryRun(input);
+    expect(outcome.acknowledgements?.map(ack => ack.id)).toEqual(["result-ready", "result-slow"]);
   });
 
   it("handles each verified member independently, leaving cancelled, partial and error replies unconsumed", async () => {

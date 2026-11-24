@@ -36,7 +36,6 @@ import {
   sanitizeScreen,
   summarizeModelContent,
   extractImageAttachments,
-  MAX_MACHINE_CONTEXT_CHARS,
 } from "@/app/api/chat/start-turn";
 import { deriveRoomProfile } from "@/lib/game/room-profile";
 import { LEGACY_ROOM_SNAPSHOT_GENERATOR_VERSION } from "@/lib/game/room-snapshot";
@@ -228,7 +227,7 @@ describe("extractImageAttachments", () => {
     });
   });
 
-  it("caps extracted attachments at 4 images", () => {
+  it("extracts and numbers every selected image", () => {
     const parts: UIMessage["parts"] = Array.from({ length: 6 }, (_, i) => ({
       type: "file",
       mediaType: "image/png",
@@ -238,8 +237,8 @@ describe("extractImageAttachments", () => {
       [msg(parts, "m1")],
       "en",
     );
-    expect(attachments).toHaveLength(4);
-    expect(messages[0].parts).toHaveLength(4);
+    expect(attachments).toHaveLength(6);
+    expect(messages[0].parts).toHaveLength(6);
   });
 
   it("numbers multiple placeholders in order", () => {
@@ -462,17 +461,36 @@ describe("startTurn machineContext carriage", () => {
     expect("machineContext" in turnInput()).toBe(false);
   });
 
-  it("caps an oversized block at MAX_MACHINE_CONTEXT_CHARS", async () => {
-    await startTurn({ messages, machineContext: ` ${"x".repeat(5000)} ` });
-    expect(turnInput().machineContext).toHaveLength(MAX_MACHINE_CONTEXT_CHARS);
+  it("preserves long visit context including its closing marker", async () => {
+    const context = `[visit-log]\n${"x".repeat(5000)}\nFinal room.\n[/visit-log]`;
+    await startTurn({ messages, machineContext: ` ${context} ` });
+    expect(turnInput().machineContext).toBe(context);
   });
 });
 
 
-it("never starts capped history on an orphaned native tool result", async () => {
-  loader.loadUserConfig.mockResolvedValue({model:{provider:"deepseek-flash"}});
-  const oldMessages = [{role:"assistant",content:"earlier",deepseek:{role:"assistant",content:"earlier",reasoning_content:"why",tool_calls:Array.from({length:205},(_,i)=>({id:"t"+i,type:"function",function:{name:"read",arguments:"{}"}}))}},...Array.from({length:205},(_,i)=>({role:"tool",content:[{type:"tool-result",toolCallId:"t"+i,toolName:"read",output:{type:"text",value:"value"}}]}))];
-  await startTurn({messages:[{id:"u0",role:"user",parts:[{type:"text",text:"old"}]},{id:"a0",role:"assistant",parts:[{type:"data-deepseek-step",data:{messages:oldMessages}}]},{id:"u1",role:"user",parts:[{type:"text",text:"new"}]}]});
-  const call = workflow.start.mock.calls.at(-1) as unknown as [unknown,[{modelMessages:Array<{role:string;content:unknown}>}]];
-  expect(call[1][0].modelMessages[0]).toEqual({role:"user",content:[{type:"text",text:"new"}]});
+it("keeps complete native tool exchanges even when one exchange contains more than 200 results", async () => {
+  loader.loadUserConfig.mockResolvedValue({ model: { provider: "deepseek-flash" } });
+  const calls = Array.from({ length: 205 }, (_, i) => ({
+    id: `t${i}`, type: "function", function: { name: "read", arguments: "{}" },
+  }));
+  const results = calls.map(call => ({
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: call.id, toolName: "read", output: { type: "text", value: call.id } }],
+  }));
+  const previousExchange = [
+    { role: "assistant", content: "earlier", deepseek: { role: "assistant", content: "earlier", reasoning_content: "why", tool_calls: calls } },
+    ...results,
+  ];
+  await startTurn({ messages: [
+    { id: "orphan", role: "assistant", parts: [{ type: "text", text: "orphaned reply before the first user" }] },
+    { id: "u0", role: "user", parts: [{ type: "text", text: "old" }] },
+    { id: "a0", role: "assistant", parts: [{ type: "data-deepseek-step", data: { messages: previousExchange } }] },
+    { id: "u1", role: "user", parts: [{ type: "text", text: "new" }] },
+  ] });
+  const call = workflow.start.mock.calls.at(-1) as unknown as [unknown, [{ modelMessages: Array<{ role: string; content: unknown }> }]];
+  const { modelMessages } = call[1][0];
+  expect(modelMessages[0]).toEqual({ role: "user", content: [{ type: "text", text: "old" }] });
+  expect(modelMessages.filter(message => message.role === "tool")).toEqual(results);
+  expect(modelMessages.at(-1)).toEqual({ role: "user", content: [{ type: "text", text: "new" }] });
 });

@@ -1,5 +1,5 @@
 /**
- * Attachments (v0.19 §C.1, §B.1, §B.5) — naming, fuses, and the three
+ * Attachments (v0.19 §C.1, §B.1, §B.5) — naming and the three
  * identity landing paths.
  *
  * LAYOUT & NAMING. A case's attachments live in its `attachments/` directory
@@ -11,12 +11,6 @@
  * src/lib/docs/naming.ts (`sanitizeNameComponent`) — applied as净化
  * (replace, not just reject) because an attachment's original name is user
  * input, not an identity the system chose.
- *
- * FUSES (engineering, not semantic thresholds). A single binary over 5MB is
- * REFUSED; a case whose attachments would exceed 25MB total is REFUSED.
- * Over-limit = a visible error in the result, NEVER a silent truncation.
- * Images are client-compressed before they ever reach this path
- * (use-image-attachments.ts).
  *
  * THE THREE IDENTITIES.
  * - Evidence (file/image): the user's in-conversation files land in the
@@ -47,13 +41,6 @@ import { recordImageRef, parseRecordImageRef, isAttachmentFileName, parseImageAt
   type ImageAttachmentEvidence, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { inspectImage, ImageAttachmentError } from "./image-validation";
 
-// ─── Fuses (§C.1) ──────────────────────────────────────────────────────────
-
-/** Single binary ceiling — enforced again at the io layer, structurally. */
-export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-/** Per-case attachments total — the 25MB engineering fuse. */
-export const MAX_CASE_ATTACHMENTS_BYTES = 25 * 1024 * 1024;
-
 // ─── Naming (§C.1) ─────────────────────────────────────────────────────────
 
 /**
@@ -81,7 +68,7 @@ export function recordAttachmentName(turnId: string, originalName: string): stri
  * `-2`, `-3`, … suffix lands before the extension — never an overwrite,
  * never randomness.
  */
-async function freeName(dir: string, fileName: string): Promise<string> {
+async function freeName(dir: string, fileName: string, batch?: WriteBatch): Promise<string> {
   const taken = new Set<string>();
   try {
     for (const e of await fsListFiles(dir)) {
@@ -89,6 +76,12 @@ async function freeName(dir: string, fileName: string): Promise<string> {
     }
   } catch {
     // directory does not exist yet — nothing taken
+  }
+  for (const [path, content] of batch?.entries ?? []) {
+    if (!path.startsWith(dir + "/")) continue;
+    const name = path.slice(dir.length + 1);
+    if (content === null) taken.delete(name);
+    else taken.add(name);
   }
   if (!taken.has(fileName)) return fileName;
   const dot = fileName.lastIndexOf(".");
@@ -112,22 +105,6 @@ export function recordAttachmentsDir(sliceId: string): string {
   return `${sliceDir(sliceId)}/attachments`;
 }
 
-// ─── The per-case fuse ─────────────────────────────────────────────────────
-
-/** Current total bytes of a case's attachments (0 when none exist). */
-export async function caseAttachmentsBytes(dir: string): Promise<number> {
-  try {
-    const entries = await fsListFiles(dir);
-    let total = 0;
-    for (const e of entries) {
-      if (e.type === "file" && typeof e.size === "number") total += e.size;
-    }
-    return total;
-  } catch {
-    return 0; // no attachments yet
-  }
-}
-
 // ─── Identity 1: evidence — files/images into the records case ─────────────
 
 export interface EvidenceAttachmentInput {
@@ -146,8 +123,7 @@ export interface EvidenceAttachmentResult {
 
 /**
  * Persist the files/images the user sent in this turn into the records case
- * they were sent in (`records/…/attachments/`, `<turnId>-<name>`), enforcing
- * both fuses. Returns per-file outcomes — a refusal is a visible entry in
+ * they were sent in (`records/…/attachments/`, `<turnId>-<name>`). Returns per-file outcomes — a refusal is a visible entry in
  * `skipped`, not an exception. The caller (the turn pipeline) records the
  * landed file names in the turn; `core.md` itself is steps.ts territory.
  */
@@ -162,30 +138,11 @@ export async function persistEvidenceAttachments(input: {
   const result: EvidenceAttachmentResult = { saved: [], skipped: [] };
   if (files.length === 0) return result;
 
-  let caseTotal = await caseAttachmentsBytes(dir);
-
   for (const file of files) {
-    if (file.data.byteLength > MAX_ATTACHMENT_BYTES) {
-      result.skipped.push({
-        name: file.name,
-        reason:
-          `附件超过单文件 5MB 上限（${file.data.byteLength} 字节）——未保存，未截断。`,
-      });
-      continue;
-    }
-    if (caseTotal + file.data.byteLength > MAX_CASE_ATTACHMENTS_BYTES) {
-      result.skipped.push({
-        name: file.name,
-        reason:
-          `该切片附件合计将超过 25MB 上限（现有 ${caseTotal} 字节）——未保存，未截断。`,
-      });
-      continue;
-    }
     try {
-      const finalName = await freeName(dir, recordAttachmentName(turnId, file.name));
+      const finalName = await freeName(dir, recordAttachmentName(turnId, file.name), batch);
       const path = `${dir}/${finalName}`;
       await fsWriteBinaryFile(path, file.data, batch);
-      caseTotal += file.data.byteLength;
       result.saved.push({ name: finalName, path });
     } catch (e) {
       result.skipped.push({
@@ -202,8 +159,7 @@ export async function persistEvidenceAttachments(input: {
 /**
  * Copy a file INTO a document case's attachments (the case stays
  * self-contained). Evidence is never copied — documents point at records.
- * Both fuses apply; a refusal throws with a visible reason (the writer pass
- * records it as a skip).
+ * A storage failure is reported to the writer.
  */
 export async function copyAssetAttachment(input: {
   category: CaseCategory;
@@ -225,19 +181,8 @@ export async function copyAssetAttachment(input: {
   }
 
   const data = await fsReadBinaryFile(sourcePath);
-  if (data.byteLength > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `附件超过单文件 5MB 上限（${data.byteLength} 字节）——未复制，未截断。`,
-    );
-  }
   const dir = caseAttachmentsDir(category, caseName);
-  const caseTotal = await caseAttachmentsBytes(dir);
-  if (caseTotal + data.byteLength > MAX_CASE_ATTACHMENTS_BYTES) {
-    throw new Error(
-      `case ${category}/${caseName} 附件合计将超过 25MB 上限（现有 ${caseTotal} 字节）——未复制，未截断。`,
-    );
-  }
-  const finalName = await freeName(dir, caseAttachmentName(date, originalName));
+  const finalName = await freeName(dir, caseAttachmentName(date, originalName), batch);
   const path = `${dir}/${finalName}`;
   await fsWriteBinaryFile(path, data, batch);
   return { name: finalName, path };
@@ -310,7 +255,7 @@ export async function readRecordImage(ref: string): Promise<{ data: Buffer; medi
 
 /** Stage all evidence into the summary's existing batch. Deterministic names
  * make a retry after partial local I/O reuse the same binary, never -2 copies.
- * Capacity or corrupt data rejects the batch instead of dropping an image. */
+ * Verify every image before staging any of its bytes. */
 export async function persistImageAttachments(input: {
   sliceId: string; turnId: string; images: ImageAttachmentEvidence[]; batch: WriteBatch;
 }): Promise<ImageAttachmentSnapshot[]> {
@@ -319,15 +264,15 @@ export async function persistImageAttachments(input: {
   const dir = recordAttachmentsDir(sliceId);
   const snapshots = parseImageAttachments(images.map((image) => image.snapshot));
   if (snapshots.length !== images.length) throw new Error("Invalid attachment snapshots");
-  let total = 0;
-  const existing = new Map<string, number>();
+  const existing = new Set<string>();
   const entries = await fsListFiles(dir).catch((error) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as { status?: number }).status === 404 || /^Directory not found:/.test((error as Error).message)) return [];
     throw error;
   });
-  for (const entry of entries) if (entry.type === "file") existing.set(entry.path, entry.size ?? (await fsReadBinaryFile(entry.path)).length);
-  for (const [path, content] of batch.entries) if (path.startsWith(`${dir}/`) && batch.encodings?.get(path) === "base64" && content !== null) existing.set(path, Buffer.from(content, "base64").length);
-  for (const size of existing.values()) total += size;
+  for (const entry of entries) if (entry.type === "file") existing.add(entry.path);
+  for (const [path, content] of batch.entries) {
+    if (path.startsWith(`${dir}/`) && batch.encodings?.get(path) === "base64" && content !== null) existing.add(path);
+  }
   const writes: Array<{ path: string; data: Buffer; snapshot: ImageAttachmentSnapshot }> = [];
   for (const image of images) {
     const data = Buffer.from(image.dataBase64, "base64"), format = inspectImage(data);
@@ -338,8 +283,7 @@ export async function persistImageAttachments(input: {
       const queued = batch.entries.get(path);
       const previous = typeof queued === "string" && batch.encodings?.get(path) === "base64" ? Buffer.from(queued, "base64") : await fsReadBinaryFile(path);
       if (!previous.equals(data)) throw new Error("Stored attachment identity has different bytes");
-    } else { total += data.length; existing.set(path, data.length); }
-    if (total > MAX_CASE_ATTACHMENTS_BYTES) throw new ImageAttachmentError("record_capacity", "Record attachments exceed the 25MB limit", 413);
+    }
     writes.push({ path, data, snapshot: { ...image.snapshot, ref: recordImageRef(sliceId, fileName) } });
   }
   for (const write of writes) await fsWriteBinaryFile(write.path, write.data, batch);

@@ -20,6 +20,7 @@ interface WebSearchRendererProps {
 
 interface WebSearchOutput {
   answer?: string;
+  results?: Array<{ title?: string; url?: string }>;
   sources?: Array<{ title?: string; url?: string }>;
   error?: string;
   recommendation?: string;
@@ -30,20 +31,15 @@ function resolveName(
   input: Record<string, unknown> | undefined,
   output: WebSearchOutput | undefined,
   running: boolean,
+  research: boolean,
   t: ReturnType<typeof useTranslations>,
 ): string {
   const query =
     typeof input?.query === "string" ? input.query : "";
-  const sourceCount = Array.isArray(output?.sources) ? output.sources.length : 0;
+  const sourceCount = (output?.results ?? output?.sources)?.length ?? 0;
 
-  if (running) {
-    return query
-      ? t("webSearchRunning", { query })
-      : t("webSearchRunning", { query: "…" });
-  }
-  return query
-    ? t("webSearchDone", { query, count: sourceCount })
-    : t("webSearchDone", { query: "…", count: sourceCount });
+  if (running) return t(research ? "webResearchRunning" : "webSearchRunning", { query: query || "…" });
+  return t(research ? "webResearchDone" : "webSearchDone", { query: query || "…", count: sourceCount });
 }
 
 /**
@@ -53,7 +49,7 @@ function resolveName(
  * on completion and clicking expands the sources.
  */
 export function WebSearchRenderer({
-  toolName: _toolName,
+  toolName,
   input,
   output,
   state,
@@ -67,8 +63,9 @@ export function WebSearchRenderer({
     typeof inp?.query === "string" ? inp.query : null;
 
   const out = output as WebSearchOutput | undefined;
-  const sources = Array.isArray(out?.sources)
-    ? out.sources.filter((s): s is { title: string; url: string } => typeof s?.url === "string")
+  const entries = out?.results ?? out?.sources;
+  const sources = Array.isArray(entries)
+    ? entries.filter((s): s is { title: string; url: string } => typeof s?.url === "string")
     : [];
   const recommendation =
     typeof out?.recommendation === "string" && out.recommendation.trim()
@@ -81,7 +78,7 @@ export function WebSearchRenderer({
       )
     : [];
 
-  const displayName = resolveName(inp, out, state.running, t);
+  const displayName = resolveName(inp, out, state.running, toolName === "webResearch", t);
 
   const expandedContent = out ? (
     out.error ? (

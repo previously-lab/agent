@@ -371,34 +371,13 @@ describe("persistTurnSummary — ONE commit for the burst's 被动存盘 (v0.42 
     expect(core).toContain("a1b2c3-");
   });
 
-  it("review-1b. an over-fuse attachment is SKIPPED at the summary with a visible reason (the moved fuse verdict) — the turn still lands", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
-      const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
-      const outcome = await persistTurnSummary(
-        payload({
-          own: ownRecord({
-            attachments: [{ name: "big.pdf", dataBase64: big.toString("base64") }],
-          }),
-        }),
-      );
-
-      expect(outcome.kind).toBe("committed");
-      expect(
-        io.flushes[0]!.paths.some((p) => p.includes("attachments/")),
-      ).toBe(false);
-      expect(
-        warn.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0].includes("[Attachments] skipped big.pdf"),
-        ),
-      ).toBe(true);
-      // the user turn itself still landed — only the file was refused
-      expect(io.files.get(CORE_PATH)!).toContain("我想换手机");
-      expect(io.files.get(CORE_PATH)!).not.toContain("[attachments:");
-    } finally {
-      warn.mockRestore();
-    }
+  it("lands the complete large attachment and its reference in the same summary", async () => {
+    io.registry.push(turnRun("summary-own", "a1b2c3", "completed"));
+    const dataBase64 = Buffer.alloc(5 * 1024 * 1024 + 1, 1).toString("base64");
+    const outcome = await persistTurnSummary(payload({ own: ownRecord({ attachments: [{ name: "big.pdf", dataBase64 }] }) }));
+    expect(outcome.kind).toBe("committed");
+    expect(io.flushes[0]!.paths.some(path => path.endsWith("/attachments/a1b2c3-big.pdf"))).toBe(true);
+    expect(io.files.get(CORE_PATH)!).toContain("a1b2c3-big.pdf");
   });
 
   it("does not write a per-slice user-model snapshot and preserves historical files", async () => {

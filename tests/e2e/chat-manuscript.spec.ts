@@ -147,14 +147,13 @@ for (const viewport of [
       const agentBody = await agent.locator(".conversation-turn-content").boundingBox();
       expect(userBody).not.toBeNull();
       expect(agentBody).not.toBeNull();
-      expect(Math.abs(userBody!.x - agentBody!.x)).toBeLessThan(1);
-      expect(Math.abs(userBody!.width - agentBody!.width)).toBeLessThan(1);
+      expect(userBody!.x).toBeGreaterThan(agentBody!.x);
+      expect(userBody!.x + userBody!.width).toBeGreaterThan(agentBody!.x + agentBody!.width);
       expect(agentBody!.x).toBeGreaterThanOrEqual(0);
       expect(agentBody!.x + agentBody!.width).toBeLessThanOrEqual(viewport.width);
       expect(await agent.locator(".conversation-prose").evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
       const byline = await agent.locator(".conversation-byline").boundingBox();
-      if (viewport.mobile) expect(byline!.y + byline!.height).toBeLessThanOrEqual(agentBody!.y);
-      else expect(byline!.x + byline!.width).toBeLessThan(agentBody!.x);
+      expect(byline!.y + byline!.height).toBeLessThanOrEqual(agentBody!.y);
 
       const input = composerInput(page);
       await expect(page.locator("[data-composer-tail] [data-manuscript-input]")).toHaveCount(1);

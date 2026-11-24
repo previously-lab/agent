@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const credentials = vi.hoisted(() => ({ key: vi.fn() }));
 vi.mock("@/lib/deepseek/credentials", () => ({ deepseekApiKey: credentials.key }));
-import { deepseekWebSearch, webSearchInputSchema } from "@/lib/search/deepseek-web";
+import { deepseekWebFetch, deepseekWebSearch, webSearchInputSchema } from "@/lib/search/deepseek-web";
 
 const fetchMock = vi.fn<typeof fetch>();
 const result = { title: "Official docs", url: "https://example.com/docs", snippet: "Evidence", summary: "More evidence", site_name: null, date: null };
@@ -24,35 +24,56 @@ describe("DeepSeek native Search API", () => {
     expect(url).toBe("https://api.deepseek.com/v1/tools/search");
     expect(init).toMatchObject({ method: "POST", redirect: "error", headers: { Authorization: "Bearer test-key", "Content-Type": "application/json" } });
     expect(JSON.parse(init!.body as string)).toEqual({ query, count: 10, need_content: false });
-    expect(init!.signal).toBeInstanceOf(AbortSignal);
+    expect(init!.signal).toBeUndefined();
     expect(credentials.key).toHaveBeenCalledTimes(1);
   });
 
-  it("sends a bounded original-question hint without changing the query", async () => {
-    fetchMock.mockImplementation(async () => response());
-    await deepseekWebSearch(
-      { query: "focused query" },
-      undefined,
-      { originalQuestion: "  What\t\n is   new?  " },
-    );
-    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).toEqual({
-      query: "focused query",
-      count: 10,
-      need_content: false,
-      ori_question: "What is new?",
-    });
-
-    await deepseekWebSearch(
-      { query: "q" },
-      undefined,
-      { originalQuestion: "😀".repeat(130) },
-    );
-    expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string).ori_question).toBe("😀".repeat(128));
+  it.each(["search", "fetch"])("allows a slow %s to finish after the old deadline", async operation => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const page = JSON.stringify({ title: "Reference", content: "Complete content" });
+    fetchMock.mockImplementation((_url, init) => new Promise((resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+      setTimeout(() => resolve(operation === "search" ? response() : new Response(page)), 35_000);
+    }));
+    const pending = operation === "search"
+      ? deepseekWebSearch({ query: "public query" }, controller.signal)
+      : deepseekWebFetch({ url: "https://example.com/a" }, controller.signal);
+    await vi.advanceTimersByTimeAsync(35_000);
+    await expect(pending).resolves.toEqual(operation === "search" ? { results: [result] } : "Complete content");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 
-  it("omits a blank original-question hint", async () => {
-    await deepseekWebSearch({ query: "q" }, undefined, { originalQuestion: " \n\t " });
-    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).not.toHaveProperty("ori_question");
+  it("fetches only the public URL and pages through large paragraphs without cutting an astral character", async () => {
+    const content = "x".repeat(14999) + "😀" + "tail";
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ title: "Page", content })));
+    const input = { url: "https://example.com/a" };
+    const first = await deepseekWebFetch(input);
+    expect(first).toContain("offset 14999");
+    expect(first).toContain("x".repeat(14999));
+    const revision = /revision "([a-f0-9]+)"/.exec(first)?.[1];
+    expect(revision).toHaveLength(64);
+    expect(await deepseekWebFetch({ ...input, offset: 14999, revision })).toBe("😀tail");
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ title: "Page", content: "Edited" })));
+    expect(await deepseekWebFetch({ ...input, offset: 14999, revision })).toMatch(/selection changed/);
+    const [url, request] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.deepseek.com/v1/tools/fetch");
+    expect(JSON.parse(request!.body as string)).toEqual(input);
+    expect(request!.redirect).toBe("error");
+  });
+
+  it("preserves explicit line selections and allows keyword misses to continue", async () => {
+    const content = "one\ntwo\n" + "x".repeat(16_000);
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ title: "Page", content })));
+    const url = "https://example.com/a";
+    expect(await deepseekWebFetch({ url, range: { type: "lines", start: 1, end: 2 } })).toBe("one\ntwo");
+    expect(await deepseekWebFetch({ url, range: { type: "search", keywords: ["absent"] } })).toContain("offset 15000");
+  });
+
+  it("preserves every valid result actually returned by the provider", async () => {
+    const results = Array.from({ length: 51 }, () => result);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ results })));
+    await expect(deepseekWebSearch({ query: "q", count: 50 })).resolves.toEqual({ results });
   });
 
   it("treats an empty result set as a normal success without retries", async () => {
@@ -101,10 +122,14 @@ describe("DeepSeek native Search API", () => {
     expect(fetchMock.mock.calls[1]![1]!.headers).toMatchObject({ Authorization: "Bearer updated-key" });
   });
 
-  it("does not shorten a server cooldown beyond its local retry bound", async () => {
-    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "Retry-After": "60" } }));
-    await expect(deepseekWebSearch({ query: "q" })).rejects.toThrow("HTTP 429");
+  it("honors a long Retry-After", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 429, headers: { "Retry-After": "60" } })).mockResolvedValueOnce(response());
+    const pending = deepseekWebSearch({ query: "q" });
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ results: [result] });
   });
 
   it.each([400, 401, 402, 403, 404, 422])("never retries deterministic HTTP %s or exposes its response body", async (status) => {

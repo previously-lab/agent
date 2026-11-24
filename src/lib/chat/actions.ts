@@ -2,6 +2,7 @@
 
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
+import { workflowRegistryPages } from "./workflow-registry-pages";
 import { WorkflowRunNotFoundError } from "workflow/errors";
 import type { PersistenceReceipt, SummaryRunOutcome, TurnRunResult } from "./turn-types";
 import { mergePersistenceReceipts } from "./persistence-receipt";
@@ -99,16 +100,17 @@ export async function getChatRecovery(runIds: string[], summaryRunIds: string[] 
     }
   }
   // Exact turn/burst attributes recover a handoff whose response was lost, and
-  // join earlier burst members to the last member's summary. A bounded registry
-  // miss proves nothing: retain the pointer until a receipt covers its turn.
+  // join earlier burst members to the last member's summary. Retain the
+  // pointer until an actual receipt covers its turn.
   if (unreturned.size > 0 || records.some(({ record }) => !record.summaryRunId)) {
     try {
-      const page = await (await getWorld()).runs.list({ pagination: { limit: 100 }, resolveData: "none" });
       const bursts = new Set(records.map(({ record }) => record.burstId).filter(Boolean));
       const turns = new Set([...unreturned.values(), ...records.map(({ record }) => record.turnId)].filter(Boolean));
-      for (const row of page.data) {
-        const attrs = (row as { attributes?: Record<string, string> }).attributes;
-        if (attrs?.role === "summary" && (turns.has(attrs.turn) || bursts.has(attrs.burst))) summaryRunIds.push(row.runId);
+      for await (const rows of workflowRegistryPages(await getWorld())) {
+        for (const row of rows) {
+          const attrs = row.attributes;
+          if (attrs?.role === "summary" && (turns.has(attrs.turn) || bursts.has(attrs.burst))) summaryRunIds.push(row.runId);
+        }
       }
     } catch { /* the carried records still remain recoverable */ }
   }

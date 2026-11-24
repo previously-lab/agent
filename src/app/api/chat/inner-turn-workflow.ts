@@ -29,7 +29,6 @@
  *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */
-import { isStepCount } from "@/lib/deepseek/tools";
 import { type ModelMessage } from "@/lib/deepseek/types";
 import { getWritable } from "workflow";
 import { type ModelCallStreamPart } from "@/lib/deepseek/types";
@@ -98,7 +97,6 @@ export async function innerTurnWorkflow(
       messages: input.messages,
       system: input.systemPrompt,
       writable: getWritable<ModelCallStreamPart>(),
-      stopWhen: isStepCount(20),
       sendFinish: false,
       preventClose: true,
     });

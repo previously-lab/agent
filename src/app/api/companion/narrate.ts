@@ -19,7 +19,6 @@
  */
 
 import { streamText } from "@/lib/deepseek/generate";
-import { isStepCount } from "@/lib/deepseek/tools";
 
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
@@ -51,21 +50,12 @@ export interface NarrateArgs {
 }
 
 export interface NarrateOptions {
-  /**
-   * Overall wall-clock bound for the provider stream. A hung LLM provider
-   * (upstream queue timeouts) is cut at this bound and the stream terminates
-   * with the failure marker instead of hanging for many minutes. Injectable
-   * so tests can use a short timeout.
-   */
-  streamTimeoutMs?: number;
+  signal?: AbortSignal;
 }
-
-/** Overall abort bound — hung provider cut off well inside platform walls. */
-const DEFAULT_STREAM_TIMEOUT_MS = 120_000;
 
 /**
  * Terminal marker appended to the text stream when a narration is cut
- * (provider error or overall timeout). Locale-honored. A stream that ends
+ * (provider error or cancellation). Locale-honored. A stream that ends
  * WITHOUT this marker is a complete narration; the marker is the in-band,
  * client-distinguishable failure signal (see route.ts contract).
  */
@@ -73,18 +63,6 @@ export function streamFailureMarker(locale: "zh" | "en"): string {
   return locale === "zh"
     ? "\n\n[ Previously 暂时走神了，稍后再试。 ]"
     : "\n\n[ Previously got distracted — please try again later. ]";
-}
-
-/** Injection cap for the live companion playbook (the companion's own
- *  prompt budget — unrelated to the self/ SOPs, which load in full). */
-const PLAYBOOK_MAX_CHARS = 2000;
-
-function capPlaybook(content: string): string {
-  if (content.length <= PLAYBOOK_MAX_CHARS) return content;
-  return (
-    content.slice(0, PLAYBOOK_MAX_CHARS) +
-    `\n\n[…playbook truncated at ${PLAYBOOK_MAX_CHARS} chars]`
-  );
 }
 
 /** L1 — the only live folded user model (people/user/index.md). Historical
@@ -107,7 +85,7 @@ async function readLiveModel() {
 async function readPlaybookLayer(ctx: CompanionToolContext): Promise<string> {
   try {
     const raw = await readMemoryFile(ctx, COMPANION_PLAYBOOK_PATH);
-    if (raw.trim()) return capPlaybook(raw.trim());
+    if (raw.trim()) return raw.trim();
   } catch {
     // fall through to the default
   }
@@ -196,8 +174,8 @@ export async function narrateSlice(
   ].join(" ");
 
   // Ephemeral read-only narration uses the fixed companion profile.
-  const streamTimeoutMs = opts.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
-  const abortSignal = AbortSignal.timeout(streamTimeoutMs);
+  const client = new AbortController();
+  const abortSignal = opts.signal ? AbortSignal.any([client.signal, opts.signal]) : client.signal;
   const result = streamText({
     role: "companion",
     sessionId: args.sliceId,
@@ -205,42 +183,21 @@ export async function narrateSlice(
     prompt: userPrompt,
     tools: buildCompanionTools(toolCtx),
     thinking: true,
-    stopWhen: isStepCount(6),
     abortSignal,
     onError: ({ error }) => {
       console.error("[Companion] narration stream error:", error);
     },
   });
 
-  // NOT result.toTextStreamResponse(): its text stream silently drops the
-  // SDK's error/abort parts, so a cut narration would look like a clean
-  // close — and the client reads clean-close as "complete narration".
-  // Forward fullStream manually instead: text deltas become the prose, and
-  // an error/abort part (or the overall timeout racing ahead of a hung
-  // provider) appends the terminal marker and closes the stream. Either way
-  // the response terminates in bounded time; the marker is what lets the
-  // client tell "cut" apart from "complete" (route.ts contract).
+  // Preserve the distinction between a complete narration and a provider error.
   const marker = streamFailureMarker(locale);
   const encoder = new TextEncoder();
   const iterator = result.fullStream[Symbol.asyncIterator]();
-  const abortRace = new Promise<never>((_, reject) => {
-    abortSignal.addEventListener(
-      "abort",
-      () =>
-        reject(
-          abortSignal.reason ?? new Error("companion narration timeout"),
-        ),
-      { once: true },
-    );
-  });
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
         for (;;) {
-          const { done, value: part } = await Promise.race([
-            iterator.next(),
-            abortRace,
-          ]);
+          const { done, value: part } = await iterator.next();
           if (done) break;
           if (part.type === "text-delta") {
             controller.enqueue(encoder.encode(part.text));
@@ -269,8 +226,8 @@ export async function narrateSlice(
         }
       }
     },
-    async cancel() {
-      // Client disconnected — stop pulling the source stream.
+    async cancel(reason) {
+      client.abort(reason);
       await iterator.return?.();
     },
   });

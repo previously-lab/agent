@@ -13,6 +13,22 @@ function history(text = envelope()): ModelMessage[] {
 }
 
 describe("compact case read envelopes", () => {
+  it("grants a full read only when host receipts span one complete edition", () => {
+    const revision = "b".repeat(64);
+    function segment(id: string, start: number, end: number, hash = revision): ModelMessage[] {
+      const output = envelope("a page", { toolCallId: id, page: { start, end, total: 40, revision: hash } });
+      return [
+        { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "recallRead", input: { ref: "research/研究案", offset: start } }] },
+        { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName: "recallRead", output: { type: "text", value: output } }] },
+      ];
+    }
+    const first = segment("a", 0, 20);
+    expect(findCaseReadReceipt({ ...target, messages: first })).toBeNull();
+    expect(findCaseReadReceipt({ ...target, messages: [...first, ...segment("b", 21, 40)] })).toBeNull();
+    expect(findCaseReadReceipt({ ...target, messages: [...first, ...segment("b", 20, 40, "c".repeat(64))] })).toBeNull();
+    expect(findCaseReadReceipt({ ...target, messages: [...first, ...segment("b", 20, 40)] })?.coverage).toBe("full-index");
+  });
+
   it("keeps metadata the same small size for a 47k document and contains the prose once", () => {
     const raw = "原始证据".repeat(11750);
     const short = parseCaseReadEnvelope(envelope("短文"))!;

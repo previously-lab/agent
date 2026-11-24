@@ -56,6 +56,15 @@ describe("dialogue orchestrator selection", () => {
       .toBe("independent-first");
   });
 
+  it("skips cancelled checkpoints and finals across Actor restarts while independent work continues", () => {
+    const works = [{ status: "cancelled", runId: "parentA", workId: "work-A", inputId: "input-A" }];
+    const old = { ...offer("A-old", "checkpoint", "input-A", "work-A"), parentRunId: "parentA" };
+    const final = { ...offer("A-final", "final", "input-A", "work-A"), parentRunId: "parentA" };
+    const active = { ...offer("B-next", "checkpoint", "input-B", "work-B"), parentRunId: "parentB" };
+    expect(selectDialogueOffer({ offers: [old, final], works, publications: [] })).toBeUndefined();
+    expect(selectDialogueOffer({ offers: [old, final, active], works, publications: [] })).toBe(active);
+  });
+
   it("skips handled events and continues with another independent result", () => {
     const selected = selectDialogueOffer({
       offers: [offer("A-final", "final"), offer("B-final", "final", "input-B", "work-B")],
@@ -77,4 +86,12 @@ describe("dialogue run time window", () => {
     expect(dialogueRunUsable("running", undefined, now)).toBe(false);
     expect(dialogueRunUsable("running", "invalid", now)).toBe(false);
   });
+});
+
+it("lets a fresh independent final publish ahead of a previous unsuccessful delivery", () => {
+  const state = { offers: [offer("A", "final"), offer("B", "final", "input-B", "work-B")], publications: [],
+    dialogueRuns: [{ runId: "old", sessionId: "session", status: "completed", createdAt: "",
+      events: [{ type: "expression_outcome" as const, status: "failed" as const, candidateIds: ["A"], inputIds: ["input-A"], planId: "A" }] }] };
+  expect(selectDialogueOffer(state)?.offerId).toBe("B");
+  expect(selectDialogueOffer(state, new Set(["B"]))?.offerId).toBe("A");
 });

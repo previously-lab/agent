@@ -1,7 +1,6 @@
 import {
   getOctokit,
   isGitHubRateLimitError,
-  isGitHubReadTimeoutError,
 } from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
 import type { ReadOptions } from "@/lib/cache/data-cache";
@@ -82,7 +81,7 @@ export async function listFiles(
       throw error;
     }
     // Guardrail failures (rate limit / read deadline) keep their type.
-    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
+    if (isGitHubRateLimitError(error)) {
       throw error;
     }
     if (

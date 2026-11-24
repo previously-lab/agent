@@ -1,9 +1,9 @@
+import { textPageEnd } from "@/lib/retrieval/text-page";
 import matter from "gray-matter";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { tool } from "@/lib/deepseek/tools";
-import type { PrepareStepFunction } from "@/lib/deepseek/types";
 import { parseTurns, type ParsedTurn } from "@/lib/episodic/turn-parser";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { conversationRole, RECORD_ATTRIBUTION_RULE } from "@/lib/episodic/record-attribution";
@@ -32,10 +32,6 @@ const MAX_EVIDENCE = 8;
 const MAX_QUOTE_CHARS = 1_200;
 const MAX_QUOTE_CONTEXT_CHARS = 240;
 const KEYWORD_QUOTE_RADIUS = 180;
-const MAX_ANSWER_CHARS = 4_000;
-const MAX_STEPS = 8;
-const DEFAULT_TIMEOUT_MS = 120_000;
-const MAX_TIMEOUT_MS = 240_000;
 
 export type ScenarioRecallStatus = "ok" | "insufficient_evidence" | "cancelled" | "timeout" | "error";
 export type ScenarioRecallRole = "user" | "assistant";
@@ -83,6 +79,7 @@ export interface ScenarioRecallCoverage {
       detail?: string;
     }>;
     omittedMatches: number;
+    nextMatchOffset?: number;
   };
 }
 
@@ -118,7 +115,6 @@ export interface ScenarioRecallInput extends ScenarioRecallRequest {
   model?: ModelConfig;
   timezone?: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
   trackRevision?: boolean;
 }
 
@@ -164,15 +160,15 @@ type ReadState = {
 };
 
 const reportSchema = z.object({
-  answer: z.string().max(6_000),
+  answer: z.string(),
   evidence: z.array(z.object({
-    ref: z.string().max(256),
-    turnId: z.string().max(256).optional(),
+    ref: z.string(),
+    turnId: z.string().optional(),
     role: z.enum(["user", "assistant"]),
-    quote: z.string().max(2_000),
-    note: z.string().max(400).optional(),
-  }).strict()).max(12).catch([]),
-  uncertainty: z.array(z.string().max(500)).max(8).catch([]),
+    quote: z.string(),
+    note: z.string().optional(),
+  }).strict()).catch([]),
+  uncertainty: z.array(z.string()).catch([]),
 }).strict();
 
 type RecallReport = z.infer<typeof reportSchema>;
@@ -264,11 +260,11 @@ function throwIfCancelled(signal?: AbortSignal): void {
 }
 
 function validateInput(input: ScenarioRecallInput): string | null {
-  if (typeof input.question !== "string" || !input.question.trim() || input.question.trim().length > 4_000) {
-    return "question must contain 1..4000 characters";
+  if (typeof input.question !== "string" || !input.question.trim()) {
+    return "question must contain text";
   }
-  if (input.refs !== undefined && (!Array.isArray(input.refs) || input.refs.length > 4)) {
-    return "refs must be an array of at most four original record refs";
+  if (input.refs !== undefined && !Array.isArray(input.refs)) {
+    return "refs must be an array of original record refs";
   }
   for (const ref of input.refs ?? []) {
     if (typeof ref !== "string" || !RECORD_REF_RE.test(ref)) {
@@ -276,14 +272,14 @@ function validateInput(input: ScenarioRecallInput): string | null {
     }
   }
   if (!scenarioRecallRequestSchema.shape.targets.safeParse(input.targets).success) {
-    return "targets must be at most eight original record pointers with exact ref, turnId and role";
+    return "targets must be original record pointers with exact ref, turnId and role";
   }
-  if (input.searchTerms !== undefined &&
+  if ((input.searchTerms !== undefined || input.matchOffset !== undefined) &&
       !scenarioRecallRequestSchema.safeParse({
         question: input.question, refs: input.refs, targets: input.targets,
-        searchTerms: input.searchTerms, after: input.after, before: input.before, cursor: input.cursor, searchOtherRecords: input.searchOtherRecords,
+        searchTerms: input.searchTerms, matchOffset: input.matchOffset, after: input.after, before: input.before, cursor: input.cursor, searchOtherRecords: input.searchOtherRecords,
       }).success) {
-    return "searchTerms requires 1–5 nonempty terms of at most 80 characters, one to four refs, and no targets, cursor, or wider search";
+    return "Keyword search requires nonempty terms and known refs. Use matchOffset only with searchTerms. Targets, cursor and wider search have their own request.";
   }
   for (const [key, value] of [["after", input.after], ["before", input.before]] as const) {
     if (value !== undefined && (typeof value !== "string" || !DATE_RE.test(value))) {
@@ -507,7 +503,11 @@ function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): Render
     const available = turn.semanticContent.length - offset;
     const budget = Math.min(MAX_TURN_CONTENT_CHARS, remaining);
     const clipped = available > budget;
-    const endOffset = clipped ? offset + Math.max(0, budget - 1) : turn.semanticContent.length;
+    if (clipped && budget <= 2 && processed > 0) {
+      next = { startTurn: turn.index, charOffset: offset };
+      break;
+    }
+    const endOffset = clipped ? textPageEnd(turn.semanticContent, offset, budget - 1) : turn.semanticContent.length;
     const fragment = turn.semanticContent.slice(offset, endOffset);
     const content = clipped ? `${fragment}…` : fragment;
     remaining -= content.length;
@@ -554,11 +554,11 @@ function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): Render
 }
 
 /** Overlap only the initial storage reads explicitly requested by the caller.
- * Yield them in input order so retries, evidence limits and partial timeout results
+ * Yield them in input order so retries, evidence pages and partial upstream results
  * retain the same behavior as a sequential read. Discovery never uses this path.
  */
 function* requestedRecordReads<T extends string | ScenarioRecallTarget>(
-  input: ScenarioRecallInput, items: T[], state: ReadState, signal: AbortSignal,
+  input: ScenarioRecallInput, items: T[], state: ReadState, signal: AbortSignal | undefined,
 ) {
   for (let start = 0; start < items.length; start += MAX_PARALLEL_REQUESTED_READS) {
     throwIfCancelled(signal);
@@ -592,7 +592,7 @@ async function readExactTarget(
   input: ScenarioRecallInput,
   target: ScenarioRecallTarget,
   state: ReadState,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
   firstRead?: Promise<string>,
 ): Promise<ScenarioRecallEvidence | undefined> {
   const { ref, turnId, role, charOffset = 0 } = target;
@@ -651,7 +651,7 @@ async function searchKnownUserMessages(
   refs: string[],
   terms: string[],
   state: ReadState,
-  signal: AbortSignal,
+  signal: AbortSignal | undefined,
 ): Promise<ScenarioRecallResult> {
   // Escape regex syntax while keeping Unicode-aware case folding and source offsets.
   const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "iu");
@@ -659,6 +659,8 @@ async function searchKnownUserMessages(
   const evidence: ScenarioRecallEvidence[] = [];
   const uncertainty = ["This lookup reports literal keyword matches in original user messages of the supplied records only. A miss does not rule out related wording or conversations elsewhere."];
   let omittedMatches = 0;
+  let matchCount = 0;
+  const offset = input.matchOffset ?? 0;
   for (const { item: ref, firstRead } of requestedRecordReads(input, refs, state, signal)) {
     throwIfCancelled(signal);
     if (!inWindow(ref, input.after, input.before)) {
@@ -679,6 +681,7 @@ async function searchKnownUserMessages(
       const match = pattern.exec(turn.content);
       if (!match) continue;
       matchedTurns += 1;
+      if (matchCount++ < offset) continue;
       if (evidence.length >= MAX_EVIDENCE) {
         omittedMatches += 1;
         continue;
@@ -697,7 +700,7 @@ async function searchKnownUserMessages(
     }
     records.push({ ref, status: matchedTurns ? "matched" : "no_match", matchedTurns });
   }
-  if (omittedMatches) uncertainty.push(`${omittedMatches} matching user message(s) exceeded the excerpt cap.`);
+  if (omittedMatches) uncertainty.push(`${omittedMatches} further matching message(s) are available. Continue with the same refs and terms and matchOffset=${offset + evidence.length}.`);
   for (const note of state.notes) uncertainty.push(note);
   for (const record of records) if (record.detail) uncertainty.push(`${record.ref}: ${record.detail}`);
   const failed = state.errors.length > 0 && records.every(({ status }) => status === "unavailable");
@@ -706,7 +709,7 @@ async function searchKnownUserMessages(
     verification: "quote_and_source_only",
     answer: "",
     evidence,
-    coverage: { ...finishCoverage(state), keywordSearch: { terms, records, omittedMatches } },
+    coverage: { ...finishCoverage(state), keywordSearch: { terms, records, omittedMatches, ...(omittedMatches ? { nextMatchOffset: offset + evidence.length } : {}) } },
     truncated: state.truncated || omittedMatches > 0,
     uncertainty,
     ...(failed ? { error: "No supplied original record could be searched" } : {}),
@@ -723,19 +726,13 @@ function safeCharacterBoundary(text: string, offset: number): number {
 function verifyEvidence(report: RecallReport, state: ReadState): {
   evidence: ScenarioRecallEvidence[];
   rejected: number;
-  overflow: number;
 } {
   const evidence: ScenarioRecallEvidence[] = [];
   const seen = new Set<string>();
   let rejected = 0;
-  let overflow = 0;
   for (const candidate of report.evidence) {
-    if (evidence.length >= MAX_EVIDENCE) {
-      overflow += 1;
-      continue;
-    }
     const quote = candidate.quote.trim();
-    if (!quote || quote.length > MAX_QUOTE_CHARS) {
+    if (!quote) {
       rejected += 1;
       continue;
     }
@@ -772,10 +769,10 @@ function verifyEvidence(report: RecallReport, state: ReadState): {
         before: fragment.slice(Math.max(0, quoteStart - MAX_QUOTE_CONTEXT_CHARS), quoteStart),
         after: fragment.slice(quoteEnd, quoteEnd + MAX_QUOTE_CONTEXT_CHARS),
       },
-      note: clip(candidate.note?.trim() || "Supports the focused recollection.", 300),
+      note: candidate.note?.trim() || "Supports the focused recollection.",
     });
   }
-  return { evidence, rejected, overflow };
+  return { evidence, rejected };
 }
 
 function finishCoverage(state: ReadState): ScenarioRecallCoverage {
@@ -784,7 +781,7 @@ function finishCoverage(state: ReadState): ScenarioRecallCoverage {
     searched: [...state.searched],
     read: [...state.readViews],
     omitted: Math.max(0, state.discovered.size - state.readViews.size),
-    notes: [...new Set(state.notes)].slice(0, 8).map((note) => clip(note, 300)),
+    notes: [...new Set(state.notes)],
     ...(state.nextCursor ? { nextCursor: state.nextCursor } : {}),
     ...(state.nextCursor && state.nextCursorWindow ? { nextCursorWindow: state.nextCursorWindow } : {}),
     ...(state.targets.length > 0 ? { targets: [...state.targets] } : {}),
@@ -799,11 +796,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
   const knownRefs = [...new Set(input.refs ?? [])];
   const targets = [...new Map((input.targets ?? []).map((target) =>
     [JSON.stringify([target.ref, target.turnId, target.role, target.charOffset ?? 0]), target])).values()];
-  const timeoutMs = Number.isFinite(input.timeoutMs)
-    ? Math.min(MAX_TIMEOUT_MS, Math.max(1_000, Math.floor(input.timeoutMs!)))
-    : DEFAULT_TIMEOUT_MS;
-  const deadlineSignal = AbortSignal.timeout(timeoutMs);
-  const signal = input.signal ? AbortSignal.any([input.signal, deadlineSignal]) : deadlineSignal;
+  const signal = input.signal;
   const state: ReadState = {
     timezone: input.timezone,
     trackRevision: input.trackRevision === true || !!input.priorFullRecord || targets.length > 0 || input.searchTerms !== undefined,
@@ -852,7 +845,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       inputSchema: z.object({
         after: z.string().regex(DATE_RE).optional(),
         before: z.string().regex(DATE_RE).optional(),
-        offset: z.number().int().min(0).max(10_000).optional(),
+        offset: z.number().int().nonnegative().optional(),
       }).strict(),
       execute: async ({ after, before, offset = 0 }: { after?: string; before?: string; offset?: number }) => {
         throwIfCancelled(signal);
@@ -994,16 +987,6 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       inputSchema: reportSchema,
     }),
   };
-  const prepareStep: PrepareStepFunction = ({ stepNumber }) => {
-    throwIfCancelled(signal);
-    return stepNumber >= MAX_STEPS - 1
-      ? {
-          system: `${RECALL_SYSTEM}\n\nThis is the final step. Call scenarioRecallReport now with the verified evidence already read and explicit gaps. Do not search or read again, and do not substitute prose for the report.`,
-          activeTools: ["scenarioRecallReport"],
-          toolChoice: "auto",
-        }
-      : undefined;
-  };
   const exactEvidence: ScenarioRecallEvidence[] = [];
   const keepExact = (result: ScenarioRecallResult): ScenarioRecallResult => exactEvidence.length === 0
     ? result
@@ -1065,16 +1048,10 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       toolChoice: "auto",
       reportToolName: "scenarioRecallReport",
       reportSchema,
-      maxSteps: MAX_STEPS,
-      prepareStep,
-      timeoutMs,
       abortSignal: signal,
     });
     if (isCancelled(input.signal)) {
       return outcome("cancelled", "Recollection was cancelled; partial exploration is not evidence of absence", finishCoverage(state));
-    }
-    if (deadlineSignal.aborted) {
-      return keepExact(outcome("timeout", "Recollection timed out; partial exploration is not evidence of absence", finishCoverage(state)));
     }
     if (!result.ok) {
       const status = result.timedOut ? "timeout" : "error";
@@ -1092,7 +1069,7 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
         evidence: exactEvidence,
         coverage: finishCoverage(state),
         truncated: true,
-        uncertainty: [...new Set([diagnostic, ...state.errors.map((error) => `Read failure: ${error}`)])].slice(0, 8),
+        uncertainty: [...new Set([diagnostic, ...state.errors.map((error) => `Read failure: ${error}`)])],
         ...(state.errors.length === 0 && state.readViews.size === 0 ? { error: diagnostic } : {}),
       };
     }
@@ -1103,16 +1080,13 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
     const verified = verifyEvidence(result.report, state);
     const evidence = [...exactEvidence, ...verified.evidence.filter((item) => !exactEvidence.some((exact) =>
       exact.ref === item.ref && exact.turnIndex === item.turnIndex && exact.quote === item.quote))];
-    const overflow = verified.overflow + Math.max(0, evidence.length - MAX_EVIDENCE);
-    const citationGap = verified.rejected > 0 || overflow > 0;
+    const citationGap = verified.rejected > 0;
     const uncertainty = result.report.uncertainty
-      .map((item) => clip(item.trim(), 300))
-      .filter(Boolean)
-      .slice(0, 2);
+      .map((item) => item.trim())
+      .filter(Boolean);
     if (verified.rejected > 0) uncertainty.push(`${verified.rejected} unverified evidence item(s) were discarded`);
-    if (overflow > 0) uncertainty.push(`${overflow} evidence item(s) exceeded the output cap`);
-    for (const note of state.notes.slice(0, 6)) uncertainty.push(note);
-    for (const error of state.errors.slice(0, 8)) uncertainty.push(`Read failure: ${error}`);
+    for (const note of state.notes) uncertainty.push(note);
+    for (const error of state.errors) uncertainty.push(`Read failure: ${error}`);
     if (state.nextCursor) uncertainty.push(`Older records remain outside this scan. Optional further coverage of the same question and window: cursor=${state.nextCursor}`);
     if (state.truncated) uncertainty.push("Coverage was bounded or truncated; absence is not established");
     if (state.readViews.size === 0) uncertainty.push("No original turn was returned by a successful readRecord view");
@@ -1120,11 +1094,6 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
     if (citationGap) {
       answer = "";
       uncertainty.push("The derived answer was suppressed because not all citations passed visible-original verification");
-    }
-    if (answer.length > MAX_ANSWER_CHARS) {
-      answer = clip(answer, MAX_ANSWER_CHARS);
-      state.truncated = true;
-      uncertainty.push("The answer exceeded the output bound and was shortened");
     }
     const failedWithoutEvidence = evidence.length === 0 && state.readViews.size === 0 && state.errors.length > 0;
     const status: ScenarioRecallStatus = failedWithoutEvidence
@@ -1137,22 +1106,22 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
       uncertainty.push("No fully verified grounded answer was produced; treat this narrative as unverified");
     }
     const coverage = finishCoverage(state);
-    const truncated = state.truncated || Boolean(coverage.nextCursor) || coverage.omitted > 0 || overflow > 0;
+    const truncated = state.truncated || Boolean(coverage.nextCursor) || coverage.omitted > 0;
     return {
       status,
       verification: "quote_and_source_only",
       answer,
-      evidence: evidence.slice(0, MAX_EVIDENCE),
+      evidence,
       coverage,
       truncated,
-      uncertainty: [...new Set(uncertainty)].slice(0, 8),
+      uncertainty: [...new Set(uncertainty)],
       ...(status === "error" ? { error: "Original record reads failed; no reliable recollection was produced" } : {}),
     };
   } catch (error) {
     if (isCancelled(input.signal)) {
       return outcome("cancelled", "Recollection was cancelled; partial exploration is not evidence of absence", finishCoverage(state));
     }
-    if (deadlineSignal.aborted || (error instanceof Error && (error.name === "TimeoutError" || error.name === "StepTimeoutError"))) {
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "StepTimeoutError")) {
       return keepExact(outcome("timeout", "Recollection timed out before completion; this is not evidence of absence", finishCoverage(state)));
     }
     return keepExact(outcome("error", `Recollection failed: ${clip(error instanceof Error ? error.message : String(error), 300)}`, finishCoverage(state)));

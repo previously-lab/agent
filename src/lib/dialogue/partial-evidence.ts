@@ -122,11 +122,10 @@ function saidBefore(value: string, history: readonly string[]): boolean {
 
 /** A model supplies the question/answer association. Only literal source prose may leave this gate. */
 export function candidatePartialAnswer(modelText: string, passages: readonly Passage[], alreadySaid: readonly string[]): string | null {
-  if (modelText.length > 16_000) return null;
   let rows: unknown;
   try { rows = JSON.parse(modelText.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")); }
   catch { return null; }
-  if (!Array.isArray(rows) || rows.length < 2 || rows.length > 12) return null;
+  if (!Array.isArray(rows) || rows.length < 2) return null;
   const questions = new Set<string>();
   const handoff = new Set<string>();
   const history = alreadySaid.map(normalized);
@@ -150,5 +149,5 @@ export function candidatePartialAnswer(modelText: string, passages: readonly Pas
     handoff.add(paragraphs.find(paragraph => paragraph.includes(verbatimEvidence))?.trim() ?? source);
   }
   const text = [...handoff].join("\n\n");
-  return unresolved && text.length > 0 && text.length <= 2_400 ? text : null;
+  return unresolved && text.length > 0 ? text : null;
 }

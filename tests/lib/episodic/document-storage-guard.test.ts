@@ -54,17 +54,16 @@ describe("real local document publication", () => {
     await expect(io.fsWriteFile(target, "reuse", batch)).rejects.toThrow("committed");
     expect(batch.documentBases?.size).toBe(0);
   });
-  it("checks pending final content and rejects a direct Map bypass before any file lands", async () => {
+  it("preserves authored content across the former character, byte and line limits", async () => {
     const io = await import("@/lib/episodic/io-helpers");
     const batch = io.createBatch();
-    await io.fsWriteFile(target, "x".repeat(11_999), batch);
-    await io.fsWriteFile(target, "x".repeat(12_000), batch);
-    await expect(io.fsWriteFile(target, "x".repeat(12_001), batch)).rejects.toMatchObject({ code: "document_full" });
-    expect(batch.entries.get(target)?.length).toBe(12_000);
-    batch.entries.set("memory/things/second/index.md", "😀".repeat(12_001));
-    await expect(io.flushBatch(batch, "fixture")).rejects.toMatchObject({ code: "document_full" });
-    expect(existsSync(join(root, target))).toBe(false);
-    expect(batch.entries.size).toBe(2);
+    const first = "p\n".repeat(20_000), second = "😀".repeat(20_000);
+    await io.fsWriteFile(target, first, batch);
+    const other = "memory/things/second/index.md";
+    await io.fsWriteFile(other, second, batch);
+    await io.flushBatch(batch, "long authored files");
+    expect(disk(target)).toBe(first);
+    expect(disk(other)).toBe(second);
   });
   it("records the read basis before staging and rejects concurrent final publication", async () => {
     seed(target, "base");
@@ -83,12 +82,11 @@ describe("real local document publication", () => {
     await expect(io.flushBatch(c, "C")).rejects.toMatchObject({ code: "rewrite_conflict" });
     expect(disk(target)).toBe("external newer bytes");
   });
-  it("allows exact oversize no-op but requires a complete verified archive for shrinking", async () => {
+  it("persists byte-identical history for explicit reorganization of a long document", async () => {
     const old = "源😀\r\n".repeat(3500); seed(target, old);
     const io = await import("@/lib/episodic/io-helpers");
     const local = await import("@/lib/tools/local-fs");
     await expect(local.writeFileLocal(target, old)).resolves.toMatchObject({ created: false });
-    await expect(local.writeFileLocal(target, "short")).rejects.toMatchObject({ code: "document_full" });
     const plan = planHistoryArchive({ ...archiveInput, sourceRaw: old });
     const batch = io.createBatch();
     for (const entry of plan.entries) await io.fsWriteFile(entry.path, entry.content, batch);
@@ -110,12 +108,12 @@ describe("real local document publication", () => {
     await expect(local.writeBinaryFileLocal(entry.path, Buffer.from("replacement"))).rejects.toThrow("guarded text");
     expect(disk(entry.path)).toBe(entry.content);
   });
-  it("leaves actual records unrestricted by authored budgets but does not exempt a records-named case", async () => {
+  it("stores long records and long authored documents", async () => {
     const io = await import("@/lib/episodic/io-helpers");
     const batch = io.createBatch();
     const record = "memory/records/2026/11/03/1200/core.md";
     await io.fsWriteFile(record, "original dialogue\n".repeat(1000), batch);
-    await expect(io.fsWriteFile("memory/things/records/index.md", "x".repeat(12_001), batch)).rejects.toMatchObject({ code: "document_full" });
+    await io.fsWriteFile("memory/things/records/index.md", "x".repeat(12_001), batch);
     await io.flushBatch(batch, "records"); expect(disk(record)).toContain("original dialogue");
   });
   it("keeps archive payload bytes intact through Git filters with autocrlf enabled", async () => {
@@ -180,14 +178,14 @@ describe("writer recovery and shared batches", () => {
     expect(batch.entries.get("memory/self/agenda.md")).toBe("new agenda");
     await io.flushBatch(batch, "two writers"); expect(disk("memory/self/agenda.md")).toBe("new agenda");
   });
-  it("counts the final dated tail and its newline in the 600-code-point limit", async () => {
+  it("preserves a long dated addition", async () => {
     seed(target, rawIndex);
     const io = await import("@/lib/episodic/io-helpers");
     const { applyCaseWriteIntent } = await import("@/lib/episodic/flash/librarian");
     const batch = io.createBatch();
     await applyCaseWriteIntent({ action: "appendTail", category: "things", caseName: "synthetic", line: "x".repeat(588) }, "2026-11-03", batch);
-    await expect(applyCaseWriteIntent({ action: "appendTail", category: "things", caseName: "synthetic", line: "y".repeat(589) }, "2026-11-03", batch)).rejects.toMatchObject({ code: "document_full" });
-    expect(batch.entries.get(target)).not.toContain("yyy");
+    await applyCaseWriteIntent({ action: "appendTail", category: "things", caseName: "synthetic", line: "y".repeat(3_000) }, "2026-11-03", batch);
+    expect(batch.entries.get(target)).toContain("y".repeat(3_000));
   });
   it("recovers the actual oversized user-model path through the dedicated evidence-backed tool helper", async () => {
     const userPath = "memory/people/user/index.md";
@@ -201,7 +199,6 @@ describe("writer recovery and shared batches", () => {
     const writer = await import("@/lib/episodic/flash/librarian");
     const { reorganizeUserModel } = await import("@/lib/evolution/user-model-maintenance");
     const store = await import("@/lib/evolution/store");
-    await expect(store.writeUserModelCard(card + "new fact")).rejects.toMatchObject({ code: "document_full" });
     const scope = writer.createCaseReadScope(), batch = io.createBatch();
     await writer.readCaseIndexForScope({ category: "people", caseName: "user", scope, batch, fresh: true });
     const input = { card, direction, pieces: [{ title: "Prior evidence", body: "Qualified evidence with records/2026-11-03-1200 reference." }], evidence: ["records/2026-11-03-1200"], date: "2026-11-03" };
@@ -265,10 +262,10 @@ describe("writer recovery and shared batches", () => {
     const writer = await import("@/lib/episodic/flash/librarian");
     const batch = io.createBatch();
     const added = await writer.applyCaseWriteIntent({ action: "addPiece", category: "things", caseName: "synthetic", title: "Focused answer", body: "A separate conclusion." }, "2026-11-03", batch);
-    expect(added.warnings?.join()).toContain("catalog");
+    expect(added.created).toBe(true);
     const repeat = await writer.applyCaseWriteIntent({ action: "addPiece", category: "things", caseName: "synthetic", title: "Another title", body: "A separate conclusion." }, "2026-11-04", batch);
     expect(repeat).toMatchObject({ path: added.path, noop: true });
-    await io.flushBatch(batch, "continuation"); expect(disk(target)).toBe(old);
+    await io.flushBatch(batch, "continuation"); expect(disk(target)).toContain("Focused answer");
     const scope = writer.createCaseReadScope();
     const read = await writer.readCaseIndexForScope({ category: "things", caseName: "synthetic", scope });
     expect(read.pieceInventory).toEqual([added.path]);

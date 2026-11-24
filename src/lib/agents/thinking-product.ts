@@ -6,7 +6,7 @@ import { projectNativeReplySemantics } from "@/lib/markdown/native-reply-semanti
 import { dialogueNeedsUserSchema } from "@/lib/dialogue/transport";
 import { collectThinkingReads, type ThinkingRead } from "./thinking-read-receipt";
 
-const boundedId = z.string().min(1).max(512);
+const boundedId = z.string().min(1);
 const findingKind = z.enum(["conversation", "project_fact", "historical_fact", "user_report",
   "observation", "external_result", "interpretation", "recommendation", "status", "unknown", "question"]);
 const decisionKind = z.enum(["proposed", "confirmed", "rejected", "unresolved"]);
@@ -14,26 +14,26 @@ const decisionKind = z.enum(["proposed", "confirmed", "rejected", "unresolved"])
 /** Optional terminal tool arguments. All identities, receipts and gates come from the host. */
 export const thinkingReportSchema = z.object({
   findings: z.array(z.object({
-    text: z.string().min(1).max(8000),
+    text: z.string().min(1),
     kind: findingKind,
-    evidenceIds: z.array(boundedId).max(24).optional(),
-    requiredReadRefs: z.array(boundedId).max(16).optional(),
+    evidenceIds: z.array(boundedId).optional(),
+    requiredReadRefs: z.array(boundedId).optional(),
     scopeId: boundedId.optional(),
-    uncertainty: z.string().max(600).optional(),
+    uncertainty: z.string().optional(),
     decision: decisionKind.optional(),
-    adoptionEvidenceIds: z.array(boundedId).max(8).optional(),
-  }).strict()).max(12).optional(),
-  openQuestions: z.array(z.string().min(1).max(400)).max(6).optional(),
-  nextAction: z.string().max(600).optional(),
+    adoptionEvidenceIds: z.array(boundedId).optional(),
+  }).strict()).optional(),
+  openQuestions: z.array(z.string().min(1)).optional(),
+  nextAction: z.string().optional(),
   memoryDelta: z.object({
-    readerQuestion: z.string().min(1).max(400),
-    newInformation: z.string().min(1).max(600),
-    findingIndices: z.array(z.number().int().nonnegative().max(11)).min(1).max(8),
-    targetRefs: z.array(boundedId).max(4),
+    readerQuestion: z.string().min(1),
+    newInformation: z.string().min(1),
+    findingIndices: z.array(z.number().int().nonnegative()).min(1),
+    targetRefs: z.array(boundedId),
   }).strict().optional(),
   /** Advisory relation to other work; never changes this result's ownership. */
   relation: z.enum(["new", "related", "continuation", "unclear"]).optional(),
-  dependsOnInputIds: z.array(boundedId).max(8).optional(),
+  dependsOnInputIds: z.array(boundedId).optional(),
   /** Genuine user-input blocker (missing file/info, a decision, permission). Optional. */
   needsUser: dialogueNeedsUserSchema.optional(),
 }).strict();
@@ -123,7 +123,7 @@ function satisfies(read: ThinkingRead, dependency: ThinkingDependency): boolean 
 }
 
 function safeText(text: string): string {
-  return projectNativeReplySemantics(text, "assistant").trim().slice(0, 8000);
+  return projectNativeReplySemantics(text, "assistant").trim();
 }
 
 /** Build from this attempt's real tool messages, never from client-replayed history. */

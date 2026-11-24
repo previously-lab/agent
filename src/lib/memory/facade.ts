@@ -1599,8 +1599,6 @@ export function applySliceRange(sliceId: string, record: string, range?: RecallR
   return `ERROR: Unknown range type "${range.type}" in ${sliceId}.`;
 }
 
-const SEMANTIC_LINE_RANGE_MAX_LINES = 400;
-const SEMANTIC_LINE_RANGE_MAX_CHARS = 16_000;
 
 function applySemanticDocumentRange(ref: string, raw: string, range: RecallReadRange): string {
   if (range.type !== "lines") {
@@ -1611,17 +1609,9 @@ function applySemanticDocumentRange(ref: string, raw: string, range: RecallReadR
   if (!Number.isInteger(start) || !Number.isInteger(requestedEnd) || start < 1 || requestedEnd < 1 || start > requestedEnd) {
     return `ERROR: Invalid line range ${start}-${requestedEnd} in ${ref}.`;
   }
-  const end = Math.min(requestedEnd, start + SEMANTIC_LINE_RANGE_MAX_LINES - 1);
-  const { content, clamped } = textLines(raw, start, end);
-  const lineCapped = end < requestedEnd;
-  const charCapped = content.length > SEMANTIC_LINE_RANGE_MAX_CHARS;
-  const bounded = charCapped ? `${content.slice(0, SEMANTIC_LINE_RANGE_MAX_CHARS - 1)}…` : content;
-  const notes = [
-    clamped ? "clamped" : null,
-    lineCapped || charCapped ? `bounded to ${SEMANTIC_LINE_RANGE_MAX_LINES} lines/${SEMANTIC_LINE_RANGE_MAX_CHARS} chars` : null,
-  ].filter((note): note is string => note !== null);
-  const header = `Lines ${start}-${requestedEnd} of ${ref}${notes.length ? ` (${notes.join("; ")})` : ""}:\n\n`;
-  return bounded === "" ? `${header}(empty range)` : header + bounded;
+  const { content, clamped } = textLines(raw, start, requestedEnd);
+  const header = `Lines ${start}-${requestedEnd} of ${ref}${clamped ? " (clamped)" : ""}:\n\n`;
+  return content === "" ? `${header}(empty range)` : header + content;
 }
 
 /** Split a slice core into turn segments (the episodic turn-parser split). */
@@ -1852,15 +1842,15 @@ export async function recallRead(
     const recordLeads = [...new Set(refs.flatMap((ref) => {
       const record = canonicalConversationRecordRef(ref);
       return record ? [record] : [];
-    }))].slice(0, 8);
+    }))];
     const relatedCases = [...new Set(refs.flatMap((ref) => {
       const candidate = parseCaseRef(ref);
       return candidate && candidate.kind !== "legacy"
         ? [`${candidate.category}/${candidate.caseName}`] : [];
-    }))].filter((ref) => ref !== caseRef).slice(0, 8);
+    }))].filter((ref) => ref !== caseRef);
     result = {
       ...result,
-      ...(exact.length ? { cardTargets: exact.slice(0, 8) } : {}),
+      ...(exact.length ? { cardTargets: exact } : {}),
       ...(recordLeads.length ? { recordLeads } : {}),
       ...(relatedCases.length ? { relatedCases } : {}),
     };

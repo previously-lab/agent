@@ -10,10 +10,11 @@ describe("image identities and stable ordinals", () => {
   it.each([0, -1, 1.5, 1_000_001, "2", null])("rejects invalid display ordinal %s", (ordinal) => {
     expect(() => parseStagedAttachments([{ assetId: id, ordinal }])).toThrow();
   });
-  it("rejects duplicate IDs, duplicate ordinals, too many and path-shaped IDs", () => {
+  it("rejects duplicate IDs, duplicate ordinals and path-shaped IDs", () => {
     expect(() => parseStagedAttachments([{ assetId: id, ordinal: 1 }, { assetId: id, ordinal: 2 }])).toThrow();
     expect(() => parseStagedAttachments([{ assetId: id, ordinal: 1 }, { assetId: `img_${"b".repeat(32)}`, ordinal: 1 }])).toThrow();
-    expect(() => parseStagedAttachments(Array.from({ length: 5 }, (_, i) => ({ assetId: `img_${String(i).repeat(32)}`, ordinal: i + 1 })))).toThrow();
+    const files = Array.from({ length: 5 }, (_, i) => ({ assetId: `img_${String(i).repeat(32)}`, ordinal: i + 1 }));
+    expect(parseStagedAttachments(files)).toEqual(files);
     expect(() => parseStagedAttachments([{ assetId: "../memory/core.md", ordinal: 1 }])).toThrow();
   });
   it.each(["records/2026/02/30/0800/photo.png", "records/2026/11/02/2500/photo.png", "records/2026/11/02/0800/../core.md", "records/2026/11/02/0800/C:secret.png"])("rejects invalid record ref %s", (ref) => {

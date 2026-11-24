@@ -1,6 +1,7 @@
 "use client";
 
 import { useDurableChat } from "@/hooks/use-durable-chat";
+import { readRecoverySnapshot, removeRecoverySnapshot, writeRecoverySnapshot } from "@/lib/chat/recovery-snapshot";
 import { messagesWithNativeReplay, rememberNativeReplay } from "@/lib/chat/native-replay";
 import { nativeMessageTurnIdentity, visibleAssistantText } from "@/lib/chat/assistant-text";
 import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
@@ -150,7 +151,7 @@ interface ChatPageProps {
   getScreenContext?: () => ScreenContext | undefined;
 }
 
-/** Only history failure blocks entry. Workflow recovery is optional and bounded. */
+/** Only an actual history failure blocks entry. Workflow recovery is optional. */
 interface MountVerdict extends ArrivalDecision {
   arrival: ArrivalState;
   recovery: ChatRecovery | null;
@@ -175,7 +176,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
   const arrivalTier = usePanelTier();
   const t = useTranslations("chat");
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
-  const [arrivalFailure, setArrivalFailure] = useState<"failed" | "timeout" | null>(null);
+  const [arrivalFailure, setArrivalFailure] = useState(false);
   const [arrivalAttempt, setArrivalAttempt] = useState(0);
   const onTurnSettledRef = useRef(props.onTurnSettled);
   onTurnSettledRef.current = props.onTurnSettled;
@@ -185,7 +186,7 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
     resolveArrival(persona).then((result) => {
       if (cancelled) return;
       if (result.kind !== "ok") {
-        setArrivalFailure(result.kind);
+        setArrivalFailure(true);
         return;
       }
       const next = result.verdict;
@@ -214,12 +215,12 @@ function ChatPageSession({ persona, ...props }: ChatPageProps & { persona: strin
   if (arrivalFailure && legacyGate) {
     return (
       <><ComposerHost composer={
-        <div data-chat-arrival-error data-arrival-failure={arrivalFailure} className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
+        <div data-chat-arrival-error data-arrival-failure="failed" className="conversation-composer composer-bar flex min-w-0 items-center gap-3 px-3">
           <p role="alert" className="min-w-0 flex-1 text-sm text-muted-foreground">
-            {t(arrivalFailure === "timeout" ? "arrivalTimeout" : "arrivalError")}
+            {t("arrivalError")}
           </p>
           <button type="button" className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm"
-            onClick={() => { setArrivalFailure(null); setArrivalAttempt((n) => n + 1); }}>
+            onClick={() => { setArrivalFailure(false); setArrivalAttempt((n) => n + 1); }}>
             {t("arrivalRetry")}
           </button>
         </div>
@@ -267,7 +268,7 @@ async function resolveArrival(persona: string): Promise<ArrivalGateResult<MountV
   const persisted = new Set(arrival.mode === "resume" ? arrival.turns.map((turn) => turn.turnId).filter((id): id is string => Boolean(id)) : []);
   const persistedUsers = new Set(arrival.mode === "resume" ? arrival.turns.filter((turn) => turn.role === "user").map((turn) => turn.clientMessageId).filter((id): id is string => Boolean(id)) : []);
   if (resumeRunId) {
-    const decision = decideArrival(true, storedRunId === resumeRunId ? readStoredMessages() : []);
+    const decision = decideArrival(true, storedRunId === resumeRunId ? await readStoredMessages() : []);
     const saved = mergeSavedTurns(decision.initialMessages, arrival.mode === "resume" ? arrival.turns : []);
     return { kind: "ok", verdict: { ...verdict, ...decision,
       initialMessages: mergeRecoveredMessages(saved, recovery.records.map(({ record }) => record), persisted, persistedUsers) } };
@@ -294,8 +295,6 @@ const CHAT_ID_KEY = "previously:chatId";
 // the whole client history (that is the context-bloat + storage-accumulation
 // source). The UI never trims; only the wire payload does.
 const SEND_MESSAGE_WINDOW = 10; // ~5 turns of working memory
-/** Cap the persisted conversation so a long session can't overflow localStorage. */
-const PERSIST_MESSAGE_CAP = 200;
 
 function readStoredRunId(): string | null {
   if (typeof localStorage === "undefined") return null;
@@ -341,10 +340,10 @@ function clearStoredChatId(): void {
 // completed conversation is restored from its slice (see resolveArrival).
 const STORED_MESSAGES_KEY = "previously:messages";
 
-function readStoredMessages(): UIMessage[] {
+async function readStoredMessages(): Promise<UIMessage[]> {
   if (typeof localStorage === "undefined") return [];
   try {
-    const raw = localStorage.getItem(STORED_MESSAGES_KEY);
+    const raw = await readRecoverySnapshot(localStorage, STORED_MESSAGES_KEY);
     return raw ? (JSON.parse(raw) as UIMessage[]) : [];
   } catch {
     return [];
@@ -353,7 +352,7 @@ function readStoredMessages(): UIMessage[] {
 
 function writeStoredMessages(messages: UIMessage[]): void {
   try {
-    localStorage.setItem(STORED_MESSAGES_KEY, JSON.stringify(messages));
+    writeRecoverySnapshot(localStorage, STORED_MESSAGES_KEY, JSON.stringify(messages));
   } catch {
     /* private mode — persistence is best-effort */
   }
@@ -361,7 +360,7 @@ function writeStoredMessages(messages: UIMessage[]): void {
 
 function clearStoredMessages(): void {
   try {
-    localStorage.removeItem(STORED_MESSAGES_KEY);
+    removeRecoverySnapshot(localStorage, STORED_MESSAGES_KEY);
   } catch {
     /* best-effort */
   }
@@ -646,7 +645,7 @@ function Inner({
     // so the gap between "finished" and "persisted" would otherwise lose the
     // just-finished reply.
     onFinish: ({ messages: finished }) => {
-      writeStoredMessages(finished.slice(-PERSIST_MESSAGE_CAP));
+      writeStoredMessages(finished);
       rememberNativeReplay(finished);
     },
     getRunId: readStoredRunId,
@@ -701,7 +700,7 @@ function Inner({
     }
     if (dialogue.mode === "dialogue") return;
     const id = setTimeout(() => {
-      writeStoredMessages(messages.slice(-PERSIST_MESSAGE_CAP));
+      writeStoredMessages(messages);
     }, 100);
     return () => clearTimeout(id);
   }, [messages, dialogue.mode]);
@@ -753,7 +752,7 @@ function Inner({
         const fresh = additions.filter((m) => !known.has(m.id));
         if (fresh.length === 0) return prev;
         const next = [...prev, ...fresh];
-        writeStoredMessages(next.slice(-PERSIST_MESSAGE_CAP));
+        writeStoredMessages(next);
         return next;
       });
     }
@@ -1535,8 +1534,6 @@ function Inner({
           newPublications={dialogue.newPublications}
           emptyState={dialogueEnabled && !dialogue.historyReady && !items.length ? (
             <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("loadingHistory")}</p>
-          ) : dialogueEnabled && dialogue.historyFailed && !items.length ? (
-            <p role="status" className="py-6 text-sm text-muted-foreground">{tDialogue("historyUnavailable")}</p>
           ) : emptyMemory && identity?.isDemo ? (
             <EmptyBriefing
               persona={persona}
@@ -1550,6 +1547,10 @@ function Inner({
             <ComposerHost
               onClearanceChange={onComposerClearanceChange}
               composer={<>
+                {dialogueEnabled && dialogue.historyFailed && !panelPill && <div className="flex flex-wrap items-center gap-2 py-2 text-sm text-muted-foreground">
+                  <p role="status">{tDialogue("historyUnavailable")}</p>
+                  <button type="button" className="rounded-md px-2 py-1 text-primary underline" onClick={dialogue.retryHistory}>{tDialogue("retry")}</button>
+                </div>}
                 {dialogueEnabled && dialogue.submission.phase === "failed" && <p role="alert" className="text-sm text-destructive">{tDialogue("submitFailedHelp")}</p>}
                 <ChatInput onSubmit={submitAndRise} isLoading={composerBusy}
                   stopLabel={dialogueEnabled ? tDialogue("stopExpression") : undefined}

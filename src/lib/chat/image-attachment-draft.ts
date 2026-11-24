@@ -1,6 +1,6 @@
 import { IMAGE_ATTACHMENT_LIMITS, type ImageAttachmentSnapshot } from "./image-attachments";
 
-export const IMAGE_INPUT_MAX_BYTES = 10 * 1024 * 1024;
+export const IMAGE_INPUT_MAX_BYTES = IMAGE_ATTACHMENT_LIMITS.maxBytes;
 
 export interface PreparedDraftImage { file: File; width?: number; height?: number }
 
@@ -49,7 +49,6 @@ export function createImageAttachmentDraft(deps: {
       const prepared = await deps.prepare(image.file);
       const file = prepared instanceof File ? prepared : prepared.file;
       if (!current()) return;
-      if (file.size > IMAGE_ATTACHMENT_LIMITS.maxBytes) throw new Error("too-large");
       const dimensions = prepared instanceof File ? {} : { width: prepared.width, height: prepared.height };
       update(image.localClientId, { status: "uploading", ...dimensions });
       const attachment = await deps.upload(file, operation.signal);
@@ -61,7 +60,21 @@ export function createImageAttachmentDraft(deps: {
       if (operations.get(image.localClientId) === operation) operations.delete(image.localClientId);
     }
   };
+  // Limit simultaneous bitmap decoders and uploads on a phone. Every selected
+  // file stays in the queue with its original ordinal.
+  const pending = new Map<string, DraftImage>();
+  let active = 0;
+  const drain = () => {
+    while (active < 3 && pending.size) {
+      const image = pending.values().next().value!;
+      pending.delete(image.localClientId);
+      active++;
+      void start(image).finally(() => { active--; drain(); });
+    }
+  };
+  const enqueue = (image: DraftImage) => { pending.set(image.localClientId, image); drain(); };
   const stop = (image: DraftImage) => {
+    pending.delete(image.localClientId);
     operations.get(image.localClientId)?.abort();
     operations.delete(image.localClientId);
     if (image.attachment) cancel(image.attachment.assetId);
@@ -71,18 +84,18 @@ export function createImageAttachmentDraft(deps: {
     getSnapshot: () => state,
     add(files: readonly File[]): readonly DraftImage[] {
       const imageFiles = files.filter(file => file.type.startsWith("image/"));
-      const count = Math.max(0, IMAGE_ATTACHMENT_LIMITS.maxPerTurn - state.images.length);
-      const added = imageFiles.slice(0, count).filter(() => nextOrdinal <= IMAGE_ATTACHMENT_LIMITS.maxOrdinal)
+      const remainingOrdinals = IMAGE_ATTACHMENT_LIMITS.maxOrdinal - nextOrdinal + 1;
+      const added = imageFiles.slice(0, remainingOrdinals)
         .map(file => Object.freeze({ localClientId: deps.mintId(), ordinal: nextOrdinal++, file, status: "preparing" as const }));
       publish({ ...state, images: [...state.images, ...added], limitReached: added.length !== imageFiles.length });
-      for (const image of added) void start(image);
+      for (const image of added) enqueue(image);
       return added;
     },
     retry(id: string) {
       const image = state.images.find(image => image.localClientId === id);
       if (!image || image.status !== "error") return;
       update(id, { status: "preparing", error: undefined });
-      void start(image);
+      enqueue(image);
     },
     remove(id: string) {
       const image = state.images.find(image => image.localClientId === id);
@@ -92,10 +105,9 @@ export function createImageAttachmentDraft(deps: {
     },
     undo() {
       if (!state.removed) return;
-      if (state.images.length >= IMAGE_ATTACHMENT_LIMITS.maxPerTurn) { publish({ ...state, limitReached: true }); return; }
       const image: DraftImage = Object.freeze({ localClientId: state.removed.localClientId, ordinal: state.removed.ordinal, file: state.removed.file, width: state.removed.width, height: state.removed.height, status: "preparing" });
       publish({ images: [...state.images, image].sort((a, b) => a.ordinal - b.ordinal), removed: null, limitReached: false });
-      void start(image);
+      enqueue(image);
     },
     /** Transfer only this frozen set. A newly added/retried image remains in
      * the next draft; accepted assets must never be cancelled on cleanup. */

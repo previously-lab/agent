@@ -18,7 +18,6 @@
  * Lives under src/app so the `withWorkflow` loader (which scans app/src/app by
  * default) picks up the `"use workflow"` directive.
  */
-import { isStepCount } from "@/lib/deepseek/tools";
 import { type ModelMessage, type StepResult, type ToolResult } from "@/lib/deepseek/types";
 import { createHook, getWritable, sleep } from "workflow";
 import { start } from "workflow/api";
@@ -43,11 +42,13 @@ import {
 } from "@/lib/dialogue/transport";
 import {
   closeDialogueThoughtsStep,
+  closeDialogueOffersStep,
   publishThoughtStartedStep,
   startDialogueRecordRunStep,
 } from "./dialogue-transport-steps";
 import {
   ensureDialogueOrchestratorStep,
+  readDialogueAdmissionStep,
   witnessDialogueDeliveryStep,
 } from "./dialogue-orchestrator-steps";
 import { buildNativeThinkingMessages, currentDialogueUserMessage, type OtherWorkState } from "@/lib/dialogue/thinking-context";
@@ -94,7 +95,6 @@ import {
   shouldStartSummary,
   startSummaryRun,
   ownRunId,
-  episodeClockMs,
   readEpisodeInbox,
   emitNestedBubble,
   pollInnerRunReports,
@@ -190,17 +190,6 @@ const EPISODE_GRACE_MS = 60_000;
  * make an answer. Arrivals ride the same lap (the disk is their queue, D2).
  */
 const BUSY_TICK_MS = 8_000;
-
-/**
- * 看门狗 (v0.31): a child run that never reports back (platform kill mid-step —
- * the agent step runs with maxRetries:0 and the 300s wall can kill silently)
- * would leave its bubble spinning "running" forever, and with it the whole
- * episode (the drain never goes idle while an instance is in flight). Past
- * this age without a report, the orchestrator marks the instance failed and
- * says so on the wire. Ages are measured on the step-stamped clock
- * (episodeClockMs) — the workflow body has no Date.
- */
-const INSTANCE_WATCHDOG_MS = 10 * 60_000;
 
 /** Final assistant text from the agent's message history. */
 export function extractFinalText(messages: ModelMessage[]): string {
@@ -971,6 +960,31 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
     : null;
 
+  const dialogue = input.dialogue ?? null;
+  const nativeDialogue = dialogue?.transport === DIALOGUE_TRANSPORT;
+  const parentIdentity = nativeDialogue ? ownRunId() : Promise.resolve("");
+  // These steps need only the accepted input. Start them alongside memory I/O
+  // so a slow document read does not delay the durable start event.
+  const started = nativeDialogue ? parentIdentity.then(parentRunId => publishThoughtStartedStep({
+    scopeKey: dialogue.scopeKey,
+    parentRunId,
+    workId: dialogue.workId,
+    sourceInputId: dialogue.sourceInputId ?? input.turnId,
+    sourceTurnId: input.turnId,
+    source: nativeDialogueSource(input),
+    priorContext: [],
+    locale: input.locale,
+    record: nativeDialogueRecordRequest(input).environment,
+  })).catch(error => { console.warn("[Dialogue] thought start unavailable", error); }) : undefined;
+  const admission = nativeDialogue
+    ? readDialogueAdmissionStep(dialogue.scopeKey, dialogue.sourceInputId ?? input.turnId)
+      .catch(error => {
+        // A later offer can discover its own recipient.
+        console.warn("[Dialogue] optional admission context unavailable", error);
+        return undefined;
+      })
+    : undefined;
+
   // Housekeeping failure → degrade to an error terminal (D-batch; semantics
   // "end with an error" registered for user confirmation in
   // doc/reviews/housekeeping-and-page-hang.md §8): emit the terminal
@@ -978,16 +992,20 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // a visible failure instead of a bare finish), then rethrow so the run
   // still records the failure for observability.
   let hk: Awaited<ReturnType<typeof housekeeping>>;
+  let parentRunId: string;
   try {
-    hk = await housekeeping(input);
+    [hk, parentRunId] = await Promise.all([housekeeping(input), parentIdentity]);
   } catch (hkErr) {
-    if (input.dialogue?.transport === DIALOGUE_TRANSPORT) {
+    if (nativeDialogue) {
       try {
         await startDialogueRecordRunStep(nativeDialogueRecordRequest(input));
       } catch (recordError) {
         console.warn("[Dialogue] user-only record handoff after context failure needs retry", recordError);
       }
     }
+    // Settle the only pending stream writer before emitting the terminal frame.
+    // The read-only admission context can finish independently.
+    await started;
     const detail = hkErr instanceof Error ? hkErr.message : String(hkErr);
     console.warn(
       "[Turn] housekeeping failed — ending the turn with an error frame:",
@@ -999,7 +1017,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           text: "",
           finishReason: "error",
           cognition: "",
-          error: `The turn failed before it could finish. Your message was not saved — please send it again.${detail ? ` (${detail.slice(0, 300)})` : ""}`,
+          error: nativeDialogue
+            ? "The turn failed while preparing its context. Please try again."
+            : `The turn failed before it could finish. Your message was not saved — please send it again.${detail ? ` (${detail})` : ""}`,
         },
         input.turnId,
       );
@@ -1007,7 +1027,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       // The stream is gone too — nothing left to degrade into; the rethrow
       // below still marks the run failed.
     }
-    if (input.dialogue) {
+    if (nativeDialogue) {
+      try { await closeDialogueOffersStep(); } catch { /* terminal status remains authoritative */ }
+    }
+    if (dialogue) {
       try { await closeDialogueThoughtsStep(); } catch { /* terminal status remains authoritative */ }
     }
     throw hkErr;
@@ -1027,41 +1050,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // stale runners exit quietly without answering. The admitted window is the
   // server-authoritative input view — the cleared browser lane never feeds
   // the worker.
-  const dialogue = input.dialogue ?? null;
-  const nativeDialogue = dialogue?.transport === DIALOGUE_TRANSPORT;
-  const parentRunId = nativeDialogue ? await ownRunId() : "";
+  const [currentAdmission] = await Promise.all([admission, started]);
   let dialogueDelivery: TurnRunResult["dialogueDelivery"];
-  let dialogueHolder: DialogueOfferContext["holder"];
-  let otherWorkStates: OtherWorkState[] = [];
-  if (nativeDialogue) {
-    const startContext: DialogueOfferContext = {
-      scopeKey: dialogue!.scopeKey,
-      parentRunId,
-      workId: dialogue!.workId,
-      sourceInputId: dialogue!.sourceInputId ?? input.turnId,
-      sourceTurnId: input.turnId,
-      source: nativeDialogueSource(input),
-      priorContext: [],
-      locale: input.locale,
-      record: nativeDialogueRecordRequest(input).environment,
-    };
-    try {
-      await publishThoughtStartedStep(startContext);
-      const ensured = await ensureDialogueOrchestratorStep({
-        scope: startContext.scopeKey,
-        parentRunId,
-        sourceInputId: startContext.sourceInputId,
-        workId: startContext.workId,
-        triggerKey: `${parentRunId}:start`,
-        candidateKeys: [`${startContext.sourceInputId}:start`],
-      });
-      otherWorkStates = ensured.otherWorks;
-      dialogueHolder = { runId: ensured.runId, sessionId: ensured.sessionId };
-    } catch (error) {
-      // A start wake is best-effort; the thought continues and its end wake retries.
-      console.warn("[Dialogue] start wake needs recovery", error);
-    }
-  }
+  const dialogueHolder = currentAdmission?.holder;
+  const otherWorkStates: OtherWorkState[] = currentAdmission?.otherWorks ?? [];
   let workWindow: DialogueWorkAdmission | null = null;
   if (dialogue && !nativeDialogue) {
     const admitted = await beginDialogueWorkStep(dialogue, await ownRunId());
@@ -1168,58 +1160,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
 
   // ── Pro agent ──────────────────────────────────────────────────────────
 
-  /**
-   * Hard cap on continuations to guard against infinite loops.
-   *
-   * NOTE: there is deliberately NO `timeout` and NO `maxOutputTokens` on
-   * agent.stream(). The workflow sandbox VM does not provision the
-   * `AbortSignal` global, so the SDK's timeout option would crash every turn
-   * (`ReferenceError: AbortSignal is not defined`). And `maxOutputTokens` is a
-   * project-wide prohibition: it behaves inconsistently across models — with
-   * DeepSeek thinking enabled, the reasoning silently eats the shared cap and
-   * leaves empty/truncated output. Both levers stay gone by design.
-   *
-   * The hung-provider bound therefore lives one layer down: every HTTP
-   * provider built by createModel() carries a first-byte fetch deadline
-   * (MODEL_FIRST_BYTE_TIMEOUT_MS, see src/lib/models/fetch-timeout.ts), which
-   * classifies as `timeout` and lands in the continuation path below. Beyond
-   * first byte, the step is bounded by the platform's 300s wall.
-   *
-   * When a step IS platform-killed (or the model otherwise fails), the error
-   * reaches the catch block below where `classifyWorkflowError` decides:
-   *   - transient → rethrow (the workflow queue redelivers/retries)
-   *   - terminal / model → surface a client-visible explanation
-   *   - timeout / abort → bounded CONTINUATION: rebuild the messages from the
-   *     interrupted run's completed steps (tool calls + results + partial text,
-   *     captured via `onStepEnd`) plus a nudge and re-invoke agent.stream()
-   *     after a durable backoff sleep, so the agent picks up where it left off
-   *     instead of dying silently and a short upstream blip isn't rammed twice
-   *     in a row.
-   * This is the same mechanism as the token-cap continuation loop below, just
-   * triggered from the failure path.
-   */
-  const MAX_CONTINUATIONS = 5;
-  /** How many times a timed-out step may be re-invoked with a continuation nudge. */
-  const MAX_TIMEOUT_CONTINUATIONS = 2;
-  /** Continuation nudge for a step that was interrupted by the platform. */
-  const TIMEOUT_CONTINUE_NUDGE =
-    "You were interrupted by a timeout. Continue exactly where you left off — do not repeat what you already wrote, and keep your answer focused so it finishes quickly.";
-  /**
-   * Durable backoff before re-invoking after a timeout. A short upstream blip
-   * clears within seconds — re-invoking immediately would ram a still-warming
-   * provider twice in a row (each call hanging minutes).
-   */
-  const TIMEOUT_BACKOFF_FIRST_MS = 30_000;
-  /**
-   * Second-continuation backoff, escalating: an outage that already outlived
-   * the first wait plus a full step attempt is likelier minutes-long than a
-   * blip, so give it longer before the final attempt.
-   */
-  const TIMEOUT_BACKOFF_SECOND_MS = 90_000;
-  const TIMEOUT_BACKOFF_MS = [
-    TIMEOUT_BACKOFF_FIRST_MS,
-    TIMEOUT_BACKOFF_SECOND_MS,
-  ] as const;
+  const TIMEOUT_CONTINUE_NUDGE = "The provider interrupted this response. Continue from the completed work without repeating it.";
 
   // Completed-step snapshots of the in-flight stream, accumulated for the
   // timeout continuation so the re-invoked agent resumes from the COMMITTED
@@ -1342,7 +1283,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const streamOpts = {
     onToolBatchStart: partialHandoff?.onBatch,
     writable: getWritable<ModelCallStreamPart>(dialogue ? { namespace: DIALOGUE_THOUGHTS_NAMESPACE } : undefined),
-    stopWhen: isStepCount(20),
     sendFinish: false,
     preventClose: true,
   } as const;
@@ -1436,7 +1376,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
          *  to the client). */
         anchorId?: string;
         /** Step-stamped spawn time — the watchdog's age base. */
-        spawnedAtMs: number;
         question: EnvelopeUserTurn;
       }
       const instances = new Map<string, InstanceRow>();
@@ -1509,7 +1448,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             );
             // The lap's clock, stamped in a step — the workflow body has no
             // Date (the sandbox provisions no clock).
-            const nowMs = await episodeClockMs();
             const spawnList: Array<{
               question: EnvelopeUserTurn;
               first: boolean;
@@ -1537,7 +1475,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
                 turnId: bubbleTurnId,
                 replyTo: u.turnId,
                 status: "queued",
-                spawnedAtMs: nowMs,
                 question: u,
                 ...(first && input.clientMessageId
                   ? { anchorId: input.clientMessageId }
@@ -1610,30 +1547,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
                 runId: innerRun.runId,
                 ...(row.anchorId ? { anchorId: row.anchorId } : {}),
               });
-            }
-
-            // 看门狗 (v0.31): a child that never reports (platform kill
-            // mid-step — the agent step runs maxRetries:0 and the 300s wall
-            // can kill silently) would spin its bubble forever, and with it
-            // the episode (the drain never goes idle with work in flight).
-            for (const row of instances.values()) {
-              if (
-                (row.status === "queued" || row.status === "running") &&
-                nowMs - row.spawnedAtMs > INSTANCE_WATCHDOG_MS
-              ) {
-                row.status = "failed";
-                row.finishReason = "timeout";
-                console.error(
-                  `[Turn:${input.turnId}][episode] child ${row.runId ?? row.turnId} watchdog timeout — marking failed`,
-                );
-                await emitNestedBubble({
-                  replyTo: row.replyTo,
-                  turnId: row.turnId,
-                  status: "failed",
-                  ...(row.runId ? { runId: row.runId } : {}),
-                  ...(row.anchorId ? { anchorId: row.anchorId } : {}),
-                });
-              }
             }
 
             // 回报对账 (v0.32 — D2 applied to REPORTS): the registry is the
@@ -1819,8 +1732,8 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         cognition: allCognition,
       };
     } else {
-      let continuations = 0;
-      let timeoutContinuations = 0;
+      let previousLengthFragment: string | undefined;
+      let waitingForProgress = false;
       /** Client-visible explanation when the turn ends as a terminal error. */
       let turnError: string | undefined;
       let finalFinishReason = "stop";
@@ -1870,18 +1783,15 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
             finalFinishReason = "interrupted";
             break;
           }
-          // timeout (a step was platform-killed / a deadline exceeded) — the
-          // dominant failure mode. Bounded CONTINUATION: rebuild the messages
-          // from the interrupted run's COMPLETED steps — every finished tool
-          // call + its result, then the partial assistant text (segments joined
-          // with a blank line) and the nudge — so the model picks up exactly
-          // where it left off and re-derives nothing.
-          if (++timeoutContinuations > MAX_TIMEOUT_CONTINUATIONS) {
+          // A provider/platform interruption can resume from committed work. With
+          // repeated interruption at the same checkpoint, return the real error.
+          const madeProgress = interruptedSteps.some(step => step.text.trim() || step.toolResults.length);
+          if (!madeProgress && waitingForProgress) {
             finalFinishReason = "interrupted";
-            turnError =
-              "The response was interrupted repeatedly by step timeouts. You can send a new message or click continue to try again.";
+            turnError = classified.userMessage ?? errorMessage(err, "The model request was interrupted.");
             break;
           }
+          waitingForProgress = !madeProgress;
           currentMessages = buildTimeoutContinuation({
             history: currentMessages,
             steps: interruptedSteps,
@@ -1894,20 +1804,12 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           // The snapshots are now committed into currentMessages — clear them so
           // a LATER timeout carries only THAT run's completed steps.
           interruptedSteps = [];
-          // Durable backoff before the re-invocation: `sleep` writes a timer
-          // event into the run's log — it replays correctly and holds no
-          // compute while waiting, unlike an immediate re-invocation that would
-          // ram a still-recovering provider.
-          await sleep(
-            TIMEOUT_BACKOFF_MS[
-              Math.min(timeoutContinuations, TIMEOUT_BACKOFF_MS.length) - 1
-            ],
-          );
-          // Loop back to re-invoke agent.stream() with the continuation.
+          await sleep(30_000);
           continue;
         }
 
 
+        waitingForProgress = false;
         finalMessages = result.messages;
         finalFinishReason = result.finishReason;
 
@@ -1919,7 +1821,13 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
 
         // Only loop when the model hit the token cap before it was done.
         if (result.finishReason !== "length") break;
-        if (++continuations >= MAX_CONTINUATIONS) break;
+        const fragment = JSON.stringify(result.steps.map(step => [step.text, step.reasoningText, step.toolCalls]));
+        if (!result.steps.some(step => step.text || step.reasoningText || step.toolResults.length) || fragment === previousLengthFragment) {
+          finalFinishReason = "interrupted";
+          turnError = "The provider reported a length limit without producing new content to continue.";
+          break;
+        }
+        previousLengthFragment = fragment;
 
         // Feed the model's output back with a continuation nudge. Strip the
         // old system message (it's embedded at index 0) and pass the system
@@ -1943,9 +1851,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
         allCognition += "\n### Reasoning fragments";
         for (const { question, answer, reasoning } of thinkDeepReports) {
           allCognition += `\n\n**Q**: ${question}`;
-          if (answer) allCognition += `\n\n${answer.slice(0, 2000)}`;
+          if (answer) allCognition += `\n\n${answer}`;
           if (reasoning)
-            allCognition += `\n\n<reasoning>\n${reasoning.slice(0, 1000)}\n</reasoning>`;
+            allCognition += `\n\n<reasoning>\n${reasoning}\n</reasoning>`;
         }
         allCognition += "\n";
       }
@@ -2074,10 +1982,10 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
           report,
           interrupted: !cleanFinish || !!outcome.error,
         });
-        const findings = thinkingExpressionClaims(product).slice(0, 12).map((claim) => ({
+        const findings = thinkingExpressionClaims(product).map((claim) => ({
           text: claim.text,
           kind: claim.kind,
-          ...(claim.uncertainty ? { uncertainty: claim.uncertainty.slice(0, 600) } : {}),
+          ...(claim.uncertainty ? { uncertainty: claim.uncertainty } : {}),
           ...(claim.decision ? { decision: claim.decision } : {}),
         }));
         if (findings.length) {

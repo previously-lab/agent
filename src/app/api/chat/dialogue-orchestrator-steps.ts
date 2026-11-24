@@ -1,3 +1,6 @@
+import { isDialogueWorkStopped, stoppedDialogueParents } from "@/lib/dialogue/work-cancellation";
+import { workflowRegistryPages } from "@/lib/chat/workflow-registry-pages";
+import { sleep } from "workflow";
 import { getHookByToken, getRun, resumeHook, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import type { DialogueInput, PublicUtterance } from "@/lib/chat/dialogue-contract";
@@ -9,7 +12,6 @@ import {
   type DialogueParentWritable,
   type DialogueOfferEvent,
   type DialogueRunInput,
-  type DialogueTypedArtifact,
   type DialogueWakeEvent,
 } from "@/lib/dialogue/transport";
 import { listDialogueEvents } from "@/lib/dialogue/workflow-offers";
@@ -34,9 +36,8 @@ import {
 import {
   publishThoughtDeliveryStep,
   recordDialogueWakeStep,
+  startDialogueRecordRunStep,
 } from "./dialogue-transport-steps";
-import { projectDialogueRecords } from "@/lib/episodic/dialogue-records";
-import { ringReflection } from "./steps";
 
 export interface DialogueWorldSnapshot extends DialogueOrchestrationWorld {
   wakes: DialogueWakeEvent[];
@@ -63,7 +64,6 @@ export interface DialogueOrchestratorArgs {
   idleMs?: number;
 }
 
-const MAX_DELIVERY_REPLACEMENTS = 2;
 const MAX_HOLDER_STREAM_CHUNKS = 128;
 
 function iso(value: unknown): string {
@@ -77,7 +77,7 @@ function runtimeEvent(value: unknown): DialogueRuntimeEvent | undefined {
   const event = value as DialogueRuntimeEvent;
   if (event.type === "lease_acquired" || event.type === "heartbeat" || event.type === "handoff_wait" || event.type === "exit_intent" ||
       event.type === "exit_commit" || event.type === "continued" || event.type === "delegated" ||
-      event.type === "expression_outcome" || event.type === "world_degraded") return event;
+      event.type === "wording_started" || event.type === "expression_outcome" || event.type === "world_degraded") return event;
   return undefined;
 }
 
@@ -106,7 +106,7 @@ async function readDialogueStream(runId: string, cacheScope?: string, maxChunks?
 const DEPLOYED_TURN_WORKFLOW = "workflow//./src/app/api/chat/turn-workflow//turnWorkflow";
 const DEPLOYED_ACTOR_WORKFLOW = "workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
 
-async function listDialogueRegistry(includeActors: boolean) {
+async function listDialogueRegistry(includeActors: boolean, status?: "running" | "pending") {
   const world = await getWorld();
   const { turnWorkflow } = await import("./turn-workflow");
   const names = new Set([DEPLOYED_TURN_WORKFLOW]);
@@ -123,16 +123,7 @@ async function listDialogueRegistry(includeActors: boolean) {
   type Row = Awaited<ReturnType<typeof world.runs.list>>["data"][number];
   const pages = await Promise.all([...names].map(async workflowName => {
     const rows: Row[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await world.runs.list({
-        workflowName, pagination: { limit: 100, sortOrder: "desc", cursor }, resolveData: "none",
-      });
-      rows.push(...page.data);
-      if (!page.hasMore) break;
-      if (!page.cursor || page.cursor === cursor) throw new Error("Workflow registry pagination did not advance");
-      cursor = page.cursor;
-    } while (true);
+    for await (const page of workflowRegistryPages(world, { workflowName, status })) rows.push(...page);
     return rows;
   }));
   // Interleave the independent name queries in registry order rather than
@@ -140,6 +131,41 @@ async function listDialogueRegistry(includeActors: boolean) {
   const rows = new Map(pages.flat().map(row => [row.runId, row]));
   return [...rows.values()].sort((a, b) => iso(b.createdAt).localeCompare(iso(a.createdAt)) ||
     b.runId.localeCompare(a.runId));
+}
+
+/** The thinking model only needs other active investigations. Read their scoped
+ * start facts, not every old Actor, public wording stream and completed turn. */
+export async function readDialogueAdmissionStep(scope: string, inputId: string): Promise<{
+  otherWorks: DialogueOrchestrationWorld["works"]; holder?: DialogueHolderReceipt;
+}> {
+  "use step";
+  const lookupHolder = async () => {
+    try {
+      const hook = await getHookByToken(`dialogue-execution:${scope}`);
+      const row = await (await getWorld()).runs.get(hook.runId, { resolveData: "none" });
+      if (row.attributes?.scope === scope && row.attributes.role === "dialogueOrchestrator" &&
+          (row.status === "running" || row.status === "pending")) {
+        return { runId: row.runId, sessionId: row.attributes.session ?? row.runId };
+      }
+    } catch { /* Offers perform authoritative discovery if this optional hint is unavailable. */ }
+  };
+  const [running, pending, holder] = await Promise.all([
+    listDialogueRegistry(false, "running"), listDialogueRegistry(false, "pending"), lookupHolder(),
+  ]);
+  const siblings = [...new Map([...running, ...pending].map(row => [row.runId, row])).values()].filter(row =>
+    row.attributes?.scope === scope && row.attributes.role === "thinking" && row.attributes.turn &&
+    row.attributes.turn !== inputId && !isDialogueWorkStopped(row) && (row.status === "running" || row.status === "pending"));
+  const otherWorks = await mapWithConcurrency(siblings, 8, async row => {
+    const attrs = row.attributes!;
+    const events = await listDialogueEvents(row.runId);
+    const start = events.find(event => event.type === "thought_started" && event.sourceInputId === attrs.turn);
+    const latest = events.findLast(event => event.type === "work_completed" || event.type === "work_checkpoint" || event.type === "offer");
+    return { runId: row.runId, workId: attrs.work ?? attrs.turn!, inputId: attrs.turn!, status: row.status,
+      acceptedAt: attrs.acceptedAt ?? iso(row.createdAt), text: start?.type === "thought_started" ? start.input.text : "",
+      latestStage: latest?.type === "work_completed" || latest?.type === "offer" && latest.stage === "final"
+        ? "completed" as const : latest ? "checkpoint" as const : "started" as const };
+  });
+  return { otherWorks, ...(holder ? { holder } : {}) };
 }
 
 /** Build the world entirely from Workflow registry and durable streams. */
@@ -211,7 +237,7 @@ async function readDialogueWorld(scope: string, activatingInputId?: string): Pro
       inputs.set(inputId, input);
       const latest = events.findLast(event => event.type === "offer" || event.type === "work_checkpoint" || event.type === "work_completed");
       works.push({
-        runId: row.runId, workId: attributes.work ?? inputId, inputId, status: row.status,
+        runId: row.runId, workId: attributes.work ?? inputId, inputId, status: isDialogueWorkStopped(row) ? "cancelled" : row.status,
         text: input.text, acceptedAt: input.acceptedAt,
         latestStage: latest?.type === "work_completed" || latest?.type === "offer" && latest.stage === "final"
           ? "completed" : latest ? "checkpoint" : "started",
@@ -268,7 +294,7 @@ export async function readWorkSnapshotStep(scope: string, workId: string): Promi
   const started = events.find(event => event.type === "thought_started");
   const inputId = started?.type === "thought_started" ? started.sourceInputId : row.attributes?.turn ?? workId;
   const acceptedAt = started?.type === "thought_started" ? started.acceptedAt : row.attributes?.acceptedAt ?? iso(row.createdAt);
-  const status = row.status;
+  const status = isDialogueWorkStopped(row) ? "cancelled" : row.status;
   if (status !== "pending" && status !== "running" && status !== "completed" && status !== "failed" && status !== "cancelled") return null;
   return projectWorkSnapshot({ workId, inputId, runId: row.runId, status, acceptedAt, updates });
 }
@@ -392,16 +418,12 @@ export async function ensureDialogueOrchestratorStep(request: DialogueEnsureRequ
   const otherWorks = world.works.filter(work => work.inputId !== request.sourceInputId);
   const runs = new Map(world.dialogueRuns.map(run => [run.runId, run]));
   const newest = world.dialogueRuns.at(-1);
-  let existing = newest ? responsibleDialogueRun(newest, runs) : undefined;
+  const existing = newest ? responsibleDialogueRun(newest, runs) : undefined;
   const now = Date.now();
   if (existing) {
     const lastWakeAt = sessionLastWakeAt(existing, world.wakes);
-    const stale = dialogueRunStale(existing, world.wakes, now);
     const failed = request.candidateKeys.some(key => dialogueCandidateFailed(existing!, key));
-    if (stale && (existing.status === "pending" || existing.status === "running")) {
-      await cancelDialogueRunStep(existing.runId);
-      existing = undefined;
-    } else if (!stale && !failed && !leavingDialogueRun(existing) && dialogueRunUsable(existing.status, lastWakeAt, now)) {
+    if (!failed && !leavingDialogueRun(existing) && dialogueRunUsable(existing.status, lastWakeAt, now)) {
       const wake = dialogueWake(request, { runId: existing.runId, sessionId: existing.sessionId }, now);
       const resumed = await resumeExistingActor(request.scope, wake);
       if (resumed) {
@@ -459,13 +481,6 @@ export async function waitForDialogueRunTerminalStep(runId: string, timeoutMs = 
   }
 }
 
-export async function cancelDialogueRunStep(runId: string): Promise<void> {
-  "use step";
-  await getRun(runId).cancel().catch(() => undefined);
-  const status = await waitForDialogueRunTerminalStep(runId);
-  if (status === "pending" || status === "running") throw new Error("Dialogue predecessor did not reach a terminal state");
-}
-
 export async function continueDialogueOrchestratorStep(args: DialogueOrchestratorArgs): Promise<string> {
   "use step";
   return (await startDialogueRun(args)).runId;
@@ -510,91 +525,73 @@ async function waitForPublication(run: DialogueRunState, candidateId: string): P
   return false;
 }
 
-/** The thought-side delivery witness follows responsibility, never the client. */
-export async function witnessDialogueDeliveryStep(
-  request: DialogueEnsureRequest,
-  initialRunId: string,
-  candidateId: string,
-): Promise<"delivered" | "failed"> {
+/** One read of the authoritative streams. A sleeping witness checks again in a
+ * new durable step, so a provider outage never holds one function invocation. */
+async function inspectDeliveryStep(request: DialogueEnsureRequest, runId: string, candidateId: string,
+  awaitingSince: number): Promise<"delivered" | "failed" | "pending" | "recover"> {
   "use step";
-  let awaitingDeliverySince = Date.now();
-  let runId = initialRunId;
-  let replacements = 0;
-  while (true) {
-    const world = await readDialogueWorldStep(request.scope);
-    const delivered = world.publications.some(publication =>
-      publication.sourceResults.some(result => result.resultId === candidateId));
-    if (delivered) break;
-    if (world.dialogueRuns.some(run => dialogueCandidateFailed(run, candidateId) ||
-      run.events.some(event => event.type === "world_degraded"))) {
-      await publishThoughtDeliveryStep({
-        type: "thought_delivery_finished", runId: request.parentRunId, sourceInputId: request.sourceInputId,
-        candidateId, status: "failed", finishedAt: new Date().toISOString(),
-      });
-      return "failed";
-    }
-    const runs = new Map(world.dialogueRuns.map(run => [run.runId, run]));
-    let current = runId ? runs.get(runId) : undefined;
-    try {
-      if (current) current = responsibleDialogueRun(current, runs);
-    } catch {
-      await publishThoughtDeliveryStep({
-        type: "thought_delivery_finished", runId: request.parentRunId, sourceInputId: request.sourceInputId,
-        candidateId, status: "failed", finishedAt: new Date().toISOString(),
-      });
-      return "failed";
-    }
-    if (current && (current.status === "pending" || current.status === "running")) {
-      if (!dialogueRunStale(current, world.wakes, Date.now(), awaitingDeliverySince)) {
-        if (await waitForPublication(current, candidateId)) break;
-        continue;
-      }
-    }
-    if (replacements >= MAX_DELIVERY_REPLACEMENTS) {
-      await publishThoughtDeliveryStep({
-        type: "thought_delivery_finished", runId: request.parentRunId, sourceInputId: request.sourceInputId,
-        candidateId, status: "failed", finishedAt: new Date().toISOString(),
-      });
-      return "failed";
-    }
-    replacements++;
-    runId = (await ensureDialogueOrchestratorStep(request)).runId;
-    awaitingDeliverySince = Date.now();
-  }
-  await publishThoughtDeliveryStep({
-    type: "thought_delivery_finished", runId: request.parentRunId, sourceInputId: request.sourceInputId,
-    candidateId, status: "delivered", finishedAt: new Date().toISOString(),
-  });
-  return "delivered";
+  const world = await readDialogueWorldStep(request.scope);
+  if (world.publications.some(item => item.sourceResults.some(result => result.resultId === candidateId))) return "delivered";
+  if (world.works.some(work => work.runId === request.parentRunId && work.status === "cancelled")) return "failed";
+  if (world.dialogueRuns.some(run => run.events.some(event => event.type === "expression_outcome" &&
+      event.status === "failed" && event.retryable === false && event.candidateIds.includes(candidateId)))) return "failed";
+  const runs = new Map(world.dialogueRuns.map(run => [run.runId, run]));
+  const first = runs.get(runId);
+  if (!first) return "recover";
+  let current: DialogueRunState;
+  try { current = responsibleDialogueRun(first, runs); }
+  catch { return "failed"; }
+  if (current.status !== "running" && current.status !== "pending") return "recover";
+  if (dialogueCandidateFailed(current, candidateId) || current.events.some(event => event.type === "world_degraded") ||
+      dialogueRunStale(current, world.wakes, Date.now(), awaitingSince)) return "recover";
+  return await waitForPublication(current, candidateId) ? "delivered" : "pending";
 }
 
-/** Only the complete public utterance is projected into the memory filesystem. */
+/** Runs in the parent workflow. The same persisted candidate is retried without
+ * replaying the thought, tools or memory writes, or requiring another input. */
+export async function witnessDialogueDeliveryStep(request: DialogueEnsureRequest, initialRunId: string,
+  candidateId: string): Promise<"delivered" | "failed"> {
+  let runId = initialRunId;
+  let awaitingSince = Date.now();
+  let retryDelayMs = 1_000;
+  while (true) {
+    const status = await inspectDeliveryStep(request, runId, candidateId, awaitingSince);
+    if (status === "delivered" || status === "failed") {
+      await publishThoughtDeliveryStep({ type: "thought_delivery_finished", runId: request.parentRunId,
+        sourceInputId: request.sourceInputId, candidateId, status, finishedAt: new Date().toISOString() });
+      return status;
+    }
+    if (status === "recover") {
+      await sleep(retryDelayMs);
+      runId = (await ensureDialogueOrchestratorStep(request)).runId;
+      awaitingSince = Date.now();
+      retryDelayMs = Math.min(retryDelayMs * 2, 60_000);
+    }
+  }
+}
+
+/** Only needed when an aggregate has already lost a contributor during wording. */
+export async function stoppedDialogueParentsStep(runIds: string[]): Promise<string[]> {
+  "use step";
+  return stoppedDialogueParents(runIds);
+}
+
+/** Launch the archive workflow once the exact utterance is public. Each input
+ * carries its own slice and attachments; the archivist reads artifacts from
+ * the authoritative actor stream without delaying subsequent wording. */
 export async function recordDialogueUtteranceStep(args: {
   input: DialogueRunInput;
   utterance: PublicUtterance;
-  artifacts: DialogueTypedArtifact[];
   inputs: DialogueInput[];
+  related: DialogueOfferEvent[];
 }): Promise<void> {
-  "use step";
-  const { input, utterance, artifacts, inputs } = args;
-  const selected = inputs.filter(candidate => utterance.inputIds.includes(candidate.inputId));
-  if (!selected.length) return;
-  const environment = input.context.record;
-  const receipt = await projectDialogueRecords({
-    inputs: selected.map(candidate => ({
-      input: candidate,
-      turnId: candidate.inputId,
-      ...(environment.sliceId ? { sliceId: environment.sliceId } : {}),
-      ...(environment.images?.length ? { images: environment.images } : {}),
-    })),
-    utterance,
-    typedArtifacts: artifacts,
-    useGithub: environment.useGithub,
-    useDemo: environment.useDemo,
-    owner: environment.owner,
-    repo: environment.repo,
-    timezone: environment.timezone,
-    slicing: environment.slicing,
+  const { input, utterance, inputs, related } = args;
+  const publicationInputs = inputs.filter(source => utterance.inputIds.includes(source.inputId)).map(source => {
+    const environment = related.find(offer => offer.sourceInputId === source.inputId)?.record ??
+      (source.inputId === input.context.sourceInputId ? input.context.record : undefined);
+    return { input: source, turnId: source.inputId, ...(environment?.sliceId ? { sliceId: environment.sliceId } : {}),
+      ...(environment?.images?.length ? { images: environment.images } : {}) };
   });
-  if (receipt) for (const range of receipt.reflection) await ringReflection(range.sliceId, range);
+  await startDialogueRecordRunStep({ source: input.context.source, sourceTurnId: input.context.sourceTurnId,
+    environment: input.context.record, utterance, publicationInputs });
 }

@@ -600,28 +600,13 @@ export function migrateToV3(content: string, currentSliceId?: string): string {
 export const CARD_STAMP = "Format: user card v2";
 /** The v1 card stamp — still accepted by parseCard. */
 export const LEGACY_CARD_STAMP = "Format: user card";
-/** Now-items older than this many days are dropped mechanically. */
+/** Age at which the editor reviews whether a Now item still matters. */
 export const CARD_NOW_EXPIRY_DAYS = 7;
-/** Hard caps — enforced by the card updater after every rewrite. */
-export const CARD_NOW_MAX = 5;
-/** Hard ceiling for the Past profile paragraph (~600 tokens worst case). */
-export const CARD_PROFILE_MAX_CHARS = 2400;
-/** Per-item text caps (refs/by/since tails never count against them). */
-export const NOW_ITEM_MAX_CHARS = 300;
-export const HORIZON_ITEM_MAX_CHARS = 200;
-/** Single-line cap — also the Identity head's per-field length limit. */
-export const SELF_MODEL_LINE_MAX_CHARS = 300;
-export const PAST_ANCHOR_MAX_CHARS = 300;
-/** Section caps. */
-export const PAST_ANCHORS_MAX = 8;
-export const HORIZON_MAX = 5;
-/** Total serialized card budget — the updater sheds sections to stay under. */
-export const CARD_TOTAL_MAX_CHARS = 8192;
 
 export interface CardNowItem {
   text: string;
   refs: string[];
-  /** ISO date the item was recorded — used for the 7-day expiry. */
+  /** ISO date the item was recorded, used for the editorial review. */
   since: string;
 }
 

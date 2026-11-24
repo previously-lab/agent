@@ -34,7 +34,7 @@ describe("searchViaFlash", () => {
     expect(opts).not.toHaveProperty("languageModel");
     expect(opts).not.toHaveProperty("effortSdk");
     expect(opts).not.toHaveProperty("providerOptions");
-    expect(opts.maxSteps).toBe(32);
+    expect(opts).not.toHaveProperty("maxSteps");
     expect(opts).not.toHaveProperty("timeoutMs");
     expect(opts.reportToolName).toBe("searchReport");
     expect(opts.selfSop).toBe("search");
@@ -53,18 +53,14 @@ describe("searchViaFlash", () => {
       suggestedReads: [],
     };
     expect(legacy.searchStats).toBeUndefined();
-    expect(legacy.truncated).toBeUndefined();
 
     const out = await searchViaFlash("q");
     expect(out.searchStats).toEqual({
-      operationLimit: 12,
       operationsStarted: 0,
       operationsSucceeded: 0,
       duplicateHits: 0,
       inFlightHits: 0,
-      exhausted: false,
     });
-    expect(out.truncated).toBe(false);
   });
 
   it("maps the report and collects deduplicated sources only from actual search results", async () => {
@@ -83,63 +79,21 @@ describe("searchViaFlash", () => {
     expect(out.answer).toBe(report.answer);
     expect(out.recommendation).toBe(report.recommendation);
     expect(out.suggestedReads).toEqual([{ url: "https://example.com/a", title: "A", reason: "primary" }]);
-    expect(out.sources).toEqual([{ title: "A", url: "https://example.com/a" }]);
+    expect(out.sources).toEqual([{ title: "A", url: "https://example.com/a", read: false }]);
     expect(mocks.search).toHaveBeenCalledWith(
       { query: "evidence", count: 3 },
       undefined,
-      { originalQuestion: "q" },
     );
   });
 
-  it.each([[false, 50, 6, 12], [true, 20, 3, 4]])(
-    "enforces round, new-operation and page quotas (scout=%s)",
-    async (scout, rounds, pages, operations) => {
-      await searchViaFlash("q", undefined, { scout });
-      const opts = options();
-      expect(opts.system).toContain(`up to ${rounds} web_search rounds`);
-      expect(opts.system).toContain(`at most ${operations} NEW search operations`);
-      expect(opts.system).toContain(`read at most ${pages} pages per run`);
-      expect(opts.system).toContain("complementary, independent sources");
-      for (let i = 0; i < operations; i++) {
-        await execute(opts, "web_search", { query: `q${i}` });
-      }
-      const limited = (await execute(opts, "web_search", { query: "over operation quota" })) as {
-        results: unknown[];
-        note?: string;
-      };
-      expect(limited).toMatchObject({ results: [] });
-      expect(limited.note).toMatch(/budget exhausted/i);
-      expect(opts.onToolProgress!({ toolName: "web_search", input: { query: "fresh query" } })?.line)
-        .toContain("budget exhausted");
-      expect(mocks.search).toHaveBeenCalledTimes(operations);
-
-      for (let i = operations + 1; i < rounds; i++) {
-        const reused = (await execute(opts, "web_search", { query: "q0" })) as { note?: string };
-        expect(reused.note).toMatch(/no new Search API operation/i);
-      }
-      expect(await execute(opts, "web_search", { query: "over round quota" })).toEqual({
-        results: [], note: "Search quota exhausted. Report what you have already found.",
-      });
-      expect(mocks.search).toHaveBeenCalledTimes(operations);
-      for (let i = 0; i < pages; i++) {
-        expect(await execute(opts, "webFetch", { url: "not a url" })).toContain("ERROR: Invalid URL");
-      }
-      expect(await execute(opts, "webFetch", { url: "https://example.com" })).toContain("Page-read quota exhausted");
-      expect(opts.prompt.includes("one of several researchers working in parallel")).toBe(scout);
-    },
-  );
-
-  it("counts failed new operations against the scout cap and propagates cancellation", async () => {
-    await searchViaFlash("q", undefined, { scout: true });
+  it.each([false, true])("allows either research mode to follow new leads without a fixed operation budget", async (scout) => {
+    await searchViaFlash("q", undefined, { scout });
     const opts = options();
     const controller = new AbortController();
-    mocks.search.mockRejectedValue(new Error("HTTP 429"));
-    for (let i = 0; i < 4; i++) {
-      await expect(execute(opts, "web_search", { query: `q${i}` }, controller.signal)).rejects.toThrow("HTTP 429");
-    }
-    expect(mocks.search.mock.calls[0]![1]).toBe(controller.signal);
-    expect(await execute(opts, "web_search", { query: "q4" })).toHaveProperty("note", expect.stringMatching(/budget exhausted/i));
-    expect(mocks.search).toHaveBeenCalledTimes(4);
+    for (let i = 0; i < 33; i++) await execute(opts, "web_search", { query: `lead ${i}` }, controller.signal);
+    expect(mocks.search).toHaveBeenCalledTimes(33);
+    expect(mocks.search.mock.lastCall?.[1]).toBe(controller.signal);
+    expect(opts).not.toHaveProperty("prepareStep");
   });
 
   it("keeps operation budgets and successful-query dedup independent for each run", async () => {
@@ -154,38 +108,6 @@ describe("searchViaFlash", () => {
     expect(mocks.search).toHaveBeenCalledTimes(5);
   });
 
-  it("synthesizes a grounded, explicitly limited report after operation exhaustion", async () => {
-    mocks.search.mockImplementation(async ({ query }: { query: string }) => ({
-      results: [{ title: query, url: `https://example.com/${query}`, summary: "Evidence" }],
-    }));
-    mocks.runSubAgent.mockImplementation(async (opts: Options) => {
-      for (let i = 0; i < 4; i++) await execute(opts, "web_search", { query: `q${i}` });
-      const exhausted = (await execute(opts, "web_search", { query: "q4" })) as { note?: string };
-      expect(exhausted.note).toMatch(/Synthesize your answer/i);
-      return {
-        ...success,
-        report: { answer: "Synthesized answer.", recommendation: "Partial coverage.", suggested_reads: [] },
-        sources: [{ sourceType: "url", title: "Invented", url: "https://invented.example" }],
-      };
-    });
-    const out = await searchViaFlash("q", undefined, { scout: true });
-    expect(out.answer).toBe("Synthesized answer.");
-    expect(out.truncated).toBe(true);
-    expect(out.recommendation).toContain("Partial coverage.");
-    expect(out.recommendation).toContain("Search budget exhausted");
-    expect(out.recommendation).toContain("follow-up research run");
-    expect(out.searchStats).toEqual({
-      operationLimit: 4,
-      operationsStarted: 4,
-      operationsSucceeded: 4,
-      duplicateHits: 0,
-      inFlightHits: 0,
-      exhausted: true,
-    });
-    expect(out.sources).toHaveLength(4);
-    expect(out.sources).not.toContainEqual({ title: "Invented", url: "https://invented.example" });
-  });
-
   it.each(["http://localhost/a", "http://169.254.169.254", "file:///etc/passwd"])("rejects unsafe page URL %s", async (url) => {
     const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
     await searchViaFlash("q");
@@ -193,58 +115,17 @@ describe("searchViaFlash", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("retains redirect validation for page reads", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } }));
-    vi.stubGlobal("fetch", fetch);
+  it("can examine further images while investigation calls for them", async () => {
     await searchViaFlash("q");
-    expect(await execute(options(), "webFetch", { url: "https://example.com" })).toContain("private network");
-    expect(fetch).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++) expect(await execute(options(), "viewImage", { url: `https://example.com/${i}.png` })).toBe("Image description");
+    expect(mocks.image).toHaveBeenCalledTimes(3);
   });
 
-  it("retains selective page reads and the plain-text size cap", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("first line\nsecond line\n" + "x".repeat(16000))));
+  it("reports progress without contacting the search provider", async () => {
     await searchViaFlash("q");
-    const opts = options();
-    expect(await execute(opts, "webFetch", { url: "https://example.com", range: { type: "lines", start: 1, end: 2 } })).toContain("first line\nsecond line");
-    expect(await execute(opts, "webFetch", { url: "https://example.com" })).toContain("Truncated at 15000 characters");
-  });
-
-  it("keeps the image quota separate and bounded", async () => {
-    await searchViaFlash("q");
-    const opts = options();
-    for (let i = 0; i < 2; i++) expect(await execute(opts, "viewImage", { url: "https://example.com/a.png" })).toBe("Image description");
-    expect(await execute(opts, "viewImage", { url: "https://example.com/b.png" })).toContain("Image-read quota exhausted");
-    expect(mocks.image).toHaveBeenCalledTimes(2);
-  });
-
-  it("requests the final report using the native prepareStep system override", async () => {
-    await searchViaFlash("q");
-    const prep = options().prepareStep!;
-    expect(await prep({ stepNumber: 30, steps: [], messages: [] })).toEqual({});
-    const last = await prep({ stepNumber: 31, steps: [], messages: [] });
-    expect(last?.system).toContain("MUST call searchReport");
-    expect(last?.system).toContain("independent researcher");
-    expect(last?.activeTools).toEqual(["searchReport"]);
-    expect(last?.toolChoice).toBe("auto");
-  });
-
-  it("preserves planning and per-tool progress without consuming search quota in the progress callback", async () => {
-    await searchViaFlash("q");
-    const opts = options();
-    expect(opts.system).toContain("Round 1 may use the query as-is");
-    expect(opts.system).toContain("every later round must either reformulate");
-    expect(opts.system).toContain("1-128 Unicode characters");
-    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 1");
-    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 1");
-    await execute(opts, "web_search", { query: "q", count: 1 });
-    expect(opts.onToolProgress!({ toolName: "web_search", input: { query: "q", count: 1 } })?.line)
-      .toContain("reusing an earlier result");
-    expect(opts.onToolProgress!({ toolName: "web_search", input: { query: "q", count: 2 } })?.line)
-      .toContain("new search operation");
-    expect(opts.onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("round 2");
-    expect(mocks.search).toHaveBeenCalledTimes(1);
-    expect(opts.onToolProgress!({ toolName: "webFetch", input: { url: "https://example.com/a" } })?.line).toContain("example.com");
-    expect(opts.onToolProgress!({ toolName: "searchReport", input: {} })?.line).toContain("Compiling");
+    expect(options().onToolProgress!({ toolName: "web_search", input: {} })?.line).toContain("Searching");
+    expect(options().onToolProgress!({ toolName: "webFetch", input: {} })?.line).toContain("Reading");
+    expect(mocks.search).not.toHaveBeenCalled();
   });
 
   it("recovers an unfiled report as explicitly lower-confidence final text", async () => {
@@ -252,7 +133,7 @@ describe("searchViaFlash", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = await searchViaFlash("q");
     expect(out.answer).toBe("Partial findings");
-    expect(out.recommendation).toContain("without filing the structured searchReport");
+    expect(out.recommendation).toContain("without filing a structured report");
     expect(out.sources).toEqual([]);
   });
 
@@ -265,8 +146,8 @@ describe("searchViaFlash", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = await searchViaFlash("q");
     expect(out.answer).toBe("Partial findings");
-    expect(out.recommendation).toContain("lower-confidence");
-    expect(out.sources).toEqual([{ title: "Docs", url: "https://example.com/docs" }]);
+    expect(out.recommendation).toContain("partial, unverified");
+    expect(out.sources).toEqual([{ title: "Docs", url: "https://example.com/docs", read: false }]);
   });
 
   it("throws failed or empty timed-out runs for outer error classification", async () => {

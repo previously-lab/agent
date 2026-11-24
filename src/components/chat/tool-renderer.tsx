@@ -65,6 +65,7 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
           state={renderState}
         />
       );
+    case "webResearch":
     case "webSearch":
       return (
         <WebSearchRenderer

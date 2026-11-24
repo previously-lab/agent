@@ -21,6 +21,26 @@ function response(events: unknown[], fragment = 7): Response {
 const base: ModelRequest = { messages: [{ role: "user", content: "fixture" }], thinking: true, reasoningEffort: "high", callId: "fixture" };
 
 describe("DeepSeek native protocol", () => {
+  it("keeps waiting for headers and an active stream until the provider finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const headers = Promise.withResolvers<Response>();
+      const firstText = Promise.withResolvers<void>();
+      let writer!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(c) { writer = c; } });
+      const pending = requestDeepSeek(base, part => {
+        if (part.type === "text-delta") firstText.resolve();
+      }, { apiKey: "fixture", fetch: async () => headers.promise });
+      await vi.advanceTimersByTimeAsync(120_000);
+      headers.resolve(new Response(body));
+      writer.enqueue(encoder.encode(`data: ${JSON.stringify(event({content: "first "}))}\n\n`));
+      await firstText.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      writer.enqueue(encoder.encode(`data: ${JSON.stringify(event({content: "last"}, "stop"))}\n\n`));
+      writer.close();
+      expect((await pending).message.content).toBe("first last");
+    } finally { vi.useRealTimers(); }
+  });
   it("announces a ready offer while a sibling is running, preserving provider history order", async () => {
     const slow = Promise.withResolvers<void>();
     const announced = Promise.withResolvers<void>();
@@ -145,6 +165,18 @@ describe("DeepSeek native protocol", () => {
 });
 
 describe("DeepSeek tool loop", () => {
+  it("continues valid tool calls beyond the previous chat step cap", async () => {
+    let round = 0;
+    const completed = await runAgent({
+      tools: { read: tool({ inputSchema: z.object({}), execute: async () => "evidence" }) },
+    }, async () => {
+      if (++round === 24) return { message: { role: "assistant", content: "done" }, toolCalls: [], finishReason: "stop", usage: zeroUsage() };
+      const toolCalls = [{ id: `read-${round}`, type: "function" as const, function: { name: "read", arguments: "{}" } }];
+      return { message: { role: "assistant", content: "", tool_calls: toolCalls }, toolCalls, finishReason: "tool_calls", usage: zeroUsage() };
+    });
+    expect(completed.text).toBe("done");
+    expect(completed.toolResults).toHaveLength(23);
+  });
   it("executes validated tools then returns the full original thinking to the next call", async () => {
     const requests: Array<Record<string, unknown>> = [];
     const execute = vi.fn(async (input: { query: string }, { context }: { context: { timezone: string } }) => `${input.query}:${context.timezone}`);
@@ -280,7 +312,7 @@ describe("DeepSeek tool loop", () => {
       { index: 0, id: "a", function: { name: "first", arguments: "{}" } },
       { index: 1, id: "b", function: { name: "second", arguments: "{}" } },
     ] }), event({}, "tool_calls")]));
-    const result = await generateText({ prompt: "fixture", tools: {
+    const result = await generateText({ prompt: "fixture", stopWhen: isStepCount(1), tools: {
       first: tool({ inputSchema: z.object({}), execute: first }), second: tool({ inputSchema: z.object({}), execute: second }),
     } }, { fetch: fetcher, apiKey: "fixture" });
     expect(starts).toEqual(["first", "second"]);
@@ -294,7 +326,7 @@ describe("DeepSeek tool loop", () => {
     const fetcher = vi.fn(async () => response([event({ tool_calls: [
       { index: 0, id: "failure", function: { name: "read", arguments: "{}" } },
     ] }), event({}, "tool_calls")]));
-    const result = await generateText({ prompt: "fixture", tools: {
+    const result = await generateText({ prompt: "fixture", stopWhen: isStepCount(1), tools: {
       read: tool({ inputSchema: z.object({}), execute: async () => { throw new Error("page unavailable"); } }),
     } }, { fetch: fetcher, apiKey: "fixture" });
     expect(result.toolResults[0].error).toBe("page unavailable");

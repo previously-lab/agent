@@ -15,26 +15,31 @@ export const scenarioRecallTargetSchema = z.object({
 export type ScenarioRecallTarget = z.infer<typeof scenarioRecallTargetSchema>;
 
 export const scenarioRecallRequestSchema = z.object({
-  question: z.string().trim().min(1).max(4000).describe("The focused question to recover from earlier conversations, including relevant context and what remains uncertain."),
-  refs: z.array(recordRef).max(4).optional()
-    .describe("Up to four known original conversation refs. Omit to let recollection locate scenarios. Semantic documents are outside this tool."),
+  question: z.string().trim().min(1).describe("The focused question to recover from earlier conversations, including relevant context and what remains uncertain."),
+  refs: z.array(recordRef).optional()
+    .describe("Known original conversation refs. Omit to let recollection locate scenarios. Semantic documents are outside this tool."),
   searchOtherRecords: z.boolean().optional()
     .describe("Set true when a known ref is only a starting point and the question needs other conversations too. A single already-read short record can otherwise return its verified original turns directly."),
-  targets: z.array(scenarioRecallTargetSchema).max(8).optional()
+  targets: z.array(scenarioRecallTargetSchema).optional()
     .describe("Known exact original messages. With targets alone, the host reads those messages by ID and role and returns verified original excerpts without a model search."),
-  searchTerms: z.array(z.string().trim().min(1).max(80)).min(1).max(5).optional()
+  searchTerms: z.array(z.string().trim().min(1)).min(1).optional()
     .describe("Literal keywords to find in original user messages within the supplied refs only. Requires at least one ref; omit targets and cursor. No model or wider search is used."),
+  matchOffset: z.number().int().nonnegative().optional()
+    .describe("For a keyword lookup, use coverage.keywordSearch.nextMatchOffset with the same refs and terms to retrieve further matching messages."),
   after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date lower bound, YYYY-MM-DD. Omit when uncertain."),
   before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Optional inclusive UTC slice-date upper bound, YYYY-MM-DD. Omit when uncertain."),
   cursor: recordRef.optional()
     .describe("Exclusive continuation cursor returned as coverage.nextCursor. If missing coverage matters, reuse the same question and date window to scan older records; omit for the newest page."),
 }).strict().superRefine((request, context) => {
-  if (request.searchTerms === undefined) return;
+  if (request.searchTerms === undefined) {
+    if (request.matchOffset !== undefined) context.addIssue({ code: "custom", path: ["matchOffset"], message: "matchOffset requires searchTerms" });
+    return;
+  }
   if (!request.refs?.length || request.targets !== undefined || request.cursor !== undefined || request.searchOtherRecords) {
     context.addIssue({
       code: "custom",
       path: ["searchTerms"],
-      message: "searchTerms requires one to four refs and cannot be combined with targets, cursor, or searchOtherRecords",
+      message: "searchTerms requires known refs and cannot be combined with targets, cursor, or searchOtherRecords",
     });
   }
 });

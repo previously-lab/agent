@@ -11,7 +11,7 @@ import {
   guardDialogueRead,
   resolveDialogueScope,
 } from "@/lib/dialogue/runtime";
-import { readArchivedDialogueArtifact } from "@/lib/episodic/dialogue-artifact-archive";
+import { readArchivedDialogueArtifact, readRecordedDialogueArtifact } from "@/lib/episodic/dialogue-artifact-archive";
 
 export async function GET(
   request: Request,
@@ -24,14 +24,15 @@ export async function GET(
     if (!/^[a-f0-9]{64}$/.test(artifactId)) {
       return Response.json({ code: "dialogue_not_found", error: "Artifact unavailable" }, { status: 404 });
     }
-    const persona = new URL(request.url).searchParams.get("persona");
+    const query = new URL(request.url).searchParams;
+    const scope = resolveDialogueScope(query.get("persona"));
     const store = await getDialogueStore();
-    const found = await store.artifact(resolveDialogueScope(persona), artifactId);
-    const archived = found ? null : await readArchivedDialogueArtifact(artifactId);
-    if (!found && !archived) {
+    const found = await store.artifact(scope, artifactId) ?? await readArchivedDialogueArtifact(artifactId)
+      ?? await readRecordedDialogueArtifact(artifactId, query.get("publicationId") ?? "", scope);
+    if (!found) {
       return Response.json({ code: "dialogue_not_found", error: "Artifact unavailable" }, { status: 404 });
     }
-    return Response.json(found ?? archived);
+    return Response.json(found);
   } catch (error) {
     return dialogueResponseError(error);
   }

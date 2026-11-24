@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import matter from "gray-matter";
 import { caseDirPath, type CaseCategory } from "./paths";
-import { documentSize, exceededSize } from "./write-limits";
+import { documentSize } from "./write-limits";
 
 export const HISTORY_ARCHIVE_NAME = /^\d{4}-\d{2}-\d{2}-history-v1-(index|current)-[a-f0-9]{16}-\d{4,}\.md$/i;
 export function isHistoryArchiveFileName(path: string): boolean { return HISTORY_ARCHIVE_NAME.test(path.split("/").at(-1) ?? ""); }
@@ -42,7 +42,7 @@ export function planHistoryArchive(input: {
   const stem = `${input.date}-history-v1-${input.source === "index.md" ? "index" : "current"}-${sourceRevision.slice(0, 16)}-`;
   const pathAt = (part: number) => `${prefix}/${stem}${String(part).padStart(4, "0")}.md`;
   const refAt = (part: number) => pathAt(part).slice("memory/".length, -3);
-  // Reserve ample metadata space, then validate the complete serialized shard below.
+  // Split large sources for convenient reading; every byte is retained across the chain.
   const chunks: string[] = [];
   let chunk = "";
   let characters = 0, bytes = 0, breaks = 0;
@@ -71,7 +71,6 @@ export function planHistoryArchive(input: {
     offset = end;
     // Day precision is deliberate: retrying the same source later that day is byte-identical.
     const content = serializeArchive(payload, metadata, input.date, input.date);
-    if (exceededSize(documentSize(content)).length) throw new Error("History archive metadata exceeds the document budget");
     return { path: pathAt(index + 1), content };
   });
   return { headRef: refAt(1), entries, sourceRevision };

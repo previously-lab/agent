@@ -544,7 +544,7 @@ function buildExpanded(
     case "unknown":
       return (
         <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-          {parsed.text.length > 3000 ? parsed.text.slice(0, 3000) + "\n…" : parsed.text}
+          {parsed.text}
         </pre>
       );
   }

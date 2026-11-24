@@ -75,18 +75,6 @@ vi.mock("@/lib/episodic/rework-signal", () => ({
 vi.mock("@/lib/agents/sub-agent-runner", () => ({
   resolveSubAgentModel: deps.resolveSubAgentModel,
 }));
-vi.mock("@/lib/chat/step-timeout", () => ({
-  // Passthrough: run the work immediately and report success.
-  withStepTimeout: vi.fn(
-    async (fn: () => Promise<unknown>) => ({
-      ok: true,
-      timedOut: false,
-      result: await fn(),
-      elapsedMs: 1,
-    }),
-  ),
-  StepTimeoutError: class StepTimeoutError extends Error {},
-}));
 
 // The workflow run writable — captured so tests can assert the data-* chunks
 // the executors stream to the client (data-tool-progress).
@@ -113,8 +101,10 @@ const searchFlashDeps = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/search/flash-search", () => ({
   searchViaFlash: searchFlashDeps.searchViaFlash,
-  SEARCH_TIMEOUT_MS: 600_000,
 }));
+
+const nativeWeb = vi.hoisted(() => ({ deepseekWebSearch: vi.fn(), deepseekWebFetch: vi.fn() }));
+vi.mock("@/lib/search/deepseek-web", () => nativeWeb);
 
 const visionDeps = vi.hoisted(() => ({
   describeImage: vi.fn(),
@@ -128,6 +118,8 @@ import {
   describeRoomExecute,
   recallReadExecute,
   webSearchExecute,
+  searchWebSourcesExecute,
+  webFetchExecute,
   viewImageExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
@@ -472,6 +464,24 @@ describe("webSearchExecute failure triage", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps a direct search, page fetch, or deep research failure in its own tool result", async () => {
+    const failure = new Error("DeepSeek failed (HTTP 503)");
+    nativeWeb.deepseekWebSearch.mockRejectedValueOnce(failure);
+    nativeWeb.deepseekWebFetch.mockRejectedValueOnce(failure);
+    searchFlashDeps.searchViaFlash.mockRejectedValueOnce(failure);
+    const options = { context: makeCtx(), toolCallId: "tc-web" };
+    await expect(searchWebSourcesExecute({ query: "q" }, options)).resolves.toMatchObject({ error: expect.stringContaining("503") });
+    await expect(webFetchExecute({ url: "https://example.com" }, options)).resolves.toContain("503");
+    await expect(webSearchExecute({ query: "q" }, options)).resolves.toMatchObject({ error: expect.stringContaining("503") });
+  });
+
+  it("preserves an explicit cancellation at the direct tool boundary", async () => {
+    const reason = new DOMException("Stopped by user", "AbortError");
+    const signal = AbortSignal.abort(reason);
+    nativeWeb.deepseekWebSearch.mockRejectedValueOnce(reason);
+    await expect(searchWebSourcesExecute({ query: "q" }, { context: makeCtx(), toolCallId: "cancelled", abortSignal: signal })).rejects.toBe(reason);
+  });
+
   it("returns an error tool result (never throws) when the adapter fails deterministically — the tool_use stays paired", async () => {
     // The web_search_tool_result_error schema crash (AI_TypeValidationError)
     // is DETERMINISTIC: it must surface as a model-readable tool result so the
@@ -487,7 +497,7 @@ describe("webSearchExecute failure triage", () => {
     );
     expect(out).toHaveProperty("error");
     const { error } = out as { error: string };
-    expect(error).toContain("[webSearch unavailable]");
+    expect(error).toContain("[webResearch unavailable]");
     expect(error).toContain("deterministic failure");
   });
 });

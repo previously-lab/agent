@@ -28,12 +28,11 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
   const allResults: ToolResult[] = [];
   const totalUsage = zeroUsage();
   const stopConditions = options.stopWhen ? (Array.isArray(options.stopWhen) ? options.stopWhen : [options.stopWhen]) : [];
-  // Every caller has a finite loop. A report-only one-shot needs no executor.
-  const stepLimit = Math.max(1, ...stopConditions.map((stop) => stop.maxSteps ?? 1));
   let finishReason = "stop";
   let finalText = "";
   let allReasoning = "";
-  for (let stepNumber = 0; stepNumber < stepLimit; stepNumber++) {
+  for (let stepNumber = 0; ; stepNumber++) {
+    options.abortSignal?.throwIfAborted();
     const preparation = await options.prepareStep?.({ stepNumber, steps, messages });
     if (preparation?.system !== undefined) {
       if (messages[0]?.role === "system") messages[0] = { role: "system", content: preparation.system };
@@ -47,7 +46,7 @@ export async function runAgent<Tools extends ToolSet = ToolSet>(
       ...(options.publicWording ? { publicWording: true } : {}),
       toolChoice: preparation?.toolChoice ?? options.toolChoice,
       thinking: settings.thinking, reasoningEffort: settings.effort, temperature: options.temperature,
-      callId: `${callPrefix}:${stepNumber}`, timeoutMs: options.timeout, maxRetries: options.maxRetries,
+      callId: `${callPrefix}:${stepNumber}`, maxRetries: options.maxRetries,
       ...(options.sessionId ? { sessionId: options.sessionId } : {}) });
     // A length/error finish may include an incomplete tool_calls fragment.
     // Preserve its text/thinking, but never leave unpaired calls in continuation.

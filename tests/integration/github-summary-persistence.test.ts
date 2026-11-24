@@ -13,26 +13,32 @@ vi.mock("@/lib/episodic/flash/turn-analyzer", () => ({ analyzeTurn: async () => 
 const env = { STORAGE: process.env.STORAGE, GITHUB_REPO_OWNER: process.env.GITHUB_REPO_OWNER, GITHUB_REPO_NAME: process.env.GITHUB_REPO_NAME };
 beforeAll(() => { createNextDataCacheContext(); });
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
 describe("GitHub summary writes with real transport and ref conflicts", () => {
   it("reassembles from the new HEAD after a concurrent writer, then dedupes replay", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-22T08:02:00Z"));
+    // The turn's at/date fields drive historical placement. Octokit's real
+    // mutation scheduler needs an advancing wall clock across writes and retries.
     process.env.STORAGE = "github"; process.env.GITHUB_REPO_OWNER = "fixture"; process.env.GITHUB_REPO_NAME = "records";
     vi.resetModules();
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const file = "memory/records/2026/10/22/0800/core.md";
-    const original = "---\nslice_id: 2026-10-22-0800\nstart: 2026-10-22T08:00:00Z\n---\n\n## Turn older1 \u2014 2026-10-22T08:00:00Z (user)\n\nOld question\n";
-    const remote = original + "\n## Turn other1 \u2014 2026-10-22T08:01:00Z (user)\n\nConcurrent question\n\n## Turn other1 \u2014 2026-10-22T08:01:00Z (agent)\n\nConcurrent answer\n";
+    const minute = Math.floor(Date.now() / 60_000) * 60_000;
+    const start = new Date(minute).toISOString();
+    const concurrentAt = new Date(minute + 1).toISOString();
+    const ownAt = new Date(minute + 2).toISOString();
+    const date = start.slice(0, 10);
+    const hhmm = start.slice(11, 16).replace(":", "");
+    const sliceId = `${date}-${hhmm}`;
+    const file = `memory/records/${date.replaceAll("-", "/")}/${hhmm}/core.md`;
+    const original = `---\nslice_id: ${sliceId}\nstart: ${start}\n---\n\n## Turn older1 \u2014 ${start} (user)\n\nOld question\n`;
+    const remote = original + `\n## Turn other1 \u2014 ${concurrentAt} (user)\n\nConcurrent question\n\n## Turn other1 \u2014 ${concurrentAt} (agent)\n\nConcurrent answer\n`;
     const repository = createGitHubRecordRepository({ [file]: original });
     const { createOctokitForTest } = await import("@/lib/github/client");
     fixture.client = createOctokitForTest(repository.fetch);
     const { persistTurnSummary } = await import("@/app/api/chat/steps");
-    const payload: SummaryRunPayload = { sliceId: "2026-10-22-0800", burstId: "burst", date: "2026-10-22", own: { turnId: "mine1", clientMessageId: "client-mine", sliceId: "2026-10-22-0800", at: "2026-10-22T08:02:00Z", userText: "My question", replyText: "My answer", cognition: "" }, slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 40 }, clientTimezone: "UTC", modelConfig: { id: "fixture", sdk: "deepseek" } as SummaryRunPayload["modelConfig"], useGithub: true, useDemo: false, owner: "fixture", repo: "records", locale: "en" };
+    const payload: SummaryRunPayload = { sliceId, burstId: "burst", date, own: { turnId: "mine1", clientMessageId: "client-mine", sliceId, at: ownAt, userText: "My question", replyText: "My answer", cognition: "" }, slicing: { idleGapMinutes: 720, maxSliceMinutes: 30, maxTurnsPerSlice: 40 }, clientTimezone: "UTC", modelConfig: { id: "fixture", sdk: "deepseek" } as SummaryRunPayload["modelConfig"], useGithub: true, useDemo: false, owner: "fixture", repo: "records", locale: "en" };
     repository.interfereNextRef({ [file]: remote });
     const context = createNextDataCacheContext();
     await context.run(async () => {

@@ -7,17 +7,26 @@ import { isValidCaseName } from "@/lib/docs/case-naming";
 const BEGIN = "<!-- PREVIOUSLY_CASE_READ_RECEIPT\n";
 const END = "\n<!-- /PREVIOUSLY_CASE_READ_RECEIPT -->";
 
+const pageSchema = z.object({
+  revision: z.string().regex(/^[a-f0-9]{64}$/),
+  start: z.number().int().nonnegative(),
+  end: z.number().int().positive(),
+  total: z.number().int().positive(),
+}).strict().refine(page => page.start < page.end && page.end <= page.total);
+export type CaseReadPage = z.infer<typeof pageSchema>;
+
 export const caseReadReceiptSchema = z.object({
   version: z.literal(1),
   toolName: z.literal("recallRead"),
-  coverage: z.literal("full-index"),
+  coverage: z.enum(["full-index", "index-page"]),
+  page: pageSchema.optional(),
   toolCallId: z.string().min(1).max(256),
   scopeId: z.string().min(1).max(512),
   requestedRef: z.string().min(1).max(2048),
   ref: z.string().min(1).max(2048),
   path: z.string().min(1).max(4096),
   revision: z.string().regex(/^[0-9a-f]{64}$/),
-}).strict();
+}).strict().refine(receipt => (receipt.coverage === "index-page") === Boolean(receipt.page));
 
 export type CaseReadReceipt = z.infer<typeof caseReadReceiptSchema>;
 
@@ -28,10 +37,12 @@ export function createCaseReadEnvelope(input: {
   category: CaseCategory;
   caseName: string;
   revision: string;
+  page?: CaseReadPage;
   rendered: string;
 }): string {
   const receipt = caseReadReceiptSchema.parse({
-    version: 1, toolName: "recallRead", coverage: "full-index",
+    version: 1, toolName: "recallRead", coverage: input.page ? "index-page" : "full-index",
+    ...(input.page ? { page: input.page } : {}),
     toolCallId: input.toolCallId, scopeId: input.scopeId,
     requestedRef: input.requestedRef.trim(),
     ref: `${input.category}/${input.caseName}`,
@@ -98,5 +109,24 @@ export function findCaseReadReceipt(input: {
       receipts.push(candidate);
     }
   }
-  return receipts.filter((receipt) => !invalidIds.has(receipt.toolCallId)).at(-1) ?? null;
+  const groups = new Map<string, CaseReadPage[]>();
+  let latest: CaseReadReceipt | null = null;
+  for (const receipt of receipts.filter(receipt => !invalidIds.has(receipt.toolCallId))) {
+    if (!receipt.page) { latest = receipt; continue; }
+    const { page } = receipt;
+    const key = JSON.stringify([receipt.revision, page.revision, page.total]);
+    const pages = groups.get(key) ?? [];
+    pages.push(page);
+    groups.set(key, pages);
+    let through = 0;
+    for (const observed of pages.sort((a, b) => a.start - b.start)) {
+      if (observed.start > through) break;
+      through = Math.max(through, observed.end);
+    }
+    if (through === page.total) {
+      const { page: _page, ...full } = receipt;
+      latest = { ...full, coverage: "full-index" };
+    }
+  }
+  return latest;
 }

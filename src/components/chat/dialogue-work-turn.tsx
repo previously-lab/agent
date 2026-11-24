@@ -25,12 +25,12 @@ export function DialogueWorkTurn({ seat: { work, replying, replies = [], preview
   const blocks = replies.flatMap<ContentBlockV1 | UIMessagePart>(reply => reply.kind === "utterance" ? reply.utterance.blocks : reply.message.parts);
   return <div className="conversation-stream-row dialogue-publication" data-dialogue-work-turn={work.workId} data-dialogue-reply={work.inputId}>
     <ConversationTurn role="assistant">
-      <DialogueWorkCaption work={work} persona={persona} replying={replying}
+      <DialogueWorkCaption work={work} persona={persona} replying={replying} hasPublishedReply={replies.length > 0}
         onCancel={onCancel} onRetry={onRetry} onResume={onResume} />
       <div className="dialogue-continuous-reply">
         {replies.map(reply => reply.kind === "utterance" ? <div className="dialogue-publication" key={reply.id}
           data-public-utterance={reply.utterance.utteranceId} data-public-seq={reply.utterance.publicSeq}>
-          <DialogueContent blocks={reply.utterance.blocks} mode="interactive" artifactBodies={reply.artifactBodies} />
+          <DialogueContent blocks={reply.utterance.blocks} mode="interactive" publicationId={reply.utterance.utteranceId} artifactBodies={reply.artifactBodies} />
         </div> : <div className="conversation-prose" key={reply.id} data-dialogue-message={reply.id}>
           <MarkdownRenderer content={reply.message.parts.flatMap(part => part.type === "text" ? [part.text] : []).join("\n\n")} isStreaming={reply.isStreaming} />
         </div>)}

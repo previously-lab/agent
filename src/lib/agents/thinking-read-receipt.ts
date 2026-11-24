@@ -5,7 +5,7 @@ import { parseCanonicalDocumentRef } from "@/lib/documents/document-link";
 
 const BEGIN = "<!-- PREVIOUSLY_THINKING_READ_V1\n";
 const END = "\n-->\n";
-const READ_TOOLS = new Set(["recallRead", "recallSearch", "recallScenario", "webFetch", "webSearch", "viewImage"]);
+const READ_TOOLS = new Set(["recallRead", "recallSearch", "recallScenario", "webFetch", "webSearch", "webResearch", "viewImage"]);
 const reading = z.object({
   evidenceId: z.string().min(1).max(512),
   ref: z.string().min(1).max(2048),
@@ -17,18 +17,18 @@ const reading = z.object({
   role: z.enum(["user", "assistant"]).optional(),
   turnId: z.string().min(1).max(128).optional(),
   turnIndex: z.number().int().nonnegative().optional(),
-  excerpt: z.string().max(1200).optional(),
+  excerpt: z.string().optional(),
   /** Search presentation only. The source read retains excerpt coverage. */
   completeEditionBody: z.literal(true).optional(),
   /** Host verified the excerpt's original section before the search window removed headings. */
   partialEvidenceEligible: z.literal(true).optional(),
   /** Record IDs mentioned in the document text. Navigation only. */
-  mentionedSliceIds: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/)).max(100).optional(),
+  mentionedSliceIds: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/)).optional(),
   range: z.object({ start: z.number().int().positive(), end: z.number().int().positive() }).strict().optional(),
 }).strict();
 const receiptSchema = z.object({
   version: z.literal(1), scopeId: z.string().min(1).max(512), toolCallId: z.string().min(1).max(256),
-  reads: z.array(reading).max(24),
+  reads: z.array(reading),
 }).strict();
 
 export type ThinkingRead = z.infer<typeof reading>;
@@ -47,7 +47,7 @@ function validSearchPassages(reads: ThinkingRead[]): boolean {
 
 export function createThinkingReadReceipt(scopeId: string, toolCallId: string, reads: readonly Omit<ThinkingRead, "evidenceId">[]): ThinkingReadReceipt {
   return receiptSchema.parse({ version: 1, scopeId, toolCallId,
-    reads: reads.slice(0, 24).map((read, index) => ({ ...read, evidenceId: `${toolCallId}:${index + 1}` })) });
+    reads: reads.map((read, index) => ({ ...read, evidenceId: `${toolCallId}:${index + 1}` })) });
 }
 
 export function wrapThinkingRead(receipt: ThinkingReadReceipt, text: string): string {
@@ -62,7 +62,7 @@ export function readReceipt(output: unknown): ThinkingReadReceipt | null {
     const text = parseCaseReadEnvelope(output)?.body ?? output;
     if (!text.startsWith(BEGIN)) return null;
     const end = text.indexOf(END, BEGIN.length);
-    if (end < 0 || end - BEGIN.length > 96_000) return null;
+    if (end < 0) return null;
     try { candidate = JSON.parse(text.slice(BEGIN.length, end)); }
     catch { return null; }
   } else if (output && typeof output === "object" && "thinkingReceipt" in output) {

@@ -20,8 +20,6 @@ import {
   closeChildStream,
 } from "./steps";
 
-const ACK_SOURCE_POLLS = 5;
-
 export async function summaryRun(
   payload: SummaryRunPayload,
 ): Promise<SummaryRunOutcome> {
@@ -39,39 +37,35 @@ export async function summaryRun(
     );
     if (verified.length === 0) return saved;
     const acknowledgements: TaskAckSettlement[] = [];
-    for (const member of verified) {
-      if (member.taskAckIntents.length === 0) continue;
-      if (member.finishReason !== "stop" || member.error || !member.sourceRunId) {
-        acknowledgements.push({
-          kind: "source", id: member.sourceRunId ?? member.reply.turnId,
-          status: "skipped",
-          detail: `Task acknowledgment requires a clean stop without error and original run id; finish=${member.finishReason ?? "unknown"}`,
-        });
-        continue;
+    // startSummaryRun returns a run ID to the source; the source never waits
+    // for this workflow. Other members can settle while one source is still live.
+    let pending = verified.filter(member => member.taskAckIntents.length);
+    let delay = 1_000;
+    while (pending.length) {
+      const next: VerifiedTaskReply[] = [];
+      for (const member of pending) {
+        if (member.finishReason !== "stop" || member.error || !member.sourceRunId) {
+          acknowledgements.push({
+            kind: "source", id: member.sourceRunId ?? member.reply.turnId, status: "skipped",
+            detail: `Task acknowledgment requires a clean stop without error and original run id; finish=${member.finishReason ?? "unknown"}`,
+          });
+          continue;
+        }
+        const status = await readSourceRunStatusForAck(member.sourceRunId);
+        if (status === "pending" || status === "running" || status === "unavailable") {
+          next.push(member);
+        } else if (status === "completed") {
+          acknowledgements.push(...await acknowledgeSavedTaskFollowups(member, payload.clientTimezone));
+        } else {
+          acknowledgements.push({ kind: "source", id: member.sourceRunId, status: "skipped",
+            detail: `Task acknowledgment not consumed: source workflow status=${status}` });
+        }
       }
-
-      let sourceStatus = await readSourceRunStatusForAck(member.sourceRunId);
-      for (
-        let poll = 1;
-        (sourceStatus === "pending" || sourceStatus === "running") && poll < ACK_SOURCE_POLLS;
-        poll += 1
-      ) {
-        await sleep("1s");
-        sourceStatus = await readSourceRunStatusForAck(member.sourceRunId);
+      pending = next;
+      if (pending.length) {
+        await sleep(delay);
+        delay = Math.min(60_000, delay * 2);
       }
-      if (sourceStatus === "completed") {
-        acknowledgements.push(...await acknowledgeSavedTaskFollowups(member, payload.clientTimezone));
-        continue;
-      }
-      const deferred: TaskAckSettlement = {
-        kind: "source",
-        id: member.sourceRunId,
-        status: sourceStatus === "pending" || sourceStatus === "running" || sourceStatus === "unavailable"
-          ? "pending"
-          : "skipped",
-        detail: `Task acknowledgment not consumed: source workflow status=${sourceStatus}`,
-      };
-      acknowledgements.push(deferred);
     }
     return { ...saved, acknowledgements };
   } finally {

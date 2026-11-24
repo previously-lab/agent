@@ -32,6 +32,9 @@
  * and that seal is what rings the unit.
  */
 import { getRun } from "workflow/api";
+import { getWorld } from "workflow/runtime";
+import { WorkflowRunNotFoundError } from "workflow/errors";
+import { markDialogueWorkStopped } from "@/lib/dialogue/work-cancellation";
 import { guardRequest } from "@/lib/security/origin-guard";
 import {
   NESTED_BUBBLE_CHUNK,
@@ -87,7 +90,15 @@ export async function POST(
   const { runId } = await params;
   try {
     const run = getRun(runId);
-    const status = await run.status;
+    const { runs } = await getWorld();
+    const row = await runs.get(runId, { resolveData: "none" });
+    const status = row.status;
+    // Older clients submitted the shared Actor ID alongside the parent. Its
+    // lease also serves other inputs; the parent's stop fences this work.
+    if (row.attributes?.role === "dialogueOrchestrator") {
+      return Response.json({ ok: true, cancelled: false, status });
+    }
+    if (row.attributes?.role === "thinking") await markDialogueWorkStopped(runId);
     const parentActive = status === "pending" || status === "running";
     let nestedChildren: string[] = [];
     if (parentActive) {
@@ -107,10 +118,10 @@ export async function POST(
       console.warn(`[chat/cancel] offer roster unavailable for ${runId}:`, error instanceof Error ? error.message : error);
       return [];
     });
-    const inflightOffers = await Promise.all(offeredChildren.map(async (offer) => {
+    const inflightOffers = await Promise.all(offeredChildren.filter(offer => offer.runId !== runId).map(async (offer) => {
       try {
-        const childStatus = await getRun(offer.runId).status;
-        return childStatus === "pending" || childStatus === "running" ? offer.runId : null;
+        const child = await runs.get(offer.runId, { resolveData: "none" });
+        return child.attributes?.role !== "dialogueOrchestrator" && (child.status === "pending" || child.status === "running") ? offer.runId : null;
       } catch (error) {
         console.warn(`[chat/cancel] offered child ${offer.runId} status unavailable (cancel skipped):`,
           error instanceof Error ? error.message : error);
@@ -135,11 +146,13 @@ export async function POST(
       ? { ok: true, cancelled: true }
       : { ok: true, cancelled: false, status });
   } catch (error) {
-    // A gone run is as good as a cancelled one for the caller's purpose.
+    if (WorkflowRunNotFoundError.is(error)) {
+      return Response.json({ ok: true, cancelled: false, status: "gone" });
+    }
     console.warn(
       `[chat/cancel] run ${runId} unavailable:`,
       error instanceof Error ? error.message : error,
     );
-    return Response.json({ ok: true, cancelled: false, status: "gone" });
+    return Response.json({ ok: false, error: "Could not confirm that the work was stopped." }, { status: 503 });
   }
 }

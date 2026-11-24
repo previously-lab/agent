@@ -31,8 +31,6 @@ import {
   directionSubstance,
   retireExpiredHypotheses,
   applyDirectionOps,
-  DIRECTION_MAX_CHARS,
-  DIRECTION_HYPOTHESES_MAX,
 } from "@/lib/evolution/direction-agent";
 
 const DIMENSIONS = [
@@ -130,13 +128,13 @@ describe("validateDirectionProposal", () => {
     expect(validateDirectionProposal(VALID_PROPOSAL, VALID_PROPOSAL).ok).toBe(false);
   });
 
-  it("rejects an over-cap proposal", () => {
-    const fat = VALID_PROPOSAL + "x".repeat(DIRECTION_MAX_CHARS);
-    expect(validateDirectionProposal(fat, null).ok).toBe(false);
+  it("accepts a long structurally valid proposal", () => {
+    const fat = VALID_PROPOSAL.replace("## Patterns & loops", "## Patterns & loops\n\n" + "x".repeat(12_001));
+    expect(validateDirectionProposal(fat, null).ok).toBe(true);
   });
 
-  it("rejects a hypothesis pool beyond the bound", () => {
-    const lines = Array.from({ length: DIRECTION_HYPOTHESES_MAX + 1 }, (_, i) =>
+  it("accepts additional well-formed hypotheses", () => {
+    const lines = Array.from({ length: 11 }, (_, i) =>
       hypLine("2026-08-20-1430", `Guess number ${i + 1}`),
     ).join("\n");
     const doc = VALID_PROPOSAL.replace(
@@ -144,8 +142,7 @@ describe("validateDirectionProposal", () => {
       `# Hypotheses\n\n${lines}`,
     );
     const res = validateDirectionProposal(doc, null);
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("too many hypotheses");
+    expect(res.ok).toBe(true);
   });
 
   it("rejects a hypothesis line without the structured metadata", () => {
@@ -411,7 +408,7 @@ describe("applyDirectionOps (the atomic write path)", () => {
     expect(doc).toBe(BASE);
   });
 
-  it("stamps the [proposed] pointer itself on add_hypothesis and enforces the pool cap", () => {
+  it("stamps the [proposed] pointer itself on add_hypothesis and keeps additional hypotheses", () => {
     const { doc, results } = applyDirectionOps(
       BASE,
       [{ op: "add_hypothesis", text: "The user may prefer plans over open exploration", falsify: "they reject structure twice" }],
@@ -433,8 +430,8 @@ describe("applyDirectionOps (the atomic write path)", () => {
       [{ op: "add_hypothesis", text: "one too many", falsify: "x" }],
       { sliceId: SLICE },
     );
-    expect(full.results[0].ok).toBe(false);
-    expect(full.results[0].detail).toContain("pool is full");
+    expect(full.results[0].ok).toBe(true);
+    expect(full.doc).toContain("one too many");
   });
 
   it("promote_hypothesis removes the guess AND lands the portrait entry in the same call", () => {

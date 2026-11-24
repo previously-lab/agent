@@ -1,12 +1,10 @@
-import { IMAGE_ATTACHMENT_LIMITS } from "@/lib/chat/image-attachments";
-
 export class ImageAttachmentError extends Error {
   constructor(public readonly code: string, message: string, public readonly status = 400) { super(message); }
 }
 /** Read raster signatures and intrinsic dimensions without executing a decoder
  * or trusting the extension/client MIME. SVG is deliberately not an upload. */
 export function inspectImage(data: Buffer): { mediaType: string; extension: string; width: number; height: number } {
-  if (!data.length || data.length > IMAGE_ATTACHMENT_LIMITS.maxBytes) throw new ImageAttachmentError("image_size", "Image must be between 1 byte and 5MB", 413);
+  if (!data.length) throw new ImageAttachmentError("image_size", "The image is empty", 400);
   let width = 0, height = 0, mediaType = "", extension = "";
   if (data.length >= 33 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && data.toString("ascii", 12, 16) === "IHDR") {
     let offset = 8, ended = false, pixels = false;

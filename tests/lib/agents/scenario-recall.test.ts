@@ -6,9 +6,6 @@ vi.mock("@/lib/deepseek/generate", () => ({ streamText: native.streamText }));
 vi.mock("workflow", () => ({ getWritable: vi.fn() }));
 vi.mock("@/lib/evolution/store", () => ({ readSelfSopSnapshot: vi.fn() }));
 vi.mock("@/lib/evolution/skill-store", () => ({ readSkillLedger: vi.fn() }));
-vi.mock("@/lib/chat/step-timeout", () => ({
-  withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({ ok: true, result: await work(), elapsedMs: 0 })),
-}));
 
 import { runScenarioRecall, type ScenarioRecallInput, type ScenarioRecallResult } from "@/lib/agents/scenario-recall";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
@@ -136,7 +133,6 @@ function inputFor(backend: RecallBackend, overrides: Partial<ScenarioRecallInput
   return {
     question: "What exact departure time did the user give, and who stated it?",
     backend,
-    timeoutMs: 1_000,
     ...overrides,
   };
 }
@@ -772,14 +768,18 @@ describe("record-only scenario recollection", () => {
     } } });
     expect(result.evidence).toHaveLength(8);
     expect(new Set(result.evidence.map((evidence) => evidence.turnId)).size).toBe(8);
+    const next = await runScenarioRecall(inputFor(backend, {
+      refs: [REF], searchTerms: ["needle"], matchOffset: result.coverage.keywordSearch!.nextMatchOffset,
+    }));
+    expect(next.evidence.map(item => item.turnId)).toEqual(["user-8", "user-9"]);
+    expect(next.coverage.keywordSearch!.nextMatchOffset).toBeUndefined();
     expect(native.streamText).not.toHaveBeenCalled();
   });
 
   it.each([
     { refs: [], searchTerms: ["needle"] },
     { refs: [REF], searchTerms: ["  "] },
-    { refs: [REF], searchTerms: ["a".repeat(81)] },
-    { refs: [REF], searchTerms: ["a", "b", "c", "d", "e", "f"] },
+    { refs: [REF], matchOffset: 1 },
     { refs: [REF], searchTerms: ["needle"], targets: [{ ref: REF, turnId: "u1", role: "user" as const }] },
     { refs: [REF], searchTerms: ["needle"], cursor: REF },
   ])("refuses invalid bounded keyword requests before opening a record: %j", async (input) => {

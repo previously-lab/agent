@@ -4,16 +4,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // only ever touches getRun().status / run.cancel() / run.getReadable().
 const workflowApi = vi.hoisted(() => ({
   getRun: vi.fn(),
+  getRow: vi.fn(),
+  setAttributes: vi.fn(),
 }));
 const dialogueOffers = vi.hoisted(() => ({
   list: vi.fn(),
 }));
+vi.mock("workflow/runtime", () => ({ getWorld: () => ({ runs: { get: workflowApi.getRow, experimentalSetAttributes: workflowApi.setAttributes } }) }));
 vi.mock("workflow/api", () => ({ getRun: workflowApi.getRun }));
 vi.mock("@/lib/dialogue/workflow-offers", () => ({ listDialogueOffers: dialogueOffers.list }));
 
 // The origin guard is exercised in its own tests; here it always passes.
 vi.mock("@/lib/security/origin-guard", () => ({ guardRequest: () => null }));
 
+import { WorkflowRunNotFoundError } from "workflow/errors";
 import { POST } from "@/app/api/chat/[runId]/cancel/route";
 
 function call(runId: string) {
@@ -70,6 +74,8 @@ function bubbleChunk(
 beforeEach(() => {
   vi.clearAllMocks();
   dialogueOffers.list.mockResolvedValue([]);
+  workflowApi.getRow.mockImplementation(async (id: string) => ({ status: await workflowApi.getRun(id).status }));
+  workflowApi.setAttributes.mockResolvedValue({});
 });
 
 describe("POST /api/chat/[runId]/cancel", () => {
@@ -88,6 +94,29 @@ describe("POST /api/chat/[runId]/cancel", () => {
     const res = await call("run_2");
     expect(run.cancel).toHaveBeenCalledOnce();
     expect(await res.json()).toEqual({ ok: true, cancelled: true });
+  });
+
+  it.each(["running", "completed"])("fences a %s thought without cancelling its shared Actor", async status => {
+    const thought = mockRun(status);
+    const actor = mockRun("running");
+    workflowApi.getRun.mockImplementation(id => id === "parent" ? thought : actor);
+    workflowApi.getRow.mockImplementation(async id => id === "parent"
+      ? { status, attributes: { role: "thinking" } }
+      : { status: "running", attributes: { role: "dialogueOrchestrator" } });
+    dialogueOffers.list.mockResolvedValue([{ offerId: "final", runId: "parent" }, { offerId: "old-client", runId: "actor" }]);
+    expect((await call("parent")).ok).toBe(true);
+    expect(workflowApi.setAttributes).toHaveBeenCalledWith("parent", [{ key: "dialogueStopped", value: "1" }]);
+    expect((await call("actor")).ok).toBe(true);
+    expect(actor.cancel).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed durable stop so the client can retry", async () => {
+    workflowApi.getRun.mockReturnValue(mockRun("completed"));
+    workflowApi.getRow.mockResolvedValue({ status: "completed", attributes: { role: "thinking" } });
+    workflowApi.setAttributes.mockRejectedValueOnce(new Error("storage unavailable"));
+    const res = await call("parent");
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false });
   });
 
   it("is a no-op on a terminal run (the stop raced the run's own completion)", async () => {
@@ -123,7 +152,7 @@ describe("POST /api/chat/[runId]/cancel", () => {
 
   it("a gone run resolves as a quiet no-op, never an error", async () => {
     workflowApi.getRun.mockImplementation(() => {
-      throw new Error("run not found");
+      throw new WorkflowRunNotFoundError("run_4");
     });
     const res = await call("run_4");
     expect(res.status).toBe(200);

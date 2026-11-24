@@ -101,9 +101,9 @@ export function buildNativeThinkingMessages(
       ...(work.latestStage ? { latestStage: work.latestStage } : {}),
     })),
     relation: "A relation (new, related, continuation or unclear) describes how this input relates to existing work. Each input retains its own task.",
-    responseModeSelection: "Choose the responseMode for the current request. Include it in completeWork.",
+    responseModeSelection: "Choose the responseMode for the current request. When the user shares news or a feeling, their own account supplies the substance for a chat handoff. A factual request may need an archive lookup. Include the selected mode in completeWork.",
     snapshots: "Read a snapshot with readWorkSnapshot only when its public handoff could fill a material gap or avoid repeating needed work. A related title alone needs no lookup.",
-    completion: "Hand off a useful partial answer with workCheckpoint while investigating the rest. When this input is answered, use completeWork. Do not repeat or complete other inputs. The single dialogue Actor decides how to integrate and phrase the public answer.",
+    completion: "Choose the next action from what the user still needs. If the conversation already supplies it, call completeWork. For two questions with one answer already known, your next tool calls are [workCheckpoint(known answer), lookup(remaining question)] in parallel. If neither answer is known, investigate.",
   };
   return [...checkpointHistory, currentDialogueUserMessage(input, `## Current task contract\n${JSON.stringify(contract)}`)];
 }

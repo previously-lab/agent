@@ -74,7 +74,7 @@ describe("recallScenarioExecutor model and abort contract", () => {
     }
   });
 
-  it("lets the first case passage inform broad recollection without delaying a targeted or independent read", async () => {
+  it("allows a broad recollection alongside a case read and on a subsequent targeted call", async () => {
     const ref = "research/设计记录";
     const original = "records/2026-10-20-0930";
     const question = { question: "What did the test establish?", refs: [original] };
@@ -83,12 +83,12 @@ describe("recallScenarioExecutor model and abort contract", () => {
       { type: "tool-call", toolName: "recallRead", toolCallId: "doc", input: { ref } },
     ] };
     const opts = { context: { ...context, thinkingFlow: true }, toolCallId: "fallback", messages: [batch] };
-    expect(await recallScenarioExecute(question, opts)).toMatchObject({ status: "deferred", evidence: [] });
-    expect(recall.run).not.toHaveBeenCalled();
+    await recallScenarioExecute(question, opts);
+    expect(recall.run).toHaveBeenCalledOnce();
     await recallScenarioExecute({ ...question, searchTerms: ["test"] }, opts);
     await recallScenarioExecute({ ...question, targets: [{ ref: original, turnId: "a", role: "user" }] }, opts);
     await recallScenarioExecute(question, { ...opts, messages: [] });
-    expect(recall.run).toHaveBeenCalledTimes(3);
+    expect(recall.run).toHaveBeenCalledTimes(4);
 
     const receipt = createThinkingReadReceipt(context.readScopeId, "doc", [{
       ref, sourceKind: "semantic_document", coverage: "range", revision: "v1", asOf: "2026-10-20T00:00:00Z",
@@ -103,6 +103,6 @@ describe("recallScenarioExecutor model and abort contract", () => {
       ] },
     ];
     await recallScenarioExecute(question, { ...opts, messages: received });
-    expect(recall.run).toHaveBeenCalledTimes(4);
+    expect(recall.run).toHaveBeenCalledTimes(5);
   });
 });

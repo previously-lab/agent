@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cachedFetch, CACHE_TTLS } from "@/lib/cache/data-cache";
-import { currentGitHubReadDeadline } from "@/lib/github/client";
 import { readStoredCaseActivity, type CaseActivitySource } from "@/lib/memory/case-activity";
 import { getRepoTreeEntry, readTextFromCompleteTree, type RepoTree } from "@/lib/tools/readFile";
 
@@ -19,7 +18,7 @@ const pendingTables = new Map<string, Promise<DateTable>>();
 async function cachedTable(key: string[], build: () => Promise<DateTable>): Promise<DateTable> {
   // Distinct searches can build the same immutable category or group on a cold
   // instance. Share only in-flight work for this owner, repo, object and budget.
-  const flightKey = JSON.stringify([key, currentGitHubReadDeadline()]);
+  const flightKey = JSON.stringify(key);
   const existing = pendingTables.get(flightKey);
   if (existing) return existing;
   // Next bypasses cache hits for unstable_cache calls nested inside a miss.

@@ -21,8 +21,6 @@ export const DIALOGUE_FALLBACK_TOOL_CALL_ID = "fallback";
 export const DIALOGUE_HOST_READ_CHECKPOINT_TOOL_CALL_ID = "host-read-checkpoint";
 export const DIALOGUE_HOST_NEEDS_USER_TOOL_CALL_ID = "host-needs-user";
 export const DIALOGUE_HOST_STRUCTURED_REPORT_TOOL_CALL_ID = "host-structured-report";
-export const OFFER_TEXT_MAX_CHARS = 200_000;
-export const CHECKPOINT_TEXT_MAX_CHARS = 2400;
 
 export type DialogueOfferStage = "checkpoint" | "final";
 
@@ -30,7 +28,7 @@ export type DialogueOfferStage = "checkpoint" | "final";
 export const dialogueNeedsUserKindSchema = z.enum(["missing_file", "missing_information", "decision", "permission"]);
 export const dialogueNeedsUserSchema = z.object({
   kind: dialogueNeedsUserKindSchema,
-  detail: z.string().trim().min(1).max(600),
+  detail: z.string().trim().min(1),
 }).strict();
 
 /**
@@ -42,7 +40,7 @@ export const dialogueSemanticEventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("read_completed"),
     sourceKind: z.enum(["semantic_document", "original_turn"]),
-    evidenceCount: z.number().int().min(1).max(24),
+    evidenceCount: z.number().int().min(1),
   }).strict(),
   z.object({
     kind: z.literal("needs_user"),
@@ -51,12 +49,12 @@ export const dialogueSemanticEventSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("findings"),
     findings: z.array(z.object({
-      text: z.string().trim().min(1).max(8000),
+      text: z.string().trim().min(1),
       kind: z.enum(["conversation", "project_fact", "historical_fact", "user_report",
         "observation", "external_result", "interpretation", "recommendation", "status", "unknown", "question"]),
-      uncertainty: z.string().trim().min(1).max(600).optional(),
+      uncertainty: z.string().trim().min(1).optional(),
       decision: z.enum(["proposed", "confirmed", "rejected", "unresolved"]).optional(),
-    }).strict()).min(1).max(12),
+    }).strict()).min(1),
   }).strict(),
 ]);
 export type DialogueNeedsUser = z.infer<typeof dialogueNeedsUserSchema>;
@@ -123,6 +121,8 @@ export interface DialogueRunInput {
   /** A merged utterance may answer more than the primary input. */
   publicationId?: string;
   publicationInputIds?: string[];
+  /** Owning thought runs for an aggregate publication, for explicit cancellation. */
+  publicationParentRunIds?: string[];
   publicationSourceResults?: PublicUtterance["sourceResults"];
   /** Workflow-native snapshot used by the independent dialogue orchestrator. */
   orchestration?: {
@@ -291,6 +291,8 @@ export interface DialogueRecordRequest {
   source: DialogueInput;
   sourceTurnId: string;
   environment: DialogueRecordEnvironment;
+  /** A public actor may express multiple inputs, each with its own image evidence. */
+  publicationInputs?: Array<{ input: DialogueInput; turnId: string; sliceId?: string; images?: ImageAttachmentEvidence[] }>;
   work?: import("@/lib/chat/turn-types").DialogueWorkResult;
   utterance?: PublicUtterance;
 }

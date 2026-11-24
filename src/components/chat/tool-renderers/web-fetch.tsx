@@ -26,7 +26,7 @@ function resolveName(
 /**
  * webFetch tool: the web complement of readSlice — the main agent points at a
  * URL and gets the page's extracted text back. Link2 icon, the URL as the
- * label, the fetched prose in the expanded view (truncated for display).
+ * label, the fetched prose in the expanded view.
  */
 export function WebFetchRenderer({
   toolName: _toolName,
@@ -55,9 +55,7 @@ export function WebFetchRenderer({
 
   const expandedContent = displayText ? (
     <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
-      {displayText.length > 3000
-        ? displayText.slice(0, 3000) + "\n…"
-        : displayText}
+      {displayText}
     </pre>
   ) : undefined;
 

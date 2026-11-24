@@ -28,7 +28,6 @@
  */
 import { getWritable, getWorkflowMetadata } from "workflow";
 import { getRun } from "workflow/api";
-import { getWorld } from "workflow/runtime";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import {
   assembleLapPlan,
@@ -122,60 +121,13 @@ export interface ReflectionDocket extends LapPlan {
   logDegraded?: boolean;
 }
 
-/**
- * Read the CLAIM conflict's holder's liveness (v0.38 §5 — "use step"; the
- * workflow body has no registry access). Returns the holder's registry
- * status and its age (from the `startedAt` attribute the holder stamped at
- * claim time), or null when the holder is unreadable (treated as unowned —
- * the challenger re-claims; a lost holder read never kills the challenger).
- */
-export async function readRunClaim(runId: string): Promise<{
-  status: string;
-  ageMs: number | null;
-} | null> {
+/** Check the exact holder. An unavailable status is not proof the holder died. */
+export async function readRunClaim(runId: string): Promise<{ status: string } | null> {
   "use step";
   try {
-    const world = await getWorld();
-    const page = await world.runs.list({
-      pagination: { limit: 100 },
-      resolveData: "none",
-    } as Parameters<typeof world.runs.list>[0]);
-    const holder = page.data.find((r) => r.runId === runId);
-    if (!holder) return null;
-    const startedAt = (holder as { attributes?: Record<string, string> | null })
-      .attributes?.startedAt;
-    const startedMs = startedAt ? Date.parse(startedAt) : NaN;
-    return {
-      status: holder.status,
-      ageMs:
-        Number.isNaN(startedMs) || startedMs <= 0
-          ? null
-          : Math.max(0, Date.now() - startedMs),
-    };
+    return { status: await getRun(runId).status };
   } catch {
     return null;
-  }
-}
-
-/**
- * Cancel a zombie holder (v0.38 §5 接管 — the same action as the
- * observability UI's Cancel button: `run_cancelled`, hooks disposed, token
- * freed by the platform). The challenger then RE-CLAIMS in a bounded retry
- * loop (the Supersede paradigm's cleanup-propagation window). Never throws:
- * a failed cancel is treated as "holder unmanageable" and the challenger
- * exits — the next bell retries.
- */
-export async function cancelReflectionHolder(runId: string): Promise<boolean> {
-  "use step";
-  try {
-    await getRun(runId).cancel();
-    return true;
-  } catch (err) {
-    console.warn(
-      `[Reflection] takeover cancel of ${runId} failed:`,
-      err instanceof Error ? err.message : err,
-    );
-    return false;
   }
 }
 
@@ -192,22 +144,6 @@ export async function stampReflectionClaim(): Promise<void> {
     await setAttributes({ startedAt: new Date().toISOString() });
   } catch {
     /* best-effort liveness stamp */
-  }
-}
-
-/**
- * Takeover 留痕 (v0.38 §5 — 不许静默): one server-log line plus the
- * `tookOver` attribute on THIS run naming the cancelled holder. What rides
- * the hq pointer is Part 4's shape decision.
- */
-export async function stampReflectionTakeover(holderRunId: string): Promise<void> {
-  "use step";
-  console.warn(`[Reflection] zombie takeover — cancelling stuck holder ${holderRunId}`);
-  try {
-    const { setAttributes } = await import("workflow");
-    await setAttributes({ tookOver: holderRunId });
-  } catch {
-    /* the log line above is the minimum留痕 */
   }
 }
 
@@ -559,18 +495,6 @@ export async function markHQRunStarted(): Promise<void> {
   // age base). What remains here is the activity frame only.
   void getWorkflowMetadata;
   await emitHQActivity({ kind: "started", at: new Date().toISOString() });
-}
-
-/**
- * Clock read ("use step"): the shell's wall-clock source. A workflow body
- * cannot read `Date.now()` itself — replay must be deterministic — so the
- * shell takes its lap timings from here. Each call is its own step, which is
- * what makes the timing replay-safe: a redelivered run re-executes against
- * the recorded values for the laps that already ran, not the replay's clock.
- */
-export async function readReflectionClock(): Promise<number> {
-  "use step";
-  return Date.now();
 }
 
 /**

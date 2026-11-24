@@ -4,7 +4,6 @@ import type { DialogueRows } from "./rows";
 import type { DraftContentBlock } from "./types";
 
 export const digest = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
-const ARTIFACT_BYTES = 2 * 1024 * 1024;
 
 export async function storeResultBlocks(rows: DialogueRows, owner: string, drafts: DraftContentBlock[]): Promise<ContentBlockV1[]> {
   const used = new Set<string>();
@@ -15,12 +14,11 @@ export async function storeResultBlocks(rows: DialogueRows, owner: string, draft
     if (draft.kind === "artifact_ref") throw new Error("A producer cannot assert artifact ownership");
     if (draft.kind !== "artifact_source") { blocks.push(draft); continue; }
     const byteSize = Buffer.byteLength(draft.body, "utf8");
-    if (byteSize > ARTIFACT_BYTES) throw new Error("Dialogue artifact exceeds its storage budget");
     const sha256 = digest(draft.body);
     const artifactId = digest(JSON.stringify([rows.scope, owner, draft.blockId, draft.artifactKind, sha256]));
     const artifact: DialogueArtifactRef = {
       artifactId, sourceOwnerId: owner, revision: 1, sha256, byteSize, kind: draft.artifactKind,
-      mediaType: draft.mediaType, ...(draft.summary ? { summary: draft.summary.slice(0, 400) } : {}),
+      mediaType: draft.mediaType, ...(draft.summary ? { summary: draft.summary } : {}),
     };
     if (!(await rows.get("blob", sha256))) await rows.put("blob", sha256, draft.body);
     if (!(await rows.get("artifact", artifactId))) await rows.put("artifact", artifactId, artifact);

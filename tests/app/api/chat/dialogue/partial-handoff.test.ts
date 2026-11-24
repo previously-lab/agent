@@ -92,7 +92,8 @@ describe("partial answers during an ongoing native investigation", () => {
       const task = createPartialHandoff(context);
       task.onBatch(later, previous);
       await expect(task.settled()).resolves.toBeUndefined();
-      await child;
+      if (attempt === 0) await expect(child).rejects.toThrow("provider busy");
+      else await child;
     }
     expect(h.publish).not.toHaveBeenCalled();
   });

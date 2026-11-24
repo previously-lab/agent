@@ -62,8 +62,7 @@ describe("readFile", () => {
     });
   });
 
-  it("reads an oversized record core by blob sha when inline content is absent", async () => {
-    const path = "memory/records/2026/11/08/1234/core.md";
+  it.each(["memory/large.md", "memory/records/2026/11/08/1234/core.md"])("reads %s by immutable blob SHA when inline content is absent", async (path) => {
     const content = "x".repeat(1_000_001);
     mockGetContent.mockResolvedValue({
       data: {
@@ -106,21 +105,4 @@ describe("readFile", () => {
     ).rejects.toThrow("File not found");
   });
 
-  it("throws when file is too large", async () => {
-    mockGetContent.mockResolvedValue({
-      data: {
-        type: "file",
-        name: "large.md",
-        path: "memory/large.md",
-        size: 2_000_000,
-        encoding: "base64",
-        content: "dG9vIGJpZw==",
-        sha: "abc123",
-      },
-    });
-
-    await expect(readFile("memory/large.md", repo, owner)).rejects.toThrow(
-      "too large"
-    );
-  });
 });

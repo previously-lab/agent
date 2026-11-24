@@ -22,53 +22,6 @@
 export const REFLECTION_TOKEN = "reflection:main";
 
 /**
- * The zombie-takeover threshold (v0.38 §5, 待裁决 6 — 采纳): a reflection
- * run older than this, STILL alive, is treated as stuck and taken over by
- * the challenger (cancel → re-claim → 留痕). 3× a round's sane upper bound
- * (a round measures ~184s in tests, ~300s in production) ≈ 15 minutes. A
- * LIVE slow round below this age is never touched (撞车即退 holds for
- * healthy holders); a terminal/dead holder is never cancelled (the platform
- * disposes the token at run terminal state — treated as unowned instead).
- * The value stays 15 minutes, but it is now a REAL zombie threshold: a
- * healthy run retires on its own after at most REFLECTION_MAX_ROUNDS_PER_RUN
- * rounds and yields early after any lap longer than REFLECTION_LAP_YIELD_MS,
- * so a live holder below this age is a round still in flight, not a stuck
- * unit. Configurable constant.
- */
-export const REFLECTION_TAKEOVER_MS = 15 * 60 * 1000;
-
-/**
- * The per-round wall-clock ceiling, passed to the round's sub-agent as
- * `timeoutMs`. The platform kills a single function invocation at 800 s and
- * the SDK then re-executes the step bodies that were in flight on redelivery
- * — the platform wall is a crash, not a bound. A round must end by itself,
- * well inside that ceiling: on expiry the sub-agent returns a failure and
- * the round lands whatever its tools already queued. 5 minutes — a sane
- * round measures ~300 s in production, so this catches a straggler one
- * platform-wall away.
- */
-export const REFLECTION_ROUND_TIMEOUT_MS = 5 * 60 * 1000;
-
-/**
- * A run retires on its own after at most this many settled rounds. The
- * platform wall (800 s per invocation) is not a bound — reaching it crashes
- * the delivery and the SDK re-executes the in-flight step bodies — so one
- * invocation must do bounded work and hand the remaining backlog to the next
- * bell. With the lap yield below, worst case ≈ 2 × 5 min + overhead, well
- * inside the wall. The exit is at a lap boundary, never inside a round.
- */
-export const REFLECTION_MAX_ROUNDS_PER_RUN = 2;
-
-/**
- * The lap-yield threshold: a lap (clock read → world read → round → settle)
- * that took longer than this retires the run even below the round cap — a
- * slow lap is the signal that the next round would not fit inside the
- * platform wall either. Measured with real clock steps so a replayed run
- * sees the recorded durations, not the replay's.
- */
-export const REFLECTION_LAP_YIELD_MS = 3.5 * 60 * 1000;
-
-/**
  * The bounded re-claim attempts after a takeover cancel (the Supersede
  * paradigm's cleanup-propagation window). Beyond this the challenger exits;
  * the next bell retries the whole claim.

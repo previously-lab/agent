@@ -57,6 +57,16 @@ describe("dialogue record workflow", () => {
     expect(h.ring).toHaveBeenCalledWith("2026-11-07-0000", { sliceId: "2026-11-07-0000", turnIds: ["input"] });
   });
 
+  it("keeps source identities and slice assignments for all inputs of a public message", async () => {
+    const publicationInputs = [
+      { input: request.source, turnId: request.sourceTurnId, sliceId: "slice-a" },
+      { input: { ...request.source, inputId: "other", text: "second question" }, turnId: "other", sliceId: "slice-b" },
+    ];
+    h.project.mockResolvedValueOnce(null);
+    await dialogueRecordWorkflow({ ...request, publicationInputs, utterance: { ...request.utterance!, inputIds: ["input", "other"] } });
+    expect(h.project).toHaveBeenLastCalledWith(expect.objectContaining({ inputs: publicationInputs }));
+  });
+
   it("recovers published native bytes from the known child only in the background flow", async () => {
     const body = "<!doctype html><p>archived</p>";
     const artifact = {

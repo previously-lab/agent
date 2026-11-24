@@ -8,7 +8,7 @@ export type WorkRelation = typeof WORK_RELATIONS[number];
 export const WORK_RESPONSE_MODES = ["chat", "focused", "research", "rewrite"] as const;
 export type WorkResponseMode = typeof WORK_RESPONSE_MODES[number];
 export const WORK_RESPONSE_MODE_GUIDANCE: Record<WorkResponseMode, string> = {
-  chat: "Give a brief natural social reply. Do not recap memory, investigate without a request, or append unrelated tasks, findings or offers.",
+  chat: "Respond to what the user is sharing now. Let familiar context inform it. Take the feelings they describe in their own terms. Leave other people's motives open unless someone actually described them.",
   focused: "Answer the exact ask directly and only that. Keep the facts and caveats needed for this answer. Omit incidental chronology, side findings and unasked comparisons. Honor the user's scope and length. Never invent personal facts such as location, preferences or dietary restrictions; use a neutral suggestion when they are unknown.",
   research: "Investigate only the requested breadth and depth. Organize the evidence needed for the research ask without exhaustive tangents or unrelated findings.",
   rewrite: "Transform only the referenced material for the requested audience and shape. Do not restart research, repeat unrelated context or add a new topic.",

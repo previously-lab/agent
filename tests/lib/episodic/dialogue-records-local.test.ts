@@ -78,17 +78,19 @@ describe("dialogue records on a plain local directory", () => {
 
   it("stores exact native HTML in the original core reply without new sidecars or legacy migration", async () => {
     const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
-    const { readArchivedDialogueArtifact } = await import("@/lib/episodic/dialogue-artifact-archive");
+    const { readArchivedDialogueArtifact, readRecordedDialogueArtifact } = await import("@/lib/episodic/dialogue-artifact-archive");
     const { readSlicePart } = await import("@/lib/episodic/paths");
     const { createSlice, loadSlice, serializeSlice } = await import("@/lib/episodic/manager");
-    const body = "<!doctype html>\r\n<p>Inline interactive HTML</p>\r\n<pre>```</pre>\r\n";
+    const body = "<!doctype html>\r\n<p>Inline interactive HTML</p>\r\n<pre>```</pre>\r\n<!--" + "X".repeat(2 * 1024 * 1024) + "-->";
+    const scope = "fixture-scope";
+    const inputId = createHash("sha256").update(JSON.stringify([scope, accepted.clientMessageId])).digest("hex").slice(0, 24);
     const artifact = {
       artifactId: "c".repeat(64), sourceOwnerId: "wrun_expired", revision: 1 as const,
       sha256: createHash("sha256").update(body).digest("hex"), byteSize: Buffer.byteLength(body),
       kind: "native_html" as const, mediaType: "text/html",
     };
     const utterance: PublicUtterance = {
-      utteranceId: "public-native", publicSeq: 2, committedAt: stamp, inputIds: ["u1"], sourceResults: [],
+      utteranceId: "public-native", publicSeq: 2, committedAt: stamp, inputIds: [inputId], sourceResults: [],
       blocks: [{ kind: "markdown", blockId: "lead", text: "Here is the original reply." },
         { kind: "artifact_ref", blockId: "widget", artifact }],
     };
@@ -114,7 +116,7 @@ describe("dialogue records on a plain local directory", () => {
     fs.writeFileSync(join(archiveRoot, `${legacyArtifact.artifactId}.json`), JSON.stringify(legacyArtifact), "utf8");
     fs.writeFileSync(join(archiveRoot, legacyArtifact.artifactId), legacyBody, "utf8");
 
-    await projectDialogueRecords({ ...payload(), utterance,
+    await projectDialogueRecords({ ...payload(), inputs: [{ ...payload().inputs[0], turnId: inputId, input: { ...accepted, inputId } }], utterance,
       typedArtifacts: [{ blockId: "widget", artifact, body }] });
 
     const core = await readSlicePart("2026-11-06-0300", "core");
@@ -131,6 +133,8 @@ describe("dialogue records on a plain local directory", () => {
     expect(fs.readdirSync(archiveRoot).sort()).toEqual([legacyArtifact.artifactId, `${legacyArtifact.artifactId}.json`].sort());
     await expect(readArchivedDialogueArtifact(legacyArtifact.artifactId)).resolves.toEqual({ artifact: legacyArtifact, body: legacyBody });
     expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyRaw);
+    expect((await readRecordedDialogueArtifact(artifact.artifactId, utterance.utteranceId, scope))?.body === body).toBe(true);
+    expect(await readRecordedDialogueArtifact(artifact.artifactId, utterance.utteranceId, "another-persona")).toBeNull();
   });
 
   it("replays inline records byte-identically and rejects a tampered source without repairing it", async () => {

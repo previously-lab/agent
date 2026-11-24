@@ -106,7 +106,8 @@ describe("current-work native tool results", () => {
     const replay = replayedResult("recallRead", input, { ...publicOutput, text: "OLD_PRIVATE_OUTPUT" });
     const tools = { recallRead: tool({ description: "Fixture core reader",
       inputSchema: z.object({ ref: z.string(), direct: z.boolean() }), execute: () => publicOutput }) };
-    const first = await runAgent({ ...options, tools, messages: replay }, async request => {
+    // Capture the completed tool exchange at the simulated workflow suspension.
+    const first = await runAgent({ ...options, tools, messages: replay, stopWhen: isStepCount(1) }, async request => {
       expect(JSON.stringify(request.messages)).not.toContain("OLD_PRIVATE_OUTPUT");
       return requestTool("recallRead", input);
     });

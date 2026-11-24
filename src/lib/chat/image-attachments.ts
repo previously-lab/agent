@@ -1,6 +1,6 @@
 /** Serializable image identities shared by the editor, records and readers.
  * No filesystem, credentials, or server imports belong in this module. */
-export const IMAGE_ATTACHMENT_LIMITS = { maxBytes: 5 * 1024 * 1024, maxPerTurn: 4, maxOrdinal: 1_000_000 } as const;
+export const IMAGE_ATTACHMENT_LIMITS = { maxBytes: 10 * 1024 * 1024, maxOrdinal: 1_000_000 } as const;
 export const IMAGE_ASSET_ID = /^img_[a-f0-9]{32}$/;
 
 export interface ImageAttachmentSnapshot {
@@ -51,7 +51,7 @@ export function imageAttachmentUrl(ref: string, persona?: string): string {
 /** Request validation is all-or-nothing, never silently drops or renumbers. */
 export function parseStagedAttachments(value: unknown): StagedAttachmentRef[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > IMAGE_ATTACHMENT_LIMITS.maxPerTurn) throw new Error("Invalid stagedAttachments list");
+  if (!Array.isArray(value)) throw new Error("Invalid stagedAttachments list");
   const ids = new Set<string>();
   const ordinals = new Set<number>();
   return value.map((entry) => {
@@ -64,7 +64,7 @@ export function parseStagedAttachments(value: unknown): StagedAttachmentRef[] {
 }
 /** Tolerant record reader: malformed metadata never makes the prose unreadable. */
 export function parseImageAttachments(value: unknown): ImageAttachmentSnapshot[] {
-  if (!Array.isArray(value) || value.length > IMAGE_ATTACHMENT_LIMITS.maxPerTurn) return [];
+  if (!Array.isArray(value)) return [];
   const ids = new Set<string>(); const ordinals = new Set<number>();
   const result: ImageAttachmentSnapshot[] = [];
   for (const entry of value) {
@@ -87,7 +87,7 @@ export function encodeImageAttachments(value: ImageAttachmentSnapshot[]): string
   return encodeURIComponent(JSON.stringify({ version: 1, attachments: parseImageAttachments(value) }));
 }
 export function decodeImageAttachments(value: unknown): ImageAttachmentSnapshot[] {
-  if (typeof value !== "string" || value.length > 20_000) return [];
+  if (typeof value !== "string") return [];
   try {
     const envelope = JSON.parse(decodeURIComponent(value));
     return envelope?.version === 1 ? parseImageAttachments(envelope.attachments).filter((image) => parseRecordImageRef(image.ref)) : [];
@@ -102,7 +102,7 @@ export function legacyRecordImageAttachments(content: string, sliceId: string, t
   const marker = /\n\n\[attachments: ([^\r\n]+)\]\s*$/.exec(content);
   if (!marker) return [];
   const names = marker[1].split(", ");
-  if (names.length > IMAGE_ATTACHMENT_LIMITS.maxPerTurn || names.some((name) => !isAttachmentFileName(name) || !name.startsWith(`${turnId}-`))) return [];
+  if (names.some((name) => !isAttachmentFileName(name) || !name.startsWith(`${turnId}-`))) return [];
   const media: Record<string, string> = { jpg: "jpeg", jpeg: "jpeg", png: "png", webp: "webp", gif: "gif", svg: "svg+xml", avif: "avif", bmp: "bmp" };
   return names.flatMap((name, index) => {
     const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();

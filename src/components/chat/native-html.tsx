@@ -53,8 +53,6 @@ interface NativeHtmlBlockProps {
   estimatedHeight?: number;
 }
 
-const MAX_NATIVE_SOURCE_CHARS = 262_144;
-
 function NativePreparing({ label }: { label?: string }): React.JSX.Element {
   const t = useTranslations("chat.native");
   return (
@@ -347,8 +345,7 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         sourceVersion: version,
       })
     : undefined;
-  const eligible = closed && source.length <= MAX_NATIVE_SOURCE_CHARS &&
-    mode !== "paper" && reading.active;
+  const eligible = closed && mode !== "paper" && reading.active;
   const lease = useNativeExecutionLease(scope, eligible, reading.priority, migrateFromScope);
   const interactive = lease.active;
   const surface = mode === "interactive" ? "chat" : "paper";
@@ -382,14 +379,6 @@ export function NativeHtmlBlock(props: NativeHtmlBlockProps): React.JSX.Element 
         <button type="button" onClick={() => onRetry ? onRetry() : requestNativeDraftAppend(t("retryDraft"))}>
           {t("retry")}
         </button>
-      </div>
-    );
-  }
-
-  if (source.length > MAX_NATIVE_SOURCE_CHARS) {
-    return (
-      <div className="native-incomplete" data-native-oversized={blockId}>
-        <p>{t("tooLarge")}</p>
       </div>
     );
   }

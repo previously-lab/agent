@@ -101,7 +101,7 @@ export async function enumerateTreePaths(root = "memory"): Promise<string[]> {
 export async function enumerateTreeFiles(root: string): Promise<string[]> {
   const source = resolveDataSource();
   if (source === "local") {
-    return walkPathsLocal(root, 50_000, { maxDepth: Infinity, requireRealRoot: true });
+    return walkPathsLocal(root, { maxDepth: Infinity, requireRealRoot: true });
   }
   if (source === "github") {
     const { owner, repo } = getRepoConfig();

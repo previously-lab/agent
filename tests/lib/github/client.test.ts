@@ -3,12 +3,8 @@ import {
   createOctokitForTest,
   getOctokit,
   isGitHubRateLimitError,
-  isGitHubReadTimeoutError,
-  readDeadlineMs,
   resetOctokit,
-  withGitHubReadBudget,
   type GitHubRateLimitError,
-  type GitHubReadTimeoutError,
   type GitHubRequestMetric,
 } from "@/lib/github/client";
 
@@ -195,50 +191,12 @@ describe("github guardrails", () => {
     expect((err as { status?: number }).status).toBe(403);
   });
 
-  it("a read exceeding the entry budget fails with GitHubReadTimeoutError", async () => {
-    const { fetchImpl } = fakeFetch(() => new Promise<Response>(() => {})); // hangs
-    const octokit = createOctokitForTest(fetchImpl);
-    const err: unknown = await withGitHubReadBudget(
-      () => octokit.request("GET /rate_limit"),
-      20,
-    ).catch((e: unknown) => e);
-    expect(isGitHubReadTimeoutError(err)).toBe(true);
-    const timeoutMs = (err as GitHubReadTimeoutError).timeoutMs;
-    expect(timeoutMs).toBeGreaterThan(0);
-    expect(timeoutMs).toBeLessThanOrEqual(20);
-  });
-
-  it("a write is NOT deadline-bound — it completes past the read budget", async () => {
-    const { fetchImpl } = fakeFetch(
-      () =>
-        new Promise<Response>((resolve) =>
-          setTimeout(() => resolve(jsonResponse(201, { ok: true })), 50),
-        ),
-    );
-    const octokit = createOctokitForTest(fetchImpl);
-    const res = await withGitHubReadBudget(
-      () => octokit.request("POST /repos/o/r/issues", { title: "x" }),
-      20,
-    );
-    expect(res.status).toBe(201);
-  });
-});
-
-describe("readDeadlineMs", () => {
-  it("returns the per-call cap when no budget is in scope", () => {
-    expect(readDeadlineMs()).toBe(15_000);
-  });
-
-  it("a tighter budget remainder wins", () => {
-    expect(readDeadlineMs(5)).toBe(5);
-  });
-
-  it("a spent budget still starts the read (1ms — fails on the next tick)", () => {
-    expect(readDeadlineMs(0)).toBe(1);
-    expect(readDeadlineMs(-50)).toBe(1);
-  });
-
-  it("a generous budget stays at the per-call cap", () => {
-    expect(readDeadlineMs(60_000)).toBe(15_000);
+  it("allows a slow read to finish", async () => {
+    let finish!: () => void;
+    const pageReady = new Promise<void>(resolve => { finish = resolve; });
+    const { fetchImpl } = fakeFetch(async () => { await pageReady; return jsonResponse(200, { resources: {} }); });
+    const pending = createOctokitForTest(fetchImpl).request("GET /rate_limit");
+    finish();
+    expect((await pending).status).toBe(200);
   });
 });

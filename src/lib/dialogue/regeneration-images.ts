@@ -1,4 +1,5 @@
 import { getWorld } from "workflow/runtime";
+import { workflowRegistryPages } from "@/lib/chat/workflow-registry-pages";
 import { parseRecordImageRef, type ImageAttachmentSnapshot } from "@/lib/chat/image-attachments";
 import { parseSlice } from "@/lib/episodic/manager";
 import type { TimeSlice } from "@/lib/episodic/types";
@@ -49,9 +50,16 @@ export async function restoreDialogueImages(scope: string, inputId: string, runH
     const hinted = typeof runHint === "string" && /^wrun_[a-z0-9]{1,120}$/i.test(runHint)
       ? await world.runs.get(runHint, { resolveData: "none" }).catch(() => undefined) : undefined;
     // Older clients sent no run hint; retries of retries can also point at a later attempt.
-    const row = isOriginal(hinted?.attributes) ? hinted : (await world.runs.list({
-      pagination: { limit: 100 }, resolveData: "none",
-    })).data.find(candidate => isOriginal(candidate.attributes));
+    let row = isOriginal(hinted?.attributes) ? hinted : undefined;
+    if (!row) {
+      for await (const rows of workflowRegistryPages(world)) {
+        const original = rows.find(candidate => isOriginal(candidate.attributes));
+        if (original) {
+          row = original;
+          break;
+        }
+      }
+    }
     if (row) {
       const start = (await listDialogueEvents(row.runId)).find(event => event.type === "thought_started" &&
         event.runId === row.runId && event.workId === inputId && event.sourceInputId === inputId && event.input.inputId === inputId);

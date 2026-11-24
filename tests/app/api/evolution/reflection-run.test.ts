@@ -88,30 +88,11 @@ vi.mock("workflow", () => ({
 
 vi.mock("workflow/api", () => ({
   getRun: (runId: string) => ({
-    cancel: () => h.cancel(runId),
-  }),
-}));
-
-vi.mock("workflow/runtime", () => ({
-  getWorld: async () => ({
-    runs: {
-      list: async () => {
-        const current = h.lastClaim;
-        return {
-          data: [
-            h.holder && current
-              ? {
-                  runId: current.runId,
-                  status: h.holder.status,
-                  attributes: h.holder.ageMs !== null
-                    ? { startedAt: new Date(Date.now() - h.holder.ageMs).toISOString() }
-                    : {},
-                }
-              : null,
-          ].filter(Boolean),
-        };
-      },
+    get status() {
+      if (!h.holder) throw new Error('Holder unavailable');
+      return Promise.resolve(h.holder.status);
     },
+    cancel: () => h.cancel(runId),
   }),
 }));
 
@@ -295,8 +276,10 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
 
     const outcome = await reflectionRun();
 
-    expect(outcome).toEqual({ kind: "retired", rounds: 2 });
-    // both slices settled: cursor at the furthest, failed round held nothing
+    expect(outcome).toEqual({ kind: "retired", rounds: 1 });
+    expect(h.world.cursor).toBeNull();
+    expect(await reflectionRun()).toEqual({ kind: "retired", rounds: 1 });
+    // A fresh wake reuses the original cursor and settles both slices.
     expect(h.world.cursor).toBe("2026-10-04-0200");
   });
 
@@ -320,21 +303,11 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
     expect(h.order).toEqual(["dispose"]);
   });
 
-  it("conflict + a ZOMBIE (alive past the threshold) → cancel + 留痕 + re-claim + run", async () => {
-    h.conflicts = [{ runId: "zombie-1" }, null]; // first claim conflicts, re-claim free
-    h.holder = { status: "running", ageMs: 20 * 60_000 }; // 20 min > 15 min
-
-    const outcome = await reflectionRun();
-
-    expect(outcome).toEqual({ kind: "retired", rounds: 0 });
-    expect(h.cancel).toHaveBeenCalledWith("zombie-1");
-    expect(h.attributes.tookOver).toBe("zombie-1");
-    expect(h.order).toEqual([
-      "cancel:zombie-1",
-      "attrs:tookOver",
-      "attrs:startedAt",
-      "dispose",
-    ]);
+  it("leaves a slow live reflection in sole ownership of its work", async () => {
+    h.conflict = { runId: "long-running" };
+    h.holder = { status: "running", ageMs: 38 * 60_000 };
+    expect(await reflectionRun()).toEqual({ kind: "dedupedTo", runId: "long-running" });
+    expect(h.cancel).not.toHaveBeenCalled();
   });
 
   it("conflict + a TERMINAL holder → treated as unowned, re-claimed, run proceeds", async () => {

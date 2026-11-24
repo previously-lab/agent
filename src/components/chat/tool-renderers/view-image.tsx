@@ -54,9 +54,7 @@ export function ViewImageRenderer({
 
   const expandedContent = displayText ? (
     <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
-      {displayText.length > 3000
-        ? displayText.slice(0, 3000) + "\n…"
-        : displayText}
+      {displayText}
     </pre>
   ) : undefined;
 

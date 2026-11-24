@@ -12,10 +12,11 @@ export async function partialHandoffWorkflow(context: ToolContext, passages: Par
   if (!await open()) return;
   const response = await callModelStep({
     messages: partialEvidencePrompt(context.currentUserText, passages),
-    thinking: false, reasoningEffort: "low", temperature: 0.2, maxRetries: 0, timeoutMs: 8_000,
+    thinking: false, reasoningEffort: "low", temperature: 0.2,
     callId: "partial-evidence", sessionId: context.sliceId,
-  }).catch(() => undefined);
-  if (!response || response.error || response.finishReason !== "stop" || typeof response.message.content !== "string") return;
+  });
+  if (response.error) throw new Error(response.error.message);
+  if (response.finishReason !== "stop" || typeof response.message.content !== "string") return;
   // A different conversation about the same date or number is not a duplicate.
   // The dialogue Actor separately sees the publications for the current input.
   const text = candidatePartialAnswer(response.message.content, passages, []);

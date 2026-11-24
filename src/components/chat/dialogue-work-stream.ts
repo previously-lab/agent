@@ -28,18 +28,25 @@ export type DialogueWorkActivity =
   | { type: "reasoning" }
   | { type: "tool"; toolCallId: string };
 
+/** Text lives in its original channel. Ranges keep the visible activity log
+ * in arrival order without making a second copy of either transcript. */
+export type DialogueWorkLogEntry =
+  | { type: "text" | "reasoning"; start: number; end: number }
+  | { type: "tool"; index: number };
+
 export interface DialogueWorkStreamView {
   cursor: number;
   text: string;
   reasoning: string;
   tools: readonly DialogueWorkToolView[];
+  log: readonly DialogueWorkLogEntry[];
   activity?: DialogueWorkActivity;
   status?: DialogueWorkStreamStatus;
   unavailable: boolean;
 }
 
 export const emptyDialogueWorkStream: DialogueWorkStreamView = {
-  cursor: 0, text: "", reasoning: "", tools: [], unavailable: false,
+  cursor: 0, text: "", reasoning: "", tools: [], log: [], unavailable: false,
 };
 
 /** The work stream is a deliberately narrow, safe projection. Reasoning is
@@ -81,8 +88,16 @@ export function applyDialogueWorkStreamEvent(state: DialogueWorkStreamView, even
   // is a replay duplicate. A stale status can never move the cursor backward.
   if (event.cursor < state.cursor || (event.type !== "status" && event.cursor === state.cursor)) return state;
   const next = { ...state, cursor: Math.max(state.cursor, event.cursor), unavailable: false };
-  if (event.type === "text") return { ...next, text: state.text + event.delta, activity: { type: "text" } };
-  if (event.type === "reasoning") return { ...next, reasoning: state.reasoning + event.delta, activity: { type: "reasoning" } };
+  if (event.type === "text" || event.type === "reasoning") {
+    if (!event.delta) return next;
+    const type = event.type;
+    const content = state[type] + event.delta;
+    const last = state.log.at(-1);
+    const log = last?.type === type
+      ? [...state.log.slice(0, -1), { ...last, end: content.length }]
+      : [...state.log, { type, start: state[type].length, end: content.length }];
+    return { ...next, [type]: content, log, activity: { type } };
+  }
   if (event.type === "status") return { ...next, status: event.status };
   const tools = [...state.tools];
   const index = tools.findIndex(tool => tool.id === event.toolCallId);
@@ -96,13 +111,14 @@ export function applyDialogueWorkStreamEvent(state: DialogueWorkStreamView, even
     ...(outcome ? { outcome } : {}),
     ...(resultCount !== undefined ? { resultCount } : {}),
   };
+  const log = index < 0 ? [...state.log, { type: "tool" as const, index: tools.length }] : state.log;
   if (index < 0) tools.push(tool); else tools[index] = tool;
   // Finishing one parallel call must not hide the tool that is still working.
   const previouslyActive = state.activity?.type === "tool" ? state.activity.toolCallId : undefined;
   const running = tools.find(tool => tool.id === previouslyActive && tool.status === "running")
     ?? tools.findLast(tool => tool.status === "running");
   const toolCallId = event.state === "running" ? event.toolCallId : running?.id ?? event.toolCallId;
-  return { ...next, tools, activity: { type: "tool", toolCallId } };
+  return { ...next, tools, log, activity: { type: "tool", toolCallId } };
 }
 
 type Fetch = typeof fetch;

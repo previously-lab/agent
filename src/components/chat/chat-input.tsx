@@ -144,10 +144,7 @@ export function ChatInput({
     const onDraft = (event: Event): void => {
       const suggestion = (event as CustomEvent<{ suggestion?: unknown }>).detail?.suggestion;
       if (typeof suggestion !== "string" || suggestion.length > 2_000) return;
-      setValue((current) => {
-        const next = appendNativeDraft(current, suggestion);
-        return next.length <= 12_000 ? next : current;
-      });
+      setValue((current) => appendNativeDraft(current, suggestion));
     };
     window.addEventListener(NATIVE_DRAFT_EVENT, onDraft);
     return () => window.removeEventListener(NATIVE_DRAFT_EVENT, onDraft);

@@ -144,7 +144,7 @@ describe("POST /api/chat/dialogue/reply", () => {
   });
 
   it("reuses an existing public run from the registry instead of starting a duplicate", async () => {
-    h.list.mockResolvedValue({ data: [{ runId: replyRunId, attributes: {
+    h.list.mockResolvedValueOnce({ data: [], cursor: "older", hasMore: true }).mockResolvedValue({ data: [{ runId: replyRunId, attributes: {
       role: "dialogue", work: "work-1", offer: "work-1:direct", scope: "scope-1",
     } }] });
     h.getRun.mockImplementation((runId: string) => runId === replyRunId

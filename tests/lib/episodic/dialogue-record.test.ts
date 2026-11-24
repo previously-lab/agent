@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeDialogueRecordTurn,
+  encodeDialogueRecordTurn,
   dialogueResearchMaterialId,
   dialogueSourceTurnId,
   selectDialogueResearchProducts,
@@ -42,4 +44,14 @@ describe("exact dialogue reflection material", () => {
     const withoutDelta = { ...research("result-c", 1), delta: undefined };
     expect(selectDialogueResearchProducts([v1, withoutDelta, other, v2], ["u1"])).toEqual([v2, other]);
   });
+});
+
+it("restores the whole public reply past both the old text and encoded metadata ceilings", () => {
+  const text = "長".repeat(66_000) + "最後一句。";
+  const value = { kind: "public_utterance" as const, publicationId: "publication", inputIds: ["input"], publicSeq: 1,
+    sourceResults: [{ resultId: "candidate", productRevision: 1, claimIds: [] }],
+    blocks: [{ kind: "markdown" as const, blockId: "body", text }] };
+  const saved = encodeDialogueRecordTurn(value);
+  expect(saved.length).toBeGreaterThan(262_144);
+  expect(decodeDialogueRecordTurn(saved, "agent")).toEqual(value);
 });

@@ -4,7 +4,7 @@ import type { ToolContext } from "./tool-executors";
 import { startPartialHandoffStep } from "./partial-handoff-steps";
 
 const furtherResearch = new Set(["recallRead", "recallSearch", "recallFind", "recallList", "recallRecent",
-  "recallSince", "recallScenario", "webFetch", "webSearch", "thinkDeep"]);
+  "recallSince", "recallScenario", "webFetch", "webSearch", "webResearch", "thinkDeep"]);
 
 /** One optional, private extraction over a real read. The original investigation keeps running. */
 export function createPartialHandoff(context: ToolContext) {
@@ -28,7 +28,9 @@ export function createPartialHandoff(context: ToolContext) {
     // The child has its own step schedule. A slow lookup in this parent cannot park its handoff.
     const { owner, repo, useGithub, useDemo, sliceId, turnId, readScopeId, currentUserText, dialogueOffer } = context;
     pending = startPartialHandoffStep({ owner, repo, useGithub, useDemo, sliceId, turnId, readScopeId,
-      currentUserText, recentTurns: [], dialogueOffer: { ...dialogueOffer, priorContext: [] } }, passages).catch(() => {});
+      currentUserText, recentTurns: [], dialogueOffer: { ...dialogueOffer, priorContext: [] } }, passages).catch(error => {
+      console.warn("[Dialogue] Could not start the optional partial handoff", error);
+    });
   }
   return {
     onBatch,

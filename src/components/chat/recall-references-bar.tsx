@@ -6,9 +6,6 @@ import type { RecallReferenceAnchor } from "@/lib/chat/build-stream";
 import { DocumentOpenButton } from "@/components/documents/document-navigation";
 import { formatSliceIdLabel } from "@/lib/chat/slice-id-time";
 
-/** How many slice chips render before the rest collapse into the count. */
-const MAX_CHIPS = 3;
-
 /** Recall evidence opens the source manuscript itself, whether or not the
  *  conversation's currently loaded page contains that slice. */
 export function RecallReferencesBar({
@@ -24,7 +21,7 @@ export function RecallReferencesBar({
     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-3 pt-1 text-xs text-muted-foreground">
       <History className="h-3 w-3 shrink-0" />
       <span>{t("title", { count: references.length })}</span>
-      {references.slice(0, MAX_CHIPS).map((r) => (
+      {references.map((r) => (
         <DocumentOpenButton
           key={r.slice_id}
           documentRef={`records/${r.slice_id}`}

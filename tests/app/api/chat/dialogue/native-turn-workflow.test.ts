@@ -10,6 +10,11 @@ const h = vi.hoisted(() => ({
   finalizeTurn: vi.fn(async () => {}),
   record: vi.fn(),
   closeThoughts: vi.fn(async () => {}),
+  closeOffers: vi.fn(async () => {}),
+  admission: vi.fn(async () => ({
+    holder: { runId: "wrun_ORCHESTRATOR", sessionId: "session" },
+    otherWorks: [{ workId: "previous-work", status: "running" }],
+  })),
   started: vi.fn(async () => {}),
   ensure: vi.fn(async (_request: unknown) => ({
     runId: "wrun_ORCHESTRATOR", sessionId: "session", reused: false,
@@ -55,11 +60,13 @@ vi.mock("@/app/api/chat/dialogue-steps", () => ({
 }));
 vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   closeDialogueThoughtsStep: h.closeThoughts,
+  closeDialogueOffersStep: h.closeOffers,
   startDialogueRecordRunStep: h.record,
   publishThoughtStartedStep: h.started,
 }));
 vi.mock("@/app/api/chat/dialogue-orchestrator-steps", () => ({
   ensureDialogueOrchestratorStep: h.ensure,
+  readDialogueAdmissionStep: h.admission,
   witnessDialogueDeliveryStep: h.witness,
 }));
 vi.mock("@/app/api/agent/tool-executors", () => ({
@@ -114,6 +121,12 @@ const slice: TimeSlice = {
   start: "2026-11-07T00:00:00.000Z", timezone: "UTC", open_loops: [], decisions: [], tags: [],
   related_slices: [], loops: [], turns: [], estimatedTokens: 0,
 };
+
+function gate() {
+  let open!: () => void;
+  const promise = new Promise<void>(resolve => { open = resolve; });
+  return { promise, open };
+}
 
 function input(): TurnInput {
   return {
@@ -250,9 +263,7 @@ describe("native thinking work", () => {
     expect(h.started).toHaveBeenCalledWith(expect.objectContaining({
       parentRunId: "wrun_01JTESTPARENT0000000000000", source: expect.objectContaining({ text: "问题" }),
     }));
-    expect(h.ensure.mock.calls.map(call => (call[0] as { triggerKey: string }).triggerKey)).toEqual([
-      "wrun_01JTESTPARENT0000000000000:start",
-    ]);
+    expect(h.ensure).not.toHaveBeenCalled();
     expect(h.witness).toHaveBeenCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }),
       "wrun_RESULT_ACTOR", "work:offer-1");
     expect(result.dialogueDelivery).toEqual({ status: "delivered", candidateId: "work:offer-1" });
@@ -317,9 +328,54 @@ describe("native thinking work", () => {
     expect(h.closeTurnStream).toHaveBeenCalledWith(expect.objectContaining({ finishReason: "error" }), "input", undefined);
   });
 
-  it("keeps the user-only failure record when housekeeping fails", async () => {
-    h.housekeeping.mockRejectedValue(new Error("context unavailable"));
-    await expect(turnWorkflow(input())).rejects.toThrow("context unavailable");
+  it("starts admission and the thought event while document reads are still pending", async () => {
+    const reading = gate();
+    const notified = gate();
+    h.housekeeping.mockImplementationOnce(async () => {
+      await reading.promise;
+      return { slice, previouslyContent: "", sliceHeadBlock: "", identityPrompt: "", sliceOnDisk: true };
+    });
+    h.started.mockImplementationOnce(async () => { notified.open(); });
+    const work = turnWorkflow(input());
+    try {
+      await notified.promise;
+      expect(h.housekeeping).toHaveBeenCalledOnce();
+      expect(h.admission).toHaveBeenCalledWith("scope", "input");
+      expect(h.stream).not.toHaveBeenCalled();
+    } finally {
+      reading.open();
+    }
+    await work;
+    expect(h.stream).toHaveBeenCalledOnce();
+  });
+
+  it("closes a failed startup after the thought event lands, independently of admission", async () => {
+    const starting = gate();
+    const releaseStart = gate();
+    const releaseAdmission = gate();
+    h.admission.mockImplementationOnce(async () => {
+      await releaseAdmission.promise;
+      return { holder: { runId: "actor", sessionId: "session" }, otherWorks: [] };
+    });
+    h.started.mockImplementationOnce(async () => {
+      starting.open();
+      await releaseStart.promise;
+    });
+    h.housekeeping.mockRejectedValueOnce(new Error("context unavailable"));
+    const failure = expect(turnWorkflow(input())).rejects.toThrow("context unavailable");
+    try {
+      await starting.promise;
+      expect(h.closeOffers).not.toHaveBeenCalled();
+      expect(h.closeTurnStream).not.toHaveBeenCalled();
+      releaseStart.open();
+      await failure;
+      expect(h.closeOffers).toHaveBeenCalledOnce();
+      expect(h.closeTurnStream).toHaveBeenCalledOnce();
+      expect(h.stream).not.toHaveBeenCalled();
+    } finally {
+      releaseStart.open();
+      releaseAdmission.open();
+    }
     expect(h.record).toHaveBeenCalledWith(expect.objectContaining({
       source: expect.objectContaining({ inputId: "input", text: "问题" }),
     }));

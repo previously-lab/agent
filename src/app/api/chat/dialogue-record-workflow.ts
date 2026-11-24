@@ -52,7 +52,7 @@ export async function dialogueRecordWorkflow(
   "use workflow";
   const typedArtifacts = await readDialogueRecordArtifactsStep(request.utterance);
   const receipt = await projectDialogueRecords({
-    inputs: [{
+    inputs: request.publicationInputs ?? [{
       input: request.source,
       turnId: request.sourceTurnId,
       ...(request.environment.sliceId ? { sliceId: request.environment.sliceId } : {}),

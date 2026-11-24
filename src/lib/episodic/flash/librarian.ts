@@ -37,6 +37,7 @@ import { forkWriteBatch, mergeWriteBatch, assertBatchOpen } from "@/lib/docs/wri
  * Never throws at the top level: every failure degrades to a skipped item in
  * the result, so the caller is never taken down by a document write.
  */
+import { coversEntireText, readTextPage, type TextPageSelection } from "@/lib/retrieval/text-page";
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
@@ -47,7 +48,7 @@ import { conversationRole, RECORD_ATTRIBUTION_RULE } from "../record-attribution
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import { isCapabilitySopCase } from "@/lib/evolution/paths";
 import { caseOpeningBody, casePieceCatalog, casePieceNavigation, renderCasePieceCatalog } from "@/lib/docs/organization";
-import { assertDocumentWrite, assertTailBudget, documentSize, exceededSize, TAIL_TOTAL_LIMITS, DOCUMENT_SOFT_LIMITS, DocumentFullRefusal, DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
+import { documentSize, exceededSize, DOCUMENT_SOFT_LIMITS, DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
 import { isHistoryArchiveFileName, planHistoryArchive } from "@/lib/docs/history-archive";
 import { archivedCaseRefPaths, archiveNoteBody, archiveNotePath } from "@/lib/docs/archive-ref";
 import { formatDocumentLink } from "@/lib/documents/document-link";
@@ -112,8 +113,6 @@ import {
   renderCaseWithCurrent,
   reviseCaseCurrent,
   serializeCaseCurrent,
-  serializeCaseTail,
-  serializeTailEntries,
   caseStorageRevision,
   caseCurrentFreshnessWarnings,
   type CaseCurrentBasis,
@@ -288,9 +287,9 @@ export function readSliceEvidencePage(
 const sliceEvidenceRangeSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("turns"),
-    indices: z.array(z.number().int().nonnegative()).min(1).max(50),
+    indices: z.array(z.number().int().nonnegative()).min(1),
   }),
-  z.object({ type: z.literal("last"), count: z.number().int().positive().max(50) }),
+  z.object({ type: z.literal("last"), count: z.number().int().positive() }),
   z.object({
     type: z.literal("date"),
     after: z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), {
@@ -888,15 +887,10 @@ async function applyCaseWriteIntentStaged(
       case "reorganize": {
         if (!current || currentRaw === null || !scopedRead || !readScope) throw new WriteRefusal("rewrite_conflict", "reorganize requires a fresh full target read");
         if (!intent.evidence.length || intent.evidence.some((ref) => !readScope.hasEvidence(ref))) throw new WriteRefusal("rewrite_conflict", "reorganize requires evidence actually read in this run");
-        const tail = current.tail.map((line) => `${line.date}：${line.text}`).join("\n");
-        if (!exceededSize(documentSize(currentRaw)).length && !exceededSize(documentSize(tail), TAIL_TOTAL_LIMITS).length) throw new Error("reorganize is only for over-budget documents/tails; use the ordinary write window otherwise");
         const archive = planHistoryArchive({ category, caseName, source: "index.md", sourceRaw: currentRaw, date, updated: nowIso, kind: "source-snapshot", previousHead: current.historyHead });
         const link = formatDocumentLink(archive.headRef);
         const body = `${intent.body.trim()}\n\nHistorical source (preserved, not a new conclusion): [archive](${link})`;
         const next = serializeCaseDoc({ ...current, body, tail: [], preserved: "", historyHead: archive.headRef });
-        const beforeSize = documentSize(currentRaw), afterSize = documentSize(next);
-        if (!Object.keys(beforeSize).every((key) => afterSize[key as keyof typeof afterSize] <= beforeSize[key as keyof typeof beforeSize]) || next === currentRaw) throw new Error("reorganize must reduce storage without growing another metric");
-        assertDocumentWrite(indexPath, next, currentRaw, true);
         for (const entry of archive.entries) await fsWriteFile(entry.path, entry.content, batch);
         batch!.maintenance ??= new Map();
         batch!.maintenance.set(indexPath, { sourceRevision: caseStorageRevision(currentRaw), archiveHeadRef: archive.headRef });
@@ -969,8 +963,6 @@ async function applyCaseWriteIntentStaged(
         const conclusion = (text: string) => text.replace(/\s*\(refs?:[^)]*\)\s*$/i, "").trim();
         if (current.tail.some((tail) => conclusion(tail.text) === conclusion(line))) return { path: indexPath, created: false, noop: true };
         const next = appendTail(current, { date, text: line });
-        assertTailBudget(indexPath, serializeTailEntries([{ date, text: line }]) + "\n", serializeCaseTail(next.tail) + "\n");
-        assertDocumentWrite(indexPath, serializeCaseDoc(next), currentRaw);
         // A supplement never restamps the body window: settled history stays settled.
         await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
         return {
@@ -1028,24 +1020,16 @@ async function applyCaseWriteIntentStaged(
         // failed second queue must not leave a piece without its navigation.
         const pending = forkWriteBatch(batch);
         await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso, bodyUpdated: nowIso }), pending);
-        let catalogOnly = false;
         if (!linked) {
           const next = appendTail(current, { date, text: navigation.line });
-          try {
-            assertTailBudget(indexPath, serializeTailEntries([{ date, text: navigation.line }]) + "\n", serializeCaseTail(next.tail) + "\n");
-            assertDocumentWrite(indexPath, serializeCaseDoc(next), currentRaw);
-            await fsWriteFile(indexPath, serializeCaseDoc(next), pending);
-          } catch (error) {
-            if (!(error instanceof DocumentFullRefusal)) throw error;
-            catalogOnly = true;
-          }
+          await fsWriteFile(indexPath, serializeCaseDoc(next), pending);
         }
         if (batch) {
           mergeWriteBatch(batch, pending);
         } else {
           await flushBatch(pending, `addPiece ${identity}`);
         }
-        return { path: piecePath, created: true, ...(catalogOnly ? { warnings: ["The index is full; this piece is discoverable in the case's live piece catalog. No index append was made."] } : {}) };
+        return { path: piecePath, created: true };
       }
       case "reviseUnderstanding": {
         if (!current) {
@@ -1096,13 +1080,12 @@ async function applyCaseWriteIntentStaged(
           return { path: scopedRead.currentPath, created: false, noop: true };
         }
         const next = reviseCaseCurrent(previous, nextInput);
-        if (previous && previousRaw !== null && (previous.body !== next.body || previous.history || exceededSize(documentSize(previousRaw)).length)) {
-          const legacy = Boolean(previous.history) || exceededSize(documentSize(previousRaw)).length > 0;
+        if (previous && previousRaw !== null && (previous.body !== next.body || previous.history)) {
+          const legacy = Boolean(previous.history);
           const sourceRaw = legacy ? previousRaw : serializeCaseCurrent({ ...previous, history: "" });
           const archive = planHistoryArchive({ category, caseName, source: "_current.md", sourceRaw, date, updated: nowIso,
             kind: legacy ? "source-snapshot" : "current-revision", previousHead: previous.historyHead });
           next.history = ""; next.historyHead = archive.headRef;
-          assertDocumentWrite(scopedRead.currentPath, serializeCaseCurrent(next), previousRaw, legacy);
           for (const entry of archive.entries) await fsWriteFile(entry.path, entry.content, batch);
           if (legacy) {
             batch!.maintenance ??= new Map();
@@ -1118,7 +1101,7 @@ async function applyCaseWriteIntentStaged(
 
 export const currentUnderstandingSchema = z.object({
   body: z.string().min(1).describe("Free-prose current understanding, with uncertainty and competing explanations labeled"),
-  evidence: z.array(z.string().min(1)).min(1).max(20).describe(
+  evidence: z.array(z.string().min(1)).min(1).describe(
     "records/YYYY-MM-DD-HHMM or case refs actually returned by readSlice/readCase in this run",
   ),
 });
@@ -1175,6 +1158,38 @@ export async function applyCaseCurrentUnderstanding(input: {
   return outcome;
 }
 
+/** Page the exact projection and grant full-read provenance only after seen intervals cover it. */
+function writerReadPage(input: {
+  text: string; ref: string; path: string; selection: TextPageSelection; scope?: CaseReadScope;
+  onComplete?: () => void;
+}): string {
+  const page = readTextPage(input.text, input.selection, 16_000);
+  if (!page.ok) return `ERROR: ${page.error}`;
+  if (page.start === 0 && page.end === page.total) {
+    input.onComplete?.();
+    return page.text;
+  }
+  if (input.scope && input.onComplete && page.end > page.start) {
+    input.scope.recordEvidence(input.ref, {
+      revision: page.revision, coverage: "range", path: input.path,
+      start: page.start, end: page.end, totalChars: page.total,
+    });
+    const observed = input.scope.getEvidenceReads(input.ref)
+      .filter(proof => proof.revision === page.revision && proof.coverage === "range" && proof.totalChars === page.total)
+      .flatMap(proof => proof.start !== undefined && proof.end !== undefined ? [{ start: proof.start, end: proof.end }] : []);
+    if (coversEntireText(observed, page.total)) input.onComplete();
+  }
+  return page.end === page.total ? page.text : page.text +
+    `\n\n[More text. Repeat readCase for ${input.ref} with offset ${page.end}, revision "${page.revision}".]`;
+}
+
+function writerIndexPage(read: CaseIndexRead, selection: TextPageSelection, scope?: CaseReadScope) {
+  return writerReadPage({
+    text: renderWriterCaseRead(read, scope), ref: `${read.category}/${read.caseName}`, path: read.path, selection, scope,
+    onComplete: () => scope?.recordIndexRead(read),
+  });
+}
+
 /**
  * The readCase read-tool every case writer gets: two-segment reference →
  * the current full text, or a visible dead-link line. Writer-is-reader is
@@ -1188,9 +1203,9 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
     description:
       "Read a case by 'category/caseName' (full index.md) or 'category/caseName/pieceTitle'. " +
       "Lists exact piece refs with this run's read status, then _current.md and the unchanged full historical index. A listed piece is not a read receipt; read relevant pieces before reusing them. " +
-      "Only a successful full new-root index read is an update receipt; dead links and read failures are not.",
-    inputSchema: z.object({ ref: z.string() }),
-    execute: async ({ ref }: { ref: string }) => {
+      "Follow the offset and revision to continue long reads. All pages of the same index edition are required for its update receipt.",
+    inputSchema: z.object({ ref: z.string(), offset: z.number().int().nonnegative().optional(), revision: z.string().optional() }),
+    execute: async ({ ref, ...selection }: { ref: string } & TextPageSelection) => {
       const parsed = parseCaseRef(ref);
       if (!parsed) return `(unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>])`;
       const [exact, ...fallbacks] = resolveCaseRefPaths(parsed);
@@ -1202,28 +1217,24 @@ export function makeCaseReadTool(batch?: WriteBatch, scope?: CaseReadScope) {
               category: parsed.category,
               caseName: parsed.caseName,
               batch,
-              scope,
             });
-            return renderWriterCaseRead(read, scope);
+            return writerIndexPage(read, selection, scope);
           }
           const content = await fsReadFile(path, batch);
           if (path === archived[1]) return `(dead link: ${ref} — this piece was not found in the archived case.)`;
           if (path === archived[0]) {
             const note = await readOptionalCaseFile(archiveNotePath(path), batch, true);
-            return [`(archived: ${ref} — historical evidence only; no active-case write receipt.)`, archiveNoteBody(note ?? ""), content].filter(Boolean).join("\n\n");
+            const text = [`(archived: ${ref} — historical evidence only; no active-case write receipt.)`, archiveNoteBody(note ?? ""), content].filter(Boolean).join("\n\n");
+            return writerReadPage({ text, ref, path, selection });
           }
-          if (isHistoryArchiveFileName(path)) return `HISTORICAL SOURCE — preserved earlier writing, not a new active conclusion or automatic evidence receipt.\n\n${content}`;
-          if (parsed.kind === "case") {
-            scope?.recordEvidence(`${parsed.category}/${parsed.caseName}`);
-          } else if (parsed.kind === "piece") {
-            scope?.recordEvidence(
-              `${parsed.category}/${parsed.caseName}/${parsed.pieceFileName.replace(/\.md$/, "")}`,
-              { revision: caseStorageRevision(content), coverage: "full", path },
-            );
-          } else {
-            scope?.recordEvidence(`legacy/${parsed.name}`);
-          }
-          return content;
+          if (isHistoryArchiveFileName(path)) return writerReadPage({ text: `HISTORICAL SOURCE — preserved earlier writing, not a new active conclusion or automatic evidence receipt.\n\n${content}`, ref, path, selection });
+          const evidenceRef = parsed.kind === "case" ? `${parsed.category}/${parsed.caseName}`
+            : parsed.kind === "piece" ? `${parsed.category}/${parsed.caseName}/${parsed.pieceFileName.replace(/\.md$/, "")}`
+            : `legacy/${parsed.name}`;
+          return writerReadPage({
+            text: content, ref: evidenceRef, path, selection, scope,
+            onComplete: () => scope?.recordEvidence(evidenceRef, { revision: caseStorageRevision(content), coverage: "full", path }),
+          });
         } catch (e) {
           if (e instanceof Error && e.message.includes("deleted in this batch")) {
             return `(deleted in this round: ${ref} was queued for deletion — treat it as gone; do not cite or update it.)`;
@@ -1310,12 +1321,12 @@ const caseWriterSchema = z.object({
         ),
         /** Optional independent current view; may accompany any historical action or skip. */
         currentUnderstanding: currentUnderstandingSchema.optional(),
-        sources: z.array(z.union([z.string().min(1).max(128).meta({ pattern: "^s[0-9a-f]{16}$" }), cardLinkSourceSchema])).min(1).max(20).optional().describe(
+        sources: z.array(z.union([z.string().min(1).max(128).meta({ pattern: "^s[0-9a-f]{16}$" }), cardLinkSourceSchema])).min(1).optional().describe(
           "Select the supporting handles returned by readSlice, or supply exact {sliceId, turnId, quote} citations from that page. Omit for unrelated writes.",
         ),
       }),
     )
-    .max(20),
+    ,
   reasoning: z.string().describe("1-2 sentences for the developer log, incl. why cases were skipped."),
 });
 
@@ -1332,7 +1343,7 @@ const nativeCaseWriterDecision = caseWriterDecision.extend({
   ],
 });
 const nativeCaseWriterSchema = caseWriterSchema.extend({
-  cases: z.array(nativeCaseWriterDecision).max(20),
+  cases: z.array(nativeCaseWriterDecision),
 }).refine(({ cases }) => {
   const writes = cases.filter((op) => op.action !== "skip" || op.currentUnderstanding);
   return writes.length === 0 || writes.some((op) => op.sources?.length);
@@ -1430,8 +1441,6 @@ export async function runLibrarianPass(
   const legacySourceIds = (input.sourceTurnIds ?? []).filter((id) => !cardTurnIds.has(id));
   const cardSourcesRequired = cardTurnIds.size > 0 && legacySourceIds.length === 0;
   const cardReads = new Map<string, Array<{ text: string; raw: string }>>();
-  // A report accepts up to 20 decisions with 20 sources each. Other read
-  // passages can still be cited by verbatim quote.
   const sourceHandles = new Map<string, { source: CardLinkSource; raw: string }>();
   let observedRevision: string | undefined;
   const onPageRead = cardTurnIds.size > 0
@@ -1455,7 +1464,6 @@ export async function runLibrarianPass(
         if (previous) {
           if (previous.raw !== raw || previous.source.turnId !== source.turnId || previous.source.quote !== source.quote) continue;
         } else {
-          if (sourceHandles.size >= 400) continue;
           try { validateCardSource(source, raw); } catch { continue; }
           sourceHandles.set(handle, { source, raw });
         }
@@ -1501,7 +1509,6 @@ Report your filing decisions.`;
     sessionId: closedSliceId,
     system: CASE_WRITER_SYSTEM,
     prompt,
-    maxSteps: 50,
     tools: {
       readCase: makeCaseReadTool(batch, scope),
       readSlice: makeSliceReadTool({ sliceId: closedSliceId, batch, scope, onPageRead }),
@@ -1667,8 +1674,7 @@ const scribeSchema = z.object({
         reason: z.string().optional().describe("covered: explain what that read document already covers; skip: explain why no write is warranted now."),
         currentUnderstanding: currentUnderstandingSchema.optional(),
       }),
-    )
-    .max(20),
+    ),
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
@@ -1676,10 +1682,9 @@ const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memo
 
 ${MEMORY_IS_GIT_RULE}
 
-You are shown: a compact slice excerpt, and per marker the marker itself plus the full current index.md, any _current.md, and an inventory of dated pieces. The successful index preloads are your case read receipts; listed pieces remain UNREAD. Use readCase to inspect relevant pieces before reusing them or adding another. readSlice is bound to this slice for any earlier turn, long message, or turning point the excerpt omitted; use ranges and continuation explicitly.
+You are shown: a compact slice excerpt, and per marker the marker itself with its current index, any _current.md, and an inventory of dated pieces. Short preloads count as full case reads. When a preload contains a continuation, use readCase for the remaining pages of that edition before writing. Listed pieces remain UNREAD. Use readCase to inspect relevant pieces before reusing them or adding another. readSlice is bound to this slice for any earlier turn, long message, or turning point the excerpt omitted; use ranges and continuation explicitly.
 
 ## Task
-
 One decision per marker, chosen by what a future reader needs:
 - covered: a document actually read already covers it; supply coveredRef and reason. This completes the marker without rewriting the document. A title in the inventory is not coverage.
 - skip: no useful write now; give a reason. This leaves the marker pending, as does omitting it.
@@ -1696,7 +1701,6 @@ Other write actions may also carry currentUnderstanding. Pasted source material 
 3. ${DOC_LANGUAGE_RULE} Dates and mechanical evidence stamps on historical writes are not your bookkeeping; cite current-view evidence explicitly.
 4. Never contradict shown existing text silently — preserve contrary evidence and label your interpretation.
 5. ${DOC_WRITE_WINDOW_RULE} ${DOCUMENT_BUDGET_RULE} Tail supplements and current-view revisions never reopen a settled index.
-
 ## Output
 
 Call \`scribeOutput\` with your decisions + a short reasoning note. A verified covered outcome completes a marker without a document write; skipped or refused decisions stay for a later pass.
@@ -1841,11 +1845,10 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
         category: resolved.category,
         caseName: resolved.caseName,
         batch,
-        scope,
         fresh: true,
       });
       currentText = read.content;
-      displayText = renderWriterCaseRead(read, scope);
+      displayText = writerIndexPage(read, {}, scope);
     } catch (error) {
       if (!isAbsentReadError(error)) {
         skipped.push({
@@ -1874,7 +1877,7 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
         `title: ${marker.title}\nnote: ${marker.note || "(none)"}` +
         `${marker.dateAnchor ? `\ndateAnchor: ${marker.dateAnchor}` : ""}\n` +
         `${marker.body?.trim() ? "sourceMaterial: preserved separately; use addPiece or verified covered, never a tail\n" : ""}` +
-        `target case: ${category}/${caseName} (${existed ? "exists — full index and current view below" : "no existing case at this path"})`;
+        `target case: ${category}/${caseName} (${existed ? "exists — case read below; follow any continuation" : "no existing case at this path"})`;
       return displayText ? `${head}\n\n${displayText.trim()}` : head;
     })
     .join("\n\n");
@@ -1902,7 +1905,6 @@ Report one entry per marker as instructed.`;
     sessionId: sliceId,
     system: SCRIBE_SYSTEM,
     prompt,
-    maxSteps: 50,
     tools: {
       readSlice: makeSliceReadTool({ sliceId, batch, scope }),
       readCase: makeCaseReadTool(batch, scope),

@@ -6,9 +6,6 @@ vi.mock("@/lib/deepseek/generate", () => ({ streamText: native.streamText }));
 vi.mock("workflow", () => ({ getWritable: vi.fn() }));
 vi.mock("@/lib/evolution/store", () => ({ readSelfSopSnapshot: vi.fn() }));
 vi.mock("@/lib/evolution/skill-store", () => ({ readSkillLedger: vi.fn() }));
-vi.mock("@/lib/chat/step-timeout", () => ({
-  withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({ ok: true, result: await work(), elapsedMs: 0 })),
-}));
 
 import { runScenarioRecall } from "@/lib/agents/scenario-recall";
 import { runAgent, zeroUsage } from "@/lib/deepseek/runner";
@@ -66,7 +63,7 @@ async function recall(content: string, quote = QUOTE) {
   });
   const result = await runScenarioRecall({
     question: "What phrase did the earlier assistant actually write in prose?",
-    refs: [REF], backend: { listMemoryFiles: async () => [PATH], readFile }, timeoutMs: 1_000,
+    refs: [REF], backend: { listMemoryFiles: async () => [PATH], readFile },
   });
   expect(files.get(PATH)).toBe(raw);
   expect(readFile).toHaveBeenCalledWith(PATH);
@@ -112,16 +109,14 @@ describe("original prose provenance across native omission markers", () => {
     ]);
   });
 
-  it("keeps thinking enabled and makes the final actual model step report-only with auto tool choice", async () => {
+  it("lets the researcher finish after more than eight real model steps", async () => {
     const requests: ModelRequest[] = [];
     const raw = conversation("The earlier assistant wrote a visible original phrase.");
     native.streamText.mockImplementation(async (options: AgentOptions) => {
-      expect(await options.prepareStep?.({ stepNumber: 7, steps: [], messages: [] })).toMatchObject({
-        toolChoice: "auto", activeTools: ["scenarioRecallReport"], system: expect.stringContaining("This is the final step"),
-      });
+      expect(await options.prepareStep?.({ stepNumber: 9, steps: [], messages: [] })).toBeUndefined();
       expect(await options.prepareStep?.({ stepNumber: 0, steps: [], messages: [] })).toBeUndefined();
       const result = await runAgent(options, async (request) => {
-        const final = requests.length === 7;
+        const final = requests.length === 10;
         requests.push(request);
         const toolCalls = [{
           id: `model-step-${requests.length}`, type: "function" as const,
@@ -147,23 +142,18 @@ describe("original prose provenance across native omission markers", () => {
       };
     });
     const result = await runScenarioRecall({
-      question: "What did the assistant write?", refs: [REF], timeoutMs: 1_000,
+      question: "What did the assistant write?", refs: [REF],
       backend: { listMemoryFiles: async () => [PATH], readFile: async () => raw },
     });
     expect(result.status).toBe("ok");
-    expect(requests).toHaveLength(8);
+    expect(requests).toHaveLength(11);
     expect(requests.at(-1)?.toolChoice).toBe("auto");
-    expect(requests.at(-1)?.tools?.map((definition) => definition.function.name)).toEqual(["scenarioRecallReport"]);
-    expect(requests.at(-1)?.messages[0].content).toContain("Call scenarioRecallReport now");
+    expect(requests.at(-1)?.tools?.map((definition) => definition.function.name)).toEqual(expect.arrayContaining(["readRecord", "scenarioRecallReport"]));
+
   });
 
-  it("stops after an in-flight backend read crosses its own deadline, without starting another read", async () => {
+  it("keeps reading after two virtual minutes while the first lookup is still in progress", async () => {
     vi.useFakeTimers();
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds: number) => {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("Fixture recall deadline", "TimeoutError")), milliseconds);
-      return controller.signal;
-    });
     let release: (value: string) => void = () => {};
     let started: () => void = () => {};
     const waiting = new Promise<string>((resolve) => { release = resolve; });
@@ -186,18 +176,18 @@ describe("original prose provenance across native omission markers", () => {
       };
     });
     const run = runScenarioRecall({
-      question: "Find the earlier statement.", timeoutMs: 1_000,
+      question: "Find the earlier statement.",
       backend: {
         listMemoryFiles: async () => [PATH, "memory/records/2026/10/19/1800/core.md"], readFile,
       },
     });
     await reading;
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(121_000);
     release(raw);
     const result = await run;
-    expect(result).toMatchObject({ status: "timeout", answer: "", evidence: [] });
-    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("insufficient_evidence");
+    expect(readFile).toHaveBeenCalledTimes(2);
     expect(result.coverage.read).toEqual([]);
-    expect(result.error).toContain("timed out");
+
   });
 });

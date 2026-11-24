@@ -1,5 +1,6 @@
 import { sleep } from "workflow";
-import { isStepCount } from "@/lib/deepseek/tools";
+import { streamDialogueWording } from "@/lib/dialogue/wording-stream";
+import { closeAgentStreamStep } from "@/lib/deepseek/steps";
 import type { ModelCallStreamPart } from "@/lib/deepseek/types";
 import { getWritable } from "workflow";
 import { createDialogueAgent } from "@/app/api/agent/agent";
@@ -20,7 +21,7 @@ import {
   startDialogueRecordRunStep,
 } from "./dialogue-transport-steps";
 
-const ADMISSION_POLLS = 15;
+
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -32,18 +33,18 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   const childRunId = await dialogueOwnRunIdStep();
   if (!input.direct) {
     let admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
-    for (let poll = 1; admission === "pending" && poll < ADMISSION_POLLS; poll++) {
-      await sleep("1s");
+    let delayMs = 1_000;
+    while (admission === "pending") {
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, 30_000);
       admission = await dialogueAdmissionStep(input.context.parentRunId, input.offerId, childRunId);
     }
     if (admission !== "admitted") {
       return {
         kind: "dialogue-reply",
         offerId: input.offerId,
-        status: admission === "pending" ? "admission_timeout" : "not_admitted",
-        error: admission === "pending"
-          ? "The reply admission did not become visible in time."
-          : "This reply offer was superseded or its parent had already ended.",
+        status: "not_admitted",
+        error: "This reply offer was superseded or its parent had already ended.",
       };
     }
   }
@@ -61,19 +62,17 @@ export async function dialogueWorkflow(input: DialogueRunInput): Promise<Dialogu
   let error: string | undefined;
   try {
     const agent = createDialogueAgent(checkpoint, input.direct === true);
-    const result = await agent.stream({
+    text = await streamDialogueWording(agent, {
       prompt: prepared.prompt,
       // Publish checkpoint text only after the server checks it is still current.
       writable: getWritable<ModelCallStreamPart>(checkpoint ? { namespace: DIALOGUE_CHECKPOINT_NAMESPACE } : undefined),
-      stopWhen: isStepCount(1),
       sendFinish: false,
-      preventClose: !checkpoint,
     });
-    if (result.finishReason !== "stop") throw new Error("Dialogue wording did not finish.");
-    text = result.text;
     held = checkpoint && !text.trim();
   } catch (cause) {
     error = failureMessage(cause);
+  } finally {
+    if (checkpoint) await closeAgentStreamStep(getWritable({ namespace: DIALOGUE_CHECKPOINT_NAMESPACE }));
   }
 
   let utterance: PublicUtterance | undefined;

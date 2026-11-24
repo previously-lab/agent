@@ -74,7 +74,6 @@ async function writeManifest(scope: Scope, path: string, manifest: Manifest): Pr
 async function withLocalLock<T>(path: string, run: () => Promise<T>): Promise<T> {
   const lockPath = resolveLocalDataPath(`${path}.lock`);
   await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + 5_000;
   let handle;
   while (!handle) {
     try {
@@ -90,7 +89,6 @@ async function withLocalLock<T>(path: string, run: () => Promise<T>): Promise<T>
           try { process.kill(pid, 0); } catch (probe) { if ((probe as NodeJS.ErrnoException).code === "ESRCH") await unlink(lockPath); }
         } else if (Date.now() - (await stat(lockPath)).mtimeMs > 30_000) await unlink(lockPath);
       } catch (probe) { if ((probe as NodeJS.ErrnoException).code !== "ENOENT") throw probe; }
-      if (Date.now() >= deadline) throw new ImageAttachmentError("asset_busy", "Image is busy; retry shortly", 409);
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
@@ -108,10 +106,14 @@ async function transition(scope: Scope, assetId: string, mutate: (manifest: Mani
   // transition must instead CAS against the exact manifest we validated.
   const { owner, repo } = getRepoConfig();
   const octokit = getOctokit();
-  for (let attempt = 0; attempt < 3; attempt++) {
+  let conflicted: { sha: string; error: unknown } | undefined;
+  while (true) {
+    let attemptedSha: string | undefined;
     try {
       const { data } = await octokit.rest.repos.getContent({ owner, repo, path });
       if (Array.isArray(data) || !("content" in data)) throw new ImageAttachmentError("asset_missing", "Image upload was not found", 404);
+      if (conflicted?.sha === data.sha) throw conflicted.error;
+      attemptedSha = data.sha;
       const manifest = parseManifest(Buffer.from(data.content, "base64").toString("utf8"), scope, assetId);
       mutate(manifest);
       const result = await octokit.rest.repos.createOrUpdateFileContents({ owner, repo, path, sha: data.sha,
@@ -122,10 +124,13 @@ async function transition(scope: Scope, assetId: string, mutate: (manifest: Mani
     } catch (error) {
       if (error instanceof ImageAttachmentError) throw error;
       if (notFound(error)) throw new ImageAttachmentError("asset_missing", "Image upload was not found", 404);
-      if (![409, 422].includes((error as { status?: number }).status ?? 0)) throw error;
+      if (!attemptedSha || ![409, 422].includes((error as { status?: number }).status ?? 0)) throw error;
+      // A 409 may reflect another file advancing the branch even when this
+      // manifest stays unchanged. A 422 against the same SHA is a real rejection.
+      conflicted = (error as { status?: number }).status === 422 ? { sha: attemptedSha, error } : undefined;
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
-  throw new ImageAttachmentError("asset_busy", "Image changed during this request; retry", 409);
 }
 
 export async function stageImage(input: { data: Buffer; name: string; persona?: unknown }): Promise<ImageAttachmentSnapshot> {

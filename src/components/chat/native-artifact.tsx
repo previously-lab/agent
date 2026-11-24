@@ -9,7 +9,7 @@ import { useNativeTurnIdentity } from "./native-identity";
 import { useNativeReadingCopy } from "./native-reading-context";
 import "./dialogue-manuscript.css";
 
-export async function readDialogueArtifact(expected: DialogueArtifactRef, persona: string, signal: AbortSignal, request = fetch, workId?: string): Promise<string> {
+export async function readDialogueArtifact(expected: DialogueArtifactRef, persona: string, signal: AbortSignal, request = fetch, workId?: string, publicationId?: string): Promise<string> {
   const params = new URLSearchParams({ persona });
   const archivePath = `/api/chat/dialogue/artifacts/${encodeURIComponent(expected.artifactId)}`;
   const path = workId
@@ -18,7 +18,9 @@ export async function readDialogueArtifact(expected: DialogueArtifactRef, person
       ? `/api/chat/${encodeURIComponent(expected.sourceOwnerId)}/artifacts/${encodeURIComponent(expected.artifactId)}`
       : archivePath;
   const read = async (target: string): Promise<string> => {
-    const response = await request(`${target}?${params}`, {
+    const query = new URLSearchParams(params);
+    if (target === archivePath && publicationId && !workId) query.set("publicationId", publicationId);
+    const response = await request(`${target}?${query}`, {
       signal, cache: "no-store", credentials: "same-origin", redirect: "error",
     });
     if (!response.ok) throw new Error("Artifact unavailable");
@@ -50,12 +52,13 @@ async function verifyDialogueArtifactBody(expected: DialogueArtifactRef, body: s
   return body;
 }
 
-export function DialogueArtifact({ artifact, mode, workId, source }: {
+export function DialogueArtifact({ artifact, mode, workId, source, publicationId }: {
   artifact: DialogueArtifactRef;
   mode: NativeRenderMode;
   /** Verified before use; public child streams can supply the exact bytes
    * directly while historical records continue through the authorized GET. */
   source?: string;
+  publicationId?: string;
   /** Completed, unpublished work products use their owner-bound preview.
    * Published utterances omit this and retain the public artifact gate. */
   workId?: string;
@@ -76,16 +79,18 @@ export function DialogueArtifact({ artifact, mode, workId, source }: {
     const controller = new AbortController();
     // Resolve the original bytes without composing Markdown around them. The
     // same source owner, block id and version also restore the same widget.
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]);
-    const reading = source === undefined
-      ? readDialogueArtifact({ artifactId, sourceOwnerId, revision, sha256, kind, mediaType, byteSize }, identity.persona, signal, fetch, workId)
-      : verifyDialogueArtifactBody(artifact, source);
+    const signal = controller.signal;
+    const readOriginal = () => readDialogueArtifact(artifact, identity.persona, signal, fetch, workId, publicationId);
+    const reading = source === undefined || !globalThis.crypto?.subtle ? readOriginal() : verifyDialogueArtifactBody(artifact, source).catch(error => {
+      if (signal.aborted) throw error;
+      return readOriginal();
+    });
     void reading.then(
       body => { if (!controller.signal.aborted) setLoaded({ key, attempt, source: body }); },
       () => { if (!controller.signal.aborted) setLoaded({ key, attempt, source: null }); },
     );
     return () => controller.abort();
-  }, [artifact, source, artifactId, sourceOwnerId, revision, sha256, kind, mediaType, byteSize, identity.persona, workId, key, attempt]);
+  }, [artifact, source, artifactId, sourceOwnerId, revision, sha256, kind, mediaType, byteSize, identity.persona, workId, publicationId, key, attempt]);
 
   const state = !result ? "pending" : result.source === null ? "unavailable" : "ready";
   return <div className="dialogue-artifact" data-rich-block={kind === "native_html" ? "html" : "attachment"} data-artifact-ref={artifactId} data-artifact-state={state} data-artifact-surface={mode}

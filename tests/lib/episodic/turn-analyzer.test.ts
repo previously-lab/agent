@@ -302,7 +302,7 @@ describe("analyzeTurn", () => {
     expect(closing[2].content).toHaveLength(300);
   });
 
-  it("runs with the 50-step anti-loop fuse (the wall clock is the real budget)", async () => {
+  it("allows model-led follow-up when more evidence is needed", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
         intent: { type: "chat", reason: "chat" },
@@ -311,6 +311,6 @@ describe("analyzeTurn", () => {
       }),
     );
     await analyzeTurn({ model, userMessage: "x" });
-    expect(ai.streamText.mock.calls.at(-1)?.[0].stopWhen.maxSteps).toBe(50);
+    expect(ai.streamText.mock.calls.at(-1)?.[0]).not.toHaveProperty('stopWhen');
   });
 });

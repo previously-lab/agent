@@ -2,13 +2,11 @@ import { z } from "zod";
 import { extractSemanticDocumentLinks } from "@/lib/archive/ref-tokens";
 import {
   appendTail, parseCaseCurrent, parseCaseDoc, serializeCaseCurrent, serializeCaseDoc,
-  serializeCaseTail, serializeTailEntries,
 } from "@/lib/docs/case-doc";
 import { isValidCaseName, isValidPieceFileName } from "@/lib/docs/case-naming";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
 import { isCaseCategory, isUserModelCase } from "@/lib/docs/paths";
 import { isCapabilitySopCase } from "@/lib/evolution/paths";
-import { assertDocumentWrite, assertTailBudget } from "@/lib/docs/write-limits";
 import { formatDocumentLink } from "@/lib/documents/document-link";
 import { fsReadFile, fsWriteFile, type WriteBatch } from "./io-helpers";
 import { parseTurns, type ParsedTurn } from "./turn-parser";
@@ -16,7 +14,7 @@ import { parseTurns, type ParsedTurn } from "./turn-parser";
 export const cardLinkSourceSchema = z.object({
   sliceId: z.string().regex(/^\d{4}-\d{2}-\d{2}-\d{4}$/),
   turnId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
-  quote: z.string().min(1).max(4000),
+  quote: z.string().min(1),
 }).strict();
 export type CardLinkSource = z.infer<typeof cardLinkSourceSchema>;
 
@@ -86,9 +84,7 @@ export async function stageCaseCardCitation(
   } else {
     if (hasCitation(current)) return;
     const doc = appendTail(parseCaseDoc(current, { category, caseName, fileName }), { date, text: citation });
-    assertTailBudget(documentPath, serializeTailEntries([{ date, text: citation }]) + "\n", serializeCaseTail(doc.tail) + "\n");
     next = serializeCaseDoc(doc);
   }
-  assertDocumentWrite(documentPath, next, current);
   await fsWriteFile(documentPath, next, batch);
 }

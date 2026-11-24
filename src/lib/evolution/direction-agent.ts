@@ -19,8 +19,8 @@
  *     lives ONLY in the trailing "— refs: YYYY-MM-DD-HHMM, …" pointers.
  *     NO imperative behavior rules — direction describes the USER, never
  *     tells the agent what to do.
- *   - `# Hypotheses`  — a bounded DYNAMIC pool of trait-level GUESSES
- *     (≤ DIRECTION_HYPOTHESES_MAX), each line:
+ *   - `# Hypotheses`  — a DYNAMIC pool of trait-level GUESSES
+ *     with evidence and a falsification condition on each line:
  *       - [proposed YYYY-MM-DD-HHMM] <guess> — falsify if: <condition>
  *     Lifecycle: confirmed (≥2 distinct slices' evidence, or explicit user
  *     confirmation) → PROMOTED into the matching Portrait dimension IN THE
@@ -46,9 +46,8 @@
  *     Portrait lines and as the [proposed …] marker on hypotheses (validated
  *     structurally: ≥2 distinct slices steady-state, ≥1 on the bootstrap
  *     write AND on a migrate re-shape);
- *   - FIXED SKELETON + BOUNDED POOL — the two sections and the six Portrait
- *     dimensions are fixed, and the hypothesis pool is capped with structured
- *     per-line metadata (both validated structurally);
+ *   - FIXED SKELETON — the two sections and six Portrait dimensions are fixed;
+ *     each hypothesis carries validated per-line metadata;
  *   - REVERSIBLE — there is no "progress" axis, only fit to the current user;
  *     an old portrait entry SHOULD retire when the user changes. Nothing in
  *     the doc is append-only: the whole doc is the agent's current best model.
@@ -85,13 +84,6 @@ export const DIRECTION_PORTRAIT_DIMENSIONS = [
   "## Communication preferences",
   "## Values & boundaries",
 ] as const;
-
-/** Hard cap on the direction doc — it is quoted into the main agent's system
- *  prompt (Portrait + Hypotheses) and into the evolution agent's prompt. */
-export const DIRECTION_MAX_CHARS = 12000;
-
-/** The hypothesis pool's bound — a guess that can't earn its slot is noise. */
-export const DIRECTION_HYPOTHESES_MAX = 10;
 
 /**
  * A hypothesis's time-to-live, in slices: a guess still unverified this many
@@ -294,8 +286,7 @@ function validatePortraitPayload(
 /**
  * Apply direction ops to the current doc, in order. Each op is validated
  * structurally BEFORE it lands (a rejected op leaves the doc untouched and
- * reports why); a op that would push the doc past DIRECTION_MAX_CHARS is
- * rolled back. Missing fixed headings are created on demand, so the applier
+ * reports why). Missing fixed headings are created on demand, so the applier
  * also builds a bootstrap/migrate doc from the empty skeleton.
  */
 export function applyDirectionOps(
@@ -307,10 +298,8 @@ export function applyDirectionOps(
   let lines = base.split("\n");
   const results: DirectionOpResult[] = [];
 
-  const sizeOk = () => lines.join("\n").length <= DIRECTION_MAX_CHARS;
 
   for (const op of ops) {
-    const before = lines;
     let result: DirectionOpResult;
     switch (op.op) {
       case "add_portrait":
@@ -365,11 +354,6 @@ export function applyDirectionOps(
         }
         work.splice(insertAt, 0, entry);
         lines = work;
-        if (!sizeOk()) {
-          lines = before;
-          result = { op: op.op, ok: false, detail: `doc would exceed the ${DIRECTION_MAX_CHARS}-char cap — compress or remove something first` };
-          break;
-        }
         result = { op: op.op, ok: true, detail: entry };
         break;
       }
@@ -399,11 +383,6 @@ export function applyDirectionOps(
         const work = [...lines];
         work[m.index] = `- ${op.text.trim()} — refs: ${op.refs.map((r) => r.trim()).filter(Boolean).join(", ")}`;
         lines = work;
-        if (!sizeOk()) {
-          lines = before;
-          result = { op: op.op, ok: false, detail: `doc would exceed the ${DIRECTION_MAX_CHARS}-char cap — compress first` };
-          break;
-        }
         result = { op: op.op, ok: true, detail: work[m.index] };
         break;
       }
@@ -429,19 +408,9 @@ export function applyDirectionOps(
           work.push("", "# Hypotheses");
           return [work.length - 1, work.length];
         })();
-        const poolSize = bulletIndices(work, hyp).length;
-        if (poolSize >= DIRECTION_HYPOTHESES_MAX) {
-          result = { op: op.op, ok: false, detail: `the pool is full (${DIRECTION_HYPOTHESES_MAX}); the new guess was not added` };
-          break;
-        }
         const entry = `- [proposed ${opts.sliceId}] ${text} — falsify if: ${falsify}`;
         work.splice(hyp[1], 0, entry);
         lines = work;
-        if (!sizeOk()) {
-          lines = before;
-          result = { op: op.op, ok: false, detail: `doc would exceed the ${DIRECTION_MAX_CHARS}-char cap — compress first` };
-          break;
-        }
         result = { op: op.op, ok: true, detail: entry };
         break;
       }
@@ -568,7 +537,7 @@ export function directionSubstance(section: string | null): string {
  * body text stays a portrait, never a case log), the evidence bar
  * (steady-state needs ≥2 DISTINCT slice pointers across the doc — the
  * cross-slice requirement; bootstrap and migrate writes clear with ≥1),
- * the size cap, and that the proposal actually changes something.
+ * that the proposal actually changes something.
  */
 export function validateDirectionProposal(
   proposed: string,
@@ -577,12 +546,6 @@ export function validateDirectionProposal(
 ): DirectionValidation {
   const text = proposed.trim();
   if (!text) return { ok: false, reason: "proposal is empty" };
-  if (text.length > DIRECTION_MAX_CHARS) {
-    return {
-      ok: false,
-      reason: `proposal exceeds the ${DIRECTION_MAX_CHARS}-char cap (${text.length})`,
-    };
-  }
   for (const section of DIRECTION_SECTIONS) {
     if (!text.includes(section)) {
       return { ok: false, reason: `missing the fixed "${section}" section` };
@@ -614,18 +577,12 @@ export function validateDirectionProposal(
         "no substantive content — # Portrait and # Hypotheses are both empty/placeholder; an empty direction is not a direction",
     };
   }
-  // The hypothesis pool: bounded, and every guess carries its metadata.
+  // Every guess carries its metadata.
   const hypSection = extractDirectionSection(text, "# Hypotheses") ?? "";
   const hypLines = hypSection
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.startsWith("- "));
-  if (hypLines.length > DIRECTION_HYPOTHESES_MAX) {
-    return {
-      ok: false,
-      reason: `too many hypotheses (${hypLines.length}) — the pool is capped at ${DIRECTION_HYPOTHESES_MAX}`,
-    };
-  }
   for (const line of hypLines) {
     if (!HYPOTHESIS_LINE_RE.test(line)) {
       return {

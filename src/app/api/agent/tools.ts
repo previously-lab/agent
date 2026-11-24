@@ -19,6 +19,7 @@ import type { DialogueOfferContext } from "@/lib/dialogue/transport";
 import { WORK_RESPONSE_MODES } from "@/lib/dialogue/work-contract";
 
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { webFetchInputSchema, webSearchInputSchema } from "@/lib/search/web-input";
 import { currentViewSchema } from "@/lib/chat/current-view";
 import { ROOM_SNAPSHOT_MAX_DOOR_COUNT } from "@/lib/game/room-snapshot";
 import { RECALL_CATEGORIES } from "@/lib/memory/categories";
@@ -39,6 +40,7 @@ import {
   recallReadExecute,
   recallScenarioExecute,
   recallSinceExecute,
+  searchWebSourcesExecute,
   webSearchExecute,
   webFetchExecute,
   thinkDeepExecute,
@@ -67,7 +69,6 @@ import { reportTaskFollowupInputSchema } from "@/lib/chat/task-followups";
 import { scenarioRecallRequestSchema } from "@/lib/chat/scenario-recall-contract";
 
 // ─── Context schemas ─────────────────────────────────────────────────────
-
 /** Structural ModelConfig schema for the serializable tool context — mirrors
  *  src/lib/models/registry.ts so provider configs survive the workflow
  *  boundary. Used by mainModel (the turn's resolved main agent, which all
@@ -122,8 +123,7 @@ export const toolContextSchema = z.object({
   // The turn's resolved MAIN model — the sub-agents that run on the chat
   // model (thinkDeep) use it directly (the same one injected for the main
   // agent) instead of re-resolving config from GitHub on every fragment step.
-  // webSearch is the exception: a DeepSeek-only infrastructure call
-  // (tool-executors webSearchExecute), independent of mainModel.
+  // Direct web search and fetch resolve their official DeepSeek credentials at the HTTP boundary.
   mainModel: modelConfigSchema.optional(),
   // User-local time rendering (time-localize.ts / the currentTime executor).
   // These MUST be declared here: the workflow step boundary re-parses the
@@ -140,6 +140,22 @@ export const toolContextSchema = z.object({
   /** Image attachments (data URLs) extracted when the main model lacks vision. */
   imageAttachments: z.array(z.string()).optional(),
 });
+
+// The model names its information gap in the lookup it was going to make.
+// Existing callers and durable calls from previous versions can omit the hint.
+// Storage receives the same locator as before.
+function archiveLookup<Shape extends z.ZodRawShape>(locator: z.ZodObject<Shape>) {
+  return {
+    modelInputSchema: locator.extend({
+      missingFact: z.string().describe("The unresolved factual question in the user's request that this archive lookup must answer. When the conversation already supports the intended reply, leave the archive closed and hand off the reply."),
+    }),
+    inputSchema: z.preprocess(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value) || !("missingFact" in value)) return value;
+      const { missingFact: _purpose, ...parameters } = value;
+      return parameters;
+    }, locator),
+  };
+}
 
 // ─── The memory-read verbs (v0.36) + the rest of the chat tool set ─────────
 //
@@ -200,18 +216,18 @@ export const chatTools = {
   }),
   recallList: tool({
     description:
-      "Browse the public memory directory. Omit path to list the categories, pass a category such as 'people' to list its case directories, or pass a case path to list its immediate documents. " +
+      "Locate a directory or a specific document needed to answer the user's question. A conversational mention does not require finding its file. Omit path to list the categories, pass a category such as 'people' to list its case directories, or pass a case path to list its immediate documents. " +
       "Returns one page of navigation entries and nextOffset when there is more. It reads no document text. Use recallRead on a returned ref to read a document; storage paths are not accepted.",
-    inputSchema: recallListInputSchema,
+    ...archiveLookup(recallListInputSchema),
     contextSchema: toolContextSchema,
     execute: recallListExecute,
   }),
   // ② Locate named documents by their public directory paths.
   recallFind: tool({
     description:
-      "Find an unfamiliar case or document by exact, included, normalized or near name. Omit category to search across categories, or restrict by category or directory. " +
+      "Find a document whose address you need for an outstanding factual question. Search by exact, included, normalized or near name. Omit category to search across categories, or restrict by category or directory. " +
       "Hits are navigation only. A known document ref can go straight to recallRead. For a known record ID use the records category, or pass the ref to recallScenario for original evidence.",
-    inputSchema: recallPathFindInputSchema,
+    ...archiveLookup(recallPathFindInputSchema),
     contextSchema: toolContextSchema,
     execute: recallFindExecute,
   }),
@@ -219,16 +235,16 @@ export const chatTools = {
   // first, raw conversation only on explicit request.
   recallSearch: tool({
     description:
-      "Search memory text by keyword. By default searches semantic documents, self documents, the user profile, and slice navigation heads. " +
+      "Look up a specific missing fact about the past. Use keywords from the factual question. When the visible conversation already supports the reply, no archive lookup is needed. By default searches semantic documents, self documents, the user profile, and slice navigation heads. " +
       "Raw conversation is scanned only with category 'records' or includeRecords:true; the resulting record refs are navigation only. Use recallScenario to verify original words. " +
       "To find accounts of a conversation, set dateBasis to 'conversation' with since/until. This matches the local opening day of a cited slice, including in accounts filed later. Each call scans up to 50 candidates. Mixed searches scan and show semantic documents before record leads. Within each group, passages matching more keywords together rank higher on the page. " +
       "A thinking-read receipt may include up to two verified case passages. They can directly answer a factual question. A passage labeled 'complete body of this edition' already contains that document's body. Other editions, pieces and linked records have their own coverage. " +
       "If there is no text match in a page, the result may offer separately labeled related names or paths. Those are navigation leads, not content matches or evidence. " +
       "If another page could affect the answer or complete coverage is required, pass both continuation values. A partial scan leaves the rest unknown.",
-    inputSchema: z.object({
+    ...archiveLookup(z.object({
       query: recallSearchQuerySchema
         .describe(
-          "One keyword or up to eight (case-insensitive). Results favor passages matching more terms together.",
+          "One or more keywords (case-insensitive). Results favor passages matching more terms together.",
         ),
       category: z
         .enum(RECALL_CATEGORIES)
@@ -278,7 +294,7 @@ export const chatTools = {
         .min(0)
         .optional()
         .describe("Candidate-page cursor from nextScanCursor; omit for the first 50 candidates. This is independent of hit offset."),
-    }),
+    })),
     contextSchema: toolContextSchema,
     execute: recallSearchExecute,
     toModelOutput: renderVerifiedSearchPassages,
@@ -344,8 +360,10 @@ export const chatTools = {
         })
         .optional()
         .describe(
-          "For semantic documents, 'lines' reads at most 400 lines/16000 chars. For direct record reads the range applies to the public conversation.",
+          "For semantic documents, 'lines' selects the requested line range. For direct record reads the range applies to the public conversation.",
         ),
+      offset: z.number().int().nonnegative().optional().describe("Continue at this character offset in the same selection."),
+      revision: z.string().optional().describe("Copy the revision from the page when continuing a long read."),
       outline: z
         .boolean()
         .optional()
@@ -514,7 +532,7 @@ export const chatTools = {
     inputSchema: z.object({
       category: z.enum(["people", "events", "things", "places", "orgs", "research", "hypotheses", "tasks", "self"]),
       caseName: z.string().trim().min(1),
-      reason: z.string().trim().min(1).max(500).describe("A short human reason for retiring this case"),
+      reason: z.string().trim().min(1).describe("A short human reason for retiring this case"),
     }).strict(),
     contextSchema: toolContextSchema,
     execute: archiveCaseExecute,
@@ -609,7 +627,7 @@ export const chatTools = {
           "pointers (slice ids, case paths) — pointers are worth more than " +
           "summaries; the run reads the original records itself.",
         ),
-      evidenceQuote: z.string().min(1).max(4000).optional().describe(
+      evidenceQuote: z.string().min(1).optional().describe(
         "For long user messages, quote the exact current-user request for this background work (at most 4000 characters).",
       ),
     }),
@@ -622,10 +640,8 @@ export const chatTools = {
   // and the scribe/research passes at slice close — a clue, not an order.
   noteForSediment: tool({
     description:
-      "Leave a marker for reflection when the conversation provides a finding worth keeping, " +
-      "such as a change in a decision or a comparison someone would want to consult (kind 'sediment'). " +
-      "Use the existing case as the target when the new evidence belongs there. " +
-      "A passing reference can stay in the conversation. For a date-anchored commitment the user " +
+      "Reflection already receives the full exchange. Use a sediment marker for a non-obvious durable finding from this work that the archivist could otherwise miss. " +
+      "A mention of a subject is already recorded and needs no marker. Use the existing case when new evidence belongs there. For a date-anchored commitment the user " +
       "actually made, use 'task' and pass dateAnchor. For an open question worth investigating later, " +
       "use 'question'. This appends one marker to the current slice's mailbox. " +
       "Reflection evaluates it when archiving the slice. Continue answering; the marker itself does not file a document.",
@@ -739,67 +755,25 @@ export const chatTools = {
     execute: currentTimeExecute,
   }),
   webSearch: tool({
-    description:
-      "Use for current or external evidence needed for the answer. A search agent finds and reads sources, then reports an answer, its sources and uncertainty. " +
-      "Choose standard for one research question. Independent gaps in a broad request can use up to four concurrent scout calls. Suggested pages are optional when the report already answers the question.",
+    description: "Look up a focused public query. Returns ranked URLs, titles and summaries directly. Read a source with webFetch when its details matter. Send only terms needed for the lookup.",
+    inputSchema: webSearchInputSchema,
+    contextSchema: toolContextSchema,
+    execute: searchWebSourcesExecute,
+  }),
+  webFetch: tool({
+    description: "Read a known public URL as Markdown using DeepSeek Fetch. Select lines or matching paragraphs if helpful; use the continuation offset for longer text.",
+    inputSchema: webFetchInputSchema,
+    contextSchema: toolContextSchema,
+    execute: webFetchExecute,
+  }),
+  webResearch: tool({
+    description: "Delegate an independent investigation when a question needs sustained research, comparison of sources or resolution of conflicting evidence. For a quick fact or known URL, use webSearch or webFetch directly.",
     inputSchema: z.object({
-      query: z
-        .string()
-        .describe("A specific, self-contained research question."),
-      mode: z
-        .enum(["standard", "scout"])
-        .optional()
-        .describe(
-          "'scout' = a lean fan-out leg (fewer page reads/search rounds) for " +
-          "when you dispatch several researchers in parallel. Omit (or " +
-          "'standard') for a single normal research run.",
-        ),
+      query: z.string().describe("A self-contained research question."),
+      mode: z.enum(["standard", "scout"]).optional().describe("Use scout for a focused subquestion of a larger investigation."),
     }),
     contextSchema: toolContextSchema,
     execute: webSearchExecute,
-  }),
-  webFetch: tool({
-    description:
-      "Read one specific page as Markdown (boilerplate stripped, ~15K " +
-      "characters, optional range filters search/lines). YOUR tool for " +
-      "reading a KNOWN URL — a link the user pasted, or a suggestedReads page " +
-      "from a webSearch report you want to verify. NOT a search tool: to FIND " +
-      "information, use webSearch.",
-    inputSchema: z.object({
-      url: z
-        .string()
-        .describe("Full absolute URL of the page to read, e.g. 'https://example.com/article'."),
-      range: z
-        .object({
-          type: z
-            .enum(["search", "lines"])
-            .describe(
-              "search = keyword match, returns matching paragraphs (+ context); " +
-              "if nothing matches, returns the full text with a note. " +
-              "lines = 1-indexed line range of the raw text, like a code file.",
-            ),
-          keywords: z
-            .array(z.string())
-            .optional()
-            .describe("Case-insensitive keywords to match. Only for type 'search'."),
-          context: z
-            .number()
-            .optional()
-            .describe("Paragraphs of context around each match (default 1). Only for type 'search'."),
-          start: z
-            .number()
-            .optional()
-            .describe("First line (1-indexed, inclusive). Only for type 'lines'."),
-          end: z
-            .number()
-            .optional()
-            .describe("Last line (1-indexed, inclusive). Only for type 'lines'."),
-        })
-        .optional()
-        .describe("Optional range filter. When omitted, returns the page text up to the cap."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: webFetchExecute,
   }),
   viewImage: tool({
     description:
@@ -849,10 +823,7 @@ export const chatTools = {
       "conversation, so you must couple its conclusion with your own context " +
       "and the user's actual needs. On conflict, your context wins; surface " +
       "the divergence rather than hiding it. " +
-      "Returns the conclusion plus its thinking trail; a pod may come back " +
-      "partial (`status: timeout`) — its `answer` and `reasoning` hold what " +
-      "it already produced; work with them, or gather the missing facts " +
-      "yourself and dispatch a finer question. The thinking role always uses max " +
+      "Returns the conclusion plus its thinking trail. If the provider fails, use any partial output with its uncertainty. The thinking role uses max " +
       "effort. Synthesize its evidence in your own voice.",
     inputSchema: z.object({
       question: z
@@ -867,7 +838,7 @@ export const chatTools = {
 const workRelationSchema = z.object({
   relation: z.enum(["new", "related", "continuation", "unclear"]).optional()
     .describe("Advisory relation to other work; never changes ownership of this input."),
-  dependsOnInputIds: z.array(z.string().min(1)).max(8).optional()
+  dependsOnInputIds: z.array(z.string().min(1)).optional()
     .describe("Other input IDs whose existing handoffs are useful; not permission to redo them."),
 }).strict();
 
@@ -875,8 +846,8 @@ export const workCheckpointTool = tool({
   description:
     "Hand off a new, supported partial answer to this input while work continues. It may come from the supplied context or a completed lookup. You can call this alongside an independent next lookup. The dialogue Actor decides what to say. If the full answer is ready, use completeWork.",
   inputSchema: workRelationSchema.extend({
-    text: z.string().max(2400).refine(text => text.trim().length > 0, "text must not be blank")
-      .describe("The finding and its material uncertainty. Identify the outstanding question if useful. Omit plans, tool logs and private reasoning."),
+    text: z.string().refine(text => text.trim().length > 0, "text must not be blank")
+      .describe("The supported part of the answer and any uncertainty that changes it. Leave independent questions for their own handoff. Omit plans, tool logs and private reasoning."),
   }).strict(),
   contextSchema: toolContextSchema,
   execute: workCheckpointExecute,
@@ -884,10 +855,10 @@ export const workCheckpointTool = tool({
 
 export const completeWorkTool = tool({
   description:
-    "Complete ONLY the current input with verified work results, not public wording. Include the selected responseMode and what the user needs at the requested precision. Preserve material caveats, sources and complete native HTML artifacts. Call exactly once when work is complete, then call finishThinking in a SEPARATE later tool step; never bundle them. For a genuine user-input blocker, skip this tool and use finishThinking with needsUser. Do not answer, repeat or complete other inputs. The dialogue Actor owns integration and public expression.",
+    "Hand off what the dialogue Actor needs to respond to this input. A conversational turn can be complete from what the user just said. For a factual request, give the supported answer at the requested precision. Include the selected responseMode and any complete native HTML artifacts. Call exactly once when work is complete, then call finishThinking in a separate later step. For a genuine user-input blocker, use finishThinking with needsUser. The dialogue Actor owns integration and public expression.",
   inputSchema: workRelationSchema.extend({
-    result: z.string().max(200_000).refine(text => text.trim().length > 0, "result must not be blank")
-      .describe("Findings for the current ask, with their evidence and material limits. State what was established about the event separately from what you could find in the records. An unavailable source leaves its contents unknown. Omit wording advice and incidental claims. The dialogue role chooses its own words."),
+    result: z.string().refine(text => text.trim().length > 0, "result must not be blank")
+      .describe("Substance of the response to this user message. When the user shares an experience, reflect the point they made. When they ask about the past, include the findings they need and any uncertainty that changes the answer. The dialogue role chooses its own words."),
     responseMode: z.enum(WORK_RESPONSE_MODES).optional()
       .describe("The response mode selected for this input. The result should fit the user's requested shape."),
   }).strict(),
@@ -936,6 +907,7 @@ export function buildChatToolsContext(
     noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,
+    webResearch: ctx,
     webSearch: ctx,
     webFetch: ctx,
     viewImage: imageContext,
@@ -945,4 +917,3 @@ export function buildChatToolsContext(
   // must never lack its context entry.
   return contexts;
 }
-

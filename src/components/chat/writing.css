@@ -523,3 +523,159 @@
     padding-block-start: calc(var(--spacing) * 4);
   }
 }
+
+/* Chat bubbles belong to the conversation surface. The record reader shares
+   the semantic turn component and keeps its paper layout. */
+.conversation-stream-row .conversation-turn:is([data-role="user"], [data-role="assistant"], [data-role="agent"]) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing);
+  padding-block: calc(var(--spacing) * 2.5);
+}
+.conversation-stream-row .conversation-turn[data-role="user"] { align-items: flex-end; }
+.conversation-stream-row .conversation-byline {
+  flex-direction: row;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  padding: 0 calc(var(--spacing) * 1.5);
+}
+.conversation-stream-row .conversation-speaker { letter-spacing: 0.025em; }
+.conversation-stream-row :is([data-role="assistant"], [data-role="agent"]) > .conversation-byline::before {
+  content: "";
+  inline-size: calc(var(--spacing) * 2);
+  block-size: calc(var(--spacing) * 2);
+  border-radius: 50%;
+  background: var(--primary);
+}
+.conversation-stream-row .conversation-turn:is([data-role="user"], [data-role="assistant"], [data-role="agent"]) > .conversation-turn-content {
+  inline-size: fit-content;
+  max-inline-size: min(94%, 43rem);
+  padding: calc(var(--spacing) * 3) clamp(calc(var(--spacing) * 3), 2vw, calc(var(--spacing) * 5));
+  border: 1px solid color-mix(in oklab, var(--foreground) 11%, transparent);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-sm);
+  background: color-mix(in oklab, var(--card) 60%, var(--background));
+}
+.conversation-stream-row .conversation-turn[data-role="user"] > .conversation-turn-content {
+  max-inline-size: min(86%, 38rem);
+  border-color: transparent;
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
+  background: color-mix(in oklab, var(--primary) 8%, var(--muted));
+}
+.conversation-stream-row .conversation-turn[data-role="user"] .conversation-prose {
+  border-inline-start: 0;
+  padding-inline-start: 0;
+}
+.conversation-stream-row .conversation-turn:is([data-role="user"], [data-role="assistant"], [data-role="agent"]) > .conversation-turn-content:has(.conversation-image-shelf, .dialogue-artifact, .dialogue-photo, .native-html) {
+  inline-size: 100%;
+}
+.conversation-stream-row .conversation-prose,
+.conversation-stream-row .conversation-prose > .typeset { --typeset-leading: 1.72; }
+.conversation-stream-row .conversation-message-actions { margin-block-start: var(--spacing); }
+.conversation-stream-row .dialogue-continuous-reply:empty { display: none; }
+.dialogue-continuous-reply > * + * { margin-block-start: calc(var(--spacing) * 3); }
+.conversation-stream-row .conversation-turn:is([data-role="assistant"], [data-role="agent"]) > .conversation-turn-content:has(> .dialogue-continuous-reply) {
+  inline-size: min(94%, 43rem);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.conversation-stream-row .dialogue-continuous-reply > * {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  padding: calc(var(--spacing) * 3) clamp(calc(var(--spacing) * 3), 2vw, calc(var(--spacing) * 5));
+  border: 1px solid color-mix(in oklab, var(--foreground) 11%, transparent);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-2xl) var(--radius-sm);
+  background: color-mix(in oklab, var(--card) 60%, var(--background));
+}
+.conversation-stream-row .dialogue-continuous-reply > :has(.dialogue-artifact, .dialogue-photo) {
+  inline-size: 100%;
+}
+.conversation-composer-tail .conversation-composer--manuscript.composer-bar {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "writing" "controls";
+  row-gap: calc(var(--spacing) * 2);
+  margin-block: calc(var(--spacing) * 5) calc(var(--spacing) * 8 + env(safe-area-inset-bottom, 0px));
+  padding: calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: var(--card);
+}
+.conversation-composer-tail .conversation-composer--manuscript.composer-bar:focus-within {
+  border-color: color-mix(in oklab, var(--primary) 45%, var(--border));
+}
+.conversation-composer-tail .conversation-composer--manuscript .conversation-composer-byline { display: none; }
+
+.dialogue-activity {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  color: var(--muted-foreground);
+  font: var(--text-xs)/var(--text-xs--line-height) var(--font-sans, sans-serif);
+}
+.dialogue-activity[data-open] {
+  inline-size: min(100%, 30rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+}
+.dialogue-activity:has(+ .dialogue-continuous-reply:not(:empty)) { margin-block-end: calc(var(--spacing) * 2); }
+.dialogue-activity-heading,
+.dialogue-activity-trigger {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-inline-size: 0;
+}
+.dialogue-activity-heading { justify-content: space-between; }
+.dialogue-activity[data-open] .dialogue-activity-heading { padding-inline: calc(var(--spacing) * 2); }
+.dialogue-activity-trigger {
+  flex: 1;
+  padding-block: var(--spacing);
+  border-radius: var(--radius-sm);
+  text-align: start;
+  cursor: pointer;
+}
+.dialogue-activity-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.dialogue-activity-trigger:hover { color: var(--foreground); }
+.dialogue-activity-indicator { display: grid; place-items: center; min-inline-size: calc(var(--spacing) * 4); }
+.dialogue-activity-indicator svg, .dialogue-activity-chevron { inline-size: .9rem; block-size: .9rem; flex: none; }
+.dialogue-activity-trigger[aria-expanded="true"] .dialogue-activity-chevron { transform: rotate(180deg); }
+.dialogue-activity[data-status="failed"] .dialogue-activity-indicator { color: var(--destructive); }
+.dialogue-live-dots { display: inline-flex; gap: 0.16rem; align-items: center; color: var(--primary); }
+.dialogue-live-dots i {
+  inline-size: var(--spacing);
+  block-size: var(--spacing);
+  border-radius: 50%;
+  background: currentColor;
+  animation: dialogue-pulse 1.5s ease-in-out infinite;
+}
+.dialogue-live-dots i:nth-child(2) { animation-delay: 150ms; }
+.dialogue-live-dots i:nth-child(3) { animation-delay: 300ms; }
+@keyframes dialogue-pulse {
+  0%, 75%, 100% { opacity: .45; }
+  35% { opacity: 1; transform: translateY(-0.12rem); }
+}
+.dialogue-activity-viewport [data-slot="scroll-area-viewport"] { overscroll-behavior: contain; }
+.dialogue-activity-log { padding: calc(var(--spacing) * 3); overflow-wrap: anywhere; }
+.dialogue-activity-log ul { margin: 0; padding: 0; list-style: none; }
+.dialogue-activity-log ul > li + li { margin-block-start: calc(var(--spacing) * 2.5); }
+.dialogue-activity-tool { display: flex; align-items: baseline; gap: calc(var(--spacing) * 2); }
+.dialogue-activity-tool::before {
+  content: "";
+  inline-size: var(--spacing);
+  block-size: var(--spacing);
+  flex: none;
+  align-self: center;
+  border-radius: 50%;
+  background: currentColor;
+}
+.dialogue-activity-tool[data-state="running"]::before { background: var(--primary); }
+.dialogue-activity-log h3 { margin-block-end: var(--spacing); font-weight: 600; }
+.dialogue-activity-text .typeset { --typeset-size: var(--text-sm); --typeset-leading: 1.6; }
+@media (pointer: coarse) {
+  .dialogue-activity-trigger { min-block-size: calc(var(--spacing) * 11); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialogue-live-dots i { animation: none; }
+}

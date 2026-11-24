@@ -9,7 +9,6 @@ import {
   DIALOGUE_ARTIFACT_CHUNK,
   DIALOGUE_OFFERS_NAMESPACE,
   DIALOGUE_PUBLICATION_CHUNK,
-  CHECKPOINT_TEXT_MAX_CHARS,
   offerEventFromResult,
   parseOfferReplyResult,
   type DialogueRecordRequest,
@@ -25,6 +24,7 @@ import {
 import type { DialogueRuntimeEvent } from "@/lib/dialogue/coordination";
 import { listDialogueOffers, readDialogueAdmission, type DialogueAdmission } from "@/lib/dialogue/workflow-offers";
 import type { DialogueOfferEvent } from "@/lib/dialogue/transport";
+import { dialoguePublicationStopped } from "@/lib/dialogue/work-cancellation";
 import { parseWorkUpdateEvent, type WorkUpdateEvent } from "@/lib/dialogue/work-contract";
 
 export async function dialogueOwnRunIdStep(): Promise<string> {
@@ -164,7 +164,7 @@ async function readSpokenCheckpoint(offer: DialogueOfferEvent): Promise<string[]
         const chunk = next.value as { type?: string; data?: PublicUtterance } | undefined;
         if (chunk?.type === DIALOGUE_PUBLICATION_CHUNK && chunk.data?.utteranceId === offer.offerId) {
           return chunk.data.blocks.flatMap((block) => block.kind === "markdown"
-            ? [block.text.slice(0, CHECKPOINT_TEXT_MAX_CHARS)] : []);
+            ? [block.text] : []);
         }
       }
     } finally {
@@ -272,8 +272,10 @@ export async function publishDialogueResultStep(args: {
   const { input, artifacts, text } = args;
   // While the dialogue was choosing what to say, the thinking flow may have
   // handed off a newer result. Skip an interim publication in that case.
-  if (input.stage === "checkpoint" &&
-      checkpointSuperseded(input, await listDialogueOffers(input.context.parentRunId))) return undefined;
+  if (input.stage === "checkpoint" && checkpointSuperseded(input, await listDialogueOffers(input.context.parentRunId))) return undefined;
+  // Check after any slow checkpoint reconciliation and before allocating a
+  // publication or writing a chunk. The shared Actor can still serve other work.
+  if (await dialoguePublicationStopped(input)) return undefined;
   const utterance: PublicUtterance = {
     utteranceId: publicUtteranceId(input),
     publicSeq: input.publicSeq,

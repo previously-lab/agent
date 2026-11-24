@@ -48,6 +48,7 @@
  * start → start-step → (reply) → data-evolution? → data-turn-status →
  * finish-step → finish.
  */
+import { workflowRegistryPages } from "@/lib/chat/workflow-registry-pages";
 import { type UIMessageChunk } from "@/lib/chat/protocol";
 import { type ModelMessage } from "@/lib/deepseek/types";
 import { streamText } from "@/lib/deepseek/generate";
@@ -55,7 +56,7 @@ import crypto from "crypto";
 import { getWritable, getWorkflowMetadata, setAttributes } from "workflow";
 import { getRun, resumeHook, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import { HookNotFoundError } from "workflow/errors";
+import { HookNotFoundError, WorkflowRunNotFoundError } from "workflow/errors";
 import {
   createSlice,
   closeSlice,
@@ -1438,6 +1439,7 @@ export async function readSourceRunStatusForAck(runId: string): Promise<string> 
   try {
     return await getRun(runId).status;
   } catch (error) {
+    if (WorkflowRunNotFoundError.is(error)) return "missing";
     console.warn(
       `[Summary] source run ${runId} status unavailable for task acknowledgment:`,
       error instanceof Error ? error.message : error,
@@ -1734,34 +1736,22 @@ export async function pollInnerRunReports(
 
 // ─── Parallel turns steps (v0.33 — 连发并行: registry + batch summary) ─────
 
-/**
- * The run registry as plain predicate input — one unfiltered page (no status
- * filter returns every run, newest first — the dev-spike GET's shape, verified
- * against world-local 5.0.0-beta.44). Entities carry attributes AND
- * createdAt/completedAt even under `resolveData: "none"`. Step-context only
- * (getWorld needs the runtime). The tail's burst gate needs TERMINAL siblings
- * too, not just live ones — a completed sibling is what proves the burst.
- */
-async function listRegistryRuns(): Promise<ParallelRunEntry[]> {
+/** Terminal siblings prove a completed burst. Active admission only needs live rows. */
+async function listRegistryRuns(status?: "pending" | "running"): Promise<ParallelRunEntry[]> {
   const world = await getWorld();
-  const page = await world.runs.list({
-    pagination: { limit: 100 },
-    resolveData: "none",
-  } as Parameters<typeof world.runs.list>[0]);
-  return page.data.map((r) => ({
-    runId: r.runId,
-    status: r.status,
-    createdAt: r.createdAt ?? null,
-    completedAt: r.completedAt ?? null,
-    attributes:
-      (r as { attributes?: Record<string, string> | null }).attributes ?? null,
-  }));
+  const rows: ParallelRunEntry[] = [];
+  for await (const page of workflowRegistryPages(world, { status })) {
+    for (const run of page) {
+      rows.push({ runId: run.runId, status: run.status, createdAt: run.createdAt ?? null,
+        completedAt: run.completedAt ?? null, attributes: run.attributes ?? null });
+    }
+  }
+  return rows;
 }
 
-/** Live half of the registry (pending + running) — the housekeeping sibling
- *  count and the summary dedupe only ever care about those. */
 async function listLiveRuns(): Promise<ParallelRunEntry[]> {
-  return (await listRegistryRuns()).filter((r) => isLiveRunStatus(r.status));
+  const [pending, running] = await Promise.all([listRegistryRuns("pending"), listRegistryRuns("running")]);
+  return [...new Map([...pending, ...running].map(run => [run.runId, run])).values()];
 }
 // ─── The summary handoff (v0.42 §1/§2 — the last turn wakes the summary) ───
 

@@ -43,12 +43,11 @@ vi.mock("@/lib/github/client", async (importOriginal) => {
 
 import {
   isGitHubRateLimitError,
-  isGitHubReadTimeoutError,
   resetOctokit,
 } from "@/lib/github/client";
 import { _resetDefaultBranchCache } from "@/lib/tools/batch-write";
 import { getArrivalState, getEpisodicState } from "@/lib/episodic/actions";
-import { raceArrivalVerdict } from "@/lib/chat/reconnect";
+import { readArrivalVerdict } from "@/lib/chat/reconnect";
 
 const rateLimitedFetch = async (): Promise<Response> =>
   new Response(
@@ -144,40 +143,14 @@ describe("GitHub unavailable — entry actions fail fast and typed", () => {
     expect(fetchMock).toHaveBeenCalled();
   }, 30_000);
 
-  it("a HUNG GitHub read rejects with GitHubReadTimeoutError at the read deadline — the page can never spin forever", async () => {
-    fetchMock.mockImplementation(hangingFetch);
-    const t0 = Date.now();
-    await expect(getArrivalState()).rejects.toSatisfy(
-      isGitHubReadTimeoutError,
-    );
-    // Real wall-clock proof of the bound: the per-call cap (15s) fires well
-    // inside the entry budget (20s).
-    const elapsed = Date.now() - t0;
-    expect(elapsed).toBeGreaterThanOrEqual(14_000);
-    expect(elapsed).toBeLessThan(20_000);
-  }, 25_000);
+
 });
 
 describe("arrival gate under GitHub-down (the verdict layer of the failure card)", () => {
-  it("a hung memory service reports timeout at the gate deadline", async () => {
-    fetchMock.mockImplementation(hangingFetch);
-    // The gate (10s here) fires BEFORE the read deadline (15s) — exactly
-    // the authoritative history gate used before optional workflow recovery.
-    const action = getArrivalState();
-    const t0 = Date.now();
-    await expect(raceArrivalVerdict(action, 10_000)).resolves.toEqual({
-      kind: "timeout",
-    });
-    expect(Date.now() - t0).toBeLessThan(11_000);
-    // Drain the loser: its own read deadline (15s) still bounds it even
-    // after the gate has moved on.
-    await expect(action).rejects.toSatisfy(isGitHubReadTimeoutError);
-  }, 25_000);
-
   it("a rate-limited memory service stays a typed read failure, never an empty briefing", async () => {
     fetchMock.mockImplementation(rateLimitedFetch);
     const t0 = Date.now();
-    const verdict = await raceArrivalVerdict(getArrivalState(), 10_000);
+    const verdict = await readArrivalVerdict(getArrivalState());
     expect(verdict.kind).toBe("failed");
     if (verdict.kind === "failed") expect(isGitHubRateLimitError(verdict.error)).toBe(true);
     expect(Date.now() - t0).toBeLessThan(1_000);

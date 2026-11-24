@@ -59,7 +59,7 @@ describe("dialogue responsibility and lease state", () => {
     expect(dialogueRunStale(idle, [wake, { ...wake, wakeAt: new Date(now).toISOString() }], now)).toBe(true);
     idle.events.push({ type: "heartbeat", at: new Date(now).toISOString() });
     expect(dialogueRunStale(idle, [wake], now)).toBe(false);
-    expect(dialogueRunStale(idle, [wake], now + 120_000)).toBe(true);
+    expect(dialogueRunStale(idle, [wake], now + 3_600_000)).toBe(false);
   });
 
   it("uses explicit outcomes for failure and opening silence", () => {
@@ -68,4 +68,10 @@ describe("dialogue responsibility and lease state", () => {
     expect(dialogueOpeningHandled(current, "input-A")).toBe(true);
     expect(dialogueOpeningHandled(current, "input-B")).toBe(false);
   });
+});
+
+it("leaves a live wording attempt alone even after a long silent provider wait", () => {
+  const at = "2026-11-15T00:00:00.000Z";
+  const actor = run("busy", [{ type: "heartbeat", at }, { type: "wording_started", candidateIds: ["answer"], at }]);
+  expect(dialogueRunStale(actor, [], Date.parse(at) + 3_600_000)).toBe(false);
 });

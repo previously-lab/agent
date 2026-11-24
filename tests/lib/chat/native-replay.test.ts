@@ -61,14 +61,14 @@ describe("bounded native replay after refresh", () => {
     expect(restoreNativeReplay([user(), answer("old", "answer", false), answer("new", "new answer", false)]).slice(1).every((message) => message.parts.length === 2)).toBe(true);
   });
 
-  it("retains at most 24 turns and silently ignores oversized raw transcripts", () => {
+  it("retains early turns and complete large native transcripts", () => {
     for (let index = 0; index < 30; index++) rememberNativeReplay([user(`u${index}`), answer()]);
-    expect(readNativeReplay()).toHaveLength(24);
-    expect(readNativeReplay()[0].userId).toBe("u6");
+    expect(readNativeReplay()).toHaveLength(30);
+    expect(readNativeReplay()[0].userId).toBe("u0");
     const huge = { ...replay, data: { messages: [{ role: "assistant", content: "x".repeat(600_000) }] } };
     rememberNativeReplay([user("too-big"), { ...answer(), parts: [{ type: "text", text: "answer" }, huge] }]);
-    expect(readNativeReplay()).toHaveLength(24);
-    expect(readNativeReplay().some((entry) => entry.userId === "too-big")).toBe(false);
+    expect(readNativeReplay()).toHaveLength(31);
+    expect(readNativeReplay().at(-1)?.parts).toEqual([huge]);
   });
 
   it("falls back to visible text with corrupt, oversized or unavailable local storage", () => {

@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./test";
 import { clearEpisodic } from "./memory-fixture";
 
-async function fixture(page: Page, count: number, withInitialReplies: boolean) {
+async function fixture(page: Page, count: number, question?: string) {
   const at = new Date(Date.now() - 60_000).toISOString();
   const records = Array.from({ length: count }, (_, offset) => {
     const index = offset + 1;
@@ -13,43 +13,41 @@ async function fixture(page: Page, count: number, withInitialReplies: boolean) {
       parentRunId,
       sourceInputId: inputId,
       workId: `work-${index}`,
+      assistantId: `work-${index}`,
       offersUrl: `/fixture/offers/${parentRunId}`,
       thoughtsUrl: `/fixture/thoughts/${parentRunId}`,
       acceptedAt: at,
       userMessage: {
         id: inputId,
         role: "user",
-        parts: [{ type: "text", text: `Question ${index}: ${"Enough text to make the stream scrollable. ".repeat(10)}` }],
+        metadata: { sourceInputId: inputId, acceptedAt: at },
+        parts: [{ type: "text", text: question ?? `Question ${index}: ${"Enough text to make the stream scrollable. ".repeat(10)}` }],
       },
-      offers: withInitialReplies ? [{
-        offerId: `offer-${index}`,
-        runId: `run-${index}`,
-        sourceInputId: inputId,
-        messageId: `message-${index}`,
-        messageAt: at,
-      }] : [],
-      done: index < count,
+      done: false,
     };
   });
-  const initialTexts = Object.fromEntries(withInitialReplies
-    ? records.map((_, index) => [`run-${index + 1}`, `Answer ${index + 1}: ${"A complete answer with enough height. ".repeat(10)}`])
-    : []);
-  await page.addInitScript(({ records, initialTexts }) => {
+  await page.addInitScript(records => {
     localStorage.setItem("previously:dialogue:parents:v2:user", JSON.stringify(records));
     const encoder = new TextEncoder();
-    const texts = new Map<string, string>(Object.entries(initialTexts));
+    const texts = new Map<string, string>();
+    const inputs = new Map<string, string>();
     const parents = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
     const originalFetch = window.fetch;
     const publishTarget = window as unknown as {
-      fixturePublish: (input: { parentRunId: string; offerId: string; runId: string; sourceInputId: string; text: string }) => void;
+      fixturePublish: (input: { parentRunId: string; offerId: string; runId: string; sourceInputId: string; text: string; done?: boolean }) => void;
     };
-    publishTarget.fixturePublish = ({ parentRunId, offerId, runId, sourceInputId, text }) => {
+    publishTarget.fixturePublish = ({ parentRunId, offerId, runId, sourceInputId, text, done }) => {
       texts.set(runId, text);
+      inputs.set(runId, sourceInputId);
       const controller = parents.get(parentRunId);
       if (!controller) throw new Error(`Parent stream not ready: ${parentRunId}`);
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({
         type: "offer", offerId, runId, sourceInputId,
       })}\n\n`));
+      if (done) {
+        controller.enqueue(encoder.encode('data: {"type":"done","status":"completed","deliveryStatus":"delivered"}\n\n'));
+        controller.close();
+      }
     };
     window.fetch = async (input, init) => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -73,6 +71,9 @@ async function fixture(page: Page, count: number, withInitialReplies: boolean) {
           { type: "text-start", id: "text" },
           { type: "text-delta", id: "text", delta: text },
           { type: "text-end", id: "text" },
+          { type: "data-dialogue-publication", data: { utteranceId: runId, publicSeq: inputs.size,
+            inputIds: [inputs.get(runId) ?? runId.replace("run-", "input-")], sourceResults: [],
+            committedAt: new Date().toISOString(), blocks: [{ kind: "markdown", blockId: "body", text }] } },
           { type: "finish" },
         ];
         const body = [...events.map(event => `data: ${JSON.stringify(event)}\n\n`), "data: [DONE]\n\n"].join("");
@@ -80,15 +81,15 @@ async function fixture(page: Page, count: number, withInitialReplies: boolean) {
       }
       return originalFetch(input, init);
     };
-  }, { records, initialTexts });
+  }, records);
 }
 
-async function publish(page: Page, index: number, offerId: string, text: string) {
-  await page.evaluate(({ parentRunId, offerId, runId, sourceInputId, text }) => {
+async function publish(page: Page, index: number, offerId: string, text: string, done = false) {
+  await page.evaluate(input => {
     (window as unknown as {
-      fixturePublish: (input: { parentRunId: string; offerId: string; runId: string; sourceInputId: string; text: string }) => void;
-    }).fixturePublish({ parentRunId, offerId, runId, sourceInputId, text });
-  }, { parentRunId: `parent-${index}`, offerId, runId: `run-${offerId}`, sourceInputId: `input-${index}`, text });
+      fixturePublish: (value: typeof input) => void;
+    }).fixturePublish(input);
+  }, { parentRunId: `parent-${index}`, offerId, runId: `run-${offerId}`, sourceInputId: `input-${index}`, text, done });
 }
 
 const scroller = (page: Page) => page.locator("[data-conversation-field]");
@@ -100,8 +101,78 @@ test.beforeEach(async () => {
   await clearEpisodic();
 });
 
+for (const width of [390, 1280]) {
+  test(`activity and successive public bubbles stay with their question at ${width}px`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 880 });
+    await fixture(page, 1, "帮我找找，上次看展的时候，我们为什么在最后一间展厅多待了一会儿？");
+    let allowFinal = false;
+    await page.route("**/fixture/thoughts/**", route => {
+      const start = Number(new URL(route.request().url()).searchParams.get("startIndex"));
+      const events = [
+        { type: "reasoning", delta: "先从那次展览的档案开始。我想核对当时留下的那段描述。" },
+        { type: "tool", toolCallId: "doc", toolName: "recallRead", subject: "周末的展览", state: "running" },
+        { type: "tool", toolCallId: "doc", toolName: "recallRead", state: "completed", outcome: "found" },
+        { type: "reasoning", delta: "找到展厅的记录了。再核对一下，你提到的究竟是哪一幅画。" },
+      ].slice(0, allowFinal ? 4 : 2);
+      const cursor = events.length;
+      const frames = events.slice(start).map((event, i) => ({ ...event, workId: "work-1", runId: "parent-1", cursor: start + i + 1 }));
+      const status = { type: "status", status: allowFinal ? "completed" : "live", workId: "work-1", runId: "parent-1",
+        cursor, ...(allowFinal ? {} : { retryAfterMs: 200 }) };
+      return route.fulfill({ contentType: "text/event-stream", body: [...frames, status].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") });
+    });
+    await page.goto("/zh/app");
+    const seat = page.locator("[data-dialogue-work-turn='work-1']");
+    const header = seat.locator("[data-dialogue-work-caption]");
+    await expect(header).toContainText("周末的展览");
+    await header.click();
+    const log = seat.locator("[data-dialogue-thought-content]");
+    await expect(log).toContainText("先从那次展览的档案开始");
+    const partial = "你们多待了一会儿，是为了再看一眼窗边那幅水景画。";
+    await publish(page, 1, "gallery-part", partial);
+    await expect(seat.locator(".dialogue-continuous-reply")).toContainText(partial);
+    const capture = (name: string) => page.screenshot({ path: info.outputPath(name), animations: "disabled", style: "nextjs-portal { display: none; }" });
+    await capture("activity.png");
+    allowFinal = true;
+    await expect(log.locator("li").last()).toContainText("是哪一幅画");
+    await header.click();
+    const final = "你是在等那束光。记录里写着，窗边的光从画框上慢慢移开以后，你才看清水面那一层很淡的蓝。";
+    await publish(page, 1, "gallery-final", final, true);
+    await expect(seat.locator(".dialogue-continuous-reply")).toContainText(final);
+    await expect(seat.locator(".dialogue-continuous-reply")).toContainText(partial);
+    await expect(header).toContainText("已完成");
+    await expect(seat.locator(".conversation-turn")).toHaveCount(1);
+    expect(await page.locator("[data-conversation-field]").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    const newReplies = page.locator("[data-dialogue-new-replies]");
+    if (await newReplies.isVisible()) await newReplies.click();
+    await capture("replies.png");
+  });
+}
+
+test("restores a full pending public reply through browser storage overflow", async ({ page }) => {
+  const sent = "A verified long answer. ".repeat(800) + "Final sentence restored.";
+  await fixture(page, 1, "Keep the whole reply after I refresh.");
+  await page.addInitScript(() => {
+    const write = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key.startsWith("previously:dialogue:parents:") && value.includes("A verified long answer.")) {
+        throw new DOMException("Simulated Web Storage quota", "QuotaExceededError");
+      }
+      write.call(this, key, value);
+    };
+  });
+  await page.goto("/en/app");
+  const seat = page.locator('[data-key="dialogue-work:work-1"]');
+  await expect(seat).toBeVisible();
+  await publish(page, 1, "big", sent, true);
+  await expect(seat.locator("[data-public-utterance]")).toHaveText(sent);
+  await expect.poll(() => page.evaluate(() => Object.entries(localStorage).some(([key, value]) =>
+    key.startsWith("previously:dialogue:parents:") && value.startsWith("previously-idb:")))).toBe(true);
+  await page.reload();
+  await expect(seat.locator("[data-public-utterance]")).toHaveText(sent);
+});
+
 test("mounts every item, leaves an upward reader alone, and follows from the bottom", async ({ page }) => {
-  await fixture(page, 18, false);
+  await fixture(page, 18);
   await page.goto("/en/app");
   const lastWork = page.locator('[data-key="dialogue-work:work-18"]');
   await expect(lastWork).toBeVisible();
@@ -128,7 +199,7 @@ test("mounts every item, leaves an upward reader alone, and follows from the bot
 });
 
 test("caption mouse and keyboard disclosure release following; work-only replies still scroll on demand", async ({ page }) => {
-  await fixture(page, 12, false);
+  await fixture(page, 12);
   await page.goto("/en/app");
   const work = page.locator('[data-key="dialogue-work:work-12"]');
   const caption = work.locator("[data-dialogue-work-caption]");

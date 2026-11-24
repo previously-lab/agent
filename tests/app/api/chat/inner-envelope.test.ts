@@ -11,8 +11,6 @@ import {
   buildInnerEnvelope,
   buildMergeSummaryBrief,
   findEpisodeUnanswered,
-  MAX_INSTANCE_TEXT_CHARS,
-  MAX_MERGE_TEXT_CHARS,
   type EnvelopeUserTurn,
 } from "@/app/api/chat/inner-envelope";
 import type { TimeSlice } from "@/lib/episodic";
@@ -70,38 +68,38 @@ describe("buildInnerEnvelope — the inner run's single user message (§3.2)", (
     expect(withRunning).not.toContain("HALF-WRITTEN");
   });
 
-  it("a done instance's answer rides truncated at MAX_INSTANCE_TEXT_CHARS (D5)", () => {
-    const long = "x".repeat(MAX_INSTANCE_TEXT_CHARS + 50);
+  it("includes the complete answer from a finished sibling", () => {
+    const long = "x".repeat(5_000) + "\nThe deadline moved to Friday.";
     const env = buildInnerEnvelope({
       sliceId: "s",
       pending: [T("u1", "q"), T("u2", "q2")],
       instances: [{ replyTo: "u1", turnId: "nu1", status: "done", text: long }],
       target: T("u2", "q2"),
     });
-    expect(env).toContain(`- message u1: done — "${"x".repeat(MAX_INSTANCE_TEXT_CHARS)}…"`);
-    expect(env).not.toContain(long);
+    expect(env).toContain(`- message u1: done — "${long}"`);
   });
 });
 
 describe("buildMergeSummaryBrief — the wrap-up nudge (§3.4/§3.6)", () => {
-  it("pairs each result with its question excerpt, done answers carried fuller", () => {
+  it("pairs each result with its original question", () => {
     const brief = buildMergeSummaryBrief([
       { question: T("u1", "the deploy question with\nnewlines"), status: "done", text: "shipped it" },
       { question: T("u2", "the billing question"), status: "failed" },
     ]);
-    expect(brief).toContain('### On "the deploy question with newlines" (message u1) — answered\nshipped it');
+    expect(brief).toContain('### Message u1 — answered\nthe deploy question with\nnewlines\nReply:\nshipped it');
     // a failure is STATED, never smoothed over (§3.6)
-    expect(brief).toContain('### On "the billing question" (message u2) — NOT answered (the instance failed)');
+    expect(brief).toContain('### Message u2 — NOT answered (the instance failed)\nthe billing question');
     expect(brief).toContain("plainly name anything that did not get answered");
   });
 
-  it("done answers truncate at MAX_MERGE_TEXT_CHARS", () => {
-    const long = "y".repeat(MAX_MERGE_TEXT_CHARS + 100);
+  it("keeps the full result and the question qualifier at the end of a long message", () => {
+    const long = "y".repeat(5_000) + "\nThe refund is conditional.";
+    const question = "x".repeat(400) + "\nDoes the condition apply?";
     const brief = buildMergeSummaryBrief([
-      { question: T("u1", "q"), status: "done", text: long },
+      { question: T("u1", question), status: "done", text: long },
     ]);
-    expect(brief).toContain("y".repeat(MAX_MERGE_TEXT_CHARS) + "…");
-    expect(brief).not.toContain(long);
+    expect(brief).toContain(long);
+    expect(brief).toContain(question);
   });
 });
 

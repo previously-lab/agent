@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("workflow", () => ({ sleep: h.sleep, getWritable: (options?: { namespace?: string }) => options ?? {} }));
+vi.mock("@/lib/deepseek/steps", () => ({ closeAgentStreamStep: vi.fn() }));
 vi.mock("@/app/api/agent/agent", () => ({ createDialogueAgent: () => ({ stream: h.stream }) }));
 vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   dialogueOwnRunIdStep: async () => "wrun_01JTESTCHILD00000000000000",
@@ -106,18 +107,33 @@ describe("dialogueWorkflow", () => {
     expect(result.status).toBe("failed");
   });
 
-  it.each(["error", "length"])("discards tentative final words when the wording ends with %s", async reason => {
+  it("discards tentative final words on a broken stream", async () => {
     const fragment = "The result is";
     h.stream.mockImplementation(async (options: { onStepEnd?: (step: { text: string }) => void }) => {
       options.onStepEnd?.({ text: fragment });
-      if (reason === "error") throw new Error("Stream interrupted");
-      return { text: fragment, finishReason: reason };
+      throw new Error("Stream interrupted");
     });
     const result = await dialogueWorkflow({ ...input, stage: "final" });
     expect(result.status).toBe("failed");
     expect(h.publish).not.toHaveBeenCalled();
     expect(h.record).toHaveBeenCalledWith(expect.not.objectContaining({ utterance: expect.anything() }));
     expect(h.close).toHaveBeenCalledWith(expect.objectContaining({ text: "", error: expect.any(String) }));
+  });
+
+  it("continues pages returned by the provider and publishes their complete text once", async () => {
+    h.stream.mockResolvedValueOnce({ text: "The result is", finishReason: "length" })
+      .mockResolvedValueOnce({ text: " exactly ", finishReason: "length" })
+      .mockResolvedValueOnce({ text: "forty.", finishReason: "stop" });
+    await dialogueWorkflow(input);
+    expect(h.stream.mock.calls[2]![0].messages.at(-1)).toEqual({ role: "assistant", content: "The result is exactly " });
+    expect(h.publish).toHaveBeenCalledExactlyOnceWith({ input, artifacts: [], text: "The result is exactly forty." });
+  });
+
+  it("admits a candidate even if its durable offer takes more than fifteen polls to appear", async () => {
+    for (let i = 0; i < 18; i++) h.admission.mockResolvedValueOnce("pending");
+    await expect(dialogueWorkflow(input)).resolves.toMatchObject({ status: "completed" });
+    expect(h.admission).toHaveBeenCalledTimes(19);
+    expect(h.publish).toHaveBeenCalledTimes(1);
   });
 
   it("publishes and records a substantive interim answer", async () => {

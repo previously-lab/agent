@@ -195,16 +195,31 @@ describe("getRepoTree", () => {
     expect(hoisted.mockGetTree).toHaveBeenCalledTimes(2);
   });
 
+  it("recovers every directory from an upstream-truncated recursive tree at the same revision", async () => {
+    primeTreeFetch({ data: { tree: [], truncated: true } });
+    hoisted.mockGetTree
+      .mockResolvedValueOnce({ data: { tree: [
+        { type: "tree", path: "events", sha: "events-tree" },
+        { type: "blob", mode: "120000", path: "symlink", sha: "external" },
+      ] } })
+      .mockResolvedValueOnce({ data: { tree: [{ type: "tree", path: "case", sha: "one-case" }] } })
+      .mockResolvedValueOnce({ data: { tree: [{ type: "blob", path: "index.md", sha: "document" }] } });
+    const tree = await getRepoTree(repo, owner);
+    expect(tree.truncated).toBe(false);
+    expect(tree.entries.map(entry => entry.path)).toEqual(["memory/events", "memory/events/case", "memory/events/case/index.md"]);
+    expect(hoisted.mockGetTree.mock.calls.map(([args]) => args.tree_sha)).toEqual(["headsha", "memsha", "memsha", "events-tree", "one-case"]);
+  });
+
   it("stores a large tree compactly and restores all path metadata from cache", async () => {
     const items = Array.from({ length: 1500 }, (_, i) => ({
       path: `地点/旧居/record-${i}.md`, type: "blob", sha: String(i).padStart(40, "a"), size: i,
     }));
-    primeTreeFetch({ data: { tree: items, truncated: true } });
+    primeTreeFetch({ data: { tree: items, truncated: false } });
     const cold = await getRepoTree(repo, owner);
     const warm = await getRepoTree(repo, owner);
 
     expect(warm).toEqual(cold);
-    expect(warm.truncated).toBe(true);
+    expect(warm.truncated).toBe(false);
     expect(warm.entries).toHaveLength(items.length);
     expect(warm.entries).toContainEqual({ ...items[123], path: "memory/" + items[123].path });
     const encoded = [...hoisted.cacheStore.values()].find(value => typeof value === "string" && value.startsWith("H4sI"));
@@ -277,6 +292,7 @@ describe("getRepoTree", () => {
 describe("readFileViaTree", () => {
   it("pins a fresh truncated-tree fallback to the head it inspected", async () => {
     primeTreeFetch({ data: { tree: [], truncated: true } });
+    hoisted.mockGetTree.mockResolvedValueOnce({ data: { tree: [], truncated: true } });
     hoisted.mockGetContent.mockResolvedValue({
       data: { type: "file", size: 3, content: Buffer.from("old").toString("base64") },
     });
@@ -349,21 +365,19 @@ describe("readFileViaTree", () => {
     ).rejects.toThrow('"memory/records" is a directory, not a file');
   });
 
-  it("enforces the 1MB cap from the tree entry BEFORE fetching the blob", async () => {
+  it("fetches large blobs by SHA when reading text", async () => {
     primeTreeFetch();
-
-    await expect(
-      readFileViaTree("memory/big.bin", repo, owner),
-    ).rejects.toThrow(
-      'File "memory/big.bin" is too large (2000000 bytes). Maximum is 1000000 bytes.',
-    );
-    expect(hoisted.mockGetBlob).not.toHaveBeenCalled();
+    const body = "a".repeat(2_000_000);
+    hoisted.mockGetBlob.mockResolvedValueOnce({ data: { content: Buffer.from(body).toString("base64") } });
+    await expect(readFileViaTree("memory/big.bin", repo, owner)).resolves.toBe(body);
+    expect(hoisted.mockGetBlob).toHaveBeenCalledWith({ owner, repo, file_sha: "bigsha" });
   });
 
   it("falls back to the raw per-file read when the tree is truncated", async () => {
     primeTreeFetch({
       data: { tree: MEMORY_SUBTREE.data.tree, truncated: true },
     });
+    hoisted.mockGetTree.mockResolvedValueOnce({ data: { tree: [], truncated: true } });
     hoisted.mockGetContent.mockResolvedValue({
       data: {
         type: "file",
@@ -458,6 +472,7 @@ describe("listRepoChildren", () => {
     primeTreeFetch({
       data: { tree: MEMORY_SUBTREE.data.tree, truncated: true },
     });
+    hoisted.mockGetTree.mockResolvedValueOnce({ data: { tree: [], truncated: true } });
     hoisted.mockGetContent.mockResolvedValue({
       data: [
         { name: "2026", type: "dir", path: "memory/records/2026" },

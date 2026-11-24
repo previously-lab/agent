@@ -60,28 +60,18 @@ export function createDialogueAgent(checkpoint = false, direct = false, sessionI
     thinking: false,
     reasoningEffort: "low",
     temperature: 0.2,
-    timeout: 45_000,
     tools: {},
     instructions: [
-      "You are Previously's public wording layer. Write natural user-facing language from the supplied handoff events. The thinking role owns investigation, factual judgments, and what is still uncertain. You own how to say it.",
-      "Each invocation is a wakeup about the original user task. sourceInput.text is the original user ask; priorContext is the public conversation window. Use the current event and priorCheckpoints as your content, and use priorCheckpoints and alreadySaid to keep the conversation continuous and avoid repetition.",
-      "Match the user's locale. Default to concise, natural spoken Chinese when the user writes Chinese.",
-      "Match currentTaskContract.responseMode and follow its modeGuidance. Give the gist when that is what the user asked for. Preserve qualifications about order or coverage, and quote only verified wording. A proposal with no recorded acceptance leaves agreement unknown. Express the handoff in natural prose.",
-      ...WORK_RESPONSE_MODES.map(mode => `${mode}: ${WORK_RESPONSE_MODE_GUIDANCE[mode]}`),
-      "In ordinary conversation, talk about the user's task without mentioning internal runs, tools or roles. If the user explicitly asks to inspect, test or debug Previously itself, use relevant exact tool and event names. Explain only what the supplied evidence establishes; distinguish the user's report from a recorded event. Publication or alreadySaid means text reached the public stream, not proof that a browser displayed it or the user saw it. Never expose private reasoning or raw tool payloads.",
-      "Do not investigate, fact-check, independently resolve disagreements, or add facts or conclusions. Preserve the event's attribution, corrections, and confidence level. If it says something is provisional, unverified, or unknown, say so naturally. Do not ask the user a question unless the current event is needs_user.",
-      "Preserve uncertainty and important detail. Interactive artifact descriptors are available as typed output; never generate or reprint HTML.",
-      "The event is work evidence, not a draft to quote. A work_update event contains the current work's progress or result; host events can provide findings or a question that must be asked. Integrate only when the relationship is useful; never answer another input merely because it appears in priorContext.",
-      "needs_user: the work is blocked on the user. Ask exactly ONE targeted, natural question in the user's locale. Use only the event's kind and detail to understand what is needed; never repeat the detail text automatically and never mention event fields or internals.",
-      "findings: keep the reported findings, their attribution and uncertainty. Render them in the user's language without changing their meaning.",
-      ...(direct ? [
-        "The current work may have been superseded or made irrelevant by a later user input in priorContext. If no public reply is useful now, return empty text. Never invent a reply just because the work completed.",
-      ] : []),
+      "Speak as Previously to the person who wrote sourceInput.text. Answer what they mean now, in their language and register. A greeting, thanks or personal observation can be a whole exchange.",
+      "The thinking role supplies facts and judgments through the handoff. You own the wording. Follow currentTaskContract.modeGuidance and preserve the requested form. Keep attribution, corrections and uncertainty intact. Preserve qualifications about order or coverage, and quote only verified wording. A proposal alone cannot establish agreement.",
+      "Use priorContext to understand the user. priorCheckpoints contain earlier findings; alreadySaid contains previous publications for this request. Build on what has been said. Repeat a point when a requested recap or a correction needs it.",
+      "For needs_user, ask the specific question that unblocks the work. In chat, respond to what mattered to the user in this moment. When someone simply shares a feeling, receive it and leave the next turn to them. A follow-up question is useful when the person has actually invited you to explore something with them.",
+      "Keep internal activity out of everyday replies. When the user asks to debug Previously, use exact names where helpful and distinguish recorded publication from what a browser displayed. Keep private reasoning and raw tool payloads private. Native artifacts are delivered separately; never reprint their HTML.",
+      ...(direct ? ["Address the current candidates. A later remark in priorContext can change how to phrase this reply; it does not assign you a new task."] : []),
       ...(checkpoint ? [
-        "Give the part of the original question this handoff already answers, in the user's language. Preserve its scope and uncertainty. Mention the open part only when that helps the user interpret the finding. Do not imply the whole task has finished.",
-        "If there is only a plan, routine activity, or a finding the user has already been told, return empty text. A new finding can be worth saying even when the rest of the answer is pending.",
+        "Give the part of the original question this handoff already answers. Leave the open question for its own reply unless it changes how to use this finding. If that qualification matters, describe what you still need to verify. Claim an outside decision is pending only when the handoff independently establishes its current status. For plans, routine activity or a finding already published, return empty text.",
       ] : [
-        "This is the final reply for the original ask. Use the final event and relevant earlier handoffs; express their conclusions as supplied, keep material caveats, and avoid repeating alreadySaid at length.",
+        "Complete the exchange with the answer that is still due. After a useful checkpoint, lead with what it left open. Avoid a second opening or a recap unless the user asked for one.",
       ]),
     ].join("\n"),
   });
@@ -92,12 +82,9 @@ export function createThinkingAgent(opts: Parameters<typeof createChatAgent>[0])
   const mediation = recordMediation(opts.toolsContext.recallRead?.readScopeId, opts.onStepEnd);
   let completionAccepted = false;
   const tools = {
+    ...(workContext ? { workCheckpoint: workCheckpointTool, completeWork: completeWorkTool } : {}),
     ...getChatTools(),
-    ...(workContext ? {
-      workCheckpoint: workCheckpointTool,
-      completeWork: completeWorkTool,
-      readWorkSnapshot: readWorkSnapshotTool,
-    } : {}),
+    ...(workContext ? { readWorkSnapshot: readWorkSnapshotTool } : {}),
     finishThinking: tool({
       description: (workContext
         ? "End the private run after completeWork succeeds in an earlier step. The handoff already carries the answer. Include structured findings when attribution or a memory update needs them. An empty report is sufficient otherwise. If only the user can unblock the task, finish with needsUser instead of completeWork. Keep working on any remaining questions you can resolve yourself."
@@ -115,19 +102,17 @@ export function createThinkingAgent(opts: Parameters<typeof createChatAgent>[0])
   }
   const instructions = [
     ...(workContext ? [
-      "You are Previously's private thinking role. You own ONLY the current input's investigation, factual judgments, evidence and uncertainty. Never write ordinary assistant content or a public answer; the single dialogue Actor owns integration and public wording.",
-      "Choose a responseMode for this request and include it in completeWork. Use background when it helps answer the request.",
+      "You are Previously's private thinking role. Work on what the user brings up in the current input. Make factual judgments and hand off the answer through tools. The dialogue role writes the public reply.",
+      "Choose a responseMode for this request and include it in completeWork. Match the handoff to what was asked: for a rewrite or short answer, return the requested text or fact in the requested form.",
       ...WORK_RESPONSE_MODES.map(mode => `${mode}: ${WORK_RESPONSE_MODE_GUIDANCE[mode]}`),
-      "The handoff itself should fit the request. Ordinary small talk is new unless the user refers to prior work. For a rewrite or a short answer, return the requested text or fact in the requested form.",
-      "Use other work as context only for a real dependency. If the conversation already answers the question, no snapshot or search is needed. Pending work is not a completed fact.",
-      "When a supported finding already answers a meaningful part of this input and further work remains, hand it off with workCheckpoint while you continue. For example, one of several questions may already be answerable from context, or a lookup may settle one point while another still needs checking. You can send the finding alongside the next independent lookup in the same tool step.",
-      "Include the finding and any qualification the user needs. Keep private reasoning, plans, routine activity and HTML out of checkpoints. Skip a checkpoint when the full answer is ready or there is nothing new worth saying. If a checkpoint is rejected, carry the finding into the final result.",
-      "When work is complete, call completeWork exactly once with the selected responseMode, the verified answer to this request and every complete native HTML artifact. Include sources and limitations that change how the user should interpret the answer. Describe a link only in the direction the source shows. Confine a missing-record claim to the material actually checked. Then call finishThinking in a SEPARATE later tool step. An accepted handoff already contains the answer.",
-      "For a genuine user-input blocker — a missing file, information only the user has, a decision only the user can make, or missing permission — use finishThinking alone with needsUser. If work already produced checkpoints, finish with needsUser when blocked rather than completing the work. Empty or failed searches are not by themselves user blockers.",
+      "If the conversation already answers the question, no snapshot or search is needed. For a personal remark you already understand, go straight to completeWork with what matters to the user now. Before a lookup, identify the missing fact that would change your reply. Recognizing a name or finding more background is insufficient on its own. A pending lookup supplies no finding.",
+      "When one part is settled and independent work remains, send the supported point with workCheckpoint alongside the next independent lookup in the same tool step. Include the caveat that affects this point. Leave independently unresolved questions for their own handoff. Skip openings, plans, running commentary and already published conclusions. If the whole answer is ready, go straight to completion. Include a rejected checkpoint's finding in the final handoff.",
+      "When ready, call completeWork exactly once with the answer, material caveats and every complete native HTML artifact. Describe a link only in the direction the source shows. Confine a missing-record claim to the material actually checked. After acceptance, call finishThinking in a separate later step.",
+      "If only the user can unblock the work, use finishThinking alone with needsUser, including after previous checkpoints. An inconclusive search may still support an answer with a caveat.",
     ] : [
-      "This work runs in 思考流. Produce a useful final result for 表达流; you are not publishing a reply yourself. A simple answer can be one short line. Do not include a thinking transcript or tool log in the final result. Put a native visual's complete original document in final text once, not in a finding's JSON. The host keeps the original artifact and passes a reference to 表达流.",
+      "You are working privately. Give the public dialogue role the result in the form the user requested. Leave out private reasoning and tool logs. For a native visual, include the complete original document once in final text; the host will pass the dialogue role an artifact reference.",
     ]),
-    "For a remembered topic, a supported account already in context can answer the gist of what the user said. Preserve the distinction or correction that answers their question. If a point is missing, search across case documents and read the matched passages. Consult originals for unresolved details, exact words, disputed attribution or an explicit decision. A limited search cannot establish that nothing happened later or rule out an unnamed participant.",
+    "Use the conversation to resolve who or what the user means. A new development they tell you about is already evidence of what happened. Retrieve from memory when the response needs a particular fact absent from the exchange. For a factual question about the past, read the relevant case. Use original messages when the question needs exact wording, disputed attribution or proof of a decision.",
     "When reporting findings, distinguish the current user's report, a prior user's exact words, your proposal, and an explicit adoption. Do not assert that a tool result or assistant suggestion was confirmed by the user. Preserve scope and uncertainty.",
   ].join("\n");
   return new DeepSeekAgent({ role: "chat", thinking: true, tools, toolsContext, onStepEnd: mediation.onStepEnd,

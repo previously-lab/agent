@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { E2E_BASE_URL as DEFAULT_BASE_URL, E2E_DIALOGUE_PROVIDER_ROOT as DEFAULT_PROVIDER_ROOT, E2E_MEMORY_ROOT as DEFAULT_MEMORY_ROOT, E2E_WORKFLOW_ROOT as DEFAULT_WORKFLOW_ROOT } from "./env";
 const isolatedRoot = process.env.SCROLL_QA_FIXTURE_ROOT;
 const E2E_BASE_URL = process.env.SCROLL_QA_BASE_URL ?? DEFAULT_BASE_URL;
@@ -397,6 +398,9 @@ test("v2 automatically publishes a verified answer while the thinker continues r
   const checkpointActor = `automatic-checkpoint-${token}`;
   const completion = `complete-automatic-${token}`;
   const finalActor = `automatic-final-${token}`;
+  const holdFinalResponse = process.env.PREVIOUSLY_E2E_SLOW_PUBLICATION === "1";
+  const finalGate = `slow-public-actor-${token}`;
+  if (holdFinalResponse) gates.add(finalGate);
   await writeRules([
     idleReflectionRule(), analyzerRule(token, "automatic"),
     { id: `read-schedule-${token}`, contains: ["finishThinking", token], thinking: "enabled", finishReason: "tool_calls",
@@ -416,7 +420,7 @@ test("v2 automatically publishes a verified answer while the thinker continues r
       frames: [toolFrame("completeWork", { responseMode: "focused", result: finalFact }, `final-${token}`)] },
     { id: `finish-automatic-${token}`, contains: ["finishThinking", finalFact], thinking: "enabled", finishReason: "tool_calls",
       frames: [toolFrame("finishThinking", { findings: [] }, `finish-${token}`)] },
-    { id: finalActor, contains: [finalFact, token], thinking: "disabled", frames: [{ content: finalText }] },
+    { id: finalActor, contains: [finalFact, token], thinking: "disabled", ...(holdFinalResponse ? { gate: finalGate } : {}), frames: [{ content: finalText }] },
   ]);
   await observePublicTiming(page, finalText);
   const accepted = await sendThroughComposer(page, `${dayQuestion} ${seatsQuestion} [${token}]`, `auto-${token}`, "click");
@@ -441,6 +445,15 @@ test("v2 automatically publishes a verified answer while the thinker continues r
     expect(JSON.stringify(actorCalls[0])).not.toContain(privateQuestion);
     await testInfo.attach("automatic-partial-while-private-work-is-blocked", { body: await page.screenshot(), contentType: "image/png" });
     await release(gate);
+    if (holdFinalResponse) {
+      await expect.poll(async () => (await capturedRequests(finalActor)).length).toBe(1);
+      const heldAt = performance.now();
+      await delay(52_000);
+      expect(performance.now() - heldAt).toBeGreaterThanOrEqual(50_000);
+      await expect(publications).toHaveText([partialText]);
+      expect(offers.events.some(event => event.type === "done")).toBe(false);
+      await release(finalGate);
+    }
     await expect(publications).toHaveText([partialText, finalText]);
     await expect.poll(() => offers.events.find(event => event.type === "done"))
       .toMatchObject({ status: "completed", deliveryStatus: "delivered" });
@@ -455,12 +468,13 @@ test("v2 automatically publishes a verified answer while the thinker continues r
   const timing = await publicTiming(page, offers.doneReceivedAt!);
   expect(timing.firstPublicText).toBe(partialText);
   expect(timing.firstPublicMs).toBeLessThan(timing.finalVisibleMs);
+  if (holdFinalResponse) expect(timing.finalVisibleMs - timing.firstPublicMs).toBeGreaterThanOrEqual(50_000);
   await page.reload();
   await expect(reply).toHaveCount(1);
   await expect(publications).toHaveText([partialText, finalText]);
   await testInfo.attach("public-timing", { body: JSON.stringify({ scenario: "automatic verified partial during further research",
     parentRunId: accepted.parentRunId, ...timing, checkpointSource: "host-partial-evidence",
-    reloadedDuringWork: false, reloadedPublicText: await publications.allInnerTexts() }, null, 2), contentType: "application/json" });
+    slowActorResponse: holdFinalResponse, reloadedDuringWork: false, reloadedPublicText: await publications.allInnerTexts() }, null, 2), contentType: "application/json" });
 });
 
 test("v2 keeps verified reads out of the chat and publishes the structured final", async ({ page }) => {

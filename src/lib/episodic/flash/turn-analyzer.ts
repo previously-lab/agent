@@ -33,7 +33,7 @@
  */
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
-import { RECORD_ATTRIBUTION_RULE, renderAttributedTurns } from "../record-attribution";
+import { RECORD_ATTRIBUTION_RULE, attributedTurn, renderAttributedTurns } from "../record-attribution";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import type { ModelConfig } from "@/lib/models/registry";
@@ -193,8 +193,9 @@ const analyzeSchema = z.object({
 /** Compress a closing slice's turns for Task 4 — first turn + last 10, chars capped. */
 function compressSliceTurns(turns: Turn[]): string {
   if (turns.length === 0) return "(empty slice)";
-  const pick = turns.length <= 11 ? turns : [turns[0], ...turns.slice(-10)];
-  return renderAttributedTurns(pick, 300);
+  const indexed = turns.map((turn, index) => ({ ...turn, index }));
+  const preview = indexed.length <= 11 ? indexed : [indexed[0], ...indexed.slice(-10)];
+  return renderAttributedTurns(preview, 300);
 }
 
 /**
@@ -232,7 +233,7 @@ Return emotional_signal with:
 
 When a time slice just closed, summarize it so future recall can understand it at a glance. Return closed_marking with:
 - focus: one sentence on what this session was about
-- summary: at most 100 characters — what happened / key decisions
+- summary: briefly describe what happened and any key decisions
 - tone: positive | neutral | negative | mixed
 - open_loops: unresolved questions or threads to carry forward (empty array when none)
 - decisions: decisions made during this session (empty array when none)`);
@@ -244,7 +245,7 @@ function buildPrompt(input: AnalyzeTurnInput): string {
 
 ## Closing slice — also run Task 4
 
-A time slice just closed.
+A time slice just closed. It contains ${input.closingSlice.turns.length} turns, indexed from zero. Use readClosingTurn with a turn index and optional character offset for any missing detail.
 
 Conversation (first turn + last turns):
 ${compressSliceTurns(input.closingSlice.turns)}
@@ -252,7 +253,7 @@ ${compressSliceTurns(input.closingSlice.turns)}
 Return closed_marking per your Task 4 instructions.`
     : "";
 
-  return `Current user message (JSON string): ${JSON.stringify(input.userMessage.slice(0, 1000))}${closingSection}`;
+  return `Current user message (JSON string): ${JSON.stringify(input.userMessage)}${closingSection}`;
 }
 
 const EMPTY_BASE: TurnAnalysis = {
@@ -275,6 +276,21 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
     system: ANALYZER_SYSTEM,
     prompt: buildPrompt(input),
     tools: {
+      ...(input.closingSlice ? {
+        readClosingTurn: tool({
+          description: "Read the original attributed turn in this closing slice. Follow nextOffset for the remaining text.",
+          inputSchema: z.object({ index: z.number().int().nonnegative(), offset: z.number().int().nonnegative().default(0) }),
+          execute: async ({ index, offset }) => {
+            const turn = input.closingSlice!.turns[index];
+            if (!turn) return { error: "Turn index is outside this slice." };
+            const original = attributedTurn({ ...turn, index });
+            const content = original.content.slice(offset, offset + 12_000);
+            const end = offset + content.length;
+            return { ...original, content, contentTruncated: offset > 0 || end < original.content.length,
+              nextOffset: end < original.content.length ? end : null };
+          },
+        }),
+      } : {}),
       analyzeOutput: tool({
         description: "Report the analysis results.",
         inputSchema: analyzeSchema,
@@ -283,9 +299,6 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
     toolChoice: "required",
     reportToolName: "analyzeOutput",
     reportSchema: analyzeSchema,
-    // Step caps are anti-loop fuses, generous by design — there is no
-    // wall-clock budget (v0.34 修订 A deleted execution budgets repo-wide).
-    maxSteps: 50,
     progress: { toolName: "turn-analyzer" },
   });
 

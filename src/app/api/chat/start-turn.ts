@@ -25,7 +25,6 @@ import { loadUserConfig } from "@/lib/config/loader";
 import { FIXED_MODEL } from "@/lib/models/registry";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
-import { withGitHubReadBudget } from "@/lib/github/client";
 import { screenContextSchema, type ScreenContext } from "@/lib/chat/screen-context";
 import { parseDocumentContext } from "@/lib/chat/document-context";
 import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
@@ -52,7 +51,7 @@ export interface StartTurnArgs {
    *  the turn re-runs the previous user message; see TurnInput.regenerate. */
   regenerate?: boolean;
   /** Optional engine-built machine context block (v0.11 §13 — the game
-   *  client's visit log). Free text; sanitized + capped server-side, omitted
+   *  client's visit log). Free text; validated server-side and omitted
    *  from TurnInput when absent. */
   machineContext?: string;
   /** The client's current view (v0.13 §5 视野注入) — structured field from
@@ -77,40 +76,21 @@ function extractLastUserText(msg: UIMessage | undefined): string {
   if (!msg) return "";
   const parts = (msg as { parts?: Array<{ type: string; text?: string }> }).parts;
   if (Array.isArray(parts)) {
-    const textPart = parts.find(
-      (p) => p.type === "text" && typeof p.text === "string"
-    );
-    if (textPart?.text) return textPart.text;
+    const text = parts.flatMap(part => part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("");
+    if (text) return text;
   }
   const content = (msg as { content?: unknown }).content;
   return typeof content === "string" ? content : "";
 }
 
-/** Max image attachments extracted per turn when the main model lacks vision. */
-const MAX_IMAGE_ATTACHMENTS = 4;
-
-/**
- * Upper bound for the optional machine context block (v0.11 §13). A visit log
- * is a few hundred characters by construction (visit-log.ts caps its own
- * trail); this is the safety valve against a misbehaving client, in the same
- * spirit as MAX_HISTORY_MESSAGES.
- */
-export const MAX_MACHINE_CONTEXT_CHARS = 2000;
-
-/**
- * Sanitize the optional machine context block: trim, drop when empty, cap.
- * Pure. Returns undefined when nothing usable was sent, so the TurnInput
- * field is OMITTED and the turn stays byte-identical to a plain chat turn.
- */
+/** Preserve the complete optional machine-authored context, separate from user speech. */
 export function sanitizeMachineContext(
   raw: string | undefined,
 ): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  // A mid-string cut can split the block's closing fence — acceptable: the
-  // workflow's own injection section closes the context regardless.
-  return trimmed.slice(0, MAX_MACHINE_CONTEXT_CHARS);
+  return trimmed;
 }
 
 /**
@@ -140,8 +120,7 @@ export function sanitizeScreen(raw: unknown): ScreenContext | undefined {
  * telling the model to call `viewImage`. Non-image file parts are dropped.
  *
  * The data URLs ride the workflow step boundary via ToolContext.imageAttachments,
- * so viewImage can resolve `attachment:N`. They are capped to keep the payload
- * bounded (client-side 1568px compression + a 4-image count cap).
+ * so viewImage can resolve each original `attachment:N` in order.
  */
 export function extractImageAttachments(
   messages: UIMessage[],
@@ -155,7 +134,7 @@ export function extractImageAttachments(
 
   const out = messages
     .map((m) => {
-      if (m.role !== "user" || attachments.length >= MAX_IMAGE_ATTACHMENTS) {
+      if (m.role !== "user") {
         return m;
       }
       const newParts: UIMessage["parts"] = [];
@@ -168,10 +147,9 @@ export function extractImageAttachments(
         const url = (p as { url?: string }).url ?? "";
         if (
           !mediaType.startsWith("image/") ||
-          attachments.length >= MAX_IMAGE_ATTACHMENTS ||
           !url
         ) {
-          // Drop non-image files and excess/unloadable images.
+          // Drop non-image files and images without source bytes.
           continue;
         }
         const idx = attachments.length;
@@ -210,9 +188,7 @@ export function summarizeModelContent(
 }
 
 export async function prepareTurnInput(args: StartTurnArgs): Promise<TurnInput> {
-  // Bounded by the shared GitHub read budget: a degraded API fails the POST
-  // fast instead of hanging it to the platform's wall-clock limit.
-  const config = await withGitHubReadBudget(() => loadUserConfig());
+  const config = await loadUserConfig();
   // Demo mode: model + thinking intensity are pinned server-side (the demo
   // runs on the maintainer's key) — client/config preferences are ignored.
   const modelConfig = FIXED_MODEL;
@@ -232,10 +208,6 @@ export async function prepareTurnInput(args: StartTurnArgs): Promise<TurnInput> 
   // negligible for a time slice's lifetime).
   const turnId = crypto.randomBytes(4).toString("base64url");
 
-  // The full client history goes to the WORKFLOW. Native dialogue uses it in
-  // full; other turns cut a slice-aligned window there. This is only a broad
-  // payload cap guarding against a misbehaving client.
-  const MAX_HISTORY_MESSAGES = 200;
   let inbound = args.messages;
   let imageAttachments: string[] = [];
   if (!modelConfig.capabilities.vision) {
@@ -252,10 +224,10 @@ export async function prepareTurnInput(args: StartTurnArgs): Promise<TurnInput> 
     }
   }
   const fullMessages = await convertToModelMessages(inbound);
-  const cappedMessages = fullMessages.slice(-MAX_HISTORY_MESSAGES);
-  // Never begin a provider request with an orphaned tool result.
-  const firstUser = cappedMessages.findIndex(message => message.role === "user");
-  const modelMessages = firstUser >= 0 ? cappedMessages.slice(firstUser) : [];
+  // A client can resume with an orphaned assistant/tool prefix. Keep every
+  // complete exchange; the workflow selects its memory window from these.
+  const firstUser = fullMessages.findIndex(message => message.role === "user");
+  const modelMessages = firstUser >= 0 ? fullMessages.slice(firstUser) : [];
   const recentTurns = modelMessages.map((m) => ({
     role: m.role as string,
     // Array content must be summarized, not stringified — see

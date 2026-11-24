@@ -15,7 +15,8 @@ import { MessageActions } from "./message-actions";
 import { findImageMarkers } from "@/lib/chat/image-markers";
 import type { DialoguePublicationSeat } from "./dialogue-stream-rows";
 
-export const DialogueContent = memo(function DialogueContent({ blocks, mode, artifactBodies }: {
+export const DialogueContent = memo(function DialogueContent({ blocks, mode, artifactBodies, publicationId }: {
+  publicationId?: string;
   blocks: readonly ContentBlockV1[];
   mode: NativeRenderMode;
   /** Exact bytes admitted on the same authenticated public child stream. */
@@ -44,7 +45,7 @@ export const DialogueContent = memo(function DialogueContent({ blocks, mode, art
       </a>);
     }
     for (const block of blocks) {
-      if (block.kind === "artifact_ref") nodes.set(block.blockId, <DialogueArtifact artifact={block.artifact} mode={mode} source={artifactBodies?.get(block.artifact.artifactId)} />);
+      if (block.kind === "artifact_ref") nodes.set(block.blockId, <DialogueArtifact artifact={block.artifact} mode={mode} publicationId={publicationId} source={artifactBodies?.get(block.artifact.artifactId)} />);
       if (block.kind === "image_ref" && !photos.has(block.image.assetId)) {
         photos.add(block.image.assetId);
         const id = block.image.assetId;
@@ -57,7 +58,7 @@ export const DialogueContent = memo(function DialogueContent({ blocks, mode, art
         <p className="dialogue-citation"><DocumentLink href={formatDocumentLink(parseDocumentLink(block.ref) ?? { ref: block.ref }) ?? ""}>{block.label ?? block.ref}</DocumentLink></p>);
     }
     return nodes;
-  }, [blocks, mode, artifactBodies, imageMarkers, content, prefix, focus, selected]);
+  }, [blocks, mode, artifactBodies, publicationId, imageMarkers, content, prefix, focus, selected]);
   return <div className="conversation-prose"><DialogueMarkdown content={content} slots={slots} imageMarkers={imageMarkers}>{children}</DialogueMarkdown></div>;
 });
 
@@ -77,7 +78,7 @@ export const DialogueUtterance = memo(function DialogueUtterance({ publications,
       <div className="dialogue-continuous-reply">
         {publications.map(({ utterance, artifactBodies }) => <div className="dialogue-publication" key={utterance.utteranceId}
           data-public-utterance={utterance.utteranceId} data-public-seq={utterance.publicSeq}>
-          <DialogueContent blocks={utterance.blocks} mode="interactive" artifactBodies={artifactBodies} />
+          <DialogueContent blocks={utterance.blocks} mode="interactive" publicationId={utterance.utteranceId} artifactBodies={artifactBodies} />
         </div>)}
       </div>
       {blocks.length > 0 && <MessageActions content={text} response={JSON.stringify(blocks, null, 2)} onRegenerate={onRegenerate} />}

@@ -99,15 +99,7 @@ describe("writeFile", () => {
     expect(result.created).toBe(true);
   });
 
-  it("throws for content exceeding size limit", async () => {
-    const hugeContent = "x".repeat(1_500_000);
-    await expect(
-      writeFile("memory/huge.md", hugeContent, repo, owner)
-    ).rejects.toThrow("too large");
-  });
-
-  it("writes a canonical record core above the generic text cap", async () => {
-    const path = "memory/records/2026/11/08/1234/core.md";
+  it.each(["memory/huge.md", "memory/records/2026/11/08/1234/core.md"])("writes long text at %s", async (path) => {
     const content = "x".repeat(1_000_001);
     mockGetContent.mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 }));
     mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });

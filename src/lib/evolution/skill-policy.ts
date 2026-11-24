@@ -4,10 +4,6 @@ import { canonicalScenarioFromRef, isCanonicalScenarioId } from "./slice-ref";
 import { isValidCaseName } from "@/lib/docs/case-naming";
 
 export const SKILL_LEDGER_SCHEMA_VERSION = 1;
-export const SKILL_INSTRUCTION_MAX_CHARS = 1200;
-export const SKILL_SUMMARY_MAX_CHARS = 240;
-export const SKILL_APPLICABILITY_MAX_CHARS = 400;
-export const SKILL_EXPECTED_BENEFIT_MAX_CHARS = 300;
 export const SKILL_LEGACY_SOP_MAX_CHARS = 12000;
 export const SKILL_PROMPT_MAX_CHARS = 6000;
 export const SKILL_LEGACY_ROLE_PROMPT_MAX_CHARS = 18000;
@@ -15,7 +11,6 @@ export const SKILL_STATE_DIAGNOSTIC_MAX_CHARS = 500;
 export const SKILL_GENERAL_MAX = 6;
 export const SKILL_CATALOGUE_MAX = 12;
 
-const SKILL_EVIDENCE_MAX = 20;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const skillRoleSchema = z.enum(["main", "search", "thinkdeep"]);
@@ -26,7 +21,7 @@ export type SkillState = z.infer<typeof skillStateSchema>;
 
 export const skillScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("general") }).strict(),
-  z.object({ kind: z.literal("task"), trigger: z.string().trim().min(1).max(240) }).strict(),
+  z.object({ kind: z.literal("task"), trigger: z.string().trim().min(1) }).strict(),
 ]);
 export type SkillScope = z.infer<typeof skillScopeSchema>;
 
@@ -64,12 +59,12 @@ const skillDraftShape = {
   ref: z.string().refine(isSkillSourceRef, "expected self/<case>/index.md"),
   role: skillRoleSchema,
   scope: skillScopeSchema,
-  applicability: z.string().trim().min(1).max(SKILL_APPLICABILITY_MAX_CHARS),
-  instruction: z.string().trim().min(1).max(SKILL_INSTRUCTION_MAX_CHARS),
-  summary: z.string().trim().min(1).max(SKILL_SUMMARY_MAX_CHARS),
+  applicability: z.string().trim().min(1),
+  instruction: z.string().trim().min(1),
+  summary: z.string().trim().min(1),
   sourceRevision: revisionSchema,
-  evidence: z.array(evidenceRefSchema).min(1).max(SKILL_EVIDENCE_MAX),
-  expectedBenefit: z.string().trim().min(1).max(SKILL_EXPECTED_BENEFIT_MAX_CHARS),
+  evidence: z.array(evidenceRefSchema).min(1),
+  expectedBenefit: z.string().trim().min(1),
   reviewDue: dateOnlySchema,
 };
 
@@ -101,7 +96,7 @@ export const skillEntrySchema = z.object({
   state: skillStateSchema,
   /** Host-stamped UTC scenario minute at this adoption, never a model input. */
   adoptionBoundary: scenarioIdSchema.optional(),
-  reviewEvidence: z.array(evidenceRefSchema).max(SKILL_EVIDENCE_MAX),
+  reviewEvidence: z.array(evidenceRefSchema),
   reviewOutcome: skillReviewOutcomeSchema,
   reviewedAt: dateOnlySchema.optional(),
   reviewNeeded: z.boolean(),
@@ -162,7 +157,7 @@ export const skillOperationSchema = z.discriminatedUnion("kind", [
     ...operationIdShape,
     ...expectedRevisionShape,
     id: z.string(),
-    reviewEvidence: z.array(evidenceRefSchema).min(1).max(SKILL_EVIDENCE_MAX),
+    reviewEvidence: z.array(evidenceRefSchema).min(1),
     reviewOutcome: z.enum(["positive", "negative", "inconclusive"]),
     reviewedAt: dateOnlySchema,
     reviewDue: dateOnlySchema,

@@ -143,6 +143,26 @@ describe("dialogue v2 Workflow publication history", () => {
     expect(emptyWindow.messages.map(message => message.id)).toEqual(["active", "assistant-active"]);
     emptyWindow.scope.abort();
   });
+  it("keeps unarchived terminal turns and restores the final while the archive only owns its partial", async () => {
+    const key = "previously:dialogue:parents:v2:fixture";
+    const storage = memoryStorage(), acceptedAt = "2026-11-22T06:30:00.000Z";
+    const partial = utterance("early", ["input-0"], "Tuesday.", "commentary");
+    const final = utterance("final", ["input-0"], "24 seats.");
+    const records = Array.from({ length: 12 }, (_, index) => ({
+      ...acceptance, parentRunId: `thought-${index}`, workId: `work-${index}`, sourceInputId: `input-${index}`,
+      assistantId: `assistant-${index}`, userMessage: acceptedSeat(String(index))[0], done: true, acceptedAt,
+      pendingPublications: index === 0 ? [partial, final] : [],
+    }));
+    storage.setItem(key, JSON.stringify(records));
+    const client = harness(vi.fn(async () => Response.json({ runId: null, status: "idle" })), storage);
+    client.controller.start({ savedPublications: new Set(["early"]), answeredInputs: new Set(["input-0"]) });
+    await vi.waitFor(() => expect(JSON.parse(storage.getItem(key)!)[0].pendingPublications).toEqual([final]));
+    expect(client.messages.filter(message => message.role === "user")).toHaveLength(12);
+    expect(client.messages.filter(message => message.id.startsWith("dialogue-publication:")).map(message => message.id)).toEqual(["dialogue-publication:final"]);
+    expect(JSON.parse(storage.getItem(key)!)).toHaveLength(12);
+    client.scope.abort();
+  });
+
   it("submits user attachments, committed content and native replay without tentative text or inline artifact bytes", () => {
     const user: UIMessage = { id: "user", role: "user", parts: [
       { type: "text", text: "My HTML is <b>user text</b>" }, { type: "file", mediaType: "image/png", url: "data:image/png;base64,fixture" },
@@ -529,6 +549,23 @@ describe("dialogue v2 Workflow publication history", () => {
     chat.scope.abort();
   });
 
+  it("continues after repeated temporary failures of the parent offers stream", async () => {
+    let reads = 0;
+    const request: typeof fetch = async url => {
+      if (String(url) === acceptance.offersUrl) {
+        if (++reads <= 5) return new Response(null, { status: 503 });
+        return sse([{ type: "done", status: "completed", deliveryStatus: "delivered" }]);
+      }
+      return Response.json({ runId: null, status: "idle" });
+    };
+    const chat = harness(request, memoryStorage(), acceptedSeat());
+    try {
+      chat.controller.accept(acceptance, "assistant-A", chat.messages[0]);
+      await vi.waitFor(() => expect(dialogueMetadata(chat.messages[1])).toMatchObject({ workConnection: "connected", workStatus: "completed" }));
+      expect(reads).toBe(6);
+    } finally { chat.scope.abort(); }
+  });
+
   it("recovers truncated output on the same run until the server closes it", async () => {
     const opening = { type: "data-dialogue-publication", data: utterance("opening", ["input-A"], "Starting", "commentary") };
     let reads = 0;
@@ -635,25 +672,49 @@ describe("dialogue v2 Workflow publication history", () => {
     chat.scope.abort();
   });
 
-  it("cancels the thought and current orchestrator run on stop", async () => {
+  it.each(["preparing", "wording"])("stops only A while the shared Actor is %s and keeps B streaming", async stage => {
+    const actor = channel(), pendingA = channel(), pendingB = channel();
     const cancelled: string[] = [];
-    const request = vi.fn(async (input: RequestInfo | URL) => {
+    const request: typeof fetch = async input => {
       const url = String(input);
-      if (url === acceptance.offersUrl) return sse([{ type: "done", status: "running", retryAfterMs: 1 }]);
-      if (url.startsWith("/api/chat/dialogue/orchestrator?")) return Response.json({ runId: "orchestrator-1", status: "running" });
-      if (url === "/api/chat/orchestrator-1/stream?startIndex=0") return publicationStream([]);
-      if (url.endsWith("/cancel")) {
-        cancelled.push(url);
-        return new Response(null, { status: 200 });
+      if (url === acceptance.offersUrl) return new Response(pendingA.stream);
+      if (url === "/api/chat/thought-B/offers") return new Response(pendingB.stream);
+      if (url.includes("/dialogue/orchestrator?")) return Response.json({ runId: "actor", status: "running" });
+      if (url === "/api/chat/actor/stream?startIndex=0") return new Response(actor.stream);
+      if (url.endsWith("/cancel")) { cancelled.push(url); return new Response(null, { status: 200 }); }
+      throw new Error(url);
+    };
+    const initial = appendDialogueTurn(acceptedSeat(), acceptedSeat("B")[0], "assistant-B", "2026-11-15T00:01:00.000Z");
+    const chat = harness(request, memoryStorage(), initial);
+    const seat = (id: string) => dialogueStreamRows(chat.messages).workSeats.get(`dialogue-work:assistant-${id}`);
+    const begin = (id: string) => {
+      actor.emit({ type: "start", messageId: `final-${id}` });
+      actor.emit({ type: "data-dialogue-source", data: { phase: "final_answer", actorRunId: "actor", utteranceId: `final-${id}`,
+        offerId: `final-${id}`, inputIds: [`input-${id}`], sourceInputId: `input-${id}`, parentRunId: `thought-${id}`, workId: `work-${id}` } });
+      actor.emit({ type: "text-start", id: "text" });
+    };
+    const delta = (text: string) => actor.emit({ type: "text-delta", id: "text", delta: text });
+    try {
+      chat.controller.accept(acceptance, "assistant-A", initial[0]);
+      chat.controller.accept({ ...acceptance, sourceInputId: "input-B", workId: "work-B", parentRunId: "thought-B",
+        offersUrl: "/api/chat/thought-B/offers" }, "assistant-B", initial[2]);
+      actor.emit({ type: "data-dialogue-publication", data: utterance("early-A", ["input-A"], "Already public.", "commentary") });
+      await vi.waitFor(() => expect(seat("A")?.replies).toHaveLength(1));
+      if (stage === "wording") {
+        begin("A"); delta("Draft A");
+        await vi.waitFor(() => expect(seat("A")?.preview).toBe("Draft A"));
       }
-      throw new Error(`Unexpected request: ${url}`);
-    }) as typeof fetch;
-    const chat = harness(request, memoryStorage(), acceptedSeat());
-    chat.controller.accept(acceptance, "assistant-A", chat.messages[0]);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("/api/chat/orchestrator-1/stream?startIndex=0", expect.anything()));
-    await chat.controller.stop("work-A");
-    expect(cancelled).toEqual(["/api/chat/thought-A/cancel", "/api/chat/orchestrator-1/cancel"]);
-    expect(dialogueMetadata(chat.messages.at(-1)!)).toMatchObject({ workStatus: "cancelled" });
-    chat.scope.abort();
+      await chat.controller.stop("work-A");
+      begin("A"); delta("Late A draft");
+      begin("B"); delta("B continues");
+      await vi.waitFor(() => expect(seat("B")?.preview).toBe("B continues"));
+      expect(cancelled).toEqual(["/api/chat/thought-A/cancel"]);
+      expect(seat("A")?.work.status).toBe("cancelled");
+      expect(seat("A")?.preview).toBeUndefined();
+      expect(chat.previews).not.toContain("Late A draft");
+      expect(seat("A")?.replies?.map(reply => reply.id)).toEqual(["early-A"]);
+      actor.emit({ type: "data-dialogue-publication", data: utterance("final-B", ["input-B"], "B complete.") });
+      await vi.waitFor(() => expect(seat("B")?.replies?.map(reply => reply.id)).toEqual(["final-B"]));
+    } finally { chat.scope.abort(); }
   });
 });

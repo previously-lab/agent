@@ -49,7 +49,7 @@ describe("getWorkspaceHistoryPage", () => {
     mocks.sliceEntry.mockImplementation((relative: string) => Promise.resolve(entry(relative.replaceAll("/", "-"))));
   });
 
-  it("reads only the selected headers under the shared budget and passes the real persona", async () => {
+  it("reads only the selected headers and passes the real persona", async () => {
     const ids = idsInOneMonth(75);
     mocks.enumerate.mockResolvedValue(ids.map((id) => id.replaceAll("/", "-")));
     const seen: string[] = [];
@@ -66,7 +66,6 @@ describe("getWorkspaceHistoryPage", () => {
     expect(mocks.sliceEntry).toHaveBeenCalledTimes(75);
     expect(mocks.setPersona).toHaveBeenCalledWith("alice");
     expect(mocks.setPersona).toHaveBeenCalledTimes(4);
-    expect(mocks.budget).toHaveBeenCalledTimes(4);
     expect(new Set(seen).size).toBe(75);
     expect([...seen].sort()).toEqual(ids);
   });

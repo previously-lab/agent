@@ -78,7 +78,7 @@ export function buildReflectionLearningTools(batch: WriteBatch, state: Reflectio
       description: "Rewrite the full SOP from this run's readSelfSop baseRevision. It is short guidance, not an archive: dated investigator prose, never 工程侧/代码/实现/缺陷/修复/上报 or messages to the makers. Cite raw records actually read with readRound; give applicability and expected benefit. An expected benefit is not verified improvement. Writes queue in the round batch. Memory is a git tree, not a database: re-read after refusal. SOPs are exempt from the document write window.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]), content: z.string().trim().min(1),
-        baseRevision: z.string().min(1), evidence: z.array(z.string().min(1)).min(1).max(20),
+        baseRevision: z.string().min(1), evidence: z.array(z.string().min(1)).min(1),
         expectedBenefit: z.string().trim().min(1), applicability: z.string().trim().min(1),
       }).strict(),
       execute: async (args) => {

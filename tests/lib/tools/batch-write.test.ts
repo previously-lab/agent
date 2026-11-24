@@ -95,18 +95,19 @@ describe("commitBatchToGitHub", () => {
     mockOctokit.git.updateRef.mockResolvedValue({ data: {} });
   }
 
-  it("preflights document caps before creating any blobs, including direct batch entries", async () => {
+  it("publishes authored content above the former size cap", async () => {
     setupMocks();
-    await expect(commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: "x".repeat(12_001) }], "oversize")).rejects.toMatchObject({ code: "document_full" });
-    expect(mockOctokit.git.createBlob).not.toHaveBeenCalled();
-    expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    const content = "x".repeat(12_001);
+    await commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content }], "long document");
+    expect(mockOctokit.git.createBlob).toHaveBeenCalled();
+    expect(mockOctokit.git.updateRef).toHaveBeenCalled();
   });
-  it("makes a byte-identical oversize retry a real no-op and refuses an unproved shrink", async () => {
+  it("makes a byte-identical oversize retry a real no-op and accepts a subsequent ordinary edit", async () => {
     setupMocks(); const old = "x".repeat(13_000);
     mockOctokit.getContent.mockResolvedValue({ data: { type: "file", content: Buffer.from(old).toString("base64") } });
     expect(await commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: old }], "retry")).toBe(HEAD_SHA);
     expect(mockOctokit.git.createBlob).not.toHaveBeenCalled();
-    await expect(commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: "short" }], "unproved")).rejects.toMatchObject({ code: "document_full" });
+    await expect(commitBatchToGitHub([{ path: "memory/things/fixture/index.md", content: "short" }], "edit")).resolves.toBe(NEW_COMMIT_SHA);
   });
 
   it("makes the correct API call sequence: getRef → getCommit → blobs → tree → commit → updateRef", async () => {

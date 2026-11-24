@@ -23,7 +23,7 @@ function hasObjectRoot(schema: Record<string, unknown>): boolean {
 export function serializeTools(tools: ToolSet | undefined): SerializedTool[] | undefined {
   if (!tools || !Object.keys(tools).length) return undefined;
   return Object.entries(tools).map(([name, definition]) => {
-    const parameters = z.toJSONSchema(definition.inputSchema, { target: "draft-7", io: "input" }) as Record<string, unknown>;
+    const parameters = z.toJSONSchema(definition.modelInputSchema ?? definition.inputSchema, { target: "draft-7", io: "input" }) as Record<string, unknown>;
     delete parameters.$schema;
     if (!hasObjectRoot(parameters)) {
       throw new Error(`Invalid schema for DeepSeek tool '${name}': parameters must describe an object`);

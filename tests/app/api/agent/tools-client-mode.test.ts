@@ -90,12 +90,14 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("question");
   });
 
-  it("webSearch accepts the optional mode input", async () => {
+  it("webResearch accepts the optional mode input", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
-    const schema = chatTools.webSearch.inputSchema as unknown as {
+    const schema = chatTools.webResearch.inputSchema as unknown as {
       shape: Record<string, unknown>;
     };
     expect(schema.shape).toHaveProperty("mode");
+    expect(chatTools.webSearch.inputSchema.parse({ query: "docs", count: 3 })).toEqual({ query: "docs", count: 3 });
+    expect(chatTools.webFetch.inputSchema.parse({ url: "https://example.com", offset: 8 })).toHaveProperty("offset", 8);
   });
 
   it("exposes the memory browsing and reading tools with context entries", () => {
@@ -186,20 +188,15 @@ describe("chat tool surface", () => {
 
   it("recallSearch: query + scan-surface inputs; recallRead: ref + part + range", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
-    const search = chatTools.recallSearch.inputSchema as unknown as {
-      shape: Record<string, unknown>;
-    };
-    expect(search.shape).toHaveProperty("query");
-    expect(search.shape).toHaveProperty("includeRecords");
-    expect(search.shape).toHaveProperty("since");
-    expect(search.shape).toHaveProperty("until");
-    expect(search.shape).toHaveProperty("limit");
-    const read = chatTools.recallRead.inputSchema as unknown as {
-      shape: Record<string, unknown>;
-    };
-    expect(read.shape).toHaveProperty("ref");
-    expect(read.shape).toHaveProperty("part");
-    expect(read.shape).toHaveProperty("range");
+    const { serializeTools } = await import("@/lib/deepseek/tools");
+    const definitions = serializeTools({ recallSearch: chatTools.recallSearch, recallRead: chatTools.recallRead })!;
+    expect(definitions[0]!.function.parameters.properties).toMatchObject({
+      missingFact: expect.any(Object), query: expect.any(Object), includeRecords: expect.any(Object),
+      since: expect.any(Object), until: expect.any(Object), limit: expect.any(Object),
+    });
+    expect(definitions[1]!.function.parameters.properties).toMatchObject({
+      ref: expect.any(Object), part: expect.any(Object), range: expect.any(Object),
+    });
   });
 });
 

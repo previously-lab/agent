@@ -522,7 +522,7 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     expect(userTurn?.content.match(/\[attachments:/g)).toHaveLength(1);
   });
 
-  it("an over-fuse attachment still RIDES the result (the fuse verdict moves to the summary stream, visible, never thrown)", async () => {
+  it("a large attachment reaches the summary without being written by housekeeping", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
     const bigDataUrl = `data:application/pdf;base64,${big.toString("base64")}`;
@@ -539,9 +539,6 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
           ] as unknown as TurnInput["modelMessages"],
         }),
       );
-      // the beat does not judge fuses — it carries; the summary stream's
-      // persistEvidenceAttachments applies the 5MB fuse and warns (pinned in
-      // summary-run.test.ts).
       expect(hk.evidenceAttachments?.map((a) => a.name)).toEqual(["big.pdf"]);
       expect([...fakeDisk.files.keys()].some((k) => k.includes("/attachments/"))).toBe(false);
       expect(warnSpy).not.toHaveBeenCalled();

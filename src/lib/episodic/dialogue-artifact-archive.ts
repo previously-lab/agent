@@ -3,11 +3,14 @@ import type { DialogueArtifactRef, PublicUtterance } from "@/lib/chat/dialogue-c
 import type { DialogueTypedArtifact } from "@/lib/dialogue/transport";
 import { absentDocumentError } from "@/lib/docs/write-validation";
 import { parseDialogueArtifactRef } from "./dialogue-record";
+import { getRepoConfig } from "@/lib/capabilities";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+import { publicTurnIdFor } from "@/lib/dialogue/task-delivery";
+import { locateSummaryRecords } from "@/lib/chat/summary-records";
 import { fsReadFile } from "./io-helpers";
 
 const ARTIFACT_ID = /^[a-f0-9]{64}$/;
 const CHILD_RUN = /^wrun_[A-Za-z0-9]+$/;
-const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 
 function archivePaths(artifactId: string): { body: string; reference: string } {
   if (!ARTIFACT_ID.test(artifactId)) throw new Error("Invalid archived artifact id");
@@ -19,7 +22,7 @@ function archivePaths(artifactId: string): { body: string; reference: string } {
 
 function verifyBody(artifact: DialogueArtifactRef, body: string): void {
   const byteSize = Buffer.byteLength(body, "utf8");
-  if (byteSize > MAX_ARTIFACT_BYTES || byteSize !== artifact.byteSize
+  if (byteSize !== artifact.byteSize
     || createHash("sha256").update(body, "utf8").digest("hex") !== artifact.sha256) {
     throw new Error("Archived artifact bytes do not match their public identity");
   }
@@ -64,4 +67,27 @@ export async function readArchivedDialogueArtifact(
     if (absentDocumentError(error)) return null;
     throw error;
   }
+}
+
+/** Current archives store the original HTML inside the immutable public turn.
+ * An artifact ID or publication hint alone never establishes access: bind the
+ * saved turn to an original user input from this deployment and persona. */
+export async function readRecordedDialogueArtifact(artifactId: string, publicationId: string, scope: string) {
+  if (!ARTIFACT_ID.test(artifactId) || !publicationId) return null;
+  const turnId = publicTurnIdFor(publicationId);
+  const { saved } = await locateSummaryRecords({ ...getRepoConfig(), useGithub: resolveDataSource() === "github", sliceId: "" },
+    [{ turnId, userText: "" }]);
+  const slice = saved.get(turnId);
+  const turn = slice?.turns.find(item => item.role === "agent" && item.turnId === turnId);
+  const published = turn?.dialogue;
+  if (!slice || !turn || published?.kind !== "public_utterance" || published.publicationId !== publicationId) return null;
+  const owns = slice.turns.some(input => input.role === "user" && input.dialogue?.kind === "user_input" &&
+    input.clientMessageId && published.inputIds.includes(input.dialogue.inputId) &&
+    createHash("sha256").update(JSON.stringify([scope, input.clientMessageId])).digest("hex").slice(0, 24) === input.dialogue.inputId);
+  if (!owns) return null;
+  const block = published.blocks.find(candidate => candidate.kind === "artifact_ref" && candidate.artifact.artifactId === artifactId);
+  const body = turn.artifactBodies?.[artifactId];
+  if (block?.kind !== "artifact_ref" || typeof body !== "string" || !CHILD_RUN.test(block.artifact.sourceOwnerId)) return null;
+  verifyBody(block.artifact, body);
+  return { artifact: block.artifact, body };
 }

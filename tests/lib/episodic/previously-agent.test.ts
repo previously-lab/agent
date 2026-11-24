@@ -14,7 +14,6 @@ import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import {
   newCardTemplate,
   parseCard,
-  CARD_PROFILE_MAX_CHARS,
 } from "@/lib/episodic/previously-format";
 import type { ModelConfig } from "@/lib/models/registry";
 
@@ -88,7 +87,7 @@ describe("runner wiring", () => {
 
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.model).toBe(MODEL);
-    expect(opts.maxSteps).toBe(50);
+    expect(opts).not.toHaveProperty('maxSteps');
     // v0.34 修订 A: no execution budget — the runner installs no timeout hooks.
     expect("timeoutMs" in opts).toBe(false);
     expect(opts.role).toBe("summary");
@@ -171,7 +170,7 @@ describe("runner wiring", () => {
   });
 });
 
-describe("partial output — step limit without finish", () => {
+describe("partial output when the model omits its report", () => {
   it("returns a PARTIAL card with the mutations that landed, not failed + empty", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
       await callTool(opts, "addNow", { text: "prepping the friday interview", refs: [SLICE] });
@@ -181,29 +180,21 @@ describe("partial output — step limit without finish", () => {
     const out = await runPreviouslyAgent(baseInput());
     expect(out.failed).toBeFalsy();
     expect(out.partial).toBe(true);
-    expect(out.reasoning).toContain("step limit reached without finish");
+    expect(out.reasoning).toContain("the model ended without submitting its report");
     expect(parseCard(out.updatedCard)?.now[0]?.text).toBe("prepping the friday interview");
     // A partial pass is a result, not a failure — no retry.
     expect(runSubAgentMock).toHaveBeenCalledTimes(1);
   });
 
-  it("the original bug: looping on the same over-long profile force-lands within 3 tries and still returns a partial card", async () => {
-    const long = "p".repeat(CARD_PROFILE_MAX_CHARS + 200);
-    const toolResults: string[] = [];
-    runSubAgentMock.mockImplementation(async (opts) => {
-      // The model resubmits the SAME over-limit profile until the step cap.
-      for (let i = 0; i < 6; i++)
-        toolResults.push(await callTool(opts, "updatePastProfile", { text: long }));
+  it("preserves the full profile submitted by a pass that ended before filing its report", async () => {
+    const long = "p".repeat(2600);
+    runSubAgentMock.mockImplementation(async opts => {
+      expect(await callTool(opts, "updatePastProfile", { text: long })).toContain("OK");
       return { ok: true, report: undefined, text: "" };
     });
     const out = await runPreviouslyAgent(baseInput());
-    expect(toolResults[0]).toContain("REJECTED");
-    expect(toolResults[1]).toContain("LOOP BRAKE");
-    expect(toolResults[2]).toMatch(/^OK — FORCED/); // 3rd: truncated + applied
-    expect(out.failed).toBeFalsy();
     expect(out.partial).toBe(true);
-    expect(parseCard(out.updatedCard)?.past.profile).toHaveLength(CARD_PROFILE_MAX_CHARS);
-    expect(out.mutations.some((m) => m.startsWith("forced:"))).toBe(true);
+    expect(parseCard(out.updatedCard)?.past.profile).toBe(long);
   });
 });
 

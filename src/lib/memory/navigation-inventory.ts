@@ -10,7 +10,6 @@ type NavigationSource =
   | { kind: "demo" }
   | { kind: "github"; repo: string; owner: string };
 
-const PATH_LIMIT = 50_000;
 const LOCAL_WALK_OPTIONS = { maxDepth: 2, requireRealRoot: true };
 
 /**
@@ -22,12 +21,6 @@ export async function loadMemoryNavigationPaths(source: NavigationSource, scope?
   const roots = (scope === undefined ? CASE_CATEGORIES : [scope])
     .map((category) => `${MEMORY_ROOT_DIR}/${category}`);
   const paths: string[] = [];
-  function addPath(path: string) {
-    // The local walker may stop at the bound. Treat a full inventory as
-    // unavailable rather than present it as complete.
-    if (paths.length + 1 >= PATH_LIMIT) throw new Error("Memory navigation inventory limit reached");
-    paths.push(path);
-  }
 
   if (source.kind === "github") {
     const tree = await getRepoTree(source.repo, source.owner);
@@ -37,30 +30,24 @@ export async function loadMemoryNavigationPaths(source: NavigationSource, scope?
       if (entry.type !== "blob") continue;
       const parts = entry.path.split("/");
       if ((parts.length === 3 || parts.length === 4) && rootSet.has(parts.slice(0, 2).join("/"))) {
-        addPath(entry.path);
+        paths.push(entry.path);
       }
     }
   } else if (source.kind === "local") {
     for (const root of roots) {
-      const files = await walkPathsLocal(root, PATH_LIMIT - paths.length, LOCAL_WALK_OPTIONS);
-      for (const file of files) addPath(file);
+      const files = await walkPathsLocal(root, LOCAL_WALK_OPTIONS);
+      for (const file of files) paths.push(file);
     }
   } else {
     // Capture once: concurrent calls selecting a different persona must not
     // mix category listings from two personas.
     const persona = getDemoPersona();
-    let visited = 0;
-    function charge(count: number) {
-      visited += count;
-      if (visited >= PATH_LIMIT) throw new Error("Memory navigation inventory limit reached");
-    }
     for (const root of roots) {
       const entries = await listFilesDemo(root, persona);
-      charge(entries.length);
       const folders = new Set<string>();
       for (const entry of entries) {
         if (entry.type === "file" && root === "memory/self" && entry.name === "agenda.md") {
-          addPath(`${root}/agenda.md`);
+          paths.push(`${root}/agenda.md`);
         } else if (entry.type === "dir" && isSafeDemoCase(entry.name)) {
           folders.add(entry.name);
         }
@@ -68,9 +55,8 @@ export async function loadMemoryNavigationPaths(source: NavigationSource, scope?
       for (const folder of folders) {
         const directory = `${root}/${folder}`;
         const files = await listFilesDemo(directory, persona);
-        charge(files.length);
         for (const file of files) {
-          if (file.type === "file" && !/[/\\]/.test(file.name)) addPath(`${directory}/${file.name}`);
+          if (file.type === "file" && !/[/\\]/.test(file.name)) paths.push(`${directory}/${file.name}`);
         }
       }
     }

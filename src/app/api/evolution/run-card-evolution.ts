@@ -57,7 +57,6 @@ import {
   retireExpiredHypotheses,
 } from "@/lib/evolution/direction-agent";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
-import { documentSize, exceededSize } from "@/lib/docs/write-limits";
 
 export interface CardEvolutionReaders {
   readSlice: (sliceId: string, range?: {
@@ -170,10 +169,6 @@ export async function runCardEvolution(
   // The folded user model (people/user/index.md, §B.7) — the card half is
   // the agent's working copy. Historical roots are not live fallbacks.
   const model = await readUserModel(input.batch);
-  if (model && exceededSize(documentSize(model.full)).length) {
-    return { ran: false, changed: false, droppedRecent: 0, note: "User model needs evidence-backed reorganization",
-      error: "document_full: readCase people/user and relevant raw records, then use HQ reorganizeUserModel with bounded card/direction and focused pieces. It preserves the full original source; profile.md remains user-owned. Resume evolveProfile afterwards." };
-  }
   const baseCard = model?.card ?? "";
   const requestedSignal = input.signal ?? "new_observation";
   const signal: PreviouslySignal = VALID_SIGNALS.includes(requestedSignal)
@@ -341,7 +336,7 @@ export async function runCardEvolution(
     }
   }
 
-  // A PARTIAL pass (step limit reached without a finish call) is NOT a
+  // A PARTIAL pass (the model stopped without a finish call) is NOT a
   // failure: the mutations that landed are written back like any other
   // result, with the note flagged so the UI/logs can tell it from a clean
   // finish.

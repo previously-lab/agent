@@ -91,7 +91,7 @@ export function WriteCaseRenderer({
       </div>
     ) : status.kind === "unknown" && status.raw ? (
       <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-        {status.raw.length > 1000 ? status.raw.slice(0, 1000) + "\n…" : status.raw}
+        {status.raw}
       </pre>
     ) : undefined;
 

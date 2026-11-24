@@ -5,7 +5,6 @@ import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 import { sliceEntryFromDisk } from "@/lib/episodic/timeline/store";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { sliceIdToRelPath } from "@/lib/episodic/paths";
-import { withGitHubReadBudget } from "@/lib/github/client";
 import {
   selectWorkspaceHistoryIds,
   type WorkspaceHistoryPage,
@@ -36,18 +35,16 @@ export async function getWorkspaceHistoryPage(
   persona?: string,
 ): Promise<WorkspaceHistoryPage> {
   if (persona) setDemoPersona(persona);
-  return withGitHubReadBudget(async () => {
-    const relativeIds = await enumerateSliceIds();
-    const selected = selectWorkspaceHistoryIds(
-      relativeIds.map((id) => id.replaceAll("/", "-")),
-      beforeId,
-      limit,
-    );
-    const entries = await readHeaders(selected.ids);
-    return {
-      entries,
-      nextBeforeId: selected.nextBeforeId,
-      hasMore: selected.hasMore,
-    };
-  });
+  const relativeIds = await enumerateSliceIds();
+  const selected = selectWorkspaceHistoryIds(
+    relativeIds.map((id) => id.replaceAll("/", "-")),
+    beforeId,
+    limit,
+  );
+  const entries = await readHeaders(selected.ids);
+  return {
+    entries,
+    nextBeforeId: selected.nextBeforeId,
+    hasMore: selected.hasMore,
+  };
 }

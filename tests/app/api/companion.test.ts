@@ -63,7 +63,6 @@ vi.mock("@/lib/demo/demo-fs", () => ({
 }));
 
 import { POST } from "@/app/api/companion/route";
-import { resetCompanionBudget } from "@/app/api/companion/budget";
 import { DEFAULT_COMPANION_PLAYBOOK } from "@/app/api/companion/default-playbook";
 import {
   narrateSlice,
@@ -87,7 +86,6 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   vi.stubEnv("STORAGE", "local");
   hoisted.files.clear();
-  resetCompanionBudget();
   hoisted.createModel.mockReturnValue({ __model: true });
   // narrate.ts consumes result.fullStream directly (toTextStreamResponse
   // cannot surface failure) — the default fake yields one clean text delta.
@@ -288,57 +286,18 @@ describe("POST /api/companion model resolution", () => {
   });
 });
 
-describe("POST /api/companion budget gate", () => {
-  it("allows 20 narrations and rejects the 21st with 429", async () => {
-    for (let i = 0; i < 20; i++) {
+describe("POST /api/companion repeated requests", () => {
+  it("serves every valid authorized request, including the 21st", async () => {
+    for (let i = 0; i < 21; i++) {
       const res = await POST(companionReq(validBody()));
       expect(res.status).toBe(200);
+      await res.text();
     }
-    const res = await POST(companionReq(validBody()));
-    expect(res.status).toBe(429);
-    const data = await res.json();
-    expect(data.error).toBe("budget_exhausted");
-    // Budget was already exhausted: the model is never touched.
-    expect(hoisted.streamText).toHaveBeenCalledTimes(20);
-  });
-
-  it("keys the budget by the first x-forwarded-for entry", async () => {
-    const one = await POST(
-      companionReq(validBody(), { "x-forwarded-for": "1.1.1.1, 2.2.2.2" }),
-    );
-    const two = await POST(
-      companionReq(validBody(), { "x-forwarded-for": "2.2.2.2" }),
-    );
-    // Different first entries → different buckets → both allowed.
-    expect(one.status).toBe(200);
-    expect(two.status).toBe(200);
+    expect(hoisted.streamText).toHaveBeenCalledTimes(21);
   });
 });
 
-
 describe("narrateSlice stream termination", () => {
-  it("cuts a never-yielding provider at the injectable timeout and closes with the zh marker", async () => {
-    // Simulates the live defect: the provider hangs (queue timeout) and the
-    // fullStream never yields anything.
-    hoisted.streamText.mockReturnValue({
-      fullStream: (async function* () {
-        await new Promise(() => {});
-        yield { type: "text-delta", id: "t1", text: "never" };
-      })(),
-    });
-    const started = Date.now();
-    const res = await narrateSlice(
-      { sliceId: "2026-07-28-0658", locale: "zh" },
-      { streamTimeoutMs: 40 },
-    );
-    const text = await res.text();
-    // Terminated promptly by the 40ms bound, not the 120s default.
-    expect(Date.now() - started).toBeLessThan(5_000);
-    expect(text).toBe(streamFailureMarker("zh"));
-    expect(text).toContain("Previously 暂时走神了");
-    expect(res.headers.get("Content-Type")).toContain("text/plain");
-  });
-
   it("appends the en marker after a mid-stream provider error and logs the cause", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     hoisted.streamText.mockReturnValue({
@@ -349,7 +308,6 @@ describe("narrateSlice stream termination", () => {
     });
     const res = await narrateSlice(
       { sliceId: "2026-07-28-0658", locale: "en" },
-      { streamTimeoutMs: 1_000 },
     );
     const text = await res.text();
     // Partial narration is preserved, then the terminal marker.
@@ -372,7 +330,6 @@ describe("narrateSlice stream termination", () => {
     });
     const res = await narrateSlice(
       { sliceId: "2026-07-28-0658" },
-      { streamTimeoutMs: 1_000 },
     );
     const text = await res.text();
     expect(text).toContain("partial");
@@ -390,7 +347,6 @@ describe("narrateSlice stream termination", () => {
     });
     const res = await narrateSlice(
       { sliceId: "2026-07-28-0658", locale: "zh" },
-      { streamTimeoutMs: 1_000 },
     );
     const text = await res.text();
     expect(text).toBe("那天你说了…");
@@ -398,7 +354,7 @@ describe("narrateSlice stream termination", () => {
     errSpy.mockRestore();
   });
 
-  it("passes the abort signal into streamText (overall 120s bound by default)", async () => {
+  it("passes the abort signal into streamText (caller can cancel explicitly)", async () => {
     await narrateSlice({ sliceId: "2026-07-28-0658" });
     const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
       abortSignal: AbortSignal;

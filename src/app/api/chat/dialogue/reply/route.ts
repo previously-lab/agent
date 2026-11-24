@@ -1,5 +1,6 @@
 import { getRun, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
+import { workflowRegistryPages } from "@/lib/chat/workflow-registry-pages";
 import { z } from "zod";
 import type { ModelMessage } from "@/lib/deepseek/types";
 import type { TurnRunResult, DialogueWorkResult } from "@/lib/chat/turn-types";
@@ -18,7 +19,7 @@ import { createMixedStreamTransform } from "../../mixed-stream-transform";
 const replyBodySchema = z.object({
   thoughtRunId: z.string().regex(/^wrun_[A-Za-z0-9]+$/),
   workId: z.string().trim().min(1).max(512),
-  messages: z.array(z.unknown()).max(200),
+  messages: z.array(z.unknown()),
 }).strict();
 
 function publicHistory(messages: unknown[], sourceInputText: string) {
@@ -61,19 +62,11 @@ function directEvent(work: DialogueWorkResult): DialogueSemanticEvent | undefine
 }
 
 async function findExistingReplyRun(workId: string, offerId: string, scopeKey: string): Promise<string | undefined> {
-  const page = await (await getWorld()).runs.list({ pagination: { limit: 100 }, resolveData: "none" });
-  const matches = page.data.filter(row => {
-    const entry = row as { attributes?: Record<string, string> | null };
-    return entry.attributes?.role === "dialogue" && entry.attributes.work === workId &&
-      entry.attributes.offer === offerId && entry.attributes.scope === scopeKey;
-  }) as Array<{ runId: string; createdAt?: Date | string }>;
-  matches.sort((a, b) => {
-    const left = a.createdAt ? new Date(a.createdAt).getTime() : NaN;
-    const right = b.createdAt ? new Date(b.createdAt).getTime() : NaN;
-    if (Number.isFinite(left) && Number.isFinite(right)) return right - left;
-    return b.runId.localeCompare(a.runId);
-  });
-  return matches[0]?.runId;
+  for await (const rows of workflowRegistryPages(await getWorld())) {
+    const match = rows.find(row => row.attributes?.role === "dialogue" && row.attributes.work === workId &&
+      row.attributes.offer === offerId && row.attributes.scope === scopeKey);
+    if (match) return match.runId;
+  }
 }
 
 export async function POST(request: Request): Promise<Response> {

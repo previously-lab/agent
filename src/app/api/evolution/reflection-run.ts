@@ -1,78 +1,23 @@
-/**
- * Reflection run — the reflection unit's SHORT-LIVED shell (v0.38 §5; the
- * v0.34 resident shell RETIRED: no mailbox drain, no idle clock, no agenda
- * clock, no handoff chain).
- *
- * One wake starts one unit, and the unit lives ONLY as long as the world has
- * work:
- *
- *   claim token (createHook + getConflict)
- *     conflict → holder liveness (readRunClaim):
- *       终态/死 → the platform disposes the token at run terminal state —
- *                 treat as unowned and re-claim (bounded — a propagation
- *                 window may briefly re-report the dead holder);
- *       活 且 age ≤ REFLECTION_TAKEOVER_MS → 撞车即退 (dedupedTo — 不等不杀
- *                 不转交, bells carry no work so nothing is lost);
- *       活 且 age > 阈值 → zombie 接管: cancel the holder, 留痕 (log +
- *                 tookOver attribute), re-claim in a bounded loop (Supersede
- *                 paradigm — the retry covers the cleanup-propagation window).
- *   stamp the claim (startedAt — the age base for the NEXT challenger).
- *   loop:
- *     t0 ← readReflectionClock()
- *     docket ← loadReflectionWorld()      // 全读、永不抛 (v0.34 R2 形状)
- *     无活 → settle 指针 (idle) → dispose token → return   // 无活即退, no clock
- *     有活 → round ← handleReflectionRound(docket)         // HQ never throws
- *          → settleReflectionRound(round, docket)          // 失败轮游标不动
- *          → 预算到 (rounds ≥ cap 或 lap ≥ yield) → idle exit → return
- *          → 否则立即再 loop（积压由循环本身消化 — 工作驱动, not a timer）
- *
- * 预算是必须的: the platform kills one invocation at 800 s and the SDK
- * re-executes the in-flight step bodies on redelivery — the wall is a crash,
- * not a bound. So one invocation does bounded work (the round cap and the
- * lap yield above) and retires on its own terms; the backlog it did not
- * reach stays on disk past the water level for the NEXT bell's run, whose
- * delivery fallback starts a fresh unit off the on-disk cursor.
- * 活性由事件链供给（消息 → turn → 总结流 → 铃), the agenda degrades to
- * 机会式补查 (each lap's docket carries due items), and a lost bell is made
- * up by the next turn's bell — the work sits on disk past the water level
- * (the newest clean round's `seen:` trailer), which is the only continuity
- * a generation needs; a bell carrying the summary stream's range (v0.42 §4)
- * scopes the first lap directly.
- *
- * This is a WORKFLOW file: its static import graph is bundled into the
- * workflow sandbox, which has no Node modules (docs/errors/
- * node-js-module-in-workflow). Everything impure lives in reflection-steps.ts
- * behind "use step" — this module imports only `workflow`, the pure contract,
- * the pure lap-plan module (sandbox-safe — judgment only), and those step
- * functions.
- *
- * Lives under src/app so the withWorkflow loader picks up the directives.
- */
+/** Claim the reflection hook and work through available evidence, one settled round at a time. */
 import { createHook } from "workflow";
 import {
-  REFLECTION_LAP_YIELD_MS,
-  REFLECTION_MAX_ROUNDS_PER_RUN,
   REFLECTION_TOKEN,
   REFLECTION_TAKEOVER_MAX_ATTEMPTS,
-  REFLECTION_TAKEOVER_MS,
   type ReflectionRunOutcome,
   type ReflectionWakeRange,
 } from "./reflection-contract";
 import { lapHasWork } from "./reflection-plan";
 import type { HistoryScanState } from "@/lib/chat/hq-history";
 import {
-  cancelReflectionHolder,
   closeReflectionStream,
   handleReflectionRound,
   loadReflectionWorld,
   maintainReflectionHypothesisTtl,
   markHQRunStarted,
   markReflectionRunIdleExit,
-  readReflectionClock,
   readRunClaim,
   settleReflectionRound,
   stampReflectionClaim,
-  stampReflectionTakeover,
 } from "./reflection-steps";
 
 export {
@@ -126,46 +71,20 @@ export async function reflectionRun(
         }
         continue;
       }
-      if (
-        holder.ageMs === null || holder.ageMs <= REFLECTION_TAKEOVER_MS
-      ) {
-        // 撞车即退 — a healthy holder owns the round; bells carry no work.
-        return { kind: "dedupedTo", runId: conflict.runId };
-      }
-      // Zombie 接管: alive past the threshold — cancel, 留痕, re-claim.
-      if (takeoverAttempts >= REFLECTION_TAKEOVER_MAX_ATTEMPTS) {
-        console.warn(
-          `[Reflection] takeover of ${conflict.runId} could not complete — exiting; the next bell retries`,
-        );
-        return { kind: "dedupedTo", runId: conflict.runId };
-      }
-      if (!(await cancelReflectionHolder(conflict.runId))) {
-        return { kind: "dedupedTo", runId: conflict.runId };
-      }
-      await stampReflectionTakeover(conflict.runId);
-      // loop: getConflict again (the Supersede re-claim)
+      // A running holder owns its in-flight work regardless of elapsed time.
+      return { kind: "dedupedTo", runId: conflict.runId };
     }
 
     // The age base for the next challenger + the pointer's "running" mark.
     await stampReflectionClaim();
     await markHQRunStarted();
 
-    // ── The work loop (§5): the loop IS the event chain, bounded by the run
-    //    budget (round cap + lap yield) so the invocation retires well inside
-    //    the platform wall. Each lap re-reads the world; a lap with work runs
-    //    ONE round and settles it immediately (失败轮不推游标 — §4.2); an empty
-    //    docket retires the unit on the spot. The bell's range opens the
-    //    FIRST lap only (a hint, consumed on read — v0.42 §4/§3.5); every
-    //    later lap reads the commit log, which the settle's trailer has
-    //    advanced past the hint.
+    // On each lap the persisted cursor determines the remaining work.
     let rounds = 0;
+    let lastWork: string | undefined;
     let openingRange = range ?? undefined;
     let historyScan: HistoryScanState | undefined;
     for (;;) {
-      // The lap's wall-clock bookends — real clock steps, so a replayed run
-      // measures the recorded laps, not the replay's clock. The budget below
-      // is what keeps the whole invocation inside the platform wall.
-      const lapStartedAt = await readReflectionClock();
       const docket = await loadReflectionWorld(undefined, openingRange, historyScan);
       if (docket.historyScan) {
         historyScan = docket.historyScan;
@@ -173,26 +92,20 @@ export async function reflectionRun(
       }
       historyScan = undefined;
       openingRange = undefined;
-      if (!lapHasWork(docket)) {
+      const work = JSON.stringify([docket.cursor, docket.scope, docket.agendaDue, docket.skillReviewDue, docket.evolutionReasons]);
+      if (!lapHasWork(docket) || work === lastWork) {
         await maintainReflectionHypothesisTtl();
         await markReflectionRunIdleExit({ rounds });
         dispose();
         return { kind: "retired", rounds };
       }
+      lastWork = work;
       const round = await handleReflectionRound(docket);
       rounds += 1;
       await settleReflectionRound(round, docket, rounds);
-      // Budget check at the lap boundary (never inside a round): the round
-      // cap or a slow lap both retire the run on its own terms — the wall
-      // would only crash it — and the next bell continues the backlog.
-      // Unsettled native cards likewise await another wake, rather than
-      // immediately repeating the same failed or incomplete archive work.
-      const lapMs = (await readReflectionClock()) - lapStartedAt;
-      if (
-        (round.deferredCards ?? 0) > 0 ||
-        rounds >= REFLECTION_MAX_ROUNDS_PER_RUN ||
-        lapMs >= REFLECTION_LAP_YIELD_MS
-      ) {
+      // A failed, superseded or deferred round has no reliable next cursor.
+      // Leave it for the next wake rather than spinning on the same inputs.
+      if (round.error || round.disposition === "superseded" || (round.deferredCards ?? 0) > 0) {
         await maintainReflectionHypothesisTtl(docket.scope.at(-1)?.sliceId);
         await markReflectionRunIdleExit({ rounds });
         dispose();

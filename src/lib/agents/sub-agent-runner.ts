@@ -1,12 +1,10 @@
 /** Shared native DeepSeek sub-agent: fixed role profile, structured reports and partial progress. */
 import { streamText } from "@/lib/deepseek/generate";
-import { isStepCount } from "@/lib/deepseek/tools";
 import type { DeepSeekRole, PrepareStepFunction, ToolSet } from "@/lib/deepseek/types";
 import type { UIMessageChunk } from "@/lib/chat/protocol";
 import { getWritable } from "workflow";
 import type { z } from "zod";
 import { FIXED_MODEL, type ModelConfig } from "@/lib/models/registry";
-import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { readSelfSopSnapshot } from "@/lib/evolution/store";
 import type { SelfAgent } from "@/lib/evolution/paths";
 import { readSkillLedger } from "@/lib/evolution/skill-store";
@@ -113,10 +111,9 @@ export interface RunSubAgentOptions<Report> {
   role?: DeepSeekRole;
   system?: string; selfSop?: SelfAgent; skillRole?: SkillRole; prompt: string; tools: ToolSet;
   toolChoice?: "auto" | "required" | "none";
-  reportToolName?: string; reportSchema?: z.ZodType<Report>; maxSteps?: number;
+  reportToolName?: string; reportSchema?: z.ZodType<Report>;
   prepareStep?: PrepareStepFunction<ToolSet>;
   onToolProgress?: (toolCall: {toolName: string; input: unknown}) => ProgressLine | undefined;
-  timeoutMs?: number;
   progress?: SubAgentProgressRef; startLine?: string;
   onLine?: (line: string, stage: "thinking" | "writing") => void;
 }
@@ -175,8 +172,6 @@ export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Rep
       abortSignal: opts.abortSignal,
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       tools: opts.tools, toolChoice: opts.toolChoice === "none" ? "none" : "auto", thinking: true,
-      ...(opts.maxSteps !== undefined ? {stopWhen: isStepCount(opts.maxSteps)} : {}),
-      ...(opts.timeoutMs !== undefined ? {timeout: opts.timeoutMs} : {}),
       prepareStep: opts.prepareStep,
       onToolExecutionStart: ({toolCall}) => {
         const line = opts.onToolProgress?.(toolCall);
@@ -195,13 +190,10 @@ export async function runSubAgent<Report = unknown>(opts: RunSubAgentOptions<Rep
     };
   };
   try {
-    if (opts.timeoutMs === undefined) return await run();
-    const result = await withStepTimeout(run, opts.timeoutMs + 3000);
-    if (result.ok) return result.result!;
-    return {ok:false, timedOut:true, text, reasoning, error:"Sub-agent deadline exceeded"};
+    return await run();
   } catch(error) {
-    const timedOut = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
-    return {ok:false, text, reasoning, ...(timedOut ? {timedOut:true} : {}), error:timedOut && opts.timeoutMs !== undefined ? `Sub-agent did not finish within ${Math.round(opts.timeoutMs / 1000)}s.` : error instanceof Error ? error.message : "Sub-agent failed"};
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    return {ok:false, text, reasoning, ...(timedOut ? {timedOut:true} : {}), error:error instanceof Error ? error.message : "Sub-agent failed"};
   } finally {
     const source = text || reasoning;
     emitter.close(source ? source.slice(source.lastIndexOf("\n")+1) : undefined, text ? "writing" : "thinking");

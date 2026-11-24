@@ -23,7 +23,7 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
 vi.mock("@/app/api/chat/dialogue-orchestrator-workflow", () => ({ dialogueOrchestratorWorkflow: h.workflow }));
 vi.mock("@/app/api/chat/turn-workflow", () => ({ turnWorkflow: h.turn }));
 
-import { ensureDialogueOrchestratorStep, forwardDialogueWakeStep, readDialogueWorldStep, readWorkSnapshotStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
+import { ensureDialogueOrchestratorStep, forwardDialogueWakeStep, readDialogueWorldStep, readDialogueAdmissionStep, readWorkSnapshotStep, waitForDialogueRunTerminalStep, type DialogueEnsureRequest } from "@/app/api/chat/dialogue-orchestrator-steps";
 
 const now = Date.parse("2026-11-15T01:00:00.000Z");
 function run(status: string, triggeredAt: string, scope = "scope") {
@@ -270,7 +270,7 @@ describe("API dialogue activation with wake events", () => {
     }));
   });
 
-  it("starts a new session for an expired run and fences its stale heartbeat", async () => {
+  it("starts a new session once the original session window expires", async () => {
     h.list.mockResolvedValue({ data: [run("running", new Date(now - 31 * 60_000).toISOString())] });
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: "run-new", sessionId: "run-new", reused: false });
     expect(h.getRun).toHaveBeenCalledWith(`run-running-${new Date(now - 31 * 60_000).toISOString()}`);
@@ -289,7 +289,7 @@ describe("API dialogue activation with wake events", () => {
     expect(h.start).not.toHaveBeenCalled();
   });
 
-  it("expires a sleeping Actor at the end of the session", async () => {
+  it("starts the next session without cancelling its idle predecessor", async () => {
     const existing = run("running", new Date(now - 31 * 60_000).toISOString());
     h.list.mockResolvedValue({ data: [existing] });
     const cancel = vi.fn(async () => {});
@@ -298,7 +298,7 @@ describe("API dialogue activation with wake events", () => {
       getReadable: () => readable([{ data: { type: "exit_intent", keys: [], at: existing.createdAt } }]),
     }));
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: "run-new", sessionId: "run-new" });
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
     expect(h.resume).not.toHaveBeenCalled();
   });
 
@@ -336,4 +336,19 @@ describe("API dialogue activation with wake events", () => {
     await expect(ensureDialogueOrchestratorStep(request())).rejects.toThrow("registry unavailable");
     expect(h.start).not.toHaveBeenCalled();
   });
+});
+
+it("admits thinking without replaying completed history or starting a public actor", async () => {
+  const active = { runId: "peer", status: "running", createdAt: new Date(now).toISOString(),
+    attributes: { role: "thinking", scope: "scope", turn: "sibling", work: "work-sibling" } };
+  h.list.mockImplementation(async ({ status }) => {
+    expect(["running", "pending"]).toContain(status);
+    return { data: status === "running" ? [active, { ...active, runId: "private-peer",
+      attributes: { ...active.attributes, scope: "unrelated" } }] : [], hasMore: false };
+  });
+  h.hook.mockRejectedValueOnce(Object.assign(new Error("no holder"), { name: "HookNotFoundError" }));
+  const admitted = await readDialogueAdmissionStep("scope", "this-input");
+  expect(admitted.otherWorks).toMatchObject([{ runId: "peer", workId: "work-sibling" }]);
+  expect(h.events.mock.calls.map(([id]) => id)).toEqual(["peer"]);
+  expect(h.start).not.toHaveBeenCalled();
 });

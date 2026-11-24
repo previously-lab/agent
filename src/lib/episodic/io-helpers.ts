@@ -48,7 +48,6 @@ import {
   writeBinaryFileLocal,
   readBinaryFileLocal,
   fileModifiedDateLocal,
-  MAX_BINARY_FILE_SIZE_BYTES,
   commitLocalBatch,
 } from "@/lib/tools/local-fs";
 import {
@@ -60,7 +59,6 @@ import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { getMemoryRoot, isPathAllowed } from "@/lib/whitelist";
 import { commitEmpty, commitPaths, isGitRepo } from "./local-git";
-import { isCanonicalRecordCorePath, MAX_RECORD_CORE_BYTES } from "./record-size-limit";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { historyDigest } from "@/lib/docs/history-archive";
 import { absentDocumentError, validateDocumentEntries, type DocumentMaintenance } from "@/lib/docs/write-validation";
@@ -279,9 +277,6 @@ export async function fsWriteFile(
 ): Promise<{ path: string; created: boolean }> {
   if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
   assertPortableRepoPath(path);
-  if (isCanonicalRecordCorePath(path) && Buffer.byteLength(content, "utf8") > MAX_RECORD_CORE_BYTES) {
-    throw new Error(`Conversation record exceeds its ${MAX_RECORD_CORE_BYTES}-byte storage limit`);
-  }
   // With a batch: queue the write, don't touch the backend yet.
   if (batch) {
     assertBatchOpen(batch);
@@ -357,8 +352,7 @@ export async function fsDeleteFile(
  * Write raw BYTES (attachments, §C.1). With a batch the content is queued
  * BASE64 (flagged in the batch's `encodings` side-channel) and becomes a
  * base64 blob in the batch commit; without a batch the backend is written
- * immediately. The binary fuse (5MB) is enforced HERE, structurally: an
- * oversize attachment is REFUSED with a visible error — never truncated.
+ * immediately.
  */
 export async function fsWriteBinaryFile(
   path: string,
@@ -367,12 +361,6 @@ export async function fsWriteBinaryFile(
 ): Promise<{ path: string; created: boolean }> {
   if (!isPathAllowed(path)) throw new Error(`Access denied: ${path}`);
   assertPortableRepoPath(path);
-  if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
-    throw new Error(
-      `Attachment too large (${data.byteLength} bytes). Maximum is ${Math.round(MAX_BINARY_FILE_SIZE_BYTES / 1024 / 1024)}MB — the file was NOT saved (nothing is truncated silently).`,
-    );
-  }
-
   if (batch) {
     assertBatchOpen(batch);
     batch.entries.set(path, data.toString("base64"));

@@ -203,7 +203,7 @@ export function createDialogueStore(storage: DialogueStorage) {
         };
         await rows.put("result", resultId, result, ++state.resultSeq, "ready");
         await rows.put("result-signature", resultId, signature);
-        const summary = args.claims.filter((claim) => claim.allowedPublicMode !== "none").map((claim) => claim.text).join("\n").slice(0, 2_000);
+        const summary = args.claims.filter((claim) => claim.allowedPublicMode !== "none").map((claim) => claim.text).join("\n");
         const artifacts = blocks.flatMap((block) => block.kind === "artifact_ref" ? [block.artifact] : []);
         await setWork(rows, state, { ...row.value, sliceId: args.sliceId, status: args.status, summary, artifacts }, now);
         await enqueue(rows, `result:${resultId}`, { kind: "project_result", resultId }, state.eventSeq, now);
@@ -294,12 +294,11 @@ export function createDialogueStore(storage: DialogueStorage) {
           return { status: "committed", utterances: previous.value.utterances };
         }
         if (!holds(state, fence, now) || state.userSeq !== basis.inputHighWater || state.publicSeq !== basis.publicHighWater) return { status: "stale", utterances: [] };
-        if (plan.sends.length > 4 || plan.decisions.length > 8) throw new DialogueConflict("Expression plan exceeds its budget");
         const utterances: PublicUtterance[] = [];
         const published = new Map<string, Set<string>>();
         const referencedBlocks = new Set<string>();
         for (const [ordinal, send] of plan.sends.entries()) {
-          if (send.text.length > 2_000 || /<\/?[a-z][\s\S]*?>|data:[^\s,]*;base64,/i.test(send.text) || parseNativeSections(send.text).some((part) => part.kind === "native")) throw new DialogueConflict("Expression cannot author executable content or embed binary bytes");
+          if (/<\/?[a-z][\s\S]*?>|data:[^\s,]*;base64,/i.test(send.text) || parseNativeSections(send.text).some((part) => part.kind === "native")) throw new DialogueConflict("Expression cannot author executable content or embed binary bytes");
           if (!send.sources.length) throw new DialogueConflict("A publication must cite an admitted claim");
           const selected = new Map<string, ContentBlockV1>();
           const sourceResults = new Map<string, PublicUtterance["sourceResults"][number]>();

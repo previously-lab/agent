@@ -177,7 +177,7 @@ describe("appendContextSuffix (outbound-only tail injection)", () => {
 
 describe("the Previously charter", () => {
   it("lets the assigned role decide who speaks while preserving direct-answer turns", () => {
-    expect(CHARTER_MD).toContain("private work gathers evidence and hands off results");
+    expect(CHARTER_MD).toContain("private work understands the request and hands off a result");
     expect(CHARTER_MD).toContain("public dialogue decides what to say and speaks as Previously");
     expect(CHARTER_MD).toContain("In a direct-answer turn with no separate dialogue role, answer the user yourself");
     expect(CHARTER_MD).not.toContain("yours is the only mouth");
@@ -239,7 +239,8 @@ describe("the Previously charter", () => {
     // The copy metaphor replaced them.
     expect(CHARTER_MD).toContain("a think-only copy of yourself");
     expect(CHARTER_MD).toContain("Adopted guidance is loaded within a role budget");
-    expect(CHARTER_MD).toContain("a search-desk copy of yourself");
+    expect(CHARTER_MD).toContain("`webResearch`** delegates deeper work");
+    expect(CHARTER_MD).toContain("`webSearch`** returns results directly");
   });
 
   it("uses English instructions, the user's language for authored prose and the source language for quotations", () => {
@@ -291,7 +292,8 @@ describe("the Previously charter", () => {
 
 describe("grounded recollection", () => {
   it("allows an attributed gist while reserving exact wording, adoption and consequential actions for original evidence", () => {
-    expect(CHARTER_MD).toContain("a reliable account you have actually read");
+    expect(CHARTER_MD).toContain("use a reliable account you have read");
+    expect(CHARTER_MD).toContain("Check chronology when the user wants to establish which occurrence was first or last");
     expect(CHARTER_MD).toContain("give the topic and qualify the order");
     expect(CHARTER_MD).toContain("For exact wording, speaker attribution, a disputed detail");
     expect(CHARTER_MD).toContain("use original user or assistant messages in context");

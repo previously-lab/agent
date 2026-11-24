@@ -75,7 +75,6 @@ import { detectDirectionMode } from "@/lib/evolution/direction-agent";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import type { ModelConfig } from "@/lib/models/registry";
 import { skillReviewOfferId, type EvolutionReason, type ScopedSlice } from "./reflection-plan";
-import { REFLECTION_ROUND_TIMEOUT_MS } from "./reflection-contract";
 import {
   backgroundModel,
   buildRunCardReaders,
@@ -208,7 +207,7 @@ Tasks are user commitments with lifecycle, not merely another prose directory. E
 
 Understanding may evolve about any person, event, object or investigation: read its complete case and relevant raw scenarios, then use writeCase action reviseUnderstanding to revise only its current view, with evidence actually read in this run. Where an open question or competing interpretation matters to that case, explain what evidence would help settle it. A substantive case must not be an empty folder or a quote-only copy of the record: give the future reader a concise interpretation, its limits and a path to evidence. The historical index remains evidence; do not rewrite it to make earlier uncertainty disappear.
 
-Procedural learning uses readSkillSource/querySkills/manageSkill. New or revised guidance is a candidate until explicitly adopted. Read the current source and raw evidence; preserve a stable id when revising. Expected benefit is a hypothesis, not proof of improvement. Only a later observed applicable scenario can support a positive review; absent one, defer or review inconclusively. Direct SOP rewrites separately require readSelfSop and its baseRevision. A worker's reads are its own, never receipts you may borrow.
+Procedural learning uses readSkillSource/querySkills/manageSkill. New or revised guidance is a candidate until explicitly adopted. Read the current source and raw evidence; preserve a stable id when revising. Keep the trigger, summary and applicability as narrow as the evidence: a correction about a disputed claim supports checking that kind of claim. Expected benefit is a hypothesis, not proof of improvement. Only a later observed applicable scenario can support a positive review; absent one, defer or review inconclusively. Direct SOP rewrites separately require readSelfSop and its baseRevision. A worker's reads are its own, never receipts you may borrow.
 
 A round can end SUPERSEDED — rarely. You read the world fresh as you work; when a read shows the world moved so this round's plan is void (another slice sealed, your agenda changed under you, the slice you were checking is no longer the latest edge), close out early: report disposition "superseded" and let the next round re-plan from the same edge. The note then says why you abandoned and what you had already landed. This is a premise overturned, never "tired, start over" — when in doubt, finish the round.
 
@@ -580,7 +579,7 @@ function buildHqTools(
 
     skipArchiveTurn: tool({
       description: "Explicitly settle one owed native user card as needing no case link. Use the supplied original card, or readRound if the message was not supplied. Give an exact quote and a reason; failed, unread, or uncertain cards should remain owed instead.",
-      inputSchema: z.object({ source: cardLinkSourceSchema, reason: z.string().trim().min(1).max(300) }).strict(),
+      inputSchema: z.object({ source: cardLinkSourceSchema, reason: z.string().trim().min(1) }).strict(),
       execute: async ({ source, reason }) => {
         try {
           if (!reason.trim()) throw new Error("A no-link reason is required");
@@ -635,7 +634,7 @@ function buildHqTools(
         "Retire a case you have fully read when it is obsolete, superseded or explicitly abandoned by the user. Move the complete case and attachments intact to a sibling directory with the -archived suffix; default directories/search/recent omit it, and its old ref reads as ARCHIVED. Never use this to delete evidence, complete a task or archive people/user. The round commits the move with its other writes.",
       inputSchema: z.object({
         category: z.enum(["people", "events", "things", "places", "orgs", "research", "hypotheses", "tasks", "self"]),
-        caseName: z.string().trim().min(1), reason: z.string().trim().min(1).max(500),
+        caseName: z.string().trim().min(1), reason: z.string().trim().min(1),
       }).strict(),
       execute: async (args) => {
         try {
@@ -658,7 +657,7 @@ function buildHqTools(
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveProfile; writes there are rejected. " +
         "When filing an owed native user card, provide sources with its sliceId, turnId and exact quote from the supplied original card or readRound. A native-only docket requires sources for every case write; a write without sources never settles a native card. " +
         "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
-        DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE + " reorganize: evidence-backed shrink of an over-budget index after a full read; preserves the complete source in immutable history shards. " +
+        DOC_WRITE_WINDOW_RULE + " " + DOCUMENT_BUDGET_RULE + " reorganize: restructure an index on the basis of evidence after a full read; preserves the complete source in immutable history shards. " +
         `\n\n${MEMORY_IS_GIT_RULE}`,
       inputSchema: z.object({
         action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "reviseUnderstanding", "reorganize"]),
@@ -687,8 +686,8 @@ function buildHqTools(
         ),
         line: z.string().optional(),
         title: z.string().optional(),
-        evidence: z.array(z.string().min(1)).min(1).max(20).optional(),
-        sources: z.array(cardLinkSourceSchema).min(1).max(20).optional(),
+        evidence: z.array(z.string().min(1)).min(1).optional(),
+        sources: z.array(cardLinkSourceSchema).min(1).optional(),
         expectedUpdated: z
           .string()
           .optional()
@@ -724,7 +723,7 @@ function buildHqTools(
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "reorganize":
-            if (!args.body || !args.evidence?.length) return reject("reorganize requires a shorter body and evidence read in this run; the source is preserved byte-for-byte");
+            if (!args.body || !args.evidence?.length) return reject("reorganize requires a revised body and evidence read in this run; the source is preserved byte-for-byte");
             intent = { action: "reorganize", ...base, body: args.body, evidence: args.evidence };
             break;
           case "open":
@@ -842,7 +841,7 @@ function buildHqTools(
     }),
 
     reorganizeUserModel: tool({
-      description: "Recover an oversized people/user/index.md without truncation. First readCase people/user and relevant raw records. Author shorter runtime card and direction halves, preserving the Previously On Identity/Past/Now and Portrait/Hypotheses grammar, uncertainty and user evidence. Commitments and lifecycle state stay in the task system; do not create Horizon content. Put independent evidence topics into focused pieces. The complete prior model is archived byte-identically; pieces and history are discoverable through readUserModel/readCase. This never edits the user's own profile.md. Resume evolveProfile after recovery.",
+      description: "Reorganize people/user/index.md when its current structure makes it hard to use. First readCase people/user and relevant raw records. Preserve the substance of both runtime card and direction halves, preserving the Previously On Identity/Past/Now and Portrait/Hypotheses grammar, uncertainty and user evidence. Commitments and lifecycle state stay in the task system; do not create Horizon content. Put independent evidence topics into focused pieces. The complete prior model is archived byte-identically; pieces and history are discoverable through readUserModel/readCase. This never edits the user's own profile.md. Resume evolveProfile after recovery.",
       inputSchema: z.object({ card: z.string().min(1), direction: z.string().nullable(),
         pieces: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).default([]),
         evidence: z.array(z.string().min(1)).min(1) }),
@@ -915,8 +914,7 @@ function buildHqTools(
             allowedSopWrites: ["search", "thinkdeep"],
           }),
         );
-        // An oversized model can refuse the pass before it runs. Keep the
-        // beat due for recovery; an actual no-change pass still counts.
+        // A completed no-change pass counts; a failed pass stays due for recovery.
         if (card.ran) flags.evolutionRan = true;
         const issues = [
           ...(card.error ? [card.error] : []),
@@ -1113,7 +1111,7 @@ export async function handleBrief(input: ReflectionRoundInput, workflowRunId?: s
   const assessCard = tool({
     description: "Decide whether the original adds anything that still calls for archival, task or procedural work, separate from the profile beat. Choosing no_further_work settles this exact card. Choosing needs_work opens normal reflection and leaves the card owed.",
     inputSchema: z.object({ source: cardLinkSourceSchema, decision: z.enum(["no_further_work", "needs_work"]),
-      reason: z.string().trim().min(1).max(300).describe("What did this message add, or which specific uncertainty prevents a decision?") }),
+      reason: z.string().trim().min(1).describe("What did this message add, or which specific uncertainty prevents a decision?") }),
     execute: async ({ source, decision, reason }, context) => {
       const key = dispositionKey(source);
       if (decision === "needs_work") {
@@ -1165,13 +1163,6 @@ export async function handleBrief(input: ReflectionRoundInput, workflowRunId?: s
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
-    maxSteps: 50,
-    // The platform wall (800 s per invocation) is NOT a budget: reaching it
-    // kills the delivery and the SDK re-executes the in-flight step bodies
-    // on redelivery — a crash, not a bound. So the round carries an explicit
-    // ceiling; on expiry the runner returns a failure and the flush below
-    // lands whatever the round's tools already queued.
-    timeoutMs: REFLECTION_ROUND_TIMEOUT_MS,
   });
 
   // A due review was offered, not necessarily completed. Persist that host

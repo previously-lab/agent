@@ -212,10 +212,8 @@ vi.mock("@/lib/evolution/store", async (importOriginal) => ({
 import { handleBrief } from "@/app/api/evolution/hq-agent";
 import { CASE_FILING_RULE } from "@/lib/identity/agent-prompt.generated";
 import { dialogueResearchMaterialId, encodeDialogueResearchRecord, type DialogueResearchRecord } from "@/lib/episodic/dialogue-record";
-import { REFLECTION_ROUND_TIMEOUT_MS } from "@/app/api/evolution/reflection-contract";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { runAgent, zeroUsage } from "@/lib/deepseek/runner";
-import { isStepCount } from "@/lib/deepseek/tools";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { parseReflectionRoundMessage, type ReflectionHistoryCheckpoint } from "@/lib/chat/commit-contract";
 import { fsReadFile } from "@/lib/episodic/io-helpers";
@@ -250,18 +248,22 @@ const DOCKET = {
   agendaDue: [],
 };
 
-it("offers reachable user-model recovery after evolveProfile feedback, with real read receipts", async () => {
+it("lets HQ reorganize a long user model after every index page and its evidence are read", async () => {
   const path = "memory/people/user/index.md";
   const card = "# Previously On\n## Identity\n- name: Example\n## Past\nQualified profile.\n## Now\n## Horizon\n";
   io.files.set(path, card + "x".repeat(18_000));
-  passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, droppedRecent: 0, note: "needs reorganization", error: "document_full: use reorganizeUserModel" });
+  passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, droppedRecent: 0, note: "needs reorganization", error: "Earlier evidence conflicts with the profile organization; use reorganizeUserModel" });
   runSubAgentMock.mockImplementation(async (opts) => {
     expect(opts.tools.reorganizeUserModel).toBeDefined();
     expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "new evidence" })).toContain("reorganizeUserModel");
     const input = { card, direction: null, pieces: [], evidence: [`records/${SLICE_ID}`] };
     expect(await callTool(opts, "reorganizeUserModel", input)).toContain("REJECTED");
-    await callTool(opts, "readCase", { ref: "people/user" });
+    const firstPage = String(await callTool(opts, "readCase", { ref: "people/user" }));
+    const continuation = /offset (\d+), revision "([\da-f]+)"/.exec(firstPage);
+    expect(continuation).not.toBeNull();
     await readEvidence(opts);
+    expect(await callTool(opts, "reorganizeUserModel", input)).toContain("REJECTED");
+    await callTool(opts, "readCase", { ref: "people/user", offset: Number(continuation![1]), revision: continuation![2] });
     expect(await callTool(opts, "reorganizeUserModel", input)).toContain("Queued user-model reorganization");
     return { ok: true, report: { actions: [], note: "" }, text: "" };
   });
@@ -356,10 +358,10 @@ describe("HQ evidence, task and learning integration", () => {
   it("reopens full reflection for a failed profile pass even when the original needs no more work", async () => {
     io.files.set(`${SLICE_ID}:core`, RAW_USER_RECORD);
     io.files.set(`${SLICE_ID}:agent`, encodeDialogueResearchRecord(checked));
-    passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, error: "document_full" });
+    passes.runCardEvolution.mockResolvedValue({ ran: false, changed: false, error: "Revision changed before the profile write" });
     runSubAgentMock.mockImplementation(async opts => {
       await callTool(opts, "assessCard", { source: { sliceId: SLICE_ID, turnId: checked.sourceTurnId, quote: "想换手机" }, decision: "no_further_work", reason: "Known." });
-      expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "Review." })).toContain("document_full");
+      expect(await callTool(opts, "evolveProfile", { sliceId: SLICE_ID, focus: "Review." })).toContain("Revision changed before the profile write");
       expect((await opts.prepareStep!({ stepNumber: 2, steps: [], messages: [] }))?.activeTools).toContain("reorganizeUserModel");
       return { ok: true, report: { actions: [], note: "Profile needs repair." }, text: "" };
     });
@@ -939,11 +941,11 @@ describe("handleBrief (v0.21 §5)", () => {
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.toolChoice).toBe("required");
     expect(opts.reportToolName).toBe("hqReport");
-    expect(opts.maxSteps).toBe(50);
-    expect(opts.timeoutMs).toBe(REFLECTION_ROUND_TIMEOUT_MS);
+    expect(opts).not.toHaveProperty('maxSteps');
+    expect(opts).not.toHaveProperty('timeoutMs');
 
     let requests = 0;
-    const result = await runAgent({ tools: opts.tools, stopWhen: isStepCount(opts.maxSteps!) }, async () => {
+    const result = await runAgent({ tools: opts.tools }, async () => {
       requests++;
       const args = requests === 1 ? { note: "missing actions" } : { actions: [], note: "Idle." };
       const calls = [{ id: `report-${requests}`, type: "function" as const,

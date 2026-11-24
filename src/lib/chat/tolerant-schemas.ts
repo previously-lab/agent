@@ -7,7 +7,7 @@
  * where a number was expected, or an out-of-range relevance. Without guard
  * rails, zod rejects the input and the AI SDK throws `InvalidToolInputError`,
  * which the executors either swallow (silent recall failure) or — worse —
- * let through `withStepTimeout` into workflow retries (webSearch).
+ * return as invalid tool arguments.
  *
  * These schemas make numeric fields deterministic:
  * - `z.coerce.number()` coerces numeric strings ("0.8" → 0.8)

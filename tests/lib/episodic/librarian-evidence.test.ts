@@ -237,7 +237,9 @@ describe("case writer user card citations", () => {
     const page = readSliceEvidencePage(raw, next);
     let excerpt = "";
     const filed = await fileWithPassages(async (read) => {
-      expect(sourcePassages(await read({ range }))).toEqual([]);
+      const [wide] = sourcePassages(await read({ range }));
+      expect(wide.end - wide.start).toBeGreaterThan(4_000);
+      expect(wide.end).toBeLessThanOrEqual(readSliceEvidencePage(raw, { range }).content.length);
       const [early] = sourcePassages(await read({ range, maxChars: 512 }));
       const [later] = sourcePassages(await read(next));
       expect(later.handle).not.toBe(early.handle);

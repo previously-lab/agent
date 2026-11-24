@@ -39,6 +39,15 @@ describe("scoped original images for dialogue regeneration", () => {
     expect(h.readPage).not.toHaveBeenCalled(); expect(h.readImage).not.toHaveBeenCalled();
   });
 
+  it("recovers every original image from an older registry page when no record exists yet", async () => {
+    h.list.mockResolvedValueOnce({ data: [], hasMore: true, cursor: "older" }).mockResolvedValueOnce({ data: [row] });
+    const images = [{ snapshot: original, dataBase64: png.toString("base64") }];
+    h.events.mockResolvedValue([{ type: "thought_started", runId: row.runId, sourceInputId: inputId, workId: inputId,
+      input: { inputId, clientMessageId, acceptedAt, text: "Original question." }, record: { images } }]);
+    expect((await restoreDialogueImages(scope, inputId, undefined, [])).images).toEqual(images);
+    expect(h.locate).not.toHaveBeenCalled();
+  });
+
   it("uses only the bound record's original attachment even with a forged filename or ordinal", async () => {
     h.readPage.mockResolvedValue({ content: "core" }); h.parse.mockReturnValue(slice);
     const restored = await restoreDialogueImages(scope, inputId, undefined, [forged]);

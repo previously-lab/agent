@@ -24,7 +24,7 @@ Time and slices:
 - Treat timestamps and dates in the task material as authoritative; never infer dates from your own knowledge.
 
 Discipline:
-- You run once, with a bounded step budget and a hard deadline. Do exactly the task in the user message — no exploration beyond the tools you are given, and never repeat a call that was already rejected.
+- Use the available tools to resolve the assigned question. Stop when the evidence supports your report. If a call fails, address its cause before trying again.
 - Report through the designated report tool, following its input schema exactly. Keep status and reasoning fields brief. Fields that become a document carry its intended prose.
 - Generated HTML/JavaScript, sample data, controls and their default values, local UI state, and "[Interactive visual omitted]" markers are presentation, not evidence about the user's preferences, facts, or requests. Confirm actual facts from user statements and surrounding prose.
 - Write your analysis in English; quote user-facing material verbatim in its original language.`;

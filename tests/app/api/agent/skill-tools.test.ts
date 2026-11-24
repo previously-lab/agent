@@ -33,10 +33,6 @@ vi.mock("@/lib/capabilities", async (importOriginal) => ({
 vi.mock("@/lib/deepseek/generate", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/deepseek/generate")>(), streamText: h.stream,
 }));
-vi.mock("@/lib/chat/step-timeout", () => ({
-  withStepTimeout: async (work: () => Promise<unknown>) => ({ ok: true, result: await work(), elapsedMs: 1 }),
-  StepTimeoutError: class StepTimeoutError extends Error {},
-}));
 vi.mock("workflow", () => ({
   getWritable: () => ({ getWriter: () => ({ write: async () => {}, releaseLock() {} }) }),
 }));

@@ -35,9 +35,8 @@ export interface TurnInput {
   dialogue?: import("@/lib/dialogue/types").DialogueLaunch;
   verifiedImages?: import("./image-attachments").ImageAttachmentEvidence[];
   /**
-   * Converted chat history from the client (capped at a broad payload limit
-   * in start-turn). Native dialogue thinking uses it in full; other turns cut
-   * a slice-aligned window before streaming.
+   * Converted exchanges from the client. Native dialogue uses them in full;
+   * other turns select a slice-aligned context window before streaming.
    */
   modelMessages: ModelMessage[];
   /** Trimmed recent turns for Flash + context assembly. */
@@ -108,7 +107,7 @@ export interface TurnInput {
   /**
    * Image attachments (data URLs) extracted from the current user message when
    * the main model lacks vision. Passed through to ToolContext so the viewImage
-   * tool can resolve `attachment:N`. Capped at 4 images; each is client-compressed
+   * tool can resolve `attachment:N`. Each image is client-compressed
    * to 1568px before upload.
    */
   imageAttachments: string[];

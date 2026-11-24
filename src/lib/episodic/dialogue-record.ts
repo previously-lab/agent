@@ -4,19 +4,19 @@ import { parseImageAttachments } from "@/lib/chat/image-attachments";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
 import type { ThinkingProduct } from "@/lib/agents/thinking-product";
 
-const id = z.string().min(1).max(256);
+const id = z.string().min(1);
 const seq = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const at = z.string().datetime({ offset: true });
 const artifact = z.object({ artifactId: id, sourceOwnerId: id, revision: z.literal(1), sha256: hash,
-  kind: z.enum(["native_html", "document"]), mediaType: z.string().max(120), byteSize: seq,
-  summary: z.string().max(4000).optional(), width: seq.optional(), height: seq.optional() }).strict();
+  kind: z.enum(["native_html", "document"]), mediaType: z.string(), byteSize: seq,
+  summary: z.string().optional(), width: seq.optional(), height: seq.optional() }).strict();
 export function parseDialogueArtifactRef(value: unknown): DialogueArtifactRef | null {
   const parsed = artifact.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 const contentBlock = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("markdown"), blockId: id, text: z.string().max(64_000)
+  z.object({ kind: z.literal("markdown"), blockId: id, text: z.string()
     .refine((text) => !parseNativeSections(text).some((section) => section.kind === "native"), "Native HTML belongs in an artifact reference") }).strict(),
   z.object({ kind: z.literal("artifact_ref"), blockId: id, artifact }).strict(),
   z.object({ kind: z.literal("image_ref"), blockId: id, image: z.unknown().transform((image, ctx) => {
@@ -25,28 +25,27 @@ const contentBlock = z.discriminatedUnion("kind", [
     ctx.addIssue({ code: "custom", message: "Invalid record image identity" });
     return z.NEVER;
   }) }).strict(),
-  z.object({ kind: z.literal("citation_ref"), blockId: id, ref: z.string().min(1).max(2048), label: z.string().max(600).optional() }).strict(),
+  z.object({ kind: z.literal("citation_ref"), blockId: id, ref: z.string().min(1), label: z.string().optional() }).strict(),
 ]);
 const dialogueTurn = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user_input"), inputId: id, userSeq: seq.optional() }).strict(),
-  z.object({ kind: z.literal("public_utterance"), publicationId: id, publicSeq: seq, inputIds: z.array(id).max(64),
-    sourceResults: z.array(z.object({ resultId: id, productRevision: seq, claimIds: z.array(id).max(32) }).strict()).max(32),
-    blocks: z.array(contentBlock).max(32),
+  z.object({ kind: z.literal("public_utterance"), publicationId: id, publicSeq: seq, inputIds: z.array(id),
+    sourceResults: z.array(z.object({ resultId: id, productRevision: seq, claimIds: z.array(id) }).strict()),
+    blocks: z.array(contentBlock),
   }).strict(),
 ]);
 
 export type DialogueRecordTurn = z.infer<typeof dialogueTurn>;
-const metadataMax = 262_144;
+
 
 export function encodeDialogueRecordTurn(value: DialogueRecordTurn): string {
   const encoded = encodeURIComponent(JSON.stringify({ v: 1, event: dialogueTurn.parse(value) }));
-  if (encoded.length > metadataMax) throw new Error("Dialogue record metadata exceeds its bound");
   return encoded;
 }
 
 /** Only an unambiguous host-serialized header can carry public metadata. */
 export function decodeDialogueRecordTurn(value: unknown, role: string): DialogueRecordTurn | undefined {
-  if (typeof value !== "string" || value.length > metadataMax) return undefined;
+  if (typeof value !== "string") return undefined;
   try {
     const envelope = JSON.parse(decodeURIComponent(value));
     if (envelope?.v !== 1) return undefined;
@@ -175,19 +174,19 @@ export function projectRecordArtifactSources(raw: string): string {
 const RESEARCH_PREFIX = "[research-result-v1] ";
 const researchResult = z.object({
   kind: z.literal("research_result"), resultId: id, productRevision: seq, workId: id,
-  inputIds: z.array(id).max(64), sourceTurnId: id, asOf: at,
-  sourceRevision: z.string().max(256).nullable(), status: z.enum(["complete", "incomplete"]),
-  artifacts: z.array(artifact).max(16),
+  inputIds: z.array(id), sourceTurnId: id, asOf: at,
+  sourceRevision: z.string().nullable(), status: z.enum(["complete", "incomplete"]),
+  artifacts: z.array(artifact),
   outputRef: z.string().regex(/^works\/[a-f0-9]{64}\.json$/).optional(),
   outputSha256: hash.optional(),
-  delta: z.object({ readerQuestion: z.string().max(400), newInformation: z.string().max(600),
-    targetRefs: z.array(z.string().max(2048)).max(4),
-    claims: z.array(z.object({ claimId: id, text: z.string().max(600), kind: z.string().max(64),
+  delta: z.object({ readerQuestion: z.string(), newInformation: z.string(),
+    targetRefs: z.array(z.string()),
+    claims: z.array(z.object({ claimId: id, text: z.string(), kind: z.string(),
       decision: z.enum(["proposed", "confirmed", "rejected", "unresolved"]).optional(),
-      uncertainty: z.string().max(600).optional(),
-      sources: z.array(z.object({ ref: z.string().max(2048), revision: z.string().max(256).nullable(),
-        role: z.enum(["user", "assistant"]).optional(), turnId: id.optional() }).strict()).max(8),
-    }).strict()).max(8),
+      uncertainty: z.string().optional(),
+      sources: z.array(z.object({ ref: z.string(), revision: z.string().nullable(),
+        role: z.enum(["user", "assistant"]).optional(), turnId: id.optional() }).strict()),
+    }).strict()),
   }).strict().optional(),
 }).strict();
 export type DialogueResearchRecord = z.infer<typeof researchResult>;
@@ -211,10 +210,9 @@ export function selectDialogueResearchProducts(
 ): DialogueResearchRecord[] {
   const selected: DialogueResearchRecord[] = [];
   const legacySeen = new Set<string>();
-  const include = (record: DialogueResearchRecord): boolean => {
-    if (selected.some((item) => item.resultId === record.resultId && item.productRevision === record.productRevision)) return false;
+  const include = (record: DialogueResearchRecord) => {
+    if (selected.some((item) => item.resultId === record.resultId && item.productRevision === record.productRevision)) return;
     selected.push(record);
-    return selected.length >= 8;
   };
   for (const materialId of materialIds) {
     const exact = materialId.includes(MATERIAL_SEPARATOR);
@@ -224,7 +222,7 @@ export function selectDialogueResearchProducts(
     for (const record of ordered) {
       if (!exact && legacySeen.has(record.resultId)) continue;
       if (!exact) legacySeen.add(record.resultId);
-      if (include(record)) return selected;
+      include(record);
     }
   }
   return selected;
@@ -238,9 +236,9 @@ export function makeDialogueResearchRecord(input: { resultId: string; productRev
   const delta = proposed && {
     readerQuestion: proposed.readerQuestion, newInformation: proposed.newInformation, targetRefs: proposed.targetRefs,
     claims: product.claims.filter((claim) => proposed.claimIds.includes(claim.claimId) && claim.allowedPublicMode === "finding")
-      .map((claim) => ({ claimId: claim.claimId, text: claim.text.slice(0, 600), kind: claim.kind,
+      .map((claim) => ({ claimId: claim.claimId, text: claim.text, kind: claim.kind,
         ...(claim.decision ? { decision: claim.decision } : {}), ...(claim.uncertainty ? { uncertainty: claim.uncertainty } : {}),
-        sources: product.readSet.filter((read) => claim.evidenceIds.includes(read.evidenceId)).slice(0, 8)
+        sources: product.readSet.filter((read) => claim.evidenceIds.includes(read.evidenceId))
           .map(({ ref, revision, role, turnId }) => ({ ref, revision, ...(role ? { role } : {}), ...(turnId ? { turnId } : {}) })),
       })),
   };
@@ -257,7 +255,7 @@ export function encodeDialogueResearchRecord(value: DialogueResearchRecord): str
 
 export function readDialogueResearchRecords(raw: string): DialogueResearchRecord[] {
   return raw.split("\n").flatMap((line) => {
-    if (!line.startsWith(RESEARCH_PREFIX) || line.length > 64_000) return [];
+    if (!line.startsWith(RESEARCH_PREFIX)) return [];
     try {
       const parsed = researchResult.safeParse(JSON.parse(line.slice(RESEARCH_PREFIX.length)));
       return parsed.success ? [parsed.data] : [];

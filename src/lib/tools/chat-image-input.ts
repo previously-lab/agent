@@ -8,7 +8,6 @@ import { sanitizeAttachmentName } from "./attachments";
 export function legacyMessageImages(messages: UIMessage[]): ImageAttachmentEvidence[] {
   const last = messages.findLast((message) => message.role === "user");
   const files = last?.parts.filter((part) => part.type === "file") ?? [];
-  if (files.length > IMAGE_ATTACHMENT_LIMITS.maxPerTurn) throw new ImageAttachmentError("image_count", "Attach at most four images");
   return files.map((part, index) => {
     if (part.type !== "file" || typeof part.url !== "string" || part.url.length > IMAGE_ATTACHMENT_LIMITS.maxBytes * 4 / 3 + 256) throw new ImageAttachmentError("image_size", "Invalid image payload", 413);
     const match = /^data:image\/(?:png|jpeg|gif|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(part.url);

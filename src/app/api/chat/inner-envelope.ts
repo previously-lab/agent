@@ -5,8 +5,7 @@
  * `buildInnerEnvelope` assembles the SINGLE user message an inner (nested)
  * run wakes up to: the queued user messages verbatim, the instance table
  * snapshot, its own target message, and the slice pointer. It judges nothing
- * semantically — what exists is carried (D5: a done instance's answer rides
- * truncated at 500 chars; a running one is a status word, no partial text).
+ * semantically. Completed answers travel in full. Running instances expose their status.
  *
  * `buildMergeSummaryBrief` is the wrap-up nudge for the OUTER agent's merged
  * summary pass once every instance is terminal: it hands the model the full
@@ -21,12 +20,6 @@
  */
 
 import type { TimeSlice } from "@/lib/episodic";
-
-/** D5: a done instance's answer rides the envelope truncated to this. */
-export const MAX_INSTANCE_TEXT_CHARS = 500;
-
-/** The wrap-up brief carries fuller answers (the merge must not misstate). */
-export const MAX_MERGE_TEXT_CHARS = 2000;
 
 /** A queued user message as the drain read it from the slice. */
 export interface EnvelopeUserTurn {
@@ -43,17 +36,8 @@ export interface EpisodeInstanceSnapshot {
   /** The instance's own id (the bubble turnId). */
   turnId: string;
   status: "queued" | "running" | "done" | "failed";
-  /** done only: the answer text (carried truncated — see MAX_INSTANCE_TEXT_CHARS). */
+  /** Verbatim answer from a completed instance. */
   text?: string;
-}
-
-function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
-}
-
-function excerpt(text: string, max = 100): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return truncate(flat, max);
 }
 
 /**
@@ -86,7 +70,7 @@ export function buildInnerEnvelope(args: {
   for (const inst of instances) {
     if (inst.status === "done" && inst.text) {
       lines.push(
-        `- message ${inst.replyTo}: done — "${truncate(inst.text, MAX_INSTANCE_TEXT_CHARS)}"`,
+        `- message ${inst.replyTo}: done — "${inst.text}"`,
       );
     } else {
       lines.push(`- message ${inst.replyTo}: ${inst.status} (instance ${inst.turnId})`);
@@ -133,13 +117,16 @@ export function buildMergeSummaryBrief(
     if (r.status === "done" && r.text) {
       lines.push(
         "",
-        `### On "${excerpt(r.question.text)}" (message ${r.question.turnId}) — answered`,
-        truncate(r.text, MAX_MERGE_TEXT_CHARS),
+        `### Message ${r.question.turnId} — answered`,
+        r.question.text,
+        "Reply:",
+        r.text,
       );
     } else {
       lines.push(
         "",
-        `### On "${excerpt(r.question.text)}" (message ${r.question.turnId}) — NOT answered (the instance failed)`,
+        `### Message ${r.question.turnId} — NOT answered (the instance failed)`,
+        r.question.text,
       );
     }
   }

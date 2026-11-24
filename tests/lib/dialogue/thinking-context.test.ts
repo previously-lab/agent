@@ -106,7 +106,7 @@ describe("native thinking context contract", () => {
     expect(messages).toHaveLength(3);
     expect(messages[0]).toEqual(contextPrefix[0]);
     expect(messages.at(-1)!.content).toContain("existing checkpoint continuation");
-    expect(messages.at(-1)!.content).toContain("Do not repeat or complete other inputs");
+    expect(messages.at(-1)!.content).toContain("Each input retains its own task");
   });
 
   it("keeps the living recap in the existing system prompt instead of recreating it", () => {
@@ -114,7 +114,7 @@ describe("native thinking context contract", () => {
     expect(contract).toContain("system prompt already carries the living recap, user model and slice background");
     expect(contract).toContain("Choose the responseMode for the current request");
     expect(contract).toContain("A related title alone needs no lookup");
-    expect(contract).toContain("The single dialogue Actor decides how to integrate");
+    expect(contract).toContain("[workCheckpoint(known answer), lookup(remaining question)] in parallel");
   });
 
   it("preserves the verified tool mapping when image parts were extracted for a text-only turn", () => {

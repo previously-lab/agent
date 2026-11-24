@@ -1,13 +1,12 @@
 import { getOctokit } from "@/lib/github/client";
 import { assertPortableRepoPath } from "@/lib/portable-path";
 import { isPathAllowed } from "@/lib/whitelist";
-import { invalidateReadCache } from "@/lib/tools/readFile";
+import { invalidateReadCache, readBlobText } from "@/lib/tools/readFile";
 import { noteRepoHead } from "@/lib/tools/batch-write";
 import { validateDocumentEntries, absentDocumentError } from "@/lib/docs/write-validation";
 import { WriteRefusal } from "@/lib/docs/write-window";
 import { isAuthoredDocumentPath } from "@/lib/docs/write-limits";
 import { isHistoryArchiveFileName } from "@/lib/docs/history-archive";
-import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 
 /**
  * Create or update a file in the GitHub repository.
@@ -29,14 +28,6 @@ export async function writeFile(
 
   if (isHistoryArchiveFileName(path)) throw new WriteRefusal("commit_failed", "History archives require the batch writer so the archive and its Git byte-preservation rule commit together");
 
-  const contentBytes = Buffer.byteLength(content, "utf-8");
-  const maxBytes = maxTextFileBytes(path);
-  if (contentBytes > maxBytes) {
-    throw new Error(
-      `Content is too large (${contentBytes} bytes). Maximum is ${maxBytes} bytes.`
-    );
-  }
-
   const octokit = getOctokit();
 
   try {
@@ -53,8 +44,10 @@ export async function writeFile(
       if (!Array.isArray(existing.data)) {
         sha = existing.data.sha;
         if (isAuthoredDocumentPath(path)) {
-          if (!("content" in existing.data)) throw new Error(`Document source unreadable: ${path}`);
-          previous = Buffer.from(existing.data.content, "base64").toString("utf8");
+          if (existing.data.type !== "file") throw new Error(`Document source unreadable: ${path}`);
+          previous = existing.data.content || existing.data.size === 0
+            ? Buffer.from(existing.data.content, "base64").toString("utf8")
+            : await readBlobText(existing.data.sha, repo, owner);
         }
       }
     } catch (error) {
@@ -161,8 +154,7 @@ export async function deleteFile(
 
 /**
  * Write raw bytes (attachments) via the contents API — the content travels
- * base64, so arbitrary binary lands intact. The 5MB binary fuse is enforced
- * by the caller (fsWriteBinaryFile); this layer re-checks as the guard.
+ * base64 to preserve the original bytes.
  */
 export async function writeBinaryFile(
   path: string,

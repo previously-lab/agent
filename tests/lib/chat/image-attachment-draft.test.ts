@@ -87,14 +87,15 @@ describe("image draft ownership", () => {
     expect(draft.getSnapshot().images[0].attachment?.assetId).toBe(attachment(2).assetId);
   });
 
-  it("rejects oversized originals before decoding, and caps the selection at four", async () => {
+  it("rejects oversized originals before decoding, and keeps the fifth image in the same draft", async () => {
     const { draft, prepare } = setup();
     const huge = file(); Object.defineProperty(huge, "size", { value: IMAGE_INPUT_MAX_BYTES + 1 });
     draft.add([huge]); await tick();
     expect(prepare).not.toHaveBeenCalled();
     expect(draft.getSnapshot().images[0].error).toBe("original-too-large");
-    expect(draft.add([file(), file(), file(), file()])).toHaveLength(3);
-    expect(draft.getSnapshot().limitReached).toBe(true);
+    expect(draft.add([file(), file(), file(), file()])).toHaveLength(4);
+    expect(draft.getSnapshot().images.map(item => item.ordinal)).toEqual([1, 2, 3, 4, 5]);
+    expect(draft.getSnapshot().limitReached).toBe(false);
   });
 
   it("keeps a newer removal undo and its ordinal when the frozen send is accepted", async () => {

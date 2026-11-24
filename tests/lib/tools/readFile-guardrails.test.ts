@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   GitHubRateLimitError,
-  GitHubReadTimeoutError,
   isGitHubRateLimitError,
-  isGitHubReadTimeoutError,
 } from "@/lib/github/client";
 
 // readFile's octokit is replaced at the module seam — the classes come from
@@ -40,16 +38,6 @@ describe("readFile guardrail passthrough", () => {
       (e: unknown) => e,
     );
     expect(isGitHubRateLimitError(err)).toBe(true);
-  });
-
-  it("a read deadline surfaces as GitHubReadTimeoutError, not a wrapped failure", async () => {
-    getContent.mockRejectedValue(
-      new GitHubReadTimeoutError("GitHub read timed out", 15_000),
-    );
-    const err: unknown = await readFile("memory/x.md", "repo", "owner").catch(
-      (e: unknown) => e,
-    );
-    expect(isGitHubReadTimeoutError(err)).toBe(true);
   });
 
   it("ordinary errors are still wrapped (the wrap's contract is unchanged)", async () => {

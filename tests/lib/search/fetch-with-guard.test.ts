@@ -53,10 +53,17 @@ describe("fetchWithGuard", () => {
     expect(mockFetch.mock.calls[1][0]).toBe("https://example.com/next");
   });
 
-  it("gives up after 5 redirect hops", async () => {
+  it("follows a valid chain longer than five hops", async () => {
+    for (let i = 1; i <= 7; i++) mockFetch.mockResolvedValueOnce(redirectTo(`/page-${i}`));
+    mockFetch.mockResolvedValueOnce(new Response("ok"));
+    expect(await (await fetchWithGuard("https://example.com/start")).text()).toBe("ok");
+    expect(mockFetch).toHaveBeenCalledTimes(8);
+  });
+
+  it("rejects an actual redirect cycle", async () => {
     mockFetch.mockResolvedValue(redirectTo("https://example.com/loop"));
     await expect(fetchWithGuard("https://example.com/loop"))
       .rejects.toThrow(/redirect/i);
-    expect(mockFetch).toHaveBeenCalledTimes(6); // initial + 5 hops
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

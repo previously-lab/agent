@@ -24,7 +24,6 @@ import {
  *  URLs do not bloat the step/workflow payload. */
 const IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 
-const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
  * The DeepSeek model this route describes images with. It MUST stay a LIVE id:
@@ -42,7 +41,7 @@ export type DescribeImageInput = {
     | { data: string /* base64 or data URL */; mediaType: string }
     | { url: string };
   question?: string;
-  timeoutMs?: number;
+  signal?: AbortSignal;
   locale?: string;
 };
 
@@ -125,7 +124,7 @@ async function readImageBytes(
   return { bytes: merged, truncated };
 }
 
-async function fetchImageAsDataUrl(url: string): Promise<
+async function fetchImageAsDataUrl(url: string, signal?: AbortSignal): Promise<
   | { ok: true; dataUrl: string; bytes: Uint8Array; contentType: string }
   | { ok: false; error: string }
 > {
@@ -149,11 +148,9 @@ async function fetchImageAsDataUrl(url: string): Promise<
     };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   try {
     const res = await fetchWithGuard(parsed.toString(), {
-      signal: controller.signal,
+      signal,
     });
     if (!res.ok) {
       return {
@@ -187,8 +184,6 @@ async function fetchImageAsDataUrl(url: string): Promise<
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: `ERROR: Could not fetch image: ${msg}` };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -257,7 +252,7 @@ export async function describeImage(
   let bytes: Uint8Array | null = null;
   let mimeHint: string | undefined;
   if ("url" in input.image) {
-    const fetched = await fetchImageAsDataUrl(input.image.url);
+    const fetched = await fetchImageAsDataUrl(input.image.url, input.signal);
     if (!fetched.ok) return fetched;
     imageData = { data: fetched.dataUrl };
     bytes = fetched.bytes;
@@ -319,7 +314,7 @@ export async function describeImage(
           ],
         },
       ],
-      timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      abortSignal: input.signal,
     });
     return { ok: true, description: text.trim(), metadata, degraded: false };
   } catch (e) {

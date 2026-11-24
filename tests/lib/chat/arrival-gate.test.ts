@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  ARRIVAL_GATE_TIMEOUT_MS,
-  raceArrivalVerdict,
-  ARRIVAL_RECOVERY_TIMEOUT_MS,
+  readArrivalVerdict,
   readArrivalWithRecovery,
   shouldDiscardRecoveredSession,
 } from "@/lib/chat/reconnect";
@@ -15,29 +13,18 @@ const emptyRecovery = (): ChatRecovery => ({
   receipts: [], unavailableRunIds: [], failures: [],
 });
 
-describe("raceArrivalVerdict", () => {
-  it("resolves ok when the verdict lands in time", async () => {
-    const r = await raceArrivalVerdict(Promise.resolve("v"), 50);
+describe("readArrivalVerdict", () => {
+  it("resolves ok when the verdict lands", async () => {
+    const r = await readArrivalVerdict(Promise.resolve("v"));
     expect(r).toEqual({ kind: "ok", verdict: "v" });
-  });
-
-  it("fails when the verdict hangs past the timeout", async () => {
-    const r = await raceArrivalVerdict(new Promise<string>(() => {}), 10);
-    expect(r).toEqual({ kind: "timeout" });
   });
 
   it("fails when the verdict rejects", async () => {
     const error = new Error("boom");
-    const r = await raceArrivalVerdict(
-      Promise.reject(error),
-      50,
-    );
+    const r = await readArrivalVerdict(Promise.reject(error));
     expect(r).toEqual({ kind: "failed", error });
   });
 
-  it("the gate constant is 15s (well under the platform wall)", () => {
-    expect(ARRIVAL_GATE_TIMEOUT_MS).toBe(15_000);
-  });
 });
 
 describe("history-first arrival with optional workflow recovery", () => {
@@ -68,26 +55,26 @@ describe("history-first arrival with optional workflow recovery", () => {
     expect(recover).not.toHaveBeenCalled();
   });
 
-  it("bounds a hanging history read without starting recovery", async () => {
+  it("accepts a slow history read once it finishes", async () => {
     vi.useFakeTimers();
+    const history = Promise.withResolvers<string>();
     const recover = vi.fn(async () => emptyRecovery());
-    const result = readArrivalWithRecovery(new Promise(() => {}), recover);
-    await vi.advanceTimersByTimeAsync(ARRIVAL_GATE_TIMEOUT_MS);
-    expect(await result).toEqual({ kind: "timeout" });
+    const result = readArrivalWithRecovery(history.promise, recover);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(recover).not.toHaveBeenCalled();
+    history.resolve("saved");
+    expect(await result).toMatchObject({ kind: "ok", verdict: { arrival: "saved" } });
   });
 
-  it("admits history after the shorter recovery budget, and ignores late receipts", async () => {
+  it("preserves receipts from slow workflow recovery", async () => {
     vi.useFakeTimers();
     let resolve!: (value: ChatRecovery) => void;
     const late = new Promise<ChatRecovery>((done) => { resolve = done; });
     const result = readArrivalWithRecovery(Promise.resolve({ mode: "resume" }), () => late);
-    await vi.advanceTimersByTimeAsync(ARRIVAL_RECOVERY_TIMEOUT_MS);
-    const accepted = await result;
-    expect(accepted).toEqual({ kind: "ok", verdict: { arrival: { mode: "resume" }, recovery: { kind: "timeout" } } });
+    await vi.advanceTimersByTimeAsync(60_000);
     resolve({ ...emptyRecovery(), savedRunIds: ["old-run"] });
-    await Promise.resolve();
-    expect(accepted).toEqual(await result);
+    expect(await result).toMatchObject({ kind: "ok", verdict: { arrival: { mode: "resume" },
+      recovery: { kind: "ok", verdict: { savedRunIds: ["old-run"] } } } });
   });
 
   it("handles a late recovery rejection without blocking loaded history", async () => {
@@ -95,10 +82,9 @@ describe("history-first arrival with optional workflow recovery", () => {
     let reject!: (error: Error) => void;
     const late = new Promise<ChatRecovery>((_, fail) => { reject = fail; });
     const result = readArrivalWithRecovery(Promise.resolve({ mode: "resume" }), () => late);
-    await vi.advanceTimersByTimeAsync(ARRIVAL_RECOVERY_TIMEOUT_MS);
-    expect((await result).kind).toBe("ok");
+    await vi.advanceTimersByTimeAsync(60_000);
     reject(new Error("network disconnected"));
-    await Promise.resolve();
+    expect((await result).kind).toBe("ok");
   });
 
   it("preserves active runs and pending summaries until exact acknowledgment", () => {

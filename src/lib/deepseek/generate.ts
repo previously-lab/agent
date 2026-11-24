@@ -42,8 +42,7 @@ export interface StreamingResult<Tools extends ToolSet = ToolSet> {
 /** Ordinary step-local call, also used for ephemeral companion narration. */
 export function streamText<Tools extends ToolSet = ToolSet>(options: AgentOptions<Tools>, dependencies: HttpDependencies = {}): StreamingResult<Tools> {
   const events = new EventChannel<ModelCallStreamPart>();
-  const timeout = options.timeout === undefined ? undefined : AbortSignal.timeout(options.timeout);
-  const signals = [options.abortSignal, dependencies.signal, timeout].filter((signal): signal is AbortSignal => !!signal);
+  const signals = [options.abortSignal, dependencies.signal].filter((signal): signal is AbortSignal => !!signal);
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   const emit = async (part: ModelCallStreamPart) => {
     events.push(part);

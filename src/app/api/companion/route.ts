@@ -10,21 +10,14 @@
  * Contract (frozen — the client is built against it):
  *   body:  { sliceId: string, event: "narrate", locale?: "zh" | "en", timezone?: string }
  *   200:   text/plain; charset=utf-8 stream. Clean close WITHOUT a terminal
- *          marker = complete narration. If the provider errors or hangs, the
- *          stream is cut at a 120s bound and a terminal marker line is
- *          appended before close — "[ Previously 暂时走神了，稍后再试。 ]" (zh) /
- *          "[ Previously got distracted — please try again later. ]" (en):
- *          marker present = cut narration (client shows failure/retry), so
- *          the client can always tell hung/cut apart from slow-but-complete.
+ *          marker = complete narration. Genuine provider errors append a terminal marker.
  *   400:   { error } — invalid JSON body / unknown event / bad sliceId format
  *   403:   { error } — origin guard (see src/lib/security/origin-guard.ts)
- *   429:   { error: "budget_exhausted" } — 20 narrations per IP per rolling hour
  *   501:   { error } — the resolved model is the bridge brain (no tool calls)
  */
 import { z } from "zod";
 import { guardRequest } from "@/lib/security/origin-guard";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
-import { checkCompanionBudget } from "./budget";
 import { narrateSlice } from "./narrate";
 
 const companionRequestSchema = z.object({
@@ -33,11 +26,6 @@ const companionRequestSchema = z.object({
   locale: z.enum(["zh", "en"]).optional(),
   timezone: z.string().optional(),
 });
-
-/** Caller key for the budget gate: first x-forwarded-for entry, else unknown. */
-function callerKey(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-}
 
 export async function POST(request: Request): Promise<Response> {
   const blocked = guardRequest(request);
@@ -64,14 +52,8 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Budget gate (§5): 20 narrations per caller per rolling hour. Checked
-  // after validation so malformed requests don't consume budget.
-  if (!checkCompanionBudget(callerKey(request))) {
-    return Response.json({ error: "budget_exhausted" }, { status: 429 });
-  }
-
   try {
-    return await narrateSlice({ sliceId, locale, timezone });
+    return await narrateSlice({ sliceId, locale, timezone }, { signal: request.signal });
   } catch (error) {
     console.error(
       "[companion] POST /api/companion:",

@@ -206,7 +206,8 @@ test("parallel thinking lets a banana correction retire an unpublished apple rep
 async function thoughtRunId(page: Page, workId: string, persona: string): Promise<string> {
   const runId = await page.evaluate(({ workId, persona }) => {
     const key = `previously:dialogue:parents:v2:${encodeURIComponent(persona)}`;
-    const records = JSON.parse(localStorage.getItem(key) ?? "[]") as Array<{
+    const raw = Object.entries(localStorage).find(([name, value]) => name.startsWith(key + ":") && value.startsWith("["))?.[1] ?? localStorage.getItem(key);
+    const records = JSON.parse(raw ?? "[]") as Array<{
       workId?: string; parentRunId?: string; userMessage?: { id?: string };
     }>;
     return records.find(record => record.workId === workId || record.userMessage?.id === workId)?.parentRunId;
@@ -218,7 +219,8 @@ async function thoughtRunId(page: Page, workId: string, persona: string): Promis
 async function publicRunId(page: Page, workId: string, persona: string): Promise<string> {
   const runId = await page.evaluate(({ workId, persona }) => {
     const key = `previously:dialogue:parents:v2:${encodeURIComponent(persona)}`;
-    const records = JSON.parse(localStorage.getItem(key) ?? "[]") as Array<{
+    const raw = Object.entries(localStorage).find(([name, value]) => name.startsWith(key + ":") && value.startsWith("["))?.[1] ?? localStorage.getItem(key);
+    const records = JSON.parse(raw ?? "[]") as Array<{
       workId?: string; dialogueRunId?: string; offers?: Array<{ runId?: string }>; userMessage?: { id?: string };
     }>;
     const record = records.find(candidate => candidate.workId === workId || candidate.userMessage?.id === workId);

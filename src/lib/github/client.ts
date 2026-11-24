@@ -1,30 +1,7 @@
 import { Octokit } from "octokit";
-import { AsyncLocalStorage } from "node:async_hooks";
-
-// ─── Guardrail tunables (registered in doc/reviews/housekeeping-and-page-hang.md §实施) ───
 
 /**
- * Hard deadline for ONE GitHub read (GET/HEAD), covering everything the
- * octokit plugin layer can add before/around the HTTP call (Bottleneck
- * queueing, throttling waits) — not just the wire. Normal p99 is <2s; 15s is
- * the "something is wrong" line, not a performance target. Writes are NOT
- * covered: a timed-out write would be ambiguous (the ref may have moved), so
- * writes rely on the 30s per-request timeout + conflict fail-fast instead.
- */
-export const GITHUB_READ_CALL_TIMEOUT_MS = 15_000;
-
-/**
- * Total GitHub-read budget for ONE entry point (a page load or a chat POST is
- * dozens of reads). Each base read still caps at GITHUB_READ_CALL_TIMEOUT_MS;
- * the budget shrinks that cap to whatever the entry point has left, so a
- * composite load fails in ~budget time instead of dying at the platform's
- * 300s wall. Nested budgets take the tighter deadline.
- */
-export const GITHUB_READ_BUDGET_MS = 20_000;
-
-/**
- * Minimum circuit-breaker window after a rate-limit hit. GitHub's longer
- * retry-after/reset hint takes precedence. While open EVERY GitHub
+ * Fallback cooldown when GitHub rate-limits without a retry-after or reset hint. While open EVERY GitHub
  * call fails fast with GitHubRateLimitError (circuitOpen: true) instead of
  * spending more quota. Per-instance state (a lambda has its own); a fresh hit
  * re-extends the window.
@@ -58,72 +35,10 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
-/** A GitHub read exceeded its deadline (per-call cap or the entry budget). */
-export class GitHubReadTimeoutError extends Error {
-  override readonly name = "GitHubReadTimeoutError";
-
-  constructor(
-    message: string,
-    readonly timeoutMs: number,
-  ) {
-    super(message);
-  }
-}
-
 export function isGitHubRateLimitError(
   err: unknown,
 ): err is GitHubRateLimitError {
   return err instanceof GitHubRateLimitError;
-}
-
-export function isGitHubReadTimeoutError(
-  err: unknown,
-): err is GitHubReadTimeoutError {
-  return err instanceof GitHubReadTimeoutError;
-}
-
-// ─── The read budget (AsyncLocalStorage-scoped) ───────────────────────────
-
-interface GitHubReadBudget {
-  readonly deadline: number;
-}
-
-const readBudgetStorage = new AsyncLocalStorage<GitHubReadBudget>();
-
-/** Different deadlines must not share an in-flight read. */
-export function currentGitHubReadDeadline(): number | undefined {
-  return readBudgetStorage.getStore()?.deadline;
-}
-
-/**
- * Run `fn` with a total GitHub-read deadline. Every base read inside `fn`
- * (anything going through this module's octokit) races its own call against
- * the remaining budget, so the composite operation fails with
- * GitHubReadTimeoutError instead of hanging to the platform timeout.
- */
-export async function withGitHubReadBudget<T>(
-  fn: () => Promise<T>,
-  budgetMs: number = GITHUB_READ_BUDGET_MS,
-): Promise<T> {
-  const parent = readBudgetStorage.getStore();
-  const deadline = parent
-    ? Math.min(parent.deadline, Date.now() + budgetMs)
-    : Date.now() + budgetMs;
-  return readBudgetStorage.run({ deadline }, fn);
-}
-
-/**
- * The deadline a single read gets right now: the per-call cap, tightened to
- * the budget's remainder when one is in scope (1ms when the budget is already
- * spent — the read fails on the next tick instead of never starting).
- * Pure — unit-tested.
- */
-export function readDeadlineMs(remainingBudgetMs?: number): number {
-  if (remainingBudgetMs === undefined) return GITHUB_READ_CALL_TIMEOUT_MS;
-  return Math.max(
-    1,
-    Math.min(GITHUB_READ_CALL_TIMEOUT_MS, Math.floor(remainingBudgetMs)),
-  );
 }
 
 // ─── Rate-limit classification + circuit breaker ─────────────────────────
@@ -174,20 +89,7 @@ function asRateLimitError(error: unknown): GitHubRateLimitError | null {
   );
 }
 
-/**
- * Wire the guardrails onto one octokit instance:
- *
- * 1. Throttle never sleeps. The octokit bundle's default onRateLimit /
- *    onSecondaryRateLimit handlers sleep until the quota reset (up to an
- *    hour) and retry once — inside the request, invisible to every timeout
- *    above it. Ours return false: the failure surfaces immediately.
- * 2. Rate-limit failures are re-typed (hook.error) and trip the circuit
- *    breaker.
- * 3. Reads carry a hard deadline (hook.wrap, outermost — it bounds plugin
- *    queueing too) with a real AbortSignal, so the wire request is cancelled,
- *    not just abandoned. Writes skip the deadline (a timed-out write is
- *    ambiguous) but still hit the breaker.
- */
+/** Respect genuine GitHub rate limits and share their retry window across calls. */
 function installGuardrails(octokit: Octokit): void {
   octokit.hook.wrap("request", async (request, options) => {
     const now = Date.now();
@@ -201,42 +103,7 @@ function installGuardrails(octokit: Octokit): void {
       );
     }
 
-    const method = (options.method ?? "GET").toUpperCase();
-    if (method !== "GET" && method !== "HEAD") {
-      return request(options);
-    }
-
-    const budget = readBudgetStorage.getStore();
-    const deadlineMs = readDeadlineMs(
-      budget ? budget.deadline - now : undefined,
-    );
-    const controller = new AbortController();
-    const callerSignal = options.request?.signal ?? undefined;
-    options.request = {
-      ...options.request,
-      signal: callerSignal
-        ? AbortSignal.any([callerSignal, controller.signal])
-        : controller.signal,
-    };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        request(options),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            reject(
-              new GitHubReadTimeoutError(
-                `GitHub read timed out after ${deadlineMs}ms: ${method} ${options.url}`,
-                deadlineMs,
-              ),
-            );
-          }, deadlineMs);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    return request(options);
   });
 
   octokit.hook.error("request", (error) => {
@@ -246,7 +113,7 @@ function installGuardrails(octokit: Octokit): void {
     if (error instanceof GitHubRateLimitError) throw error;
     const rateLimited = asRateLimitError(error);
     if (!rateLimited) throw error;
-    const openMs = Math.max(GITHUB_CIRCUIT_OPEN_MS, rateLimited.retryAfterMs ?? 0);
+    const openMs = rateLimited.retryAfterMs ?? GITHUB_CIRCUIT_OPEN_MS;
     circuitOpenUntil = Date.now() + openMs;
     circuitOpenKind = rateLimited.kind;
     console.warn(
@@ -332,7 +199,6 @@ function buildOctokit(
   const octokit = new Octokit({
     auth: token,
     request: {
-      timeout: 30_000, // 30s per-request cap — prevents hanging API calls
       fetch: measuredFetch(fetchImpl ?? globalThis.fetch, observe),
     },
     // Rate limits (403/429) and ref conflicts (422) fail immediately — the

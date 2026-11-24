@@ -82,6 +82,7 @@ export function useImageAttachments({ scope, persona }: { scope: string; persona
       body.set("persona", persona);
       const response = await fetch("/api/attachments/upload", { method: "POST", body, signal });
       const result = await response.json().catch(() => null);
+      if (response.status === 413) throw new Error("too-large");
       if (!response.ok) throw new Error(typeof result?.error === "string" ? result.error.slice(0, 500) : "upload-failed");
       const attachment = parseImageAttachments([result?.attachment])[0];
       if (!attachment) throw new Error("upload-failed");

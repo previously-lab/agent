@@ -2,9 +2,7 @@ import { promisify } from "node:util";
 import { constants, gzip, gunzip } from "node:zlib";
 import {
   getOctokit,
-  currentGitHubReadDeadline,
   isGitHubRateLimitError,
-  isGitHubReadTimeoutError,
 } from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
 import {
@@ -22,7 +20,6 @@ import {
   memoizeGitHubRead,
 } from "@/lib/github/read-view";
 import { listFiles } from "@/lib/tools/listFiles";
-import { maxTextFileBytes } from "@/lib/episodic/record-size-limit";
 
 // ─── The GitHub read (cached in the Next.js Data Cache) ──────────────────
 //
@@ -105,15 +102,6 @@ async function fetchFromGitHub(
       throw new Error(`"${path}" is not a regular file (type: ${response.data.type})`);
     }
 
-    // Check file size before decoding. Canonical record cores have a bounded
-    // exception because embedded HTML can exceed the generic text limit.
-    const maxBytes = maxTextFileBytes(path);
-    if (response.data.size > maxBytes) {
-      throw new Error(
-        `File "${path}" is too large (${response.data.size} bytes). Maximum is ${maxBytes} bytes.`
-      );
-    }
-
     // GitHub omits inline content for larger files. Fetch the same content
     // by its immutable blob sha, preserving the existing blob cache identity.
     if (!response.data.content && response.data.size > 0) {
@@ -131,7 +119,7 @@ async function fetchFromGitHub(
     }
     // Guardrail failures (rate limit / read deadline) keep their type so
     // callers can degrade instead of retrying a generic failure.
-    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
+    if (isGitHubRateLimitError(error)) {
       throw error;
     }
     if (
@@ -321,7 +309,7 @@ async function fetchRepoTree(
   );
   if (!memorySha) return { treeSha: "", entries: [], truncated: memorySha === null };
   const stored = await cachedFetch(
-    ["github", "tree", owner, repo, "gzip-v1", memorySha],
+    ["github", "tree", owner, repo, "gzip-v2", memorySha],
     CACHE_TTLS.BLOB_SECONDS,
     [],
     async () => {
@@ -329,21 +317,33 @@ async function fetchRepoTree(
         owner, repo, tree_sha: memorySha, recursive: "1",
       });
       const entries: RepoTreeEntry[] = [];
-      for (const item of tree.tree ?? []) {
-        if (item.type !== "blob" && item.type !== "tree") continue;
-        // Symlinks (120000) and submodules (160000) are not memory files.
-        if (item.mode === "120000" || item.mode === "160000") continue;
-        const p = item.path ?? "";
-        if (!p || !item.sha) continue;
-        entries.push({
-          path: `${MEMORY_TREE_ROOT}/${p}`,
-          type: item.type,
-          sha: item.sha,
-          ...(typeof item.size === "number" ? { size: item.size } : {}),
-        });
+      const directories: Array<{ path: string; sha: string }> = [];
+      function collect(items: typeof tree.tree, directory: string, walkChildren: boolean) {
+        for (const item of items) {
+          if ((item.type !== "blob" && item.type !== "tree") || !item.path || !item.sha) continue;
+          if (item.mode === "120000" || item.mode === "160000") continue;
+          const path = `${directory}/${item.path}`;
+          entries.push({ path, type: item.type, sha: item.sha,
+            ...(typeof item.size === "number" ? { size: item.size } : {}) });
+          if (walkChildren && item.type === "tree") directories.push({ path, sha: item.sha });
+        }
+      }
+      let incomplete = false;
+      if (!tree.truncated) {
+        collect(tree.tree ?? [], MEMORY_TREE_ROOT, false);
+      } else {
+        // A recursive Git Trees response has an upstream entry/byte ceiling.
+        // Walk complete directory trees at the same immutable revision.
+        directories.push({ path: MEMORY_TREE_ROOT, sha: memorySha });
+        while (directories.length) {
+          const directory = directories.pop()!;
+          const { data } = await octokit.rest.git.getTree({ owner, repo, tree_sha: directory.sha });
+          collect(data.tree ?? [], directory.path, true);
+          if (data.truncated) incomplete = true;
+        }
       }
       entries.sort((a, b) => a.path.localeCompare(b.path));
-      const projected = { treeSha: memorySha, entries, truncated: tree.truncated === true };
+      const projected = { treeSha: memorySha, entries, truncated: incomplete };
       if (opts?.fresh || entries.length < COMPRESS_TREE_AT_ENTRIES) return projected;
       const compressed = await gzipTree(JSON.stringify(projected), { level: constants.Z_BEST_SPEED });
       return compressed.toString("base64");
@@ -416,7 +416,7 @@ async function fetchBlobBase64(
     return data.content.replace(/\n/g, "");
   } catch (error) {
     // Guardrail failures (rate limit / read deadline) keep their type.
-    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
+    if (isGitHubRateLimitError(error)) {
       throw error;
     }
     if (
@@ -456,7 +456,7 @@ export async function readBlobBase64(
   if (opts?.fresh) return load();
   // Separate read budgets so one caller's deadline never extends or aborts
   // another's operation. Identical git bytes can otherwise share a cold load.
-  const key = JSON.stringify([owner, repo, sha, currentGitHubReadDeadline()]);
+  const key = JSON.stringify([owner, repo, sha]);
   const existing = blobInflight.get(key);
   if (existing) return existing;
   const pending = load();
@@ -521,12 +521,6 @@ export async function readTextFromCompleteTree(
   if (!entry) throw new Error(`File not found: "${path}"`);
   if (entry.type !== "blob") {
     throw new Error(`"${path}" is a directory, not a file`);
-  }
-  const maxBytes = maxTextFileBytes(normalized);
-  if (entry.size !== undefined && entry.size > maxBytes) {
-    throw new Error(
-      `File "${path}" is too large (${entry.size} bytes). Maximum is ${maxBytes} bytes.`,
-    );
   }
   return readBlobText(entry.sha, repo, owner, opts);
 }

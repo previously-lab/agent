@@ -41,6 +41,8 @@ export type ToolExecutionOptions<Context = unknown> = {
 export interface Tool<Input = unknown, Output = unknown, Context = unknown> {
   description?: string;
   inputSchema: z.ZodType<Input>;
+  /** Optional model-facing schema for hints that older callers need not supply. */
+  modelInputSchema?: z.ZodType;
   contextSchema?: z.ZodType<Context>;
   /** Optional provider-facing rendering of an executed result. Its canonical output remains available to receipts and tools. */
   toModelOutput?(output: unknown, toolCallId: string): string | undefined;
@@ -91,7 +93,7 @@ export interface AgentOptions<Tools extends ToolSet = ToolSet> {
   toolChoice?: ToolChoice; stopWhen?: StopCondition | StopCondition[];
   prepareStep?: PrepareStepFunction<Tools>;
   thinking?: boolean; reasoningEffort?: ReasoningEffort;
-  temperature?: number; timeout?: number; abortSignal?: AbortSignal;
+  temperature?: number; abortSignal?: AbortSignal;
   maxRetries?: number;
   /** Stable provider session identity; never a credential or workflow run secret. */
   sessionId?: string;
@@ -109,7 +111,7 @@ export interface ModelRequest {
   publicWording?: true;
   messages: NativeMessage[]; tools?: SerializedTool[]; toolChoice?: ToolChoice;
   thinking: boolean; reasoningEffort: ReasoningEffort; temperature?: number;
-  callId: string; timeoutMs?: number; maxRetries?: number;
+  callId: string; maxRetries?: number;
   /** Stable provider session identity, never an API credential. */
   sessionId?: string;
 }

@@ -1,6 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNextDataCacheContext } from "../helpers/next-data-cache-context";
-import { withGitHubReadBudget } from "@/lib/github/client";
 
 const api = vi.hoisted(() => ({
   get: vi.fn(), getRef: vi.fn(), getTree: vi.fn(), getBlob: vi.fn(),
@@ -121,17 +120,17 @@ describe("GitHub read views with real Next Data Cache", () => {
     });
   });
 
-  it("retries a failed shared fetch and isolates repositories and read deadlines", async () => {
+  it("retries a failed shared fetch and isolates repositories", async () => {
     api.getBlob.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
     const read = () => reads.readBlobText("body", "one", "owner");
     const errors = await Promise.allSettled([read(), read()]);
     expect(errors.map(e => e.status)).toEqual(["rejected", "rejected"]);
     expect(api.getBlob).toHaveBeenCalledTimes(1);
     const bodies = await Promise.all([
-      read(), reads.readBlobText("body", "two", "owner"), withGitHubReadBudget(read, 100),
+      read(), reads.readBlobText("body", "two", "owner"), read(),
     ]);
     expect(bodies).toEqual(["hello", "hello", "hello"]);
-    expect(api.getBlob).toHaveBeenCalledTimes(4);
+    expect(api.getBlob).toHaveBeenCalledTimes(3);
   });
 
   it("uses complete-tree absence only until the writer publishes a new commit", async () => {

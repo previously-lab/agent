@@ -3,12 +3,13 @@ import type { DialogueWakeEvent } from "./transport";
 export type DialogueRuntimeEvent =
   | { type: "lease_acquired"; at: string }
   | { type: "heartbeat"; at: string }
+  | { type: "wording_started"; candidateIds: string[]; at: string }
   | { type: "handoff_wait"; waitingForRunId: string; at: string }
   | { type: "exit_intent"; keys: string[]; at: string }
   | { type: "exit_commit"; at: string }
   | { type: "continued"; nextRunId: string }
   | { type: "delegated"; holderRunId: string; wake?: DialogueWakeEvent }
-  | { type: "expression_outcome"; status: "answered" | "intentionally_silent" | "failed"; candidateIds: string[]; inputIds: string[]; planId: string }
+  | { type: "expression_outcome"; status: "answered" | "intentionally_silent" | "failed"; candidateIds: string[]; inputIds: string[]; planId: string; retryable?: boolean }
   | { type: "world_degraded"; reason: string };
 
 export interface DialogueRunState {

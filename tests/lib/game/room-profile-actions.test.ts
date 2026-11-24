@@ -62,7 +62,6 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.stubGlobal("fetch", mocks.fetch);
   mocks.resolveDataSource.mockReturnValue("local");
-  mocks.withGitHubReadBudget.mockImplementation((fn: () => Promise<unknown>) => fn());
 });
 
 afterEach(() => {
@@ -76,7 +75,6 @@ describe("getRoomProfile", () => {
     expect(result.status).toBe("ready");
     expect(result.profile.activity).toBe("writing");
     expect(result.profile.primaryModule).toBe("study");
-    expect(mocks.withGitHubReadBudget).toHaveBeenCalledTimes(1);
     expect(mocks.fsReadFile).toHaveBeenCalledTimes(1);
     expect(mocks.fsReadFile).toHaveBeenCalledWith(PRIMARY);
     expect(mocks.fsListFiles).not.toHaveBeenCalled();
@@ -125,7 +123,6 @@ describe("getRoomProfile", () => {
     expect(mocks.fsReadFile).toHaveBeenCalledTimes(1);
     expect(mocks.fsReadFile).toHaveBeenCalledWith(PRIMARY);
     expect(mocks.fsReadFile).not.toHaveBeenCalledWith(LEGACY);
-    expect(mocks.withGitHubReadBudget).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -176,7 +173,6 @@ describe("getRoomProfile", () => {
       });
     }
     expect(mocks.fsReadFile).not.toHaveBeenCalled();
-    expect(mocks.withGitHubReadBudget).not.toHaveBeenCalled();
     expect(mocks.fsListFiles).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
@@ -250,7 +246,6 @@ describe("getRoomProfile", () => {
     }
     expect(mocks.readFileDemo).not.toHaveBeenCalled();
     expect(mocks.fsReadFile).not.toHaveBeenCalled();
-    expect(mocks.withGitHubReadBudget).not.toHaveBeenCalled();
     expect(mocks.setDemoPersona).not.toHaveBeenCalled();
     expect(mocks.getDemoPersona).not.toHaveBeenCalled();
   });

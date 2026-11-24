@@ -148,16 +148,20 @@ describe("binary write path — byte-identical end to end", () => {
     expect(Buffer.compare(written, JPEG_BYTES)).toBe(0);
   });
 
-  it("a same-name same-turn repeat gets a deterministic -2 suffix (born, never overwritten)", async () => {
-    const { persistEvidenceAttachments } = await fresh();
+  it("keeps both originals when same-name evidence is staged together", async () => {
+    const { persistEvidenceAttachments, createBatch, flushBatch } = await fresh();
+    const batch = createBatch();
     const result = await persistEvidenceAttachments({
       sliceId: "2026-09-05-1030",
-      turnId: "t9f2ha",
+      turnId: "t9f2ha", batch,
       files: [
         { name: "photo.jpg", data: JPEG_BYTES },
-        { name: "photo.jpg", data: JPEG_BYTES },
+        { name: "photo.jpg", data: Buffer.from([1, 2, 3]) },
       ],
     });
+    await flushBatch(batch, "Save both originals");
+    expect(bytesOnDisk(result.saved[0].path)).toEqual(JPEG_BYTES);
+    expect(bytesOnDisk(result.saved[1].path)).toEqual(Buffer.from([1, 2, 3]));
     expect(result.saved.map((s) => s.name)).toEqual([
       "t9f2ha-photo.jpg",
       "t9f2ha-photo-2.jpg",
@@ -165,45 +169,19 @@ describe("binary write path — byte-identical end to end", () => {
   });
 });
 
-describe("fuses — visible errors, never truncated", () => {
-  it("a single file over 5MB is refused with a visible reason, nothing written", async () => {
-    const { persistEvidenceAttachments, MAX_ATTACHMENT_BYTES } = await fresh();
-    const big = Buffer.alloc(MAX_ATTACHMENT_BYTES + 1);
+describe("attachment storage", () => {
+  it("keeps each complete file when a record exceeds the old per-file and aggregate limits", async () => {
+    const { persistEvidenceAttachments, createBatch, flushBatch } = await fresh();
+    const big = Buffer.alloc(5 * 1024 * 1024 + 1, 97);
+    const batch = createBatch();
     const result = await persistEvidenceAttachments({
-      sliceId: "2026-09-05-1030",
-      turnId: "t9f2ha",
-      files: [{ name: "big.bin", data: big }],
+      sliceId: "2026-09-05-1030", turnId: "seed00", batch,
+      files: Array.from({ length: 5 }, (_, i) => ({ name: `part-${i}.bin`, data: big })),
     });
-    expect(result.saved).toEqual([]);
-    expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0].reason).toContain("5MB");
-    expect(result.skipped[0].reason).toContain("未保存");
-    const dir = path.join(tmpDir, "memory/records/2026/09/05/1030/attachments");
-    expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
-  });
-
-  it("a case whose attachments would exceed 25MB total refuses the new file, keeps the old", async () => {
-    const { persistEvidenceAttachments } = await fresh();
-    // Seed exactly 25MiB total (5 × exactly-5MiB files — the single-file
-    // check is `>`, so each passes), then even a tiny file trips the
-    // per-case fuse: refused, visible.
-    const chunk = Buffer.alloc(5 * 1024 * 1024);
-    const first = await persistEvidenceAttachments({
-      sliceId: "2026-09-05-1030",
-      turnId: "seed00",
-      files: Array.from({ length: 5 }, (_, i) => ({ name: `part-${i}.bin`, data: chunk })),
-    });
-    expect(first.saved).toHaveLength(5);
-    const second = await persistEvidenceAttachments({
-      sliceId: "2026-09-05-1030",
-      turnId: "seed00",
-      files: [{ name: "one-more.jpg", data: JPEG_BYTES }],
-    });
-    expect(second.saved).toEqual([]);
-    expect(second.skipped[0].reason).toContain("25MB");
-    expect(second.skipped[0].reason).toContain("未保存");
-    // The existing attachments are untouched — no truncation, no overwrite.
-    expect(bytesOnDisk(first.saved[0].path).byteLength).toBe(chunk.byteLength);
+    expect(result.skipped).toEqual([]);
+    expect(result.saved).toHaveLength(5);
+    await flushBatch(batch, "Store complete files");
+    for (const item of result.saved) expect(bytesOnDisk(item.path).equals(big)).toBe(true);
   });
 });
 

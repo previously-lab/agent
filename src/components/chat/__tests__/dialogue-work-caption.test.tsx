@@ -110,6 +110,19 @@ describe("dialogue work caption stream", () => {
     expect(state.cursor).toBe(4);
   });
 
+  it("follows the order of new reasoning, tool calls, and later reasoning without duplicating a finished tool", () => {
+    const events: DialogueWorkStreamEvent[] = [
+      { type: "reasoning", cursor: 1, delta: "First " },
+      { type: "reasoning", cursor: 2, delta: "thought" },
+      { type: "tool", cursor: 3, toolCallId: "x", toolName: "currentTime", state: "running" },
+      { type: "tool", cursor: 4, toolCallId: "x", toolName: "currentTime", state: "completed" },
+      { type: "reasoning", cursor: 5, delta: "Later thought" },
+    ];
+    const view = events.reduce(applyDialogueWorkStreamEvent, emptyDialogueWorkStream);
+    expect(view.log.map(entry => entry.type === "tool" ? view.tools[entry.index].status :
+      view[entry.type].slice(entry.start, entry.end))).toEqual(["First thought", "completed", "Later thought"]);
+  });
+
   it("isolates a previous work/run immediately, including persona and preview retry identity", () => {
     const first = dialogueWorkStreamIdentity(work, "user");
     const changedRun = dialogueWorkStreamIdentity({ ...work, runId: "run-2" }, "user");
@@ -136,6 +149,7 @@ describe("dialogue work caption status and rendering", () => {
     stream.current = {
       ...emptyDialogueWorkStream,
       status: streamStatus,
+      log: [{ type: "tool", index: 0 }, { type: "tool", index: 1 }],
       tools: [
         { id: "finish", name: "finishThinking", status: "running" },
         { id: "offer", name: "offerReply", status: "running" },
@@ -161,6 +175,7 @@ describe("dialogue work caption status and rendering", () => {
     stream.current = {
       ...emptyDialogueWorkStream,
       status: "cancelled",
+      log: Array.from({ length: 6 }, (_, index) => ({ type: "tool" as const, index })),
       tools: [
         { id: "finish", name: "finishThinking", status: "running" },
         { id: "offer", name: "offerReply", status: "completed" },
@@ -230,6 +245,11 @@ describe("dialogue work caption status and rendering", () => {
       ...emptyDialogueWorkStream,
       reasoning: "Complete **reasoning** without truncation",
       text: "Complete *work output* without truncation",
+      log: [
+        { type: "reasoning", start: 0, end: "Complete **reasoning** without truncation".length },
+        { type: "text", start: 0, end: "Complete *work output* without truncation".length },
+        { type: "tool", index: 0 },
+      ],
       tools: [{ id: "time", name: "currentTime", status: "completed" }],
       status: "completed",
     };
@@ -241,7 +261,7 @@ describe("dialogue work caption status and rendering", () => {
     expect(html).toContain("data-dialogue-thought-content");
     expect(html).toContain("Complete **reasoning** without truncation");
     expect(html).toContain("Complete *work output* without truncation");
-    expect(html).toContain("h-48 max-h-48");
+    expect(html).toContain("h-32 max-h-32");
     expect(html).toContain("chat.dialogue.tool_currentTime");
     expect(html).toContain("chat.dialogue.thoughtOutput");
     expect(html).toContain("chat.dialogue.showThoughts");

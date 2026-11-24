@@ -33,11 +33,6 @@ import {
   parseCard,
   projectLivePreviously,
   CARD_NOW_EXPIRY_DAYS,
-  CARD_PROFILE_MAX_CHARS,
-  NOW_ITEM_MAX_CHARS,
-  PAST_ANCHOR_MAX_CHARS,
-  CARD_NOW_MAX,
-  PAST_ANCHORS_MAX,
 } from "../previously-format";
 import {
   createCardSession,
@@ -256,14 +251,14 @@ Direction is the interpretive half. It can help anticipate the user's response i
 
 ## How you write the card — MUTATIONS, never the whole file
 
-You edit an in-memory copy of the card through write tools. Each write is validated: over-limit or malformed writes come back REJECTED with instructions — compress and retry; YOU decide what survives a cap (nothing is ever truncated silently — unless the loop brake force-applies a write you kept resubmitting identically, truncated to the cap). Entries you never touch stay exactly as they are. Removal tools take a \`match\` substring of the entry you mean.
+You edit an in-memory copy of the card through write tools. Preserve the substance and qualifications in every write. Malformed fields and missing evidence receive specific feedback. Entries you never touch stay exactly as they are. Removal tools take a \`match\` substring of the entry you mean.
 
 | Tool | When to use |
 |------|-------------|
 | \`setIdentity(field, value)\` | field ∈ name / address_as / pronouns / alias. Sets or replaces that line. |
-| \`updatePastProfile(text)\` | Rewrite the rolling profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). |
-| \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Established fact of enduring relevance to the user's history, ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
-| \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
+| \`updatePastProfile(text)\` | Rewrite the rolling profile paragraph IN PLACE. |
+| \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Established fact of enduring relevance to the user's history, evidence refs required. |
+| \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, evidence refs required. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
 | \`writeSop(agent, content, evidence, expectedBenefit, applicability)\` | Rewrite a self/ colleague's SOP from its recorded full read (agent ∈ search / thinkdeep). GATED by the allowlist and read basis. Evidence, expected benefit, and applicability must each be nonempty. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
 | \`readAgentTimeline(sliceId)\` | Read agent.md — the reasoning + tool calls. Process context for judging how interactions went. |
@@ -642,7 +637,7 @@ function buildTools(
     }),
     updatePastProfile: tool({
       description:
-        `Rewrite the rolling Past profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). ` +
+        `Rewrite the rolling Past profile paragraph IN PLACE. ` +
         "Keep established background or turning points that help a reader pick up the user's story. A single observation can remain in its case.",
       inputSchema: z.object({
         text: z.string().describe("The full new profile paragraph, in the user's language."),
@@ -651,7 +646,7 @@ function buildTools(
     }),
     addPastAnchor: tool({
       description:
-        `Add a durable Past anchor fact (≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total). ` +
+        `Add a durable Past anchor fact (evidence refs required). ` +
         "An anchor is an established fact of lasting relevance to the user's story.",
       inputSchema: z.object({
         text: z.string(),
@@ -666,7 +661,7 @@ function buildTools(
     }),
     addNow: tool({
       description:
-        `Add a Now hook — a current situation that will fade (≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total). ` +
+        `Add a Now hook — a current situation that will fade (evidence refs required). ` +
         "ONE event per line; the details stay in the slices.",
       inputSchema: z.object({
         text: z.string(),
@@ -854,11 +849,6 @@ function buildTools(
 
 // ─── Runner call ──────────────────────────────────────────────────────────
 
-/** The run does BOTH domains (direction + card/SOPs) — the cap is an
- *  anti-loop fuse, generous by design (there is no wall-clock budget:
- *  v0.34 修订 A deleted execution budgets repo-wide). */
-const MAX_STEPS = 50;
-
 const finishReportSchema = z.object({
   reasoning: z.string(),
   summary: z.string().catch(""),
@@ -894,7 +884,6 @@ async function attemptCall(
     tools: buildTools(input, session, sopWrites, directionSession),
     reportToolName: "finish",
     reportSchema: finishReportSchema,
-    maxSteps: MAX_STEPS,
     role: "summary",
     onLine: input.onLine,
   });
@@ -912,12 +901,11 @@ async function attemptCall(
     };
   }
   if (res.ok) {
-    // Step limit reached without finish (or a plain-text stop / unparseable
-    // finish call): the mutations that already landed are still valid work —
+    // A missing or unparseable finish leaves the accepted mutations available:
     // return the card as it stands, flagged partial, instead of failing.
     if (res.text.trim())
       console.warn("[PreviouslyAgent] Agent produced text instead of finish:", res.text.slice(0, 200));
-    return { reasoning: "step limit reached without finish", summary: "", partial: true };
+    return { reasoning: "the model ended without submitting its report", summary: "", partial: true };
   }
   return { reasoning: res.error ?? "Previously Agent failed", summary: "", failed: true };
 }
@@ -986,8 +974,7 @@ async function attempt(
 /**
  * Run the Previously Agent. Never throws.
  *   - clean finish          → the serialized card;
- *   - step limit w/o finish → the serialized card flagged `partial` (the
- *     loop brake force-lands repeated length violations, so partial work is
+ *   - missing finish → the serialized card flagged `partial` (partial work is
  *     bounded and sane) — the caller writes it back with a partial note;
  *   - hard failure          → ONE retry with a fresh session. Still
  *     failing → empty card + `failed`, so the caller can no-op gracefully.

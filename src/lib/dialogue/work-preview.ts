@@ -125,7 +125,7 @@ function documentSubject(value: unknown): string | undefined {
 function toolSubject(toolName: string, input: unknown): string | undefined {
   const record = asRecord(input);
   if (!record) return undefined;
-  if (toolName === "webSearch") return topicSubject(record.query);
+  if (toolName === "webSearch" || toolName === "webResearch") return topicSubject(record.query);
   if (toolName === "webFetch") return webPageSubject(record.url);
   if (toolName === "recallRead") return documentSubject(record.ref);
   if (toolName === "recallSearch") return topicSubject(record.query);
@@ -166,10 +166,11 @@ function toolResultProjection(toolName: string, rawOutput: unknown): ToolResultP
   }
   const record = asRecord(output);
   if (!record) return {};
-  if (toolName === "webSearch") {
+  if (toolName === "webSearch" || toolName === "webResearch") {
     if (typeof record.error === "string") return { failed: true };
-    if (!Array.isArray(record.sources)) return {};
-    const resultCount = record.sources.length;
+    const sources = record.results ?? record.sources;
+    if (!Array.isArray(sources)) return {};
+    const resultCount = sources.length;
     return { outcome: resultCount > 0 ? "found" : "empty", resultCount };
   }
   if (toolName === "recallScenario") {

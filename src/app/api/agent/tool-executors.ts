@@ -17,7 +17,7 @@ import { type UIMessageChunk } from "@/lib/chat/protocol";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { getWritable } from "workflow";
 import type { DialogueCheckpoint, DialogueOfferContext, DialogueOfferStage, DialogueParentWritable, DialogueSemanticEvent, OfferReplyResult } from "@/lib/dialogue/transport";
-import { CHECKPOINT_TEXT_MAX_CHARS, dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, OFFER_TEXT_MAX_CHARS, parseOfferReplyResult } from "@/lib/dialogue/transport";
+import { dialogueOfferId, dialogueSemanticEventSchema, DIALOGUE_OFFER_RESULT, parseOfferReplyResult } from "@/lib/dialogue/transport";
 import { parseNativeSections } from "@/lib/markdown/native-sections";
 import { WORK_RELATIONS, WORK_RESPONSE_MODES, type WorkRelation, type WorkResponseMode, type WorkUpdateEvent, type WorkUpdateResult, type WorkSnapshot } from "@/lib/dialogue/work-contract";
 import { start } from "workflow/api";
@@ -38,8 +38,9 @@ import {
   listFilesDemo,
 } from "@/lib/demo/demo-fs";
 
-import { searchViaFlash, SEARCH_TIMEOUT_MS, type WebSearchResult } from "@/lib/search/flash-search";
-import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_MAX_BYTES } from "@/lib/search/fetch-utils";
+import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
+import { deepseekWebSearch, deepseekWebFetch } from "@/lib/search/deepseek-web";
+import type { WebFetchInput } from "@/lib/search/web-input";
 import { describeImage } from "@/lib/vision/describe-image";
 import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
@@ -127,6 +128,7 @@ import {
   findMemoryPaths, listMemoryDirectory, recallListInputSchema, recallPathFindInputSchema,
   type DirectoryResult, type RecallListInput, type RecallPathFindInput,
 } from "@/lib/memory/navigation";
+import { readTextPage } from "@/lib/retrieval/text-page";
 import { loadMemoryNavigationPaths } from "@/lib/memory/navigation-inventory";
 import { recallSearchQuerySchema } from "@/lib/memory/search-query";
 import {
@@ -148,17 +150,10 @@ import { buildDateAnchors } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { loadUserConfig } from "@/lib/config/loader";
 import { DEFAULTS } from "@/lib/config/defaults";
-import {
-  splitParagraphs,
-  segmentSearch,
-  textLines,
-  searchResultToString,
-} from "@/lib/retrieval/doc-segments";
 
 import { resolveMainModelFromConfig } from "@/lib/models/resolve";
 import { resolveSubAgentModel } from "@/lib/agents/sub-agent-runner";
 import { FIXED_MODEL, type ModelConfig } from "@/lib/models/registry";
-import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { isTransientError, triageErrorMessage } from "@/lib/chat/tool-triage";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
 import {
@@ -310,7 +305,7 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
         // Dirent traversal skips symlinks. Prune by UTC date prefix before visiting
         // month/day directories; attachments and other slice subdirectories never open.
         if (scope?.category === "records") {
-          return walkPathsLocal(root, Infinity, {
+          return walkPathsLocal(root, {
             maxDepth: 5, requireRealRoot: true,
             descend: path => {
               const parts = path.slice(root.length + 1).split("/");
@@ -323,7 +318,7 @@ function createRecallBackend(ctx: ToolContext): RecallBackend {
             },
           });
         }
-        return walkPathsLocal(root, Infinity, { maxDepth: scope ? 1 : Infinity, requireRealRoot: true });
+        return walkPathsLocal(root, { maxDepth: scope ? 1 : Infinity, requireRealRoot: true });
       }
       const github = ctx.useGithub && !ctx.useDemo ? await getSnapshot() : undefined;
       if (github) {
@@ -475,7 +470,7 @@ export async function recallSearchExecute(
     : undefined;
   const query = recallSearchQuerySchema.safeParse(input.query);
   if (!query.success) {
-    return renderRecallResult({ kind: "unavailable", note: "Expected one to eight keywords of 1–256 characters each." }, {});
+    return renderRecallResult({ kind: "unavailable", note: "Expected a nonempty keyword or a list of nonempty keywords." }, {});
   }
   const keywords = Array.isArray(query.data) ? query.data : [query.data];
   const result = await recallSearch(createRecallBackend(ctx), {
@@ -574,6 +569,8 @@ function observeThinkingRead(result: RecallReadResult, ref: string, ctx: ToolCon
 export async function recallReadExecute(
   input: {
     ref: string;
+    offset?: number;
+    revision?: string;
     part?: "core" | "agent" | "previously";
     range?: RecallReadRange;
     outline?: boolean;
@@ -581,7 +578,7 @@ export async function recallReadExecute(
     /** Deliberate original-record read; not the default recollection path. */
     direct?: boolean;
   },
-  { context: ctx, toolCallId, messages = [] }: ExecuteOpts<ToolContext>,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<string | ConversationRecordReadRedirect | PublicRecordReadResult> {
   "use step";
   const ref = input.ref?.trim();
@@ -597,11 +594,6 @@ export async function recallReadExecute(
   const directRef = directPublicRecordRef(input);
   const recordRedirect = createConversationRecordReadRedirect(ref);
   if (recordRedirect && !directRef) return recordRedirect;
-  if (ctx.thinkingFlow && directRef && !input.range && !input.outline &&
-      hasPendingCaseRead(messages, toolCallId, ctx.readScopeId)) {
-    return { kind: "public_record_v1", status: "deferred", ref: directRef, scopeId: ctx.readScopeId,
-      toolCallId, text: CASE_READ_FIRST };
-  }
   const result = await recallRead(createRecallBackend(ctx), {
     ref: directRef ?? ref,
     ...(directRef ? { publicRecordOnly: true } : {}),
@@ -613,8 +605,46 @@ export async function recallReadExecute(
     ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
   });
 
+  const rendered = renderRecallReadResult(result, directRef ?? ref);
+  const pageSize = 16_000;
+  const offset = input.offset ?? 0;
+  if (result.kind === "content" || result.kind === "outline" || result.kind === "archived") {
+    const page = readTextPage(rendered, input, pageSize);
+    if (!page.ok) return `ERROR: ${page.error}`;
+    if (offset > 0 || page.end < page.total) {
+      const { revision: selectionRevision, end, text: content } = page;
+      const next = end < rendered.length
+        ? `\n\n[More text. Repeat recallRead with the same selection, offset ${end}, revision "${selectionRevision}".]` : "";
+      const text = content + next;
+      if (directRef) {
+        return { kind: "public_record_v1", scopeId: ctx.readScopeId, toolCallId, ref: directRef, text,
+          ...(ctx.thinkingFlow ? { thinkingReceipt: createThinkingReadReceipt(ctx.readScopeId, toolCallId, [{
+            ref: directRef, sourceKind: "original_turn", edition: "original", coverage: "range", asOf: new Date().toISOString(),
+            revision: result.kind === "content" ? result.storageRevision ?? null : null,
+          }]) } : {}) };
+      }
+      let pageText = text;
+      if (result.kind === "content") {
+        const sourceRef = parseCanonicalDocumentRef(result.path.replace(/^memory\//, "").replace(/(?:\/index)?\.md$/, ""));
+        if (sourceRef && ctx.thinkingFlow) {
+          pageText = wrapThinkingRead(createThinkingReadReceipt(ctx.readScopeId, toolCallId, [{
+            ref: sourceRef, sourceKind: "semantic_document", asOf: new Date().toISOString(),
+            coverage: "range", revision: selectionRevision,
+          }]), text);
+        }
+        if (!ctx.dialogueOffer && result.path.startsWith("memory/")) recordDocRead(ctx.sliceId, result.path, extractSliceIds(content));
+        const match = !input.range && !input.outline && /^memory\/([^/]+)\/([^/]+)\/index\.md$/.exec(result.path);
+        if (match && isCaseCategory(match[1]) && result.caseRevision && end > offset) {
+          return createCaseReadEnvelope({ scopeId: ctx.readScopeId, toolCallId, requestedRef: ref,
+            category: match[1], caseName: match[2]!, revision: result.caseRevision, rendered: pageText,
+            page: { revision: selectionRevision, start: offset, end, total: rendered.length } });
+        }
+      }
+      return pageText;
+    }
+  }
   if (directRef) {
-    const text = renderRecallReadResult(result, directRef);
+    const text = rendered;
     return {
       kind: "public_record_v1", scopeId: ctx.readScopeId, toolCallId, ref: directRef, text,
       ...(ctx.thinkingFlow ? { thinkingReceipt: observeThinkingRead(result, directRef, ctx, toolCallId, input, text) } : {}),
@@ -652,38 +682,13 @@ export async function recallReadExecute(
 
 // ─── recallSince — the differential view (v0.11) ──────────────────────────
 
-const CASE_READ_FIRST = "Originals have not been read. Use the case passage returned in this batch. If an original is still needed for this request, ask for that detail separately.";
-
-/** A broad fallback requested alongside the first case read cannot yet take
- * that read into account. Targeted reads and standalone recollection stay available. */
-function hasPendingCaseRead(messages: ModelMessage[], toolCallId: string, scopeId: string) {
-  const batch = messages.at(-1);
-  if (batch?.role !== "assistant" || !Array.isArray(batch.content)) return false;
-  const parts = batch.content;
-  if (!parts.some(p => p.type === "tool-call" && (p.toolName === "recallScenario" || p.toolName === "recallRead") && p.toolCallId === toolCallId)) return false;
-  const hasCaseRead = parts.some(p => {
-    if (p.type !== "tool-call" || p.toolName !== "recallRead" || !p.input || typeof p.input !== "object") return false;
-    const input = p.input as { ref?: unknown; outline?: unknown; part?: unknown; direct?: unknown };
-    const ref = parseCanonicalDocumentRef(input.ref);
-    return !!ref && isCaseCategory(ref.split("/")[0]!) && !input.outline && !input.part && !input.direct;
-  });
-  return hasCaseRead && !collectThinkingReads(messages, scopeId).some(read =>
-    read.sourceKind === "semantic_document" && read.revision &&
-    (read.coverage === "full" || read.coverage === "range"));
-}
-
 /** Question-conditioned recollection, with verified excerpts from original records. */
 export async function recallScenarioExecute(
   input: ScenarioRecallRequest,
   { context: ctx, toolCallId, messages = [], abortSignal }: ExecuteOpts<ToolContext>,
-): Promise<(ScenarioRecallResult & { thinkingReceipt?: ReturnType<typeof createThinkingReadReceipt> }) |
-  { status: "deferred"; answer: string; evidence: []; uncertainty: [] }> {
+): Promise<ScenarioRecallResult & { thinkingReceipt?: ReturnType<typeof createThinkingReadReceipt> }> {
   "use step";
   const request = scenarioRecallRequestSchema.parse(input);
-  if (ctx.thinkingFlow && !request.targets?.length && !request.searchTerms?.length && !request.cursor &&
-      hasPendingCaseRead(messages, toolCallId, ctx.readScopeId)) {
-    return { status: "deferred", evidence: [], uncertainty: [], answer: CASE_READ_FIRST };
-  }
   await emitToolProgress(toolCallId, "recallScenario", "Recollecting the conversation…", "running");
   const refToVerify = ctx.thinkingFlow ? singleRecordForVerification(request) : undefined;
   const priorRecord = refToVerify
@@ -1429,7 +1434,7 @@ function precedingCheckpoints(messages: ModelMessage[] | undefined, workId: stri
       if (message.role === "assistant" && part.type === "tool-call" && ["offerReply", "workCheckpoint"].includes(part.toolName)) {
         const input = part.input as { stage?: unknown; text?: unknown } | null | undefined;
         if ((part.toolName === "workCheckpoint" || input?.stage === "checkpoint") && typeof input?.text === "string") {
-          candidates.set(part.toolCallId, input.text.slice(0, CHECKPOINT_TEXT_MAX_CHARS));
+          candidates.set(part.toolCallId, input.text);
         }
       } else if (message.role === "tool" && part.type === "tool-result" && ["offerReply", "workCheckpoint"].includes(part.toolName)) {
         const text = candidates.get(part.toolCallId);
@@ -1553,10 +1558,7 @@ export async function offerReplyExecute(
   if (!context) return { ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason: "This run has no dialogue offer context." };
   const reject = (reason: string): OfferReplyResult => ({ ok: false, kind: DIALOGUE_OFFER_RESULT, offerId, reason });
   const checkpoint = input.stage === "checkpoint";
-  const limit = checkpoint ? CHECKPOINT_TEXT_MAX_CHARS : OFFER_TEXT_MAX_CHARS;
-  if (!input.text.trim() || input.text.length > limit) {
-    return reject(`text must be nonblank and at most ${limit} characters.`);
-  }
+  if (!input.text.trim()) return reject("text must be nonblank.");
   const priorCheckpoints = precedingCheckpoints(messages, context.workId, context.parentRunId);
   if (checkpoint) {
     if (priorCheckpoints.some((prior) => prior.text.trim() === input.text.trim())) return reject("This checkpoint was already offered.");
@@ -1765,178 +1767,53 @@ export async function startLongTaskExecute(
 
 // ─── Chat-only executors ─────────────────────────────────────────────────
 
-/**
- * webSearch �?delegates to the Flash search adapter (see lib/search/). The
- * calling slice scopes the model session. The search tool needs no
- * repo identity. A missing API key is a deterministic config problem �?
- * returned as data; transient search failures throw and get the step retries.
- */
-export async function webSearchExecute(
-  { query, mode }: { query: string; mode?: "standard" | "scout" },
-  { toolCallId, context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<WebSearchResult | { error: string }> {
-  "use step";
-  // Status subtitle streams for the whole execution; awaited so it is ordered
-  // before the result.
-  await emitToolProgress(toolCallId, "webSearch", "Searching the web…", "running");
-
-  // webSearch is a DEEPSEEK-ONLY infra call (see lib/search/flash-search.ts
-  // @security note). Gate on the key itself, not the generic isAIConfigured():
-  // A Chat-only route is not a native DeepSeek credential either.
-  if (!hasDeepSeekCredential()) {
-    return {
-      error:
-        "Web search requires a DeepSeek API key. Configure DeepSeek BYOK in client settings or DEEPSEEK_API_KEY on the server.",
-    };
+/** A direct search returns the provider's source list to the thinking agent. */
+function webToolError(name: string, error: unknown): string {
+  // The HTTP client has already retried explicit upstream failures. Returning
+  // tool data keeps sibling evidence and lets the model decide what to do next.
+  if (isTransientError(error) || (error instanceof TypeError && /fetch failed/i.test(error.message))) {
+    return `[${name} unavailable] The upstream request failed: ${error instanceof Error ? error.message : String(error)}. You can retry or proceed with other evidence.`;
   }
-
-  // Soft safety net — backstop on top of the runner's own budget inside
-  // searchViaFlash. searchViaFlash errors (transient search failures)
-  // still throw and get step retries — only a timeout returns an error result.
-  //
-  // v0.19 R5 (§C.2): the researcher's SOP (self/search/index.md) is loaded by
-  // the sub-agent runner itself at spawn — full text into the system prompt.
-  let timed: Awaited<ReturnType<typeof withStepTimeout<WebSearchResult>>>;
-  try {
-    timed = await withStepTimeout(
-      () =>
-        searchViaFlash(
-          query,
-          { toolCallId, toolName: "webSearch" },
-          { scout: mode === "scout", sessionId: ctx.sliceId },
-        ),
-      SEARCH_TIMEOUT_MS,
-    );
-  } catch (err) {
-    // Triage: deterministic failures (schema validation, config, domain) become
-    // a model-readable tool result so the workflow does NOT retry them. Only
-    // genuinely transient errors re-throw for the step's auto-retry.
-    if (isTransientError(err)) throw err;
-    console.warn(
-      "[WebSearch] triaged failure:",
-      err instanceof Error ? err.message : err,
-    );
-    return { error: triageErrorMessage(err, "webSearch") };
-  }
-
-  if (!timed.ok || timed.result === undefined) {
-    return {
-      error: timed.ok
-        ? "Web search returned no result"
-        : `Web search timed out after ${timed.elapsedMs}ms`,
-    };
-  }
-
-  // Settle the subtitle on the outcome before the tool result lands, so the
-  // typewriter box ends on "Found N sources" instead of the stale "Searching…".
-  const result = timed.result;
-  await emitToolProgress(
-    toolCallId,
-    "webSearch",
-    `Found ${result.sources.length} source${result.sources.length === 1 ? "" : "s"}`,
-    "done",
-  );
-  return result;
+  return triageErrorMessage(error, name);
 }
 
-// ── webFetch — fetch a specific page's text content ────────────────────
-
-const WEB_FETCH_TIMEOUT_MS = 30_000;
-const WEB_FETCH_MAX_CHARS = 15_000;
-
-/**
- * webFetch — read a specific URL's page text, server-side.
- *
- * The web complement of recallRead: the main agent points at one item (a URL
- * instead of a memory ref) and gets its raw content back for the model to
- * digest. Used when the user pastes a link, or when a webSearch recommendation
- * suggests a page is worth reading. Returns the extracted prose (scripts and
- * styles stripped), truncated to keep context bounded.
- *
- * Optional `range` applies the shared Document Segment Read protocol: keyword
- * search (matches → relevant paragraphs; miss → full text + note) or line
- * ranges (1-indexed, like reading a code file).
- *
- * Security: only http(s) schemes and non-private hostnames are fetchable.
- * The Vercel sandbox is the real boundary; this validation is defense-in-depth.
- */
-export type WebFetchRange = {
-  type: "search" | "lines";
-  keywords?: string[];
-  context?: number;
-  start?: number;
-  end?: number;
-};
-
-export async function webFetchExecute(
-  { url, range }: { url: string; range?: WebFetchRange },
-  _opts: ExecuteOpts<ToolContext>,
-): Promise<string> {
+export async function searchWebSourcesExecute(input: { query: string; count?: number }, { abortSignal }: ExecuteOpts<ToolContext>) {
   "use step";
-  let parsed: URL;
   try {
-    parsed = new URL(url);
-  } catch {
-    return "ERROR: Invalid URL. Pass a full absolute URL, e.g. 'https://example.com/article'.";
+    return await deepseekWebSearch(input, abortSignal);
+  } catch (error) {
+    abortSignal?.throwIfAborted();
+    return { error: webToolError("webSearch", error) };
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "ERROR: Unsupported URL protocol. Only http:// and https:// are allowed.";
-  }
-  if (isPrivateHost(parsed.hostname)) {
-    return "ERROR: Cannot fetch local or private network addresses.";
-  }
+}
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
+/** Keep the durable executor identity for in-flight and pre-upgrade research. */
+export async function webSearchExecute(
+  { query, mode }: { query: string; mode?: "standard" | "scout" },
+  { toolCallId, context: ctx, abortSignal }: ExecuteOpts<ToolContext>,
+): Promise<WebSearchResult | { error: string }> {
+  "use step";
+  if (!hasDeepSeekCredential()) return { error: "Web research requires a DeepSeek API key." };
+  await emitToolProgress(toolCallId, "webResearch", "Researching sources…", "running");
   try {
-    const res = await fetchWithGuard(parsed.toString(), {
-      signal: controller.signal,
+    const result = await searchViaFlash(query, { toolCallId, toolName: "webResearch" }, {
+      scout: mode === "scout", sessionId: ctx.sliceId, abortSignal,
     });
-    if (!res.ok) {
-      return `ERROR: HTTP ${res.status} ${res.statusText}`;
-    }
-    const { text, truncated } = await readBodyCapped(res);
-    let extracted = extractText(text);
-    if (truncated) {
-      // The byte cap fired (see readBodyCapped) — tell the model the page
-      // continues past what it can see, in the same note style as the 15K
-      // character fallback below.
-      extracted += `\n\n(Fetched page truncated at ${Math.round(FETCH_BODY_MAX_BYTES / 1024 / 1024)} MB)`;
-    }
+    await emitToolProgress(toolCallId, "webResearch", `Found ${result.sources.length} sources`, "done");
+    return result;
+  } catch (error) {
+    abortSignal?.throwIfAborted();
+    return { error: webToolError("webResearch", error) };
+  }
+}
 
-    // Document Segment Read protocol — applied before truncation so a matched
-    // subset or line range is returned in full, not capped by the 15K fallback.
-    // A keyword MISS still caps at the same 15K: a miss on a huge page must
-    // not flood the context with the full text.
-    if (range) {
-      if (range.type === "search") {
-        const keywords = range.keywords ?? [];
-        const context = range.context ?? 1;
-        const hits = segmentSearch(splitParagraphs(extracted), keywords, context, context);
-        return searchResultToString(parsed.hostname + parsed.pathname, keywords, hits, extracted, WEB_FETCH_MAX_CHARS);
-      }
-      if (range.type === "lines") {
-        const { content, clamped } = textLines(extracted, range.start ?? 1, range.end ?? 1);
-        if (content === "" && (range.start ?? 1) > (range.end ?? 1)) {
-          return `ERROR: Invalid line range ${range.start}-${range.end} for ${parsed.hostname}.`;
-        }
-        const header = `Lines ${range.start}-${range.end} of ${parsed.hostname}${clamped ? " (clamped)" : ""}:\n\n`;
-        return content === "" ? `${header}(empty range)` : header + content;
-      }
-    }
-
-    if (extracted.length > WEB_FETCH_MAX_CHARS) {
-      return (
-        extracted.slice(0, WEB_FETCH_MAX_CHARS) +
-        `\n\n(Truncated at ${WEB_FETCH_MAX_CHARS} characters)`
-      );
-    }
-    return extracted;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return `ERROR: Could not fetch URL: ${msg}`;
-  } finally {
-    clearTimeout(timer);
+export async function webFetchExecute(input: WebFetchInput, { abortSignal }: ExecuteOpts<ToolContext>): Promise<string> {
+  "use step";
+  try {
+    return await deepseekWebFetch(input, abortSignal);
+  } catch (error) {
+    abortSignal?.throwIfAborted();
+    return `ERROR: ${webToolError("webFetch", error)}`;
   }
 }
 
@@ -2169,57 +2046,6 @@ export async function describeRoomExecute(
   return `${rendered}\n\n${baseNote}\n${generatedAtmosphereNote}`;
 }
 
-/**
- * thinkDeep — a reasoning fragment (think-only sub-agent).
- *
- * Runs ONE bounded reasoning fragment as a single synchronous `streamText`
- * call INSIDE this step, using the user's MAIN model at the requested thinking
- * intensity. The sub-agent is think-only: NO tools, NO search — it reasons over
- * the information the main agent embedded in the question and writes its
- * conclusion. The conclusion + reasoning trail flow back as the tool result,
- * and the WorkflowAgent loop integrates them naturally on the next step.
- *
- * TIME-based truncation, NOT token-based: there is deliberately NO
- * `maxOutputTokens` here. A hard token cap is invisible to the model — it can't
- * pace itself within it, and with thinking enabled the reasoning silently eats
- * the shared budget, leaving an empty/truncated report (the old 3500-token
- * behavior). Instead the step is bounded by wall-clock and the SDK's native
- * timeout hook:
- *
- *   - `streamText({ timeout })` is the PRIMARY hook: the SDK runs
- *     `AbortSignal.timeout()` (available here — this is real Node in a
- *     `"use step"`, unlike the deterministic workflow body) and ABORTS the
- *     stream cleanly at the deadline, surfacing as `AbortError`. The value is
- *     adaptive: `STEP_TOTAL_MS` minus the prologue already elapsed, so the step
- *     returns right around STEP_TOTAL_MS regardless of setup overhead — safely
- *     under the 300s platform wall.
- *   - `withStepTimeout` is the backstop: if the SDK abort somehow doesn't
- *     surface, it still returns a structured result before the wall, so the
- *     step NEVER dies silently.
- *
- * BOTH output channels are captured live via `onChunk`: `text-delta` (the
- * written answer) and `reasoning-delta` (the thinking trail). On timeout the
- * main agent receives the partial answer AND the full reasoning so far — the
- * sub-agent's thinking is never lost, even if it is interrupted mid-thought.
- *
- * Why think-only? A sub-agent with tools re-runs the search the main
- * agent already did, and an unbounded tool-loop + thinking guarantees it
- * exhausts the wall before writing (the v2 empty-report bug). Think-only
- * fragments are single-invocation, bounded by construction, and cannot cascade.
- *
- * Provider options are built inline here — this module must NOT import from
- * ./agent.ts, which pulls `@ai-sdk/workflow` into the step bundle.
- */
-/**
- * Total target for the whole thinkDeep step — the maximum safely usable under
- * the 300s platform wall. The SDK abort + catch + return path needs a few
- * hundred ms, and cold-start (unmeasurable from inside the handler) silently
- * eats into the wall, so we cannot target the full 300s. 295s leaves ~4s of
- * margin on the primary path; the backstop fires 3s later at ~298s with ~2s to
- * return — past that the platform kill would win the race.
- */
-const STEP_TOTAL_MS = 295_000;
-
 export type SelectSkillResult =
   | {
       status: "selected";
@@ -2265,15 +2091,6 @@ export async function selectSkillExecute(
   };
 }
 
-/** Guidance the main agent reads when a reasoning fragment is interrupted. */
-const SUB_AGENT_TIMEOUT_NOTE =
-  "The reasoning fragment was interrupted before finishing. The `answer` holds " +
-  "the partial conclusion and `reasoning` the thinking trail it already produced " +
-  "— work with them (noting the uncertainty). If you need more, gather the " +
-  "missing information yourself (webSearch / recallSearch / recallRead for semantic documents / recallScenario for records), embed it, and dispatch a " +
-  "finer fragment. Do not re-dispatch the same question unchanged — a fragment " +
-  "that timed out will likely time out again.";
-
 /** Structured result a thinkDeep reasoning fragment returns to the main agent. */
 export interface ThinkDeepResult {
   ok: boolean;
@@ -2289,15 +2106,6 @@ export interface ThinkDeepResult {
   note?: string;
 }
 
-/** Detect the SDK `timeout` abort — the SDK's `AbortSignal.timeout()` surfaces as name "AbortError". */
-function isTimeoutAbort(err: unknown): boolean {
-  return (
-    err !== null &&
-    typeof err === "object" &&
-    "name" in err &&
-    (err as { name?: unknown }).name === "AbortError"
-  );
-}
 /**
  * The think-only task assignment, appended AFTER the caller's full system
  * prompt (when available) so sub-agents share the main agent's exact prefix —
@@ -2311,9 +2119,6 @@ tools — every fact you need is already embedded in the question. Do not ask fo
 information; reason with what you are given and state plainly anything you lack.
 
 Writing discipline (critical):
-- A hard deadline will cut you off. Write your conclusion AS YOU GO — every
-  sentence you emit is preserved and returned to the caller. Do not save all
-  writing for the end.
 - Keep it short and decisive. This is one fragment of a larger reasoning, not
   a report — a few paragraphs at most.
 - If you reach a conclusion, state it clearly at the end ("Conclusion: …").
@@ -2357,7 +2162,7 @@ export async function thinkDeepExecute(
   { question }: {
     question: string;
     },
-  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+  { context: ctx, toolCallId, abortSignal }: ExecuteOpts<ToolContext>,
 ): Promise<ThinkDeepFragmentResult> {
   "use step";
 
@@ -2376,10 +2181,6 @@ export async function thinkDeepExecute(
   // back to resolving it only when the context lacks it.
   const modelConfig = ctx.mainModel ?? (await resolveMainModelFromConfig());
 
-  // Step start — the fragment's adaptive SDK timeout is measured from here so
-  // the step returns around STEP_TOTAL_MS no matter how long setup took.
-  const stepStartMs = Date.now();
-
   // Single fragment (index 0 of 1) → streams WITHOUT the [i/N] prefix.
   return runThinkDeepFragment(
     { question },
@@ -2390,7 +2191,7 @@ export async function thinkDeepExecute(
       baseSystemPrompt: ctx.baseSystemPrompt,
       sessionId: ctx.sliceId,
       toolCallId,
-      stepStartMs,
+      abortSignal,
     },
   );
 }
@@ -2410,11 +2211,11 @@ async function runThinkDeepFragment(
     baseSystemPrompt?: string;
     sessionId: string;
     toolCallId: string;
-    stepStartMs: number;
+    abortSignal?: AbortSignal;
   },
 ): Promise<ThinkDeepFragmentResult> {
   const { question } = fragment;
-  const { modelConfig, baseSystemPrompt, toolCallId, stepStartMs } = opts;
+  const { modelConfig, baseSystemPrompt, toolCallId } = opts;
 
   const prefix = total > 1 ? `[${index + 1}/${total}] ` : "";
 
@@ -2451,9 +2252,7 @@ async function runThinkDeepFragment(
     "",
     "# Reasoning fragment",
     "",
-    "Reason through the sub-question below to a clear conclusion. Write your",
-    "conclusion as you go — a hard deadline will cut you off, and every sentence",
-    "you emit is preserved and returned to the caller.",
+    "Reason through the sub-question to a clear conclusion and explain what supports it.",
     "",
     `Sub-question: ${question.trim()}`,
     "",
@@ -2462,15 +2261,6 @@ async function runThinkDeepFragment(
   ]
     .filter(Boolean)
     .join("\n");
-
-  // Adaptive SDK timeout — the PRIMARY hook: `streamText({ timeout })` runs
-  // `AbortSignal.timeout()` (available in real Node) and ABORTS the stream
-  // cleanly at the deadline, surfacing as AbortError. Measured from step start
-  // so every fragment in the batch shares the same wall.
-  const streamTimeoutMs = Math.max(
-    30_000,
-    STEP_TOTAL_MS - (Date.now() - stepStartMs),
-  );
 
   // Accumulated by onChunk — the written answer (text-delta) and the thinking
   // trail (reasoning-delta). Both are returned on completion AND interruption.
@@ -2551,106 +2341,60 @@ async function runThinkDeepFragment(
     emitLine(line, stage);
   };
 
+  const releaseProgress = () => {
+    try { flushProgress(); } finally { progressWriter?.releaseLock(); }
+  };
   try {
-    const result = await withStepTimeout(
-      async () => {
-        try {
-          // streamText (not generateText) so onChunk can capture BOTH channels
-          // progressively — never lost, even mid-thought.
-          const stream = await streamText({
-            role: "think",
-            sessionId: opts.sessionId,
-            system,
-            prompt: userPrompt,
-            thinking: true,
-            // The SDK timeout hook — aborts the stream cleanly at the deadline.
-            timeout: streamTimeoutMs,
-            onChunk({ chunk }) {
-              if (chunk.type === "text-delta") {
-                answer += (chunk.text ?? chunk.delta ?? "");
-                // Stream the live reasoning/answer line to the client.
-                writeProgress();
-              } else if (chunk.type === "reasoning-delta") {
-                reasoning += (chunk.text ?? chunk.delta ?? "");
-                writeProgress();
-              }
-            },
-          });
-          // Provider warnings (unsupported settings, silent downgrades such as
-          // dropped image parts) never throw — log them so a quiet degradation
-          // is visible in the server log. Promise-only in the SDK, so attach
-          // without touching the control flow.
-          void Promise.resolve(stream.warnings).then((w) => {
-            if (w?.length) {
-              console.warn(
-                `[thinkDeep] model=${modelConfig.id} stream warnings:`,
-                w,
-              );
-            }
-          });
-          return await stream.text;
-        } finally {
-          // Push the final progress line, then release the writer so the step's
-          // HTTP request can terminate (an unreleased lock keeps it alive until
-          // timeout).
-          try {
-            flushProgress();
-            progressWriter?.releaseLock();
-          } catch {
-            /* ignore */
-          }
+    const stream = await streamText({
+      role: "think",
+      sessionId: opts.sessionId,
+      system,
+      prompt: userPrompt,
+      thinking: true,
+      abortSignal: opts.abortSignal,
+      onChunk({ chunk }) {
+        if (chunk.type === "text-delta") {
+          answer += (chunk.text ?? chunk.delta ?? "");
+          // Stream the live reasoning/answer line to the client.
+          writeProgress();
+        } else if (chunk.type === "reasoning-delta") {
+          reasoning += (chunk.text ?? chunk.delta ?? "");
+          writeProgress();
         }
       },
-      // Backstop (fires ~3s after the SDK abort): if the abort somehow doesn't
-      // surface, withStepTimeout still returns a structured result before the
-      // wall — the step never dies silently. This must stay strictly under 300s
-      // (plus return overhead) or the platform kill would beat it.
-      streamTimeoutMs + 3_000,
-      () => answer || undefined,
-    );
-
-    if (!result.ok) {
-      // Backstop fired (the SDK timeout didn't surface) — same structured return.
-      return {
-        question,
-        ok: false,
-        status: "timeout",
-        error: `Reasoning fragment did not finish within ${Math.round(result.elapsedMs / 1000)}s and was interrupted.`,
-        answer,
-        reasoning,
-        note: SUB_AGENT_TIMEOUT_NOTE,
-      };
-    }
-
+    });
+    // Provider warnings (unsupported settings, silent downgrades such as
+    // dropped image parts) never throw — log them so a quiet degradation
+    // is visible in the server log. Promise-only in the SDK, so attach
+    // without touching the control flow.
+    void Promise.resolve(stream.warnings).then((w) => {
+      if (w?.length) {
+        console.warn(
+          `[thinkDeep] model=${modelConfig.id} stream warnings:`,
+          w,
+        );
+      }
+    });
+    const finalAnswer = await stream.text;
     return {
       question,
       ok: true,
       status: "completed",
-      answer: result.result ?? "",
+      answer: finalAnswer,
       reasoning,
     };
   } catch (err) {
-    if (isTimeoutAbort(err)) {
-      // The SDK timeout hook aborted the stream — return the partial conclusion
-      // and the thinking trail.
-      return {
-        question,
-        ok: false,
-        status: "timeout",
-        error: `Reasoning fragment did not finish within ${Math.round(streamTimeoutMs / 1000)}s and was interrupted.`,
-        answer,
-        reasoning,
-        note: SUB_AGENT_TIMEOUT_NOTE,
-      };
-    }
+    opts.abortSignal?.throwIfAborted();
     return {
       question,
       ok: false,
       status: "error",
       error: err instanceof Error ? err.message : "Sub-agent failed",
-      answer: "",
-      reasoning: "",
+      answer,
+      reasoning,
     };
+  } finally {
+    releaseProgress();
   }
 }
 

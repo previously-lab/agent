@@ -1,48 +1,5 @@
-/**
- * Card session — the mutation layer behind the Previously Agent's write tools.
- *
- * The agent never writes the whole card. It holds an in-memory CardDocument
- * (parsed from the current card) and applies FINE-GRAINED mutations through
- * these functions, each wired to a tool. Validation lives HERE, not in a
- * post-hoc pass: an over-limit / malformed write is REJECTED with feedback
- * ("2630 chars, limit 2400 — compress and retry"), so the agent itself decides
- * what survives the cap. Untouched parts of the card are preserved by
- * construction — a mutation session cannot silently drop a line it never
- * looked at.
- *
- * Tool-result convention:
- *   success   → "OK — <what was applied> (<resulting state>)"
- *   rejection → "REJECTED: <why> — <how to fix it>"
- * The rejection text is the model's retry instruction; keep it specific.
- *
- * LOOP BRAKE: the original Previously Agent failure mode was resubmitting the
- * SAME rejected write verbatim until the step cap killed the pass. The session
- * tracks rejections per (tool + whitespace-normalized args):
- *   2nd identical rejection → the rejection text is prefixed with an escalation
- *     that states the exact arithmetic (length violations) so the model cannot
- *     "compress" by two chars and resubmit;
- *   3rd identical rejection → a length-class violation is FORCE-APPLIED,
- *     truncated to the cap (log marked `forced:`); any other class (missing
- *     refs, duplicates, no-match, …) cannot be fixed mechanically, so the write
- *     is SKIPPED with an instruction to finish immediately with the card as-is.
- *
- * Pure in-memory — no I/O, no LLM calls. The owning workflow step creates the
- * session, hands these functions to the agent's tools, and serializes at the
- * end.
- */
-import {
-  parseCard,
-  serializeCard,
-  CARD_PROFILE_MAX_CHARS,
-  NOW_ITEM_MAX_CHARS,
-  SELF_MODEL_LINE_MAX_CHARS,
-  PAST_ANCHOR_MAX_CHARS,
-  CARD_NOW_MAX,
-  PAST_ANCHORS_MAX,
-  type CardDocument,
-} from "./previously-format";
-
-// ─── Session ─────────────────────────────────────────────────────────────
+/** Fine-grained mutations preserve the complete text and require valid evidence references. */
+import { parseCard, serializeCard, type CardDocument } from "./previously-format";
 
 export interface CardSession {
   /** The working document — mutated in place by the session functions. */
@@ -51,8 +8,6 @@ export interface CardSession {
   log: string[];
   /** The user's LOCAL calendar date (YYYY-MM-DD) — the default `since` for new Now items. */
   today: string;
-  /** Loop brake: rejections per (tool + normalized args) — see the file header. */
-  rejections: Map<string, number>;
 }
 
 /**
@@ -80,7 +35,7 @@ export function createCardSession(
     };
   doc.sliceId = sliceId;
   doc.updated = nowIso;
-  return { doc, log: [], today, rejections: new Map() };
+  return { doc, log: [], today };
 }
 
 /** Serialize the session's working document — the final card text. */
@@ -124,12 +79,10 @@ function normalizeRef(ref: string): string | null {
   return m ? `${m[1]}/${m[2]}/${m[3]}/${m[4]}` : null;
 }
 
-function checkLength(field: string, text: string, max: number): string | null {
+function checkField(field: string, text: string): string | null {
   if (!text.trim()) return `REJECTED: ${field} is empty.`;
   if (text.includes("\n"))
     return `REJECTED: ${field} must be a single line (${text.length} chars incl. a line break).`;
-  if (text.length > max)
-    return `REJECTED: ${field} is ${text.length} chars — the limit is ${max}. Compress it and retry; YOU decide what to keep, nothing is truncated for you.`;
   return null;
 }
 
@@ -177,88 +130,6 @@ function noMatch(section: string, match: string, items: Array<{ text: string }>)
   return `REJECTED: no ${section} entry contains "${match}". Current entries: ${previewList(items)}. Retry with a substring of the entry you mean.`;
 }
 
-// ─── Loop brake ───────────────────────────────────────────────────────────
-// (See the file header for the rationale.) Rejections are tracked per
-// (tool + whitespace-normalized args) so the model cannot escape the brake by
-// tweaking a space or the casing.
-
-/** Whitespace/case-tolerant key for one tool invocation. */
-function brakeKey(tool: string, ...args: unknown[]): string {
-  const norm = (v: unknown): string =>
-    typeof v === "string"
-      ? v.trim().replace(/\s+/g, " ").toLowerCase()
-      : (JSON.stringify(v) ?? "");
-  return `${tool}:${args.map(norm).join("|")}`;
-}
-
-interface Brake {
-  /** The rejection text to return (escalated on repeats) — unless `force`. */
-  message: string;
-  /** 3rd identical LENGTH-class rejection: the caller truncates and applies. */
-  force: boolean;
-}
-
-function trackRejection(
-  session: CardSession,
-  key: string,
-  base: string,
-  length?: { actual: number; limit: number },
-): Brake {
-  const count = (session.rejections.get(key) ?? 0) + 1;
-  session.rejections.set(key, count);
-  if (count < 2) return { message: base, force: false };
-  if (count >= 3 && length) return { message: "", force: true };
-  const prefix =
-    count >= 3
-      ? `LOOP BRAKE (attempt ${count}): this exact write keeps failing and cannot be fixed mechanically — it is now SKIPPED. Do NOT retry it; call finish NOW with the card as it stands.\n`
-      : length
-        ? `LOOP BRAKE (attempt ${count}): you resubmitted nearly identical content and it was rejected again. The arithmetic is not negotiable — ${length.actual} chars against a ${length.limit} limit means you must DELETE at least ${length.actual - length.limit} chars before resubmitting. Rewrite, don't resubmit.\n`
-        : `LOOP BRAKE (attempt ${count}): you resubmitted nearly identical content and it was rejected again. Change the CONTENT of your next attempt — a whitespace tweak does not count.\n`;
-  return { message: prefix + base, force: false };
-}
-
-/**
- * Length validation wired into the loop brake. Returns:
- *   null            → length OK, proceed;
- *   { reject }      → still rejected — return this text (escalated on repeats);
- *   { forcedText }  → 3rd identical over-limit attempt: apply this truncation.
- * Only the over-limit case is mechanically fixable; empty / multi-line writes
- * take the non-length escalation path.
- */
-function brakeLength(
-  session: CardSession,
-  key: string,
-  field: string,
-  text: string,
-  max: number,
-  emptyOverride?: string,
-): { reject: string } | { forcedText: string } | null {
-  const err = checkLength(field, text, max);
-  if (!err) return null;
-  const base =
-    emptyOverride && err === `REJECTED: ${field} is empty.` ? emptyOverride : err;
-  const overLimit = text.trim().length > 0 && !text.includes("\n") && text.length > max;
-  const brake = trackRejection(
-    session,
-    key,
-    base,
-    overLimit ? { actual: text.length, limit: max } : undefined,
-  );
-  return brake.force ? { forcedText: text.trim().slice(0, max) } : { reject: brake.message };
-}
-
-/** Non-length rejection path of the brake — returns the (possibly escalated) text. */
-function brakeReject(session: CardSession, key: string, base: string): string {
-  return trackRejection(session, key, base).message;
-}
-
-/** Result text for a force-applied write. */
-function forcedOk(what: string, limit: number): string {
-  return `OK — FORCED: ${what} was truncated to the ${limit}-char limit and applied after repeated identical rejections. Call finish when your remaining writes are done.`;
-}
-
-// ─── Identity ─────────────────────────────────────────────────────────────
-
 const IDENTITY_LABELS = {
   name: "Name",
   address_as: "Address them as",
@@ -267,23 +138,15 @@ const IDENTITY_LABELS = {
 } as const;
 
 export type IdentityField = keyof typeof IDENTITY_LABELS;
-const IDENTITY_MAX_LINES = 8;
 
 export function sessionSetIdentity(
   session: CardSession,
   field: IdentityField,
   value: string,
 ): string {
-  const key = brakeKey("setIdentity", field, value);
-  const len = brakeLength(session, key, `Identity ${field}`, value, SELF_MODEL_LINE_MAX_CHARS);
-  let effective = value.trim();
-  let forced = false;
-  if (len) {
-    if ("forcedText" in len) {
-      effective = len.forcedText;
-      forced = true;
-    } else return len.reject;
-  }
+  const error = checkField("Identity", value);
+  if (error) return error;
+  const effective = value.trim();
   const label = IDENTITY_LABELS[field];
   const line = `${label}: ${effective}`;
   const idx = session.doc.identity.findIndex((l) =>
@@ -291,39 +154,22 @@ export function sessionSetIdentity(
   );
   if (idx >= 0) {
     session.doc.identity[idx] = line;
-    session.log.push(`${forced ? "forced: " : ""}setIdentity: ${label} updated`);
-    return forced ? forcedOk(label, SELF_MODEL_LINE_MAX_CHARS) : `OK — ${label} updated in place.`;
+    session.log.push(`setIdentity: ${label} updated`);
+    return `OK — ${label} updated in place.`;
   }
-  if (session.doc.identity.length >= IDENTITY_MAX_LINES)
-    return brakeReject(session, key, `REJECTED: Identity head is full (${IDENTITY_MAX_LINES} lines). Replace an existing field instead of adding.`);
   session.doc.identity.push(line);
-  session.log.push(`${forced ? "forced: " : ""}setIdentity: ${label} added`);
-  return forced
-    ? forcedOk(label, SELF_MODEL_LINE_MAX_CHARS)
-    : `OK — ${label} added (${session.doc.identity.length}/${IDENTITY_MAX_LINES} Identity lines).`;
+  session.log.push(`setIdentity: ${label} added`);
+  return `OK — ${label} added.`;
 }
 
 // ─── Past ─────────────────────────────────────────────────────────────────
 
 export function sessionUpdatePastProfile(session: CardSession, text: string): string {
-  const key = brakeKey("updatePastProfile", text);
-  const len = brakeLength(
-    session,
-    key,
-    "Past profile",
-    text,
-    CARD_PROFILE_MAX_CHARS,
-    "REJECTED: the Past profile cannot be emptied — rewrite it in place with the new paragraph.",
-  );
-  if (len && !("forcedText" in len)) return len.reject;
-  if (len && "forcedText" in len) {
-    session.doc.past.profile = len.forcedText;
-    session.log.push(`forced: updatePastProfile truncated to ${CARD_PROFILE_MAX_CHARS} chars`);
-    return forcedOk("Past profile", CARD_PROFILE_MAX_CHARS);
-  }
+  const error = checkField("Past profile", text);
+  if (error) return error;
   session.doc.past.profile = text.trim();
   session.log.push("updatePastProfile: profile rewritten");
-  return `OK — Past profile updated (${text.trim().length}/${CARD_PROFILE_MAX_CHARS} chars).`;
+  return `OK — Past profile updated (${text.trim().length} chars).`;
 }
 
 export function sessionAddPastAnchor(
@@ -331,33 +177,20 @@ export function sessionAddPastAnchor(
   text: string,
   refs: string[],
 ): string {
-  const key = brakeKey("addPastAnchor", text, refs);
-  let effective = text.trim();
-  let forced = false;
-  const len = brakeLength(session, key, "Past anchor", text, PAST_ANCHOR_MAX_CHARS);
-  if (len) {
-    if ("forcedText" in len) {
-      effective = len.forcedText;
-      forced = true;
-    } else return len.reject;
-  }
-  const err =
+  const effective = text.trim();
+  const err = checkField("Past anchor", text) ??
     checkRefs(refs) ??
     checkDup(session.doc.past.anchors.map((a) => a.text), effective, "Past anchor");
-  if (err) return brakeReject(session, key, err);
-  if (session.doc.past.anchors.length >= PAST_ANCHORS_MAX)
-    return brakeReject(session, key, `REJECTED: Past anchors are full (${PAST_ANCHORS_MAX}). Remove a stale anchor first, or fold the fact into the profile paragraph instead. Admission test: "almost certainly still true in 3 years?"`);
+  if (err) return err;
   session.doc.past.anchors.push({ text: effective, refs });
-  session.log.push(`${forced ? "forced: " : ""}addPastAnchor: ${effective.slice(0, 50)}`);
-  return forced
-    ? forcedOk("Past anchor", PAST_ANCHOR_MAX_CHARS)
-    : `OK — anchor added (${session.doc.past.anchors.length}/${PAST_ANCHORS_MAX}).`;
+  session.log.push(`addPastAnchor: ${effective.slice(0, 50)}`);
+  return `OK — anchor added (${session.doc.past.anchors.length}).`;
 }
 
 export function sessionRemovePastAnchor(session: CardSession, match: string): string {
   const hit = findMatch(session.doc.past.anchors, match);
   if (!hit)
-    return brakeReject(session, brakeKey("removePastAnchor", match), noMatch("Past anchor", match, session.doc.past.anchors));
+    return noMatch("Past anchor", match, session.doc.past.anchors);
   session.doc.past.anchors = session.doc.past.anchors.filter((a) => a !== hit);
   session.log.push(`removePastAnchor: ${hit.text.slice(0, 50)}`);
   return `OK — anchor removed: "${hit.text.slice(0, 60)}".`;
@@ -371,36 +204,23 @@ export function sessionAddNow(
   refs: string[],
   since?: string,
 ): string {
-  const key = brakeKey("addNow", text, refs, since ?? "");
-  let effective = text.trim();
-  let forced = false;
-  const len = brakeLength(session, key, "Now item", text, NOW_ITEM_MAX_CHARS);
-  if (len) {
-    if ("forcedText" in len) {
-      effective = len.forcedText;
-      forced = true;
-    } else return len.reject;
-  }
-  const err =
+  const effective = text.trim();
+  const err = checkField("Now item", text) ??
     checkRefs(refs) ??
     checkDup(session.doc.now.map((r) => r.text), effective, "Now");
-  if (err) return brakeReject(session, key, err);
+  if (err) return err;
   const date = since ?? session.today;
   if (!DATE_RE.test(date))
-    return brakeReject(session, key, `REJECTED: since must be YYYY-MM-DD (got "${date}") — use the user's local date given in the prompt.`);
-  if (session.doc.now.length >= CARD_NOW_MAX)
-    return brakeReject(session, key, `REJECTED: Now is full (${CARD_NOW_MAX}). Remove a stale item or promote one to Past first — one event per line, newest first.`);
+    return `REJECTED: since must be YYYY-MM-DD (got "${date}") — use the user's local date given in the prompt.`;
   session.doc.now.unshift({ text: effective, refs, since: date });
-  session.log.push(`${forced ? "forced: " : ""}addNow: ${effective.slice(0, 50)}`);
-  return forced
-    ? forcedOk("Now item", NOW_ITEM_MAX_CHARS)
-    : `OK — Now item added (${session.doc.now.length}/${CARD_NOW_MAX}), since: ${date}.`;
+  session.log.push(`addNow: ${effective.slice(0, 50)}`);
+  return `OK — Now item added (${session.doc.now.length}), since: ${date}.`;
 }
 
 export function sessionRemoveNow(session: CardSession, match: string): string {
   const hit = findMatch(session.doc.now, match);
   if (!hit)
-    return brakeReject(session, brakeKey("removeNow", match), noMatch("Now", match, session.doc.now));
+    return noMatch("Now", match, session.doc.now);
   session.doc.now = session.doc.now.filter((r) => r !== hit);
   session.log.push(`removeNow: ${hit.text.slice(0, 50)}`);
   return `OK — Now item removed: "${hit.text.slice(0, 60)}".`;
@@ -412,15 +232,8 @@ export function sessionRemoveNow(session: CardSession, match: string): string {
  * removeNow.
  */
 export function sessionPromoteNowToPast(session: CardSession, match: string): string {
-  const key = brakeKey("promoteNowToPast", match);
   const hit = findMatch(session.doc.now, match);
-  if (!hit) return brakeReject(session, key, noMatch("Now", match, session.doc.now));
-  if (session.doc.past.anchors.length >= PAST_ANCHORS_MAX)
-    return brakeReject(session, key, `REJECTED: Past anchors are full (${PAST_ANCHORS_MAX}) — remove a stale anchor first, or fold the substance into the profile paragraph with updatePastProfile + removeNow.`);
-  // No length check: this MOVES text already on the card — rejecting it for a
-  // limit the agent didn't author (legacy over-length items) traps the pass in
-  // a rejection loop it cannot escape. Folding via updatePastProfile remains
-  // the path for compressing the substance.
+  if (!hit) return noMatch("Now", match, session.doc.now);
   session.doc.now = session.doc.now.filter((r) => r !== hit);
   session.doc.past.anchors.push({ text: hit.text, refs: hit.refs });
   session.log.push(`promoteNowToPast: ${hit.text.slice(0, 50)}`);

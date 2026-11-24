@@ -10,6 +10,7 @@ import {
   parseSubmittedUserMessage,
   type DialogueAcceptedV2,
 } from "./dialogue-parent-stream";
+import { useNativeSourceScope } from "./native-source-scope";
 import { chatRequestMessages, mergeDialogueHistory } from "./dialogue-stream-rows";
 
 type DialogueMode = "legacy" | "dialogue";
@@ -29,12 +30,15 @@ export class DialogueDisabled extends Error {}
 /** Capability and saved records live here; live conversation state does not.
  * Inner binds useDurableChat's get/set so every writer shares one history. */
 export function useDialogueManuscript(persona: string) {
+  const source = useNativeSourceScope();
   const [mode, setMode] = useState<DialogueMode>("dialogue");
   const [expression, setExpression] = useState<DialoguePage["expression"]>("idle");
   const opened = useRef(true);
   const [historyWindow, setHistoryWindow] = useState<ConversationWindow | null>(null);
   const [historyReady, setHistoryReady] = useState(false);
   const [historyFailed, setHistoryFailed] = useState(false);
+  const [historyAttempt, setHistoryAttempt] = useState(0);
+  const retryHistory = useCallback(() => setHistoryAttempt(attempt => attempt + 1), []);
   const [newPublications, setNewPublications] = useState(0);
   const [submission, setSubmission] = useState<DialogueSubmission>({ phase: "idle" });
   const [historyBound, setHistoryBound] = useState(false);
@@ -53,7 +57,7 @@ export function useDialogueManuscript(persona: string) {
     const scope = new AbortController();
     lifetime.current = scope;
     const parent = new DialogueParentController({
-      persona,
+      persona, source,
       signal: scope.signal,
       getMessages: () => getMessages.current(),
       setMessages: update => setMessages.current(update),
@@ -64,10 +68,23 @@ export function useDialogueManuscript(persona: string) {
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
 
+    return () => {
+      scope.abort();
+      lifetime.current = null;
+      controller.current = null;
+      window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", resume);
+    };
+  }, [persona, source]);
+
+  useEffect(() => {
+    const scope = new AbortController();
+    setHistoryFailed(false);
+    setHistoryReady(false);
     const loadWindow = async () => {
       try {
         const response = await fetch(`/api/chat/dialogue?capabilities=1&persona=${encodeURIComponent(persona)}`, {
-          credentials: "same-origin", signal: AbortSignal.any([scope.signal, AbortSignal.timeout(5_000)]),
+          credentials: "same-origin", signal: scope.signal,
         });
         if (response.status === 409 && codeOf(await response.json()) === "dialogue_disabled") {
           if (!scope.signal.aborted) {
@@ -87,14 +104,8 @@ export function useDialogueManuscript(persona: string) {
       if (!scope.signal.aborted) setHistoryReady(true);
     });
 
-    return () => {
-      scope.abort();
-      lifetime.current = null;
-      controller.current = null;
-      window.removeEventListener("online", resume);
-      document.removeEventListener("visibilitychange", resume);
-    };
-  }, [persona]);
+    return () => scope.abort();
+  }, [persona, historyAttempt]);
 
   useEffect(() => {
     if (!historyReady || !historyBound || !controller.current) return;
@@ -156,5 +167,5 @@ export function useDialogueManuscript(persona: string) {
   const resume = useCallback(() => controller.current?.resume(), []);
 
   return { mode, opened: opened.current, expression, submission, submit, stop, resume, newPublications,
-    historyWindow, historyReady, historyFailed, bindHistory };
+    historyWindow, historyReady, historyFailed, retryHistory, bindHistory };
 }
