@@ -508,6 +508,13 @@ export function appendTail(doc: CaseDoc, line: { date: string; text: string }): 
 
 export const CASE_CURRENT_FILE_NAME = "_current.md";
 const CASE_CURRENT_HISTORY_MARKER = "—— 认识历史 ——";
+
+/** These lines separate the case's main prose from stored supplements or earlier entries. */
+export function hasCaseHistoryBoundary(body: string): boolean {
+  return body.split(/\r?\n/).some(line => TAIL_MARKER.test(line) ||
+    LEGACY_ENTRY_HEADER.test(line) || line.trim() === CASE_CURRENT_HISTORY_MARKER);
+}
+
 export interface CaseCurrentPieceBasis {
   path: string;
   /** Present only when the piece's exact bytes were actually read. */

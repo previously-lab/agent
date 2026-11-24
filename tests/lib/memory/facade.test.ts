@@ -549,7 +549,34 @@ describe("recallSearch", () => {
     const raw = "---\nopened: 2026-11-08\n---\n\n" + body;
     const result = await recallSearch(makeBackend({ "memory/things/Beacon/index.md": raw }),
       { query: "beacon", includeSemanticPassages: true });
-    expect(result).toMatchObject({ passages: [{ excerpt: body, revision: caseStorageRevision(raw) }] });
+    expect(result).toMatchObject({ passages: [{ excerpt: body, completeEditionBody: true, revision: caseStorageRevision(raw) }] });
+  });
+
+  it.each([
+    "needle\n<!-- removed -->\nvisible again",
+    "needle\n~~~js\nexample()\n~~~",
+    "needle\n    indentedCode()",
+    "needle\n<details><summary>Earlier editions</summary>Historical notes.</details>",
+    "needle\n—— 认识历史 ——\nAn earlier understanding.",
+    "needle\n  —— 认识历史 ——\nAn earlier understanding.",
+    "needle\n—— 尾部 ——\n2026-10-01：An appended note.",
+    "needle\n## 2026-10-01—旧判断\nA preserved legacy entry.",
+    "needle " + "x".repeat(834),
+  ])("keeps clipped, interrupted or mixed-content passages labeled as excerpts", async raw => {
+    const result = await recallSearch(makeBackend({ "memory/things/Beacon/index.md": raw }),
+      { query: "needle", includeSemanticPassages: true });
+    if (result.kind !== "entries" || !result.passages?.length) throw new Error("Expected a verified passage");
+    expect(result.passages[0].excerpt).toContain("needle");
+    expect(result.passages[0]).not.toHaveProperty("completeEditionBody");
+  });
+
+  it("scopes completeness to the returned edition even when the case has a newer understanding and a separate piece", async () => {
+    const result = await recallSearch(makeBackend({
+      "memory/things/Beacon/index.md": "Needle measurement.",
+      "memory/things/Beacon/_current.md": "New conclusion.\n—— 认识历史 ——\nHidden conclusion.",
+      "memory/things/Beacon/2026-11-01-Measurement.md": "Separate observation.",
+    }), { query: "needle", includeSemanticPassages: true });
+    expect(result).toMatchObject({ passages: [{ edition: "original", completeEditionBody: true, excerpt: "Needle measurement." }] });
   });
 
   it("keeps record, private, hidden, and current-view hits out of verified body passages", async () => {

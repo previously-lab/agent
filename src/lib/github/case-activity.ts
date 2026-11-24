@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cachedFetch, CACHE_TTLS } from "@/lib/cache/data-cache";
+import { currentGitHubReadDeadline } from "@/lib/github/client";
 import { readStoredCaseActivity, type CaseActivitySource } from "@/lib/memory/case-activity";
 import { getRepoTreeEntry, readTextFromCompleteTree, type RepoTree } from "@/lib/tools/readFile";
 
@@ -12,21 +13,32 @@ class IncompleteTable extends Error {
   constructor(readonly table: DateTable) { super("Incomplete case activity dates"); }
 }
 
+const pendingTables = new Map<string, Promise<DateTable>>();
+
 /** A failed header read may degrade this search's order, never subsequent searches. */
 async function cachedTable(key: string[], build: () => Promise<DateTable>): Promise<DateTable> {
+  // Distinct searches can build the same immutable category or group on a cold
+  // instance. Share only in-flight work for this owner, repo, object and budget.
+  const flightKey = JSON.stringify([key, currentGitHubReadDeadline()]);
+  const existing = pendingTables.get(flightKey);
+  if (existing) return existing;
   // Next bypasses cache hits for unstable_cache calls nested inside a miss.
   // Run the immutable dependencies in the caller's original read context, so
   // an updated category can still reuse cached groups and warm Git blobs.
   const loadDependencies = AsyncLocalStorage.bind(build);
-  try {
-    return await cachedFetch(key, CACHE_TTLS.BLOB_SECONDS, [], async () => {
-      const table = await loadDependencies();
-      if (!table.complete) throw new IncompleteTable(table);
-      return table;
-    });
-  } catch (error) {
+  const pending = cachedFetch(key, CACHE_TTLS.BLOB_SECONDS, [], async () => {
+    const table = await loadDependencies();
+    if (!table.complete) throw new IncompleteTable(table);
+    return table;
+  }).catch((error: unknown) => {
     if (error instanceof IncompleteTable) return error.table;
     throw error;
+  });
+  pendingTables.set(flightKey, pending);
+  try {
+    return await pending;
+  } finally {
+    pendingTables.delete(flightKey);
   }
 }
 

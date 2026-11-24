@@ -113,7 +113,8 @@ it("recovers a partial header read on the same SHA and never caches truncated tr
   const nodes = buildTreeIndex([...docs.keys()]).cases;
   const load = () => ctx.run(() => gitHubCaseActivityDates(tree, nodes, "retry", "owner"));
   fixture.failing = current;
-  expect((await load())?.get(path)).toBe("2026-09-01");
+  expect((await Promise.all([load(), load()])).map(table => table?.get(path))).toEqual(["2026-09-01", "2026-09-01"]);
+  expect(fixture.reads).toEqual([path, current]);
   await ctx.run(() => ctx.flush());
   fixture.failing = "";
   expect((await load())?.get(path)).toBe("2026-10-25");
@@ -122,6 +123,33 @@ it("recovers a partial header read on the same SHA and never caches truncated tr
   expect((await load())?.get(path)).toBe("2026-10-25");
   expect(await gitHubCaseActivityDates({ ...tree, truncated: true }, nodes, "retry", "owner")).toBeUndefined();
   expect(fixture.reads).toHaveLength(0);
+});
+
+it("shares the same cold activity catalogue across simultaneous distinct search queries", async () => {
+  const docs = new Map(Array.from({ length: 12 }, (_, i) => [
+    `memory/events/cold-case-${i}/index.md`,
+    `---\nopened: '2026-08-01'\n---\n${i % 2 ? "amber" : "cobalt"} ${i}`,
+  ]));
+  const { base, indexed } = snapshot(docs);
+  const searchBoth = (backend: RecallBackend) => Promise.all(["amber", "cobalt"].map(query => recallSearch(backend, { query })));
+  const expected = await searchBoth(base);
+  expect(await ctx.run(() => searchBoth(indexed))).toEqual(expected);
+  expect(fixture.reads.toSorted()).toEqual([...docs.keys()].sort());
+  expect(fixture.peak).toBeLessThanOrEqual(8);
+});
+
+it("keeps simultaneous date builds separate across repositories and read deadlines", async () => {
+  const path = "memory/events/isolated/index.md";
+  const { tree } = snapshot(new Map([[path, "---\nopened: '2026-07-09'\n---\nIndependent domains."]]));
+  const nodes = buildTreeIndex([path]).cases;
+  const { withGitHubReadBudget } = await import("@/lib/github/client");
+  const load = (owner: string, repo: string) => gitHubCaseActivityDates(tree, nodes, repo, owner);
+  const tables = await ctx.run(() => withGitHubReadBudget(() => Promise.all([
+    load("owner", "isolate"), withGitHubReadBudget(() => load("owner", "isolate"), 5_000),
+    load("other", "isolate"), load("owner", "sibling"),
+  ]), 20_000));
+  expect(tables.map(table => table?.get(path))).toEqual(Array(4).fill("2026-07-09"));
+  expect(fixture.reads).toEqual(Array(4).fill(path));
 });
 
 it("builds a first-time catalogue from already cached immutable blobs", async () => {

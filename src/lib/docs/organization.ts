@@ -32,7 +32,7 @@ export function casePieceCatalog(input: {
 export function renderCasePieceCatalog(entries: CasePieceCatalogEntry[] | null): string {
   if (entries === null) return "CASE PIECES — inventory unavailable; do not infer that no pieces exist.";
   const heading = "CASE PIECES — titles are reading pointers, not evidence or read receipts. Read relevant unread pieces before reusing their content or adding another.";
-  if (entries.length === 0) return `${heading}\n(no dated pieces listed)`;
+  if (entries.length === 0) return "CASE PIECES — no dated pieces listed.";
   return `${heading}\n${entries.map((entry) =>
     `- ${entry.ref} — ${entry.title} (${entry.date}; ${entry.read ? "full read in this run" : "UNREAD in this run"})`,
   ).join("\n")}`;

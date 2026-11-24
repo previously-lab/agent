@@ -4,6 +4,9 @@ import type { ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
 import type { DialogueInput } from "@/lib/chat/dialogue-contract";
 import type { ImageReservation } from "@/lib/tools/staged-images";
 import { withVerifiedImages } from "@/lib/tools/chat-image-input";
+import { messageImageAttachments } from "@/lib/chat/image-attachment-message";
+import { restoreDialogueImages } from "@/lib/dialogue/regeneration-images";
+import { ImageAttachmentError } from "@/lib/tools/image-validation";
 import {
   dialogueResponseError,
   getDialogueStore,
@@ -25,8 +28,36 @@ export interface AcceptDialogueArgs extends StartTurnArgs {
   regenerate: boolean;
   /** Original input id on a dialogue regenerate retry. */
   dialogueInputId?: unknown;
+  dialogueSourceRunId?: unknown;
   verifiedImages: ImageAttachmentEvidence[];
   reservation: ImageReservation;
+}
+
+function scopedInputId(scope: string, clientMessageId: string): string {
+  return digest(JSON.stringify([scope, clientMessageId])).slice(0, 24);
+}
+
+/** Capture identities only. Hot publication rows can have structured blocks and no text part. */
+function recentExchangeHints(messages: StartTurnArgs["messages"], scope: string) {
+  const current = messages.findLastIndex(message => message.role === "user");
+  const inputIds = new Set<string>();
+  const publicationIds = new Set<string>();
+  // Leave room for unfinished parallel inputs and more than one published checkpoint per input.
+  for (let i = current - 1; i >= 0; i--) {
+    const row = messages[i];
+    if (row.role === "user" && row.id) {
+      inputIds.add(scopedInputId(scope, row.id));
+      if (inputIds.size === 8) break;
+    }
+    if (row.role !== "assistant" || publicationIds.size >= 16) continue;
+    for (const part of row.parts ?? []) {
+      if (part.type !== "data-dialogue-publication" || !part.data || typeof part.data !== "object") continue;
+      const id = "utteranceId" in part.data && part.data.utteranceId;
+      if (typeof id === "string" && id.length > 0 && id.length <= 256) publicationIds.add(id);
+      if (publicationIds.size === 16) break;
+    }
+  }
+  if (inputIds.size && publicationIds.size) return { inputIds: [...inputIds], publicationIds: [...publicationIds] };
 }
 
 export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Response> {
@@ -38,32 +69,46 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
     return dialogueResponseError(error);
   }
 
+  const regenerating = args.regenerate && typeof args.dialogueInputId === "string" && !!args.dialogueInputId;
+  const user = args.messages.findLast(message => message.role === "user");
+  const hints = regenerating ? messageImageAttachments(user?.metadata) : [];
+  if (args.regenerate && user?.metadata && typeof user.metadata === "object" && "attachments" in user.metadata &&
+      Array.isArray(user.metadata.attachments) && user.metadata.attachments.length !== hints.length) {
+    throw new ImageAttachmentError("regenerate_attachments", "Invalid original attachment metadata");
+  }
+  const original = hints.length ? await restoreDialogueImages(scope, args.dialogueInputId as string, args.dialogueSourceRunId, hints).catch(error => {
+    if (error instanceof ImageAttachmentError) throw error;
+    throw new ImageAttachmentError("original_images_unavailable", "Could not read the original images; retry shortly", 503);
+  }) : undefined;
+  const verifiedImages = original?.images ?? args.verifiedImages;
   const prepared = await prepareTurnInput({
     ...args,
-    messages: withVerifiedImages(args.messages, args.verifiedImages),
-    ...(args.verifiedImages.length ? { verifiedImages: args.verifiedImages } : {}),
+    messages: withVerifiedImages(original ? args.messages.map(message => message === user
+      ? { ...message, parts: [{ type: "text", text: original.text }] } : message) : args.messages, verifiedImages),
+    ...(original ? { originalUserText: original.text } : {}),
+    ...(verifiedImages.length ? { verifiedImages } : {}),
   });
   if (!prepared.clientMessageId) {
     await args.reservation.release().catch((cleanup) => console.error("[Images] reservation rollback needs recovery", cleanup));
     return Response.json({ error: "A client message id is required for dialogue acceptance" }, { status: 400 });
   }
 
-  const regenerating = args.regenerate && typeof args.dialogueInputId === "string" && !!args.dialogueInputId;
   const sourceInputId = regenerating
     ? args.dialogueInputId as string
-    : digest(JSON.stringify([scope, prepared.clientMessageId])).slice(0, 24);
+    : scopedInputId(scope, prepared.clientMessageId);
+  const recentExchanges = args.regenerate ? undefined : recentExchangeHints(args.messages, scope);
   const workId = regenerating
     ? digest(JSON.stringify([scope, "regenerate", prepared.clientMessageId])).slice(0, 24)
     : sourceInputId;
   const input: DialogueInput = {
     inputId: sourceInputId,
-    clientMessageId: prepared.clientMessageId,
+    clientMessageId: original?.clientMessageId ?? prepared.clientMessageId,
     userSeq: 1,
     eventSeq: 1,
-    acceptedAt: prepared.startedAtIso,
+    acceptedAt: original?.acceptedAt ?? prepared.startedAtIso,
     text: prepared.lastUserMessage,
-    ...(args.verifiedImages.length
-      ? { attachments: args.verifiedImages.map((image) => image.snapshot) }
+    ...(verifiedImages.length
+      ? { attachments: verifiedImages.map((image) => image.snapshot) }
       : {}),
     ...(prepared.documentContext?.length ? { documentContext: prepared.documentContext } : {}),
   };
@@ -75,7 +120,9 @@ export async function acceptDialogueTurnV2(args: AcceptDialogueArgs): Promise<Re
       workId,
       transport: DIALOGUE_TRANSPORT,
       sourceInputId,
-      acceptedTime: formatLocalTime(input.acceptedAt, prepared.clientTimezone),
+      acceptedTime: formatLocalTime(prepared.startedAtIso, prepared.clientTimezone),
+      ...(recentExchanges ? { recentExchangeHints: recentExchanges } : {}),
+      ...(original ? { originalInput: { acceptedAt: original.acceptedAt, clientMessageId: original.clientMessageId } } : {}),
     },
   });
   await args.reservation.confirm().catch((error) =>

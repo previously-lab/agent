@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelMessage } from "@/lib/deepseek/types";
+import { toNativeMessages } from "@/lib/deepseek/messages";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import type { TimeSlice } from "@/lib/episodic";
 
@@ -165,6 +166,52 @@ describe("native thinking work", () => {
     });
     h.completeWork.mockImplementation(async (_input, options) => accepted(options.toolCallId, _input.stage ?? "final"));
     h.completeEvent.mockImplementation(async (_input, options) => accepted(options.toolCallId, _input.stage ?? "final"));
+  });
+
+  it.each(["workflow-v2", "legacy"] as const)("sends only the accepted image and its display ordinal to %s thinking", async transport => {
+    const turn = input();
+    if (transport === "legacy") delete turn.dialogue!.transport;
+    const dataBase64 = "AQID";
+    const assetId = `img_${"a".repeat(32)}`;
+    turn.lastUserMessage = "";
+    turn.verifiedImages = [{ snapshot: { version: 1, assetId, ref: `drafts/${assetId}`, ordinal: 3,
+      name: "attached.png", mediaType: "image/png" }, dataBase64 }];
+    turn.modelMessages = [
+      { role: "user", content: [{ type: "image", image: "OLD" }] },
+      { role: "user", content: [{ type: "image", image: dataBase64 }] },
+    ];
+    await turnWorkflow(turn);
+    const outbound = h.stream.mock.calls[0]![0] as { messages: ModelMessage[] };
+    const wire = toNativeMessages(outbound.messages);
+    expect(wire).toHaveLength(1);
+    expect(wire[0].content).toEqual(expect.arrayContaining([
+      { type: "image_url", image_url: { url: "data:image/png;base64,AQID" } },
+      { type: "text", text: expect.stringContaining("〔图3〕 = attached.png") },
+    ]));
+    expect(JSON.stringify(wire)).not.toContain("OLD");
+    expect(h.agentOptions!.toolsContext.context).toMatchObject({ imageAttachments: ["data:image/png;base64,AQID"] });
+  });
+
+  it("gives thinking the previous confirmed public exchange before the current input is interpreted", async () => {
+    const turn = input();
+    turn.lastUserMessage = "Same again.";
+    turn.startedAtIso = "2026-11-07T00:05:00.000Z";
+    turn.config.slicing.maxTurnsPerSlice = 32;
+    turn.dialogue!.recentExchangeHints = { inputIds: ["earlier"], publicationIds: ["visible"] };
+    const currentSlice: TimeSlice = { ...slice, turns: [
+      { role: "user", timestamp: slice.start, content: "Noise from upstairs again.", dialogue: { kind: "user_input", inputId: "earlier" } },
+      { role: "agent", timestamp: "2026-11-07T00:03:00.000Z", content: "raw row", dialogue: { kind: "public_utterance",
+        publicationId: "visible", inputIds: ["earlier"], publicSeq: 1, sourceResults: [],
+        blocks: [{ kind: "markdown", blockId: "public", text: "You heard it at the old flat." }] } },
+    ] };
+    h.housekeeping.mockResolvedValue({ slice: currentSlice, previouslyContent: "", sliceHeadBlock: "", identityPrompt: "",
+      analysis: null, evidenceAttachments: null, sliceOnDisk: true });
+    await turnWorkflow(turn);
+    const outbound = h.stream.mock.calls[0]![0] as { messages: ModelMessage[] };
+    const content = outbound.messages.at(-1)!.content as string;
+    expect(content).toContain('"recentPublicExchanges":[{"user":"Noise from upstairs again.","assistant":"You heard it at the old flat."}]');
+    expect(content).toContain('"task":"Same again."');
+    expect(content).not.toContain("earlier public answer");
   });
 
   it("keeps ordinary thought text empty and publishes a scoped final offer", async () => {

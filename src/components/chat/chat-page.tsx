@@ -1274,6 +1274,7 @@ function Inner({
       const regenerationRequest = buildDialogueRegenerationRequest(input, request.requestId, {
         locale,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        thoughtRunId: dialogueMetadata(previousAssistant).thoughtRunId,
       });
       await dialogue.submit({
         ...regenerationRequest,

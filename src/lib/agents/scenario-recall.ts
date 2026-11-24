@@ -21,6 +21,7 @@ const RECORD_REF_RE = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const NEW_CORE_RE = /^memory\/records\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\/core\.md$/;
 const MAX_SEARCH_NEW_READS = 6;
+const MAX_PARALLEL_REQUESTED_READS = 4;
 const MAX_SEARCH_SNIPPET_CHARS = 500;
 const SEARCH_SNIPPET_BEFORE_CHARS = 160;
 const MAX_LIST_RESULTS = 24;
@@ -357,6 +358,7 @@ async function loadRecord(
   ref: string,
   state: ReadState,
   signal?: AbortSignal,
+  firstRead?: Promise<string>,
 ): Promise<RecordLoad> {
   throwIfCancelled(signal);
   const cached = state.records.get(ref);
@@ -365,7 +367,7 @@ async function loadRecord(
   if (missing) return { error: missing };
   const pending = state.pendingReads.get(ref);
   if (pending) return pending;
-  const reading = readRecordFromStorage(backend, ref, state, signal)
+  const reading = readRecordFromStorage(backend, ref, state, signal, firstRead)
     .finally(() => state.pendingReads.delete(ref));
   state.pendingReads.set(ref, reading);
   return reading;
@@ -376,6 +378,7 @@ async function readRecordFromStorage(
   ref: string,
   state: ReadState,
   signal?: AbortSignal,
+  firstRead?: Promise<string>,
 ): Promise<RecordLoad> {
   const path = recordPath(ref);
   if (!path) return { error: "Only an exact records/YYYY-MM-DD-HHMM ref can be read" };
@@ -386,7 +389,7 @@ async function readRecordFromStorage(
     for (;;) {
       throwIfCancelled(signal);
       try {
-        raw = await backend.readFile(path);
+        raw = await (attempt === 0 && firstRead ? firstRead : backend.readFile(path));
         break;
       } catch (error) {
         if (isCancelled(signal) || (error instanceof Error && error.name === "AbortError") || isTimeoutReadError(error)) {
@@ -550,12 +553,47 @@ function renderRecord(record: LoadedRecord, range: RecordReadRange = {}): Render
   };
 }
 
+/** Overlap only the initial storage reads explicitly requested by the caller.
+ * Yield them in input order so retries, evidence limits and partial timeout results
+ * retain the same behavior as a sequential read. Discovery never uses this path.
+ */
+function* requestedRecordReads<T extends string | ScenarioRecallTarget>(
+  input: ScenarioRecallInput, items: T[], state: ReadState, signal: AbortSignal,
+) {
+  for (let start = 0; start < items.length; start += MAX_PARALLEL_REQUESTED_READS) {
+    throwIfCancelled(signal);
+    const batch = items.slice(start, start + MAX_PARALLEL_REQUESTED_READS)
+      .map(item => ({ item, ref: typeof item === "string" ? item : item.ref }));
+    const reads = new Map<string, Promise<string>>();
+    for (const { ref } of batch) {
+      if (batch.length === 1 || !inWindow(ref, input.after, input.before) || reads.has(ref) ||
+          state.records.has(ref) || state.missingRecords.has(ref) || state.pendingReads.has(ref)) continue;
+      const path = recordPath(ref);
+      if (!path) continue;
+      const read = Promise.resolve().then(() => {
+        throwIfCancelled(signal);
+        return input.backend.readFile(path);
+      });
+      // A later read can reject before its turn, or after the caller has cancelled.
+      // Its original promise still propagates the failure to loadRecord when consumed.
+      void read.catch(() => {});
+      reads.set(ref, read);
+    }
+    for (const { item, ref } of batch) {
+      const firstRead = reads.get(ref);
+      reads.delete(ref);
+      yield { item, firstRead };
+    }
+  }
+}
+
 /** Resolve the exact source identity before showing a bounded original excerpt. */
 async function readExactTarget(
   input: ScenarioRecallInput,
   target: ScenarioRecallTarget,
   state: ReadState,
   signal: AbortSignal,
+  firstRead?: Promise<string>,
 ): Promise<ScenarioRecallEvidence | undefined> {
   const { ref, turnId, role, charOffset = 0 } = target;
   const miss = (status: ScenarioRecallTargetCoverage["status"], detail: string): undefined => {
@@ -565,7 +603,7 @@ async function readExactTarget(
   };
   if (!inWindow(ref, input.after, input.before)) return miss("outside_window", "The exact record is outside the requested date window.");
   state.discovered.add(ref);
-  const loaded = await loadRecord(input.backend, ref, state, signal);
+  const loaded = await loadRecord(input.backend, ref, state, signal, firstRead);
   if (!loaded.record) return miss("unavailable", loaded.error ?? "Could not read the original record.");
   const { record } = loaded;
   const matches = record.turns.filter((turn) => turn.turnId === turnId && turn.role === role);
@@ -621,14 +659,14 @@ async function searchKnownUserMessages(
   const evidence: ScenarioRecallEvidence[] = [];
   const uncertainty = ["This lookup reports literal keyword matches in original user messages of the supplied records only. A miss does not rule out related wording or conversations elsewhere."];
   let omittedMatches = 0;
-  for (const ref of refs) {
+  for (const { item: ref, firstRead } of requestedRecordReads(input, refs, state, signal)) {
     throwIfCancelled(signal);
     if (!inWindow(ref, input.after, input.before)) {
       records.push({ ref, status: "outside_window", matchedTurns: 0, detail: "The record is outside the requested date window." });
       state.truncated = true;
       continue;
     }
-    const loaded = await loadRecord(input.backend, ref, state, signal);
+    const loaded = await loadRecord(input.backend, ref, state, signal, firstRead);
     if (!loaded.record) {
       records.push({ ref, status: "unavailable", matchedTurns: 0, detail: loaded.error });
       continue;
@@ -987,8 +1025,8 @@ export async function runScenarioRecall(input: ScenarioRecallInput): Promise<Sce
         verifiesWholeRecord = true;
       }
     }
-    for (const target of targets) {
-      const evidence = await readExactTarget(input, target, state, signal);
+    for (const { item: target, firstRead } of requestedRecordReads(input, targets, state, signal)) {
+      const evidence = await readExactTarget(input, target, state, signal, firstRead);
       if (evidence) exactEvidence.push(evidence);
     }
     throwIfCancelled(signal);

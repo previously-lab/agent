@@ -151,4 +151,29 @@ describe("real isolated image staging", () => {
     await expect(stageImage({ data: oversized, name: "large.png" })).rejects.toMatchObject({ code: "image_format" });
     expect(fs.existsSync(path.join(root, "sessions"))).toBe(false);
   });
+
+  it("regenerates from a committed record without claiming the upload again or duplicating the original user turn", async () => {
+    const service = await setup();
+    const { digest } = await import("@/lib/dialogue/artifacts");
+    const { resolveDialogueScope } = await import("@/lib/dialogue/runtime");
+    const { restoreDialogueImages } = await import("@/lib/dialogue/regeneration-images");
+    const { projectDialogueRecords } = await import("@/lib/episodic/dialogue-records");
+    const { loadSlice } = await import("@/lib/episodic/manager");
+    const scope = resolveDialogueScope("user"), clientMessageId = "source-message";
+    const inputId = digest(JSON.stringify([scope, clientMessageId])).slice(0, 24);
+    const reserved = await service.reserveStagedImages([{ assetId: service.image.assetId, ordinal: 2 }], clientMessageId);
+    await reserved.confirm();
+    const input = { inputId, clientMessageId, acceptedAt: "2026-11-02T08:00:00.000Z", userSeq: 1, eventSeq: 1, text: "See the original." };
+    const source = { useGithub: false, owner: "local", repo: "local", timezone: "UTC" };
+    const landing = await projectDialogueRecords({ ...source, inputs: [{ input, turnId: inputId, images: reserved.attachments }] });
+    const before = (await loadSlice(landing!.sliceId))!.turns.find(turn => turn.role === "user")!;
+    const claim = manifest(service.image.assetId).value.claimId;
+    const restored = await restoreDialogueImages(scope, inputId, undefined, before.attachments!);
+    expect(restored.images[0].dataBase64).toBe(PNG.toString("base64"));
+    const sourceInput = { ...input, text: restored.text, clientMessageId: restored.clientMessageId, acceptedAt: restored.acceptedAt };
+    await projectDialogueRecords({ ...source, inputs: [{ input: sourceInput, turnId: inputId, images: restored.images }] });
+    const after = (await loadSlice(landing!.sliceId))!.turns.filter(turn => turn.role === "user");
+    expect(after).toEqual([before]);
+    expect(manifest(service.image.assetId).value).toMatchObject({ state: "committed", claimId: claim });
+  });
 });

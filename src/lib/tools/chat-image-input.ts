@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { UIMessage } from "@/lib/chat/protocol";
-import { IMAGE_ATTACHMENT_LIMITS, type ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
+import { IMAGE_ATTACHMENT_LIMITS, imageAttachmentMapping, type ImageAttachmentEvidence } from "@/lib/chat/image-attachments";
 import { inspectImage, ImageAttachmentError } from "./image-validation";
 import { sanitizeAttachmentName } from "./attachments";
 
@@ -28,7 +28,7 @@ export function withVerifiedImages(messages: UIMessage[], attachments: ImageAtta
     parts: [
       ...message.parts.filter((part) => part.type !== "file"),
       ...(index === lastIndex ? attachments.flatMap(({ snapshot, dataBase64 }, imageIndex) => ([
-        { type: "text" as const, text: `[Image mapping: 〔图${snapshot.ordinal ?? imageIndex + 1}〕 = ${snapshot.name}; assetId=${snapshot.assetId}; viewImage source="attachment:${imageIndex}". The displayed number is not the tool index.]` },
+        { type: "text" as const, text: imageAttachmentMapping(snapshot, imageIndex) },
         { type: "file" as const, url: `data:${snapshot.mediaType};base64,${dataBase64}`, mediaType: snapshot.mediaType, filename: snapshot.name },
       ])) : message.parts.filter((part) => part.type === "file").map(() => ({ type: "text" as const, text: "[image from earlier message]" }))),
     ],

@@ -6,7 +6,7 @@ import { createDocumentContextEnvelope, createDocumentContextMetadata } from "./
 export function buildDialogueRegenerationRequest(
   input: DialogueInput,
   requestId: string,
-  options: { locale: string; timezone: string },
+  options: { locale: string; timezone: string; thoughtRunId?: string },
 ): Record<string, unknown> {
   const documentContext = input.documentContext ?? [];
   return {
@@ -14,6 +14,7 @@ export function buildDialogueRegenerationRequest(
     inputId: input.inputId,
     dialogueInputId: input.inputId,
     dialogueRequestId: requestId,
+    ...(input.attachments?.length && options.thoughtRunId ? { dialogueSourceRunId: options.thoughtRunId } : {}),
     messages: [{
       id: requestId,
       role: "user",

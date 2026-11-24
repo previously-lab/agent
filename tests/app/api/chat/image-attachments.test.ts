@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const state = vi.hoisted(() => ({ start: vi.fn(), reserve: vi.fn(), confirm: vi.fn(), release: vi.fn() }));
+const state = vi.hoisted(() => ({ start: vi.fn(), reserve: vi.fn(), restore: vi.fn(), confirm: vi.fn(), release: vi.fn() }));
 vi.mock("@/app/api/chat/start-turn", () => ({ startTurn: state.start }));
 vi.mock("@/lib/tools/staged-images", () => ({ reserveStagedImages: state.reserve }));
+vi.mock("@/lib/dialogue/regeneration-images", () => ({ restoreDialogueImages: state.restore }));
 vi.mock("@/lib/chat/server-stream", () => ({ createUIMessageStreamResponse: ({ headers }: { headers: HeadersInit }) => new Response("fixture stream", { headers }) }));
 vi.mock("@/app/api/chat/mixed-stream-transform", () => ({ createMixedStreamTransform: () => new TransformStream() }));
 import { POST } from "@/app/api/chat/route";
@@ -18,6 +19,29 @@ beforeEach(() => {
   state.start.mockResolvedValue({ runId: "fixture-run", readable: new ReadableStream({ start(controller) { controller.close(); } }) });
 });
 describe("image submission acceptance boundary", () => {
+  it.each([
+    [new ImageAttachmentError("original_images_unavailable", "Original unavailable", 409), 409],
+    [new Error("internal backend failure"), 503],
+  ] as const)("returns a restore failure through the chat API without starting an imageless retry", async (error, status) => {
+    vi.stubEnv("STORAGE", "local");
+    try {
+      state.restore.mockRejectedValue(error);
+      const snapshot = { version: 1, assetId, ref: `drafts/${assetId}`, ordinal: 3, name: "image.png", mediaType: "image/png" };
+      const response = await POST(request({ regenerate: true, dialogueVersion: 2, dialogueInputId: "original", stagedAttachments: [],
+        messages: [{ id: "retry", role: "user", parts: [], metadata: { attachments: [snapshot] } }] }));
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject({ code: "original_images_unavailable" });
+      expect(state.start).not.toHaveBeenCalled(); expect(state.confirm).not.toHaveBeenCalled();
+      expect(state.release).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("rejects a fresh upload on a v2 retry before it can be claimed against the new message", async () => {
+    const response = await POST(request({ regenerate: true, dialogueVersion: 2, dialogueInputId: "previous" }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe("regenerate_attachments");
+    expect(state.reserve).not.toHaveBeenCalled();
+  });
   it("confirmed workflow acceptance still returns its run ID when manifest confirmation fails", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     state.confirm.mockRejectedValue(new Error("fixture disk offline"));

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcceptDialogueArgs } from "@/app/api/chat/dialogue/accept";
+import { digest } from "@/lib/dialogue/artifacts";
 
 const h = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -8,9 +9,11 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(async () => {}),
   release: vi.fn(),
   dispatch: vi.fn(async () => {}),
+  restore: vi.fn(),
 }));
 
 vi.mock("next/server", () => ({ after: vi.fn() }));
+vi.mock("@/lib/dialogue/regeneration-images", () => ({ restoreDialogueImages: h.restore }));
 vi.mock("@/lib/dialogue/runtime", () => ({
   resolveDialogueScope: () => "scope-1",
   getDialogueStore: async () => ({ accept: h.accept, regenerate: vi.fn() }),
@@ -91,6 +94,26 @@ describe("native dialogue acceptance", () => {
     expect(h.release).not.toHaveBeenCalled();
   });
 
+  it("captures scoped pointers to recent visible rows without accepting browser text or a sibling after the current input", async () => {
+    type Row = AcceptDialogueArgs["messages"][number];
+    const publication = (id: string): Row => ({ role: "assistant", id, parts: [
+      { type: "data-dialogue-publication", data: { utteranceId: id, blocks: [{ text: "client claims" }] } },
+    ] });
+    const messages: Row[] = [
+      publication("before-previous"),
+      { role: "user", id: "previous", parts: [], metadata: { sourceInputId: "other-scope" } },
+      publication("visible"), publication("visible"),
+      { role: "assistant", id: "pending", parts: [{ type: "reasoning", text: "private" }] },
+      args().messages[0], publication("after-current"),
+    ];
+    await acceptDialogueTurnV2(args({ messages }));
+    expect(h.start.mock.calls[0][0].dialogue.recentExchangeHints).toEqual({
+      inputIds: [digest(JSON.stringify(["scope-1", "previous"])).slice(0, 24)], publicationIds: ["visible", "before-previous"],
+    });
+    await acceptDialogueTurnV2(args({ messages, regenerate: true, dialogueInputId: "original" }));
+    expect(h.start.mock.calls[1][0].dialogue.recentExchangeHints).toBeUndefined();
+  });
+
   it("passes server-verified image bytes and the vision-tool mapping to the native run", async () => {
     const snapshot = { version: 1 as const, assetId: `img_${"a".repeat(32)}`, ref: "drafts/image", ordinal: 1, name: "sample.png", mediaType: "image/png", byteSize: 3 };
     const response = await acceptDialogueTurnV2(args({
@@ -123,5 +146,21 @@ describe("native dialogue acceptance", () => {
       sourceInputId: "original-input",
       workId: accepted.workId,
     }));
+  });
+
+  it("replays the server-owned original pictures and source identity when the new request has only metadata", async () => {
+    const assetId = `img_${"c".repeat(32)}`;
+    const snapshot = { version: 1, assetId, ref: `drafts/${assetId}`, ordinal: 5, name: "original.png", mediaType: "image/png" };
+    const images = [{ snapshot, dataBase64: "AQID" }];
+    const identity = { acceptedAt: "2026-11-01T00:00:00.000Z", clientMessageId: "first-http-request" };
+    h.restore.mockResolvedValue({ ...identity, text: "Original question.", images });
+    const result = await acceptDialogueTurnV2(args({ regenerate: true, dialogueInputId: "original-input", dialogueSourceRunId: "wrun_ORIGINAL",
+      messages: [{ id: "retry", role: "user", parts: [{ type: "text", text: "client supplied text" }], metadata: { attachments: [snapshot] } }] }));
+    expect(result.status).toBe(200);
+    expect(h.prepare.mock.calls[0][0]).toMatchObject({ originalUserText: "Original question.", verifiedImages: images });
+    expect(h.prepare.mock.calls[0][0].messages[0].parts).toContainEqual({ type: "file", mediaType: "image/png",
+      filename: "original.png", url: "data:image/png;base64,AQID" });
+    expect(h.start.mock.calls[0][0].dialogue).toMatchObject({ sourceInputId: "original-input", originalInput: identity });
+    expect((await result.json()).input).toMatchObject({ inputId: "original-input", ...identity, attachments: [snapshot] });
   });
 });

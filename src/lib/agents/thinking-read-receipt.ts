@@ -18,6 +18,8 @@ const reading = z.object({
   turnId: z.string().min(1).max(128).optional(),
   turnIndex: z.number().int().nonnegative().optional(),
   excerpt: z.string().max(1200).optional(),
+  /** Search presentation only. The source read retains excerpt coverage. */
+  completeEditionBody: z.literal(true).optional(),
   /** Host verified the excerpt's original section before the search window removed headings. */
   partialEvidenceEligible: z.literal(true).optional(),
   /** Record IDs mentioned in the document text. Navigation only. */
@@ -75,13 +77,34 @@ export function unwrapThinkingRead(text: string): string {
   return text.startsWith(BEGIN) && readReceipt(text) ? text.slice(text.indexOf(END, BEGIN.length) + END.length) : text;
 }
 
+/** Keep the audit envelopes in workflow history; present the document and its citable editions once. */
+export function renderSemanticDocumentRead(output: unknown, toolCallId: string): string | undefined {
+  if (typeof output !== "string") return;
+  const envelope = parseCaseReadEnvelope(output);
+  if (envelope && envelope.receipt.toolCallId !== toolCallId) return;
+  const inner = envelope?.body ?? output;
+  if (!inner.startsWith(BEGIN)) return;
+  const receipt = readReceipt(inner);
+  if (!receipt || receipt.toolCallId !== toolCallId || !receipt.reads.length ||
+      !receipt.reads.every((read, i) => read.evidenceId === `${toolCallId}:${i + 1}` &&
+        (read.sourceKind === "semantic_document" || read.sourceKind === "navigation"))) return;
+  const docs = receipt.reads.filter(read => read.sourceKind === "semantic_document");
+  if (!docs.some(read => read.revision && (read.coverage === "full" || read.coverage === "range"))) return;
+  const sources = docs.map(read => {
+    const range = read.range ? `, lines ${read.range.start}–${read.range.end}` : "";
+    const revision = read.revision ? `, revision ${read.revision}` : "";
+    return `[${read.evidenceId}] ${read.ref} (${read.edition}, ${read.coverage}${range}${revision})`;
+  });
+  return sources.join("\n") + "\n\n" + inner.slice(inner.indexOf(END, BEGIN.length) + END.length);
+}
+
 /** Render the verified source text first; the host retains its complete original receipt. */
 export function renderVerifiedSearchPassages(output: unknown, toolCallId: string): string | undefined {
   if (typeof output !== "string" || !output.startsWith(BEGIN)) return;
   const receipt = readReceipt(output);
   if (!receipt || receipt.toolCallId !== toolCallId || !validSearchPassages(receipt.reads)) return;
   const passages = receipt.reads.map(read =>
-    `[${read.evidenceId}] ${read.ref} (edition: ${read.edition})\n${read.excerpt}`);
+    `[${read.evidenceId}] ${read.ref} (edition: ${read.edition}, ${read.completeEditionBody ? "complete body of this edition" : "excerpt"})\n${read.excerpt}`);
   const navigation = output.slice(output.indexOf(END, BEGIN.length) + END.length).split("\n").map(line => {
     const source = receipt.reads.find(read => line.startsWith("- [") && line.endsWith(` (ref: ${read.ref})`));
     const separator = line.indexOf(" — ");
@@ -90,7 +113,7 @@ export function renderVerifiedSearchPassages(output: unknown, toolCallId: string
     return `${line.slice(0, separator)}${date ? " — " + date : ""} (ref: ${source.ref})`;
   }).join("\n");
   return "Case passages read for this question\n\n" + passages.join("\n\n") +
-    "\n\nSearch navigation\n" + navigation.replace("Document excerpts (use these for a supported overview):", "Document matches:");
+    "\n\nSearch navigation\n" + navigation.replace(/^Document excerpts(?: \(use these for a supported overview\))?:$/m, "Document matches:");
 }
 
 /** Only paired tool returns from the current attempt can contribute read evidence. */

@@ -50,7 +50,7 @@ import {
   ensureDialogueOrchestratorStep,
   witnessDialogueDeliveryStep,
 } from "./dialogue-orchestrator-steps";
-import { buildNativeThinkingMessages, type OtherWorkState } from "@/lib/dialogue/thinking-context";
+import { buildNativeThinkingMessages, currentDialogueUserMessage, type OtherWorkState } from "@/lib/dialogue/thinking-context";
 import {
   beginDialogueWorkStep,
   completeDialogueWorkStep,
@@ -110,10 +110,10 @@ function nativeDialogueSource(input: TurnInput) {
   const sourceInputId = input.dialogue?.sourceInputId ?? input.turnId;
   return {
     inputId: sourceInputId,
-    clientMessageId: input.clientMessageId ?? sourceInputId,
+    clientMessageId: input.dialogue?.originalInput?.clientMessageId ?? input.clientMessageId ?? sourceInputId,
     userSeq: 1,
     eventSeq: 1,
-    acceptedAt: input.startedAtIso,
+    acceptedAt: input.dialogue?.originalInput?.acceptedAt ?? input.startedAtIso,
     text: input.lastUserMessage,
     ...(input.verifiedImages?.length
       ? { attachments: input.verifiedImages.map((image) => image.snapshot) }
@@ -165,7 +165,8 @@ export function buildTurnToolContext(
     startedAtIso: input.startedAtIso,
     locale: input.locale,
     ...(includeImageAttachments
-      ? { imageAttachments: input.imageAttachments }
+      ? { imageAttachments: input.imageAttachments.length ? input.imageAttachments
+        : (input.verifiedImages ?? []).map(({ snapshot, dataBase64 }) => `data:${snapshot.mediaType};base64,${dataBase64}`) }
       : {}),
     ...(input.view ? { view: input.view } : {}),
   };
@@ -1352,7 +1353,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   let nestedTail: NestedTurnTail | undefined;
   try {
     let currentMessages = nativeDialogue
-      ? buildNativeThinkingMessages(input, otherWorkStates, { contextPrefix: hk.contextPrefix })
+      ? buildNativeThinkingMessages(input, otherWorkStates, { contextPrefix: hk.contextPrefix, slice: hk.sliceOnDisk ? hk.slice : undefined })
       : historyWindow;
     // 思考流 dialogue work: the browser lane was cleared at acceptance, so the
     // model window starts from the worker's OWN input only, with the
@@ -1360,7 +1361,7 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
     // persisted, never user speech — the same outbound-copy discipline as the
     // machine-context block).
     if (dialogue && workWindow) {
-      currentMessages = [{ role: "user" as const, content: input.lastUserMessage }];
+      currentMessages = [currentDialogueUserMessage(input, input.lastUserMessage)];
       currentMessages = appendContextSuffix(
         currentMessages,
         buildWorkContextSection({

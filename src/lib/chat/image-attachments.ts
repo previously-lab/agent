@@ -19,6 +19,11 @@ export interface StagedAttachmentRef { assetId: string; ordinal: number }
 /** Internal durable payload. Only server-verified bytes may populate this. */
 export interface ImageAttachmentEvidence { snapshot: ImageAttachmentSnapshot; dataBase64: string }
 
+/** Display ordinals survive deletions; tool indices refer to this submission's order. */
+export function imageAttachmentMapping(snapshot: ImageAttachmentSnapshot, index: number): string {
+  return `[Image mapping: 〔图${snapshot.ordinal ?? index + 1}〕 = ${snapshot.name}; assetId=${snapshot.assetId}; viewImage source="attachment:${index}". The displayed number is not the tool index.]`;
+}
+
 export function isImageOrdinal(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= IMAGE_ATTACHMENT_LIMITS.maxOrdinal;
 }

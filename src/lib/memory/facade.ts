@@ -53,6 +53,7 @@ import { CASE_CATEGORIES, isArchivedCaseName, MEMORY_ROOT_DIR } from "@/lib/docs
 import type { CaseCategory } from "@/lib/docs/paths";
 import {
   caseCurrentPath,
+  hasCaseHistoryBoundary,
   parseCaseDoc,
   renderCaseWithCurrent,
   parseCaseCurrent,
@@ -1029,6 +1030,7 @@ interface SemanticSearchPassage {
   excerpt: string;
   revision: string;
   edition: "original" | "current";
+  completeEditionBody?: true;
   partialEvidenceEligible?: true;
 }
 
@@ -1056,7 +1058,7 @@ function splitAtHeadings(section: string): string[] {
   return section.split(/^[ \t]*#{1,6}(?:[ \t]+[^\r\n]*|[ \t]*)\r?$/gm);
 }
 
-function matchedBodyPassage(raw: string, keywords: readonly string[]): string | undefined {
+function matchedBodyPassage(raw: string, keywords: readonly string[]): Pick<SemanticSearchPassage, "excerpt" | "completeEditionBody"> | undefined {
   let best: string | undefined;
   let bestTerms = 0;
   const terms = keywords.map(k => k.toLowerCase());
@@ -1073,7 +1075,13 @@ function matchedBodyPassage(raw: string, keywords: readonly string[]): string | 
       if (matched.length <= bestTerms) continue;
       // A compact case can contain its observations and limitations under later
       // headings. Keep them together after confirming an actual body match.
-      if (body && body.length <= 840) return body;
+      if (body && body.length <= 840) {
+        // Label only one literal, uninterrupted document body. HTML, code,
+        // stored history and legacy tails retain ordinary excerpt semantics.
+        const codeOrHtml = /<\/?[a-z][\w:-]*(?=[\s/>])|`|^(?: {4,}|\t)\S|^[ \t]*~{3,}/im;
+        return codeOrHtml.test(sections[0]!) || hasCaseHistoryBoundary(body)
+          ? { excerpt: body } : { excerpt: body, completeEditionBody: true };
+      }
       const at = hit.index + Math.min(...matched.map(k => lower.indexOf(k)));
       const start = Math.max(0, hit.index - 120, at - 180);
       const paragraphEnd = hit.index + paragraph.length;
@@ -1090,7 +1098,7 @@ function matchedBodyPassage(raw: string, keywords: readonly string[]): string | 
       bestTerms = matched.length;
     }
   }
-  return best;
+  return best === undefined ? undefined : { excerpt: best };
 }
 
 /** Only public, role-qualified, canonical links can address an original turn. */
@@ -1489,10 +1497,11 @@ export async function recallSearch(
     for (const entry of page) {
       const source = ranked.find(hit => hit.entry === entry)?.source;
       if (!source) continue;
-      const excerpt = matchedBodyPassage(source.raw, keywords);
-      if (!excerpt) continue;
+      const passage = matchedBodyPassage(source.raw, keywords);
+      if (!passage) continue;
+      const { excerpt } = passage;
       const partialEvidenceEligible = source.edition === "current" && permitsPartialSearchExcerpt(withoutFrontmatter(source.raw), excerpt);
-      passages.push({ ref: entry.ref, excerpt, revision: caseStorageRevision(source.raw), edition: source.edition,
+      passages.push({ ref: entry.ref, ...passage, revision: caseStorageRevision(source.raw), edition: source.edition,
         ...(partialEvidenceEligible ? { partialEvidenceEligible: true } : {}) });
       if (input.turnLinks) {
         const inExcerpt = new Set(linkedTurns(excerpt).map(target => JSON.stringify(target)));
@@ -2453,7 +2462,7 @@ export function renderRecallResult(result: RecallResult, meta: RenderMeta = {}):
           : `The ${result.entries.length} most recent ${meta.category ?? "memory"} entries:`;
       const recordStart = meta.query === undefined ? -1 : result.entries.findIndex(entry => entry.kind === "slice");
       const lines = recordStart > 0
-        ? `Document excerpts (use these for a supported overview):\n${renderEntryLines(result.entries.slice(0, recordStart))}\n` +
+        ? `Document excerpts:\n${renderEntryLines(result.entries.slice(0, recordStart))}\n` +
           `Original record leads (for unresolved details or exact wording):\n${renderEntryLines(result.entries.slice(recordStart))}`
         : renderEntryLines(result.entries);
       // Paging notes (fixed wording): an offset page with more entries behind

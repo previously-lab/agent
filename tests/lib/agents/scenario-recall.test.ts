@@ -601,6 +601,64 @@ describe("record-only scenario recollection", () => {
     expect(readFile).not.toHaveBeenCalledWith(OTHER_PATH);
   });
 
+  it.each(["targets", "searchTerms"] as const)("overlaps only requested %s reads and reports in request order", async (mode) => {
+    const first = Promise.withResolvers<string>();
+    const second = Promise.withResolvers<string>();
+    const readFile = vi.fn((path: string) => path === PATH ? first.promise : second.promise);
+    const excluded = "records/2026-09-10-0100";
+    const refs = [REF, excluded, OTHER_REF];
+    const targets = refs.map(ref => ({ ref, turnId: "u1", role: "user" as const }));
+    const result = runScenarioRecall(inputFor({ readFile, listMemoryFiles: vi.fn() }, {
+      after: "2026-10-01",
+      ...(mode === "searchTerms" ? { refs, searchTerms: ["08:30"] } : {
+        targets: [...targets, { ref: REF, turnId: "a1", role: "assistant" }],
+      }),
+    }));
+    await Promise.resolve();
+    expect(readFile.mock.calls).toEqual([[PATH], [OTHER_PATH]]);
+    second.resolve(core("08:30 on the older day"));
+    first.resolve(core());
+    const output = await result;
+    expect(output.status).toBe("ok");
+    expect(output.evidence.map(entry => entry.ref)).toEqual(mode === "targets" ? [REF, OTHER_REF, REF] : [REF, OTHER_REF]);
+    const coverage = mode === "targets" ? output.coverage.targets : output.coverage.keywordSearch?.records;
+    expect(coverage?.map(entry => entry.status)).toEqual(mode === "targets"
+      ? ["verified", "outside_window", "verified", "verified"] : ["matched", "outside_window", "matched"]);
+    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
+  it("preserves earlier exact evidence on timeout and does not start the next batch", async () => {
+    const refs = Array.from({ length: 6 }, (_, i) => `records/2026-10-20-093${i}`);
+    const readFile = vi.fn(async (path: string) => {
+      if (path.includes("/0931/")) throw Object.assign(new Error("read timed out"), { name: "TimeoutError" });
+      return core();
+    });
+    const result = await runScenarioRecall(inputFor({ readFile, listMemoryFiles: vi.fn() }, {
+      targets: refs.map(ref => ({ ref, turnId: "u1", role: "user" })),
+    }));
+    expect(result).toMatchObject({
+      status: "timeout", evidence: [{ ref: refs[0], quote: USER_QUOTE }], coverage: { read: [refs[0]] },
+    });
+    expect(readFile.mock.calls.map(([path]) => path)).toEqual(refs.slice(0, 4)
+      .map((_, i) => `memory/records/2026/10/20/093${i}/core.md`));
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
+  it("cancels queued source reads before contacting storage", async () => {
+    const controller = new AbortController();
+    const readFile = vi.fn(async () => {
+      controller.abort();
+      return core();
+    });
+    const result = await runScenarioRecall(inputFor({ readFile, listMemoryFiles: vi.fn() }, {
+      refs: [REF, OTHER_REF], searchTerms: ["08:30"], signal: controller.signal,
+    }));
+    expect(result).toMatchObject({ status: "cancelled", evidence: [], truncated: true });
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(PATH);
+    expect(native.streamText).not.toHaveBeenCalled();
+  });
+
   it("continues a bounded exact excerpt within the same legacy numeric message", async () => {
     const prefix = "甲".repeat(1_199);
     const suffix = "🐙后续原话";

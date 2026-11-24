@@ -8,8 +8,12 @@ export interface DialogueLaunch {
   /** Native offer transport; omitted on legacy store-backed runs. */
   transport?: "workflow-v2";
   sourceInputId?: string;
+  /** Preserve the accepted source identity when regenerating from its verified attachments. */
+  originalInput?: Pick<DialogueInput, "acceptedAt" | "clientMessageId">;
   /** This native work's accepted instant, rendered by the host before entering the workflow VM. */
   acceptedTime?: import("@/lib/turn-priming").LocalTimeInfo;
+  /** Prior row identities visible at submission. Only persisted public text can resolve them. */
+  recentExchangeHints?: { inputIds: string[]; publicationIds: string[] };
 }
 
 export interface DialogueWorkRecord extends DialogueWork {

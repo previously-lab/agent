@@ -155,6 +155,7 @@ describe("current-work native tool results", () => {
     const shown = requests[1]!.messages.at(-1)!;
     expect(shown).toMatchObject({ role: "tool", tool_call_id: "search" });
     expect(shown.content).toContain("[search:1] events/Example");
+    expect(shown.content).toContain("edition: current, excerpt");
     expect(String(shown.content).split(excerpt)).toHaveLength(2);
     expect(String(shown.content).indexOf(excerpt)).toBeLessThan(String(shown.content).indexOf("next page"));
     expect(shown.content).not.toContain("PREVIOUSLY_THINKING_READ");

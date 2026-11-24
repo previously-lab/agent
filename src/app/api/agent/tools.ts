@@ -12,7 +12,7 @@ import { DOCUMENT_BUDGET_RULE } from "@/lib/docs/write-limits";
  * those references; each content reader owns its storage paths.
  */
 
-import { renderVerifiedSearchPassages } from "@/lib/agents/thinking-read-receipt";
+import { renderSemanticDocumentRead, renderVerifiedSearchPassages } from "@/lib/agents/thinking-read-receipt";
 import { tool } from "@/lib/deepseek/tools";
 import { z } from "zod";
 import type { DialogueOfferContext } from "@/lib/dialogue/transport";
@@ -222,7 +222,7 @@ export const chatTools = {
       "Search memory text by keyword. By default searches semantic documents, self documents, the user profile, and slice navigation heads. " +
       "Raw conversation is scanned only with category 'records' or includeRecords:true; the resulting record refs are navigation only. Use recallScenario to verify original words. " +
       "To find accounts of a conversation, set dateBasis to 'conversation' with since/until. This matches the local opening day of a cited slice, including in accounts filed later. Each call scans up to 50 candidates. Mixed searches scan and show semantic documents before record leads. Within each group, passages matching more keywords together rank higher on the page. " +
-      "A thinking-read receipt may include up to two verified semantic document excerpts. Use those passages directly when they answer the question; read further only for missing context. " +
+      "A thinking-read receipt may include up to two verified case passages. They can directly answer a factual question. A passage labeled 'complete body of this edition' already contains that document's body. Other editions, pieces and linked records have their own coverage. " +
       "If there is no text match in a page, the result may offer separately labeled related names or paths. Those are navigation leads, not content matches or evidence. " +
       "If another page could affect the answer or complete coverage is required, pass both continuation values. A partial scan leaves the rest unknown.",
     inputSchema: z.object({
@@ -286,7 +286,7 @@ export const chatTools = {
   // ④ Continue reading — the "出处" verb: entries cite refs, refs read here.
   recallRead: tool({
     description:
-      "Read a semantic document by ref. Approximate names resolve with a matched-name note. A reliable account you read can answer a gist question at its supported scope. " +
+      "Read a semantic document by ref for evidence missing from the conversation or search passages. Approximate names resolve with a matched-name note. " +
       "For a long document, outline returns headings and line spans for bounded reads. Optional relatedCases, cardTargets and recordLeads point to further evidence when a material question remains. " +
       "An original record ref normally returns recallScenario_required. For surrounding public conversation, direct: true returns original user and assistant messages from core. A failed read leaves the content unknown.",
     inputSchema: z.object({
@@ -364,6 +364,7 @@ export const chatTools = {
     }),
     contextSchema: toolContextSchema,
     execute: recallReadExecute,
+    toModelOutput: renderSemanticDocumentRead,
   }),
 
   // ⑤ The differential view — "自某天以来变了什么" from the commit history
@@ -910,6 +911,12 @@ export function getChatTools(): typeof chatTools { return chatTools; }
 export function buildChatToolsContext(
   ctx: ToolContext,
 ): Record<keyof typeof chatTools, ToolContext> {
+  const imageContext = ctx;
+  if (ctx.imageAttachments?.length) {
+    // Only viewImage needs the image data URLs in its tool invocation payload.
+    ctx = { ...ctx };
+    delete ctx.imageAttachments;
+  }
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
     recallScenario: ctx,
     recallRecent: ctx,
@@ -931,7 +938,7 @@ export function buildChatToolsContext(
     currentTime: ctx,
     webSearch: ctx,
     webFetch: ctx,
-    viewImage: ctx,
+    viewImage: imageContext,
     thinkDeep: ctx,
   };
   // Keep the context map in lockstep with getChatTools(): a registered tool

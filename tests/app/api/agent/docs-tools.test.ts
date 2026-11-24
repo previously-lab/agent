@@ -12,7 +12,7 @@ import { findCaseReadReceipt, parseCaseReadEnvelope, unwrapCaseReadEnvelope } fr
 import { parseRecallOutput } from "@/lib/chat/recall-output";
 import { mediateReplayedRecordReads, type ScenarioRecallTarget } from "@/lib/chat/scenario-recall-contract";
 import type { ScenarioRecallEvidence, ScenarioRecallResult } from "@/lib/agents/scenario-recall";
-import { collectThinkingReads, readReceipt } from "@/lib/agents/thinking-read-receipt";
+import { collectThinkingReads, readReceipt, renderVerifiedSearchPassages } from "@/lib/agents/thinking-read-receipt";
 import { buildThinkingProduct, permitsThinkingClaim } from "@/lib/agents/thinking-product";
 import type { ModelMessage } from "@/lib/deepseek/types";
 import { caseStorageRevision } from "@/lib/docs/case-doc";
@@ -329,11 +329,14 @@ describe("recallSearchExecute", () => {
     ];
     const reads = collectThinkingReads(mediateReplayedRecordReads(messages), context.readScopeId);
     expect(reads).toMatchObject([{ ref, sourceKind: "semantic_document", coverage: "excerpt",
-      edition: "current", revision: caseStorageRevision(raw), excerpt: body }]);
+      edition: "current", completeEditionBody: true, revision: caseStorageRevision(raw), excerpt: body }]);
     expect(parseCaseReadEnvelope(out)).toBeNull();
     expect(findCaseReadReceipt({ messages, scopeId: context.readScopeId, category: "research", caseName: "手机调研" })).toBeNull();
 
     const plain = await recallSearchExecute(input, opts(makeCtx("2026-09-10-1000")));
+    expect(renderVerifiedSearchPassages(out, toolCallId)).toContain("edition: current, complete body of this edition");
+    expect(renderVerifiedSearchPassages(plain, toolCallId)).toBeUndefined();
+    expect(plain).not.toContain("complete body of this edition");
     const card = parseRecallOutput(toolName, out);
     expect(card).toMatchObject({ kind: "entries", entries: expect.arrayContaining([expect.objectContaining({ ref })]) });
     expect(card).toEqual(parseRecallOutput(toolName, plain));

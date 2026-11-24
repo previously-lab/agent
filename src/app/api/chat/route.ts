@@ -41,6 +41,7 @@ export async function POST(request: Request): Promise<Response> {
       persona?: unknown;
       dialogueVersion?: unknown;
       dialogueInputId?: unknown;
+      dialogueSourceRunId?: unknown;
     };
 
     const { messages } = body;
@@ -65,6 +66,10 @@ export async function POST(request: Request): Promise<Response> {
     const typedMessages = normalizedMessages as UIMessage[];
     const latestUser = typedMessages.findLast((message) => message.role === "user");
     if (!latestUser) return Response.json({ error: "A user message is required" }, { status: 400 });
+    if (body.dialogueVersion === 2 && body.regenerate === true && (latestUser.parts.some(part => part.type === "file") ||
+      Array.isArray(body.stagedAttachments) && body.stagedAttachments.length)) {
+      throw new ImageAttachmentError("regenerate_attachments", "Regenerate uses the images from the original message");
+    }
     const legacyImages = body.stagedAttachments === undefined ? legacyMessageImages(typedMessages) : [];
     reservation = await reserveStagedImages(body.stagedAttachments, latestUser.id, body.persona);
     const verifiedImages = [...reservation.attachments, ...legacyImages];
@@ -78,6 +83,7 @@ export async function POST(request: Request): Promise<Response> {
         persona: body.persona,
         regenerate: body.regenerate === true,
         dialogueInputId: body.dialogueInputId,
+        dialogueSourceRunId: body.dialogueSourceRunId,
         model: typeof body.model === "string" ? body.model : undefined,
         timezone: typeof body.timezone === "string" ? body.timezone : undefined,
         locale: typeof body.locale === "string" && ["en", "zh"].includes(body.locale) ? body.locale : undefined,

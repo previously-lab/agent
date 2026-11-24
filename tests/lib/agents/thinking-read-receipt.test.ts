@@ -3,6 +3,7 @@ import type { ModelMessage } from "@/lib/deepseek/types";
 import {
   collectThinkingReads,
   createThinkingReadReceipt,
+  renderSemanticDocumentRead,
   substantiveThinkingReadCheckpoint,
   wrapThinkingRead,
   type ThinkingRead,
@@ -11,6 +12,24 @@ import {
 const asOf = "2026-11-06T00:00:00.000Z";
 const doc = (ref: string, coverage: ThinkingRead["coverage"] = "full", revision: string | null = "bytes-v1"): Omit<ThinkingRead, "evidenceId"> => ({
   ref, sourceKind: "semantic_document", edition: "current", revision, asOf, coverage,
+});
+
+it("presents the editions and body of a case once without changing its host receipt or elevating stale prose", () => {
+  const ref = "events/Workshop";
+  const reads = [{ ...doc(ref), edition: "original" as const }, doc(ref, "stale")];
+  const receipt = createThinkingReadReceipt("scope", "r", reads);
+  const body = "The opening quote was 40.\n\nCurrent understanding: awaiting verification.";
+  const output = wrapThinkingRead(receipt, body);
+  const rendered = renderSemanticDocumentRead(output, "r");
+  expect(rendered).toContain("[r:1] events/Workshop (original, full, revision bytes-v1)");
+  expect(rendered).toContain("[r:2] events/Workshop (current, stale, revision bytes-v1)");
+  expect(rendered?.endsWith(body)).toBe(true);
+  expect(rendered).not.toContain("PREVIOUSLY_THINKING_READ");
+  expect(renderSemanticDocumentRead(output, "other-call")).toBeUndefined();
+  expect(renderSemanticDocumentRead(body, "r")).toBeUndefined();
+  expect(renderSemanticDocumentRead(wrapThinkingRead(createThinkingReadReceipt("scope", "r",
+    [{ ...doc("records/2026-10-01-0900"), sourceKind: "original_turn" }]), body), "r")).toBeUndefined();
+  expect(output).toContain("PREVIOUSLY_THINKING_READ");
 });
 
 describe("recallSearch passage authority", () => {
