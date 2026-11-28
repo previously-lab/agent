@@ -63,9 +63,12 @@ export function sessionLastWakeAt(
   run: DialogueRunState,
   wakes: readonly DialogueWakeEvent[],
 ): string | undefined {
-  const latest = wakes.filter(wake => wake.sessionId === run.sessionId)
-    .map(wake => Date.parse(wake.wakeAt))
-    .filter(Number.isFinite)
+  // Session continuity follows actual activity, including a clean exit, not
+  // just the increasingly old wake which happened to start this run.
+  const activity = run.events.flatMap(event => "at" in event ? [Date.parse(event.at)] : []);
+  const wakeTimes = wakes.filter(wake => wake.sessionId === run.sessionId)
+    .map(wake => Date.parse(wake.wakeAt));
+  const latest = [...activity, ...wakeTimes].filter(Number.isFinite)
     .reduce((max, value) => Math.max(max, value), Date.parse(run.createdAt));
   return Number.isFinite(latest) ? new Date(latest).toISOString() : undefined;
 }

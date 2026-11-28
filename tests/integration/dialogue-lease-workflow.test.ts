@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   runtime: [] as unknown[],
   published: [] as PublicUtterance[],
   prompts: 0,
+  beforePublish: vi.fn(),
   prepare: vi.fn(),
 }));
 vi.mock("workflow", () => ({
@@ -41,6 +42,7 @@ vi.mock("@/app/api/chat/dialogue-transport-steps", () => ({
   writeDialogueRuntimeEventStep: vi.fn(async (event: unknown) => { h.runtime.push(event); }),
   prepareDialogueOfferStep: h.prepare,
   publishDialogueResultStep: vi.fn(async ({ input, text }) => {
+    await h.beforePublish(input);
     const utterance: PublicUtterance = {
       utteranceId: input.publicationId ?? input.offerId, publicSeq: 1, committedAt: new Date().toISOString(),
       inputIds: [input.context.sourceInputId], sourceResults: [{ resultId: input.offerId, productRevision: 1, claimIds: [] }],
@@ -88,6 +90,7 @@ beforeEach(() => {
   h.runtime = [];
   h.published = [];
   h.prompts = 0;
+  h.beforePublish.mockReset().mockResolvedValue(undefined);
   h.createHook.mockReset();
   h.sleep.mockReset().mockResolvedValue();
   h.ownRunId.mockReset().mockResolvedValue("wrun_ORCHESTRATOR");
@@ -133,69 +136,70 @@ describe("dialogue lease and handoff execution", () => {
     expect(h.prepare).toHaveBeenCalledWith(expect.objectContaining({ responseMode: "chat" }), "wrun_ORCHESTRATOR");
   });
 
-  it("delegates to a healthy idle same-session holder without cancelling it", async () => {
-    const idle = holder();
-    idle.createdAt = new Date(Date.now() - 3 * 60_000).toISOString();
-    idle.events = [{ type: "exit_intent", at: idle.createdAt, keys: [] }];
-    setup(idle);
+  it("delegates to a working same-session holder without cancelling or notifying it", async () => {
+    const working = holder();
+    working.createdAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    working.events = [{ type: "heartbeat", at: working.createdAt }];
+    setup(working);
     h.conflicts = [{ runId: "holder" }];
     const result = await dialogueOrchestratorWorkflow({ scope: "scope", sessionId: "session" });
     expect(result.status).toBe("delegated");
     expect(h.cancel).not.toHaveBeenCalled();
+    expect(h.forward).not.toHaveBeenCalled();
     expect(h.prompts).toBe(0);
     expect(h.published).toHaveLength(0);
     expect(h.runtime).toContainEqual({ type: "delegated", holderRunId: "holder" });
   });
 
-  it("forwards a competing first activation to the actual owner, even when both created their own session", async () => {
+  it("delegates a competing activation without forwarding a wake", async () => {
     setup(holder("owner-session"));
-    h.world.dialogueRuns[0]!.events = [{ type: "exit_intent", keys: [], at: new Date().toISOString() }];
+    h.world.dialogueRuns[0]!.events = [{ type: "heartbeat", at: new Date().toISOString() }];
     h.conflicts = [{ runId: "holder" }];
     const result = await dialogueOrchestratorWorkflow({ scope: "scope", initialWake });
-    const wake = { ...initialWake, sessionId: "owner-session", runId: "holder", reused: true, wakeAt: expect.any(String) };
-    expect(h.forward).toHaveBeenCalledWith("scope", wake);
+    expect(h.forward).not.toHaveBeenCalled();
     expect(result).toEqual({ status: "delegated", laps: 0 });
-    expect(h.runtime).toEqual([{ type: "delegated", holderRunId: "holder", wake }]);
-    expect(forwardedDialogueWakes(h.runtime as DialogueRunState["events"])).toEqual([wake]);
+    expect(h.runtime).toEqual([{ type: "delegated", holderRunId: "holder" }]);
+    expect(forwardedDialogueWakes(h.runtime as DialogueRunState["events"])).toEqual([]);
     expect(h.cancel).not.toHaveBeenCalled();
     expect(h.wait).not.toHaveBeenCalled();
     expect(h.prompts).toBe(0);
     expect(h.published).toHaveLength(0);
   });
 
-  it("wakes a sleeping owner and publishes a racing final exactly once", async () => {
+  it("pulls a result completed during the current reply without notifying or duplicating the Actor", async () => {
     setup(holder("holder"));
-    h.world.offers = [];
-    let signalIdle!: () => void;
-    let wakeOwner!: (result: IteratorResult<unknown>) => void;
-    const ownerIdle = new Promise<void>(resolve => { signalIdle = resolve; });
-    h.sleep.mockImplementationOnce(() => { signalIdle(); return new Promise<void>(() => {}); });
-    h.createHook.mockImplementationOnce(() => ({
-      getConflict: async () => null, dispose: vi.fn(),
-      [Symbol.asyncIterator]: () => ({ next: () => new Promise<IteratorResult<unknown>>(resolve => { wakeOwner = resolve; }) }),
-    }));
+    let release!: () => void;
+    let entered!: () => void;
+    const publishing = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    h.beforePublish.mockImplementationOnce(async () => { entered(); await publishing; });
     h.ownRunId.mockResolvedValueOnce("holder").mockResolvedValueOnce("contender");
     const owner = dialogueOrchestratorWorkflow({ scope: "scope" });
-    await ownerIdle;
+    await started;
+
+    const second = { ...offer, offerId: "B-final", sourceInputId: "input-B", workId: "work-B", text: "B result" };
+    h.world.inputs.push({ ...input, inputId: "input-B", clientMessageId: "message-B" });
+    h.world.works.push({ runId: "thought-B", workId: "work-B", inputId: "input-B", status: "completed" });
+    h.world.offers.push(second);
     h.conflicts = [{ runId: "holder" }];
-    h.world.offers.push(offer);
-    h.forward.mockImplementationOnce(async (_scope, wake: DialogueWakeEvent) => {
-      wakeOwner({ done: false, value: wake });
-      return true;
-    });
-    const contender = dialogueOrchestratorWorkflow({ scope: "scope", initialWake });
-    const [first, second] = await Promise.all([owner, contender]);
-    expect(first.status).toBe("idle");
-    expect(second.status).toBe("delegated");
-    expect(h.published.map(p => p.sourceResults[0]!.resultId)).toEqual([offer.offerId]);
+    const contender = dialogueOrchestratorWorkflow({ scope: "scope", initialWake: { ...initialWake, triggerKey: second.offerId } });
+    await expect(contender).resolves.toMatchObject({ status: "delegated", laps: 0 });
+    expect(h.forward).not.toHaveBeenCalled();
     expect(h.prompts).toBe(1);
+
+    release();
+    await expect(owner).resolves.toMatchObject({ status: "idle", laps: 2 });
+    expect(h.published.map(p => p.sourceResults[0]!.resultId)).toEqual([offer.offerId, second.offerId]);
+    expect(h.prompts).toBe(2);
   });
 
-  it("takes the released lease if the holder disappears before it accepts the forwarded wake", async () => {
+  it("takes the released lease after a holder announces exit", async () => {
     setup(holder());
+    h.world.dialogueRuns[0]!.events = [{ type: "exit_intent", keys: [], at: new Date().toISOString() }];
     h.conflicts = [{ runId: "holder" }, null];
-    h.forward.mockResolvedValueOnce(false);
-    await expect(dialogueOrchestratorWorkflow({ scope: "scope", initialWake })).resolves.toMatchObject({ status: "idle" });
+    await expect(dialogueOrchestratorWorkflow({ scope: "scope", sessionId: "session", initialWake })).resolves.toMatchObject({ status: "idle" });
+    expect(h.forward).not.toHaveBeenCalled();
+    expect(h.runtime).toContainEqual(expect.objectContaining({ type: "handoff_wait", waitingForRunId: "holder" }));
     expect(h.runtime).not.toContainEqual(expect.objectContaining({ type: "delegated" }));
     expect(h.published).toHaveLength(1);
   });

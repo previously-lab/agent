@@ -264,17 +264,17 @@ describe("native thinking work", () => {
       parentRunId: "wrun_01JTESTPARENT0000000000000", source: expect.objectContaining({ text: "问题" }),
     }));
     expect(h.ensure).not.toHaveBeenCalled();
-    expect(h.witness).toHaveBeenCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }),
-      "wrun_RESULT_ACTOR", "work:offer-1");
-    expect(result.dialogueDelivery).toEqual({ status: "delivered", candidateId: "work:offer-1" });
+    expect(h.witness).not.toHaveBeenCalled();
+    expect(result.dialogueDelivery).toBeUndefined();
   });
 
-  it("recovers delivery when a completion receipt has no Actor run ID", async () => {
+  it("ends after a durable handoff without a receipt lookup or delivery witness", async () => {
     h.notifiedRunId = undefined;
     const result = await turnWorkflow(input());
-    expect(h.ensure).toHaveBeenLastCalledWith(expect.objectContaining({ triggerKey: "work:offer-1" }));
-    expect(h.witness).toHaveBeenCalledWith(expect.anything(), "wrun_ORCHESTRATOR", "work:offer-1");
-    expect(result.dialogueDelivery?.status).toBe("delivered");
+    expect(h.ensure).not.toHaveBeenCalled();
+    expect(h.witness).not.toHaveBeenCalled();
+    expect(result.dialogueDelivery).toBeUndefined();
+    expect(result.error).toBeUndefined();
   });
 
   it("hands a genuine user blocker to the dialogue orchestrator without ordinary text", async () => {
@@ -301,7 +301,8 @@ describe("native thinking work", () => {
     const result = await turnWorkflow(input());
     if (accepted) {
       expect(result.dialogueWork?.text).toBe("Final | verified result");
-      expect(result.dialogueDelivery?.status).toBe("delivered");
+      expect(result.dialogueDelivery).toBeUndefined();
+      expect(h.witness).not.toHaveBeenCalled();
       expect(result.error).toBeUndefined();
       expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ work: result.dialogueWork }));
     } else {

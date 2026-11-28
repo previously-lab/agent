@@ -250,4 +250,16 @@ describe("dialogue orchestrator timed activation", () => {
     expect(h.prepare.mock.lastCall![0].orchestration.publications).toEqual([checkpoint]);
   });
 
+  it("picks up a result arriving after exit intent during the final pull", async () => {
+    h.world = world([input("input-A")], [offer("A-final", "input-A", "final")]);
+    h.runtime.mockImplementation(event => {
+      if (event.type !== "exit_intent") return;
+      h.world!.inputs.push(input("input-B"));
+      h.world!.works.push({ runId: "thought-input-B", workId: "work-input-B", inputId: "input-B", status: "completed" });
+      h.world!.offers.push(offer("B-final", "input-B", "final"));
+    });
+    await expect(dialogueOrchestratorWorkflow({ scope: "scope" })).resolves.toMatchObject({ status: "idle", laps: 2 });
+    expect(h.published.map(item => item.sourceResults[0]!.resultId)).toEqual(["A-final", "B-final"]);
+  });
+
 });

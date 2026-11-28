@@ -1527,12 +1527,10 @@ async function startDialogueOffer(params: {
         : workUpdate && context.holder ? await ensure(request, context.holder) : await ensure(request);
       return { ...result, runId: started.runId };
     } catch (error) {
-      if (!workUpdate) throw error;
-      // The thinking run already owns the committed update. A missing Actor
-      // acknowledgement lets the turn recover this same ID before witnessing
-      // delivery, rather than synthesizing a second completion.
-      console.warn("[Dialogue] work wake needs recovery", error);
-      return result;
+      // The durable update ID makes activation retry safe. Without a witness,
+      // reporting success after a failed lookup would leave the offer orphaned.
+      console.warn("[Dialogue] work activation needs recovery", error);
+      throw error;
     }
   } catch (error) {
     // An append can commit before either its acknowledgement or its recovery

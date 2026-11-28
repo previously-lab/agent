@@ -20,12 +20,12 @@ import { workCheckpointExecute, type ToolContext } from "@/app/api/agent/tool-ex
 describe("extraction child checkpoint handoff", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each(["known", "discovered", "new"])("writes the update and %s Actor wake to the forwarded parent stream", async branch => {
+  it.each(["known", "discovered", "new"])("writes the update and handles %s Actor activation without direct notification", async branch => {
     const now = new Date().toISOString();
     const holder = { runId: "wrun_ACTOR", sessionId: "session" };
     const actor = { runId: holder.runId, createdAt: now, status: "running",
       attributes: { scope: "scope", role: "dialogueOrchestrator", session: holder.sessionId } };
-    h.row.mockResolvedValue(actor);
+    h.row.mockImplementation(async (id: string) => id === actor.runId && branch !== "new" ? actor : undefined);
     h.hook.mockResolvedValue({ runId: holder.runId, hookId: "hook" });
     h.rows.mockResolvedValue({ data: branch === "new" ? [] : [actor] });
     const dialogueOffer: DialogueOfferContext = {
@@ -42,10 +42,16 @@ describe("extraction child checkpoint handoff", () => {
     const result = await workCheckpointExecute({ text: "Tuesday." }, { context, toolCallId: "host-partial-evidence", messages: [] }, parent);
     const actorRunId = branch === "new" ? "wrun_NEW" : holder.runId;
     expect(result).toMatchObject({ ok: true, runId: actorRunId });
-    expect(events).toMatchObject([
+    expect(events[0]).toMatchObject(
       { type: "work_checkpoint", runId: "wrun_PARENT", updateId: "work-A:host-partial-evidence" },
-      { type: "dialogue_wake", parentRunId: "wrun_PARENT", runId: actorRunId, triggerKey: "work-A:host-partial-evidence" },
-    ]);
+    );
+    if (branch === "new") {
+      expect(events).toHaveLength(2);
+      expect(events[1]).toMatchObject({ type: "dialogue_wake", parentRunId: "wrun_PARENT",
+        runId: actorRunId, triggerKey: "work-A:host-partial-evidence" });
+    } else {
+      expect(events).toHaveLength(1);
+    }
     expect(h.ownWritable).not.toHaveBeenCalled();
   });
 });

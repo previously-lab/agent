@@ -3,7 +3,7 @@ import type { ModelCallStreamPart } from "@/lib/deepseek/types";
 import { createDialogueAgent } from "@/app/api/agent/agent";
 import { streamDialogueWording } from "@/lib/dialogue/wording-stream";
 import { dialoguePriorContext } from "@/lib/dialogue/dialogue-prompt";
-import { DIALOGUE_SESSION_MS, dialogueRunUsable, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
+import { dialogueRunUsable, publicationOfferIds, selectDialogueOffer } from "@/lib/dialogue/orchestrator";
 import { sessionLastWakeAt } from "@/lib/dialogue/coordination";
 import {
   DIALOGUE_CHECKPOINT_NAMESPACE,
@@ -22,7 +22,6 @@ import {
   writeDialogueRuntimeEventStep,
 } from "./dialogue-transport-steps";
 import {
-  forwardDialogueWakeStep,
   readDialogueWorldStep,
   recordDialogueUtteranceStep,
   stampDialogueTriggerStep,
@@ -108,11 +107,12 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
       const holder = snapshot.dialogueRuns.find(run => run.runId === holderId);
       const now = Date.now();
       if (holder && (holder.status === "pending" || holder.status === "running")) {
-        // Two first wakes can create independent run/session IDs before either
-        // hook is visible. Only an actual handoff needs to outlive the holder.
+        // A working holder pulls completed thoughts after its current reply. No
+        // hook notification is sent. Only a leaving holder must be succeeded.
         const newSession = sessionId !== holder.sessionId && (args.handoffReason === "session_expiry" ||
           !dialogueRunUsable(holder.status, sessionLastWakeAt(holder, snapshot.wakes), now));
-        const leaving = holder.events.some(event => event.type === "exit_commit" || event.type === "continued" || event.type === "delegated");
+        const leaving = holder.events.some(event => event.type === "exit_intent" || event.type === "exit_commit" ||
+          event.type === "continued" || event.type === "delegated");
         if (args.handoffFrom === holderId || newSession || leaving) {
           await writeDialogueRuntimeEventStep({ type: "handoff_wait", waitingForRunId: holderId, at: new Date(now).toISOString() });
           await waitForDialogueRunTerminalStep(holderId);
@@ -120,13 +120,8 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
           // A liveness poll is not a failed acquisition of a released lease.
           waitedForPredecessor = true;
         } else {
-          const wake = args.initialWake && {
-            ...args.initialWake, runId: holderId, sessionId: holder.sessionId, wakeAt: new Date(now).toISOString(), reused: true,
-          };
-          if (!wake || await forwardDialogueWakeStep(args.scope, wake)) {
-            await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId, ...(wake ? { wake } : {}) });
-            return { status: "delegated", laps };
-          }
+          await writeDialogueRuntimeEventStep({ type: "delegated", holderRunId: holderId });
+          return { status: "delegated", laps };
         }
       }
       // A conflicted hook was never registered and caches that conflict forever.
@@ -144,16 +139,15 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
     }
     await writeDialogueRuntimeEventStep({ type: "lease_acquired", at: new Date().toISOString() });
 
-    // Hook events are only wake hints. Workflow facts remain authoritative.
-    const wakes = lease[Symbol.asyncIterator]();
-    let nextWake = wakes.next();
     let messages: ModelMessage[] = [];
     const knownInputs = new Set<string>();
+    const watchedThinkingRunIds = new Set<string>();
     let primed = false;
     const handled = new Set<string>();
     while (true) {
       await writeDialogueRuntimeEventStep({ type: "heartbeat", at: new Date().toISOString() });
-      const world = await readDialogueWorldStep(args.scope);
+      const world = await readDialogueWorldStep(args.scope, [...watchedThinkingRunIds]);
+      for (const work of world.works) if (work.runId) watchedThinkingRunIds.add(work.runId);
       if (!primed) {
         messages = priorMessages(world).slice(-16);
         for (const input of world.inputs) knownInputs.add(input.inputId);
@@ -168,19 +162,13 @@ export async function dialogueOrchestratorWorkflow(args: DialogueOrchestratorArg
           ...world.inputs.map(input => `${input.inputId}:start`),
         ])];
         await writeDialogueRuntimeEventStep({ type: "exit_intent", keys, at: new Date().toISOString() });
-        const outcome = await Promise.race([
-          nextWake.then(result => ({ kind: "wake" as const, result })),
-          sleep(args.idleMs ?? DIALOGUE_SESSION_MS).then(() => ({ kind: "idle" as const })),
-        ]);
-        if (outcome.kind === "idle") {
-          const verification = await readDialogueWorldStep(args.scope);
-          if (selectDialogueOffer(verification, handled)) continue;
-          await writeDialogueRuntimeEventStep({ type: "exit_commit", at: new Date().toISOString() });
-          return { status: "idle", laps };
-        }
-        if (outcome.result.done) return { status: "idle", laps };
-        nextWake = wakes.next();
-        continue;
+        // Mark intent before the final pull. A result committing after this
+        // point either appears here or starts the successor which takes lease.
+        const verification = await readDialogueWorldStep(args.scope, [...watchedThinkingRunIds]);
+        for (const work of verification.works) if (work.runId) watchedThinkingRunIds.add(work.runId);
+        if (selectDialogueOffer(verification, handled)) continue;
+        await writeDialogueRuntimeEventStep({ type: "exit_commit", at: new Date().toISOString() });
+        return { status: "idle", laps };
       }
       const related = relatedFinalOffers(primary, world, handled);
       handled.add(primary.offerId);

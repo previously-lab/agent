@@ -22,7 +22,8 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock("workflow", () => ({ sleep: vi.fn(async () => {}) }));
 vi.mock("workflow/runtime", () => ({
-  getWorld: async () => ({ runs: { list: async () => ({ data: h.rows, hasMore: false, cursor: null }), waitForTerminalStatus: h.wait } }),
+  getWorld: async () => ({ runs: { list: async () => ({ data: h.rows, hasMore: false, cursor: null }),
+    get: async (runId: string) => h.rows.find(row => row.runId === runId), waitForTerminalStatus: h.wait } }),
 }));
 vi.mock("workflow/api", () => ({ getRun: h.getRun, start: h.start, resumeHook: h.resume }));
 vi.mock("@/lib/dialogue/workflow-offers", () => ({ listDialogueEvents: vi.fn(async () => []) }));

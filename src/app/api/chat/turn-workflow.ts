@@ -46,11 +46,7 @@ import {
   publishThoughtStartedStep,
   startDialogueRecordRunStep,
 } from "./dialogue-transport-steps";
-import {
-  ensureDialogueOrchestratorStep,
-  readDialogueAdmissionStep,
-  witnessDialogueDeliveryStep,
-} from "./dialogue-orchestrator-steps";
+import { readDialogueAdmissionStep } from "./dialogue-orchestrator-steps";
 import { buildNativeThinkingMessages, currentDialogueUserMessage, type OtherWorkState } from "@/lib/dialogue/thinking-context";
 import {
   beginDialogueWorkStep,
@@ -1051,7 +1047,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   // server-authoritative input view — the cleared browser lane never feeds
   // the worker.
   const [currentAdmission] = await Promise.all([admission, started]);
-  let dialogueDelivery: TurnRunResult["dialogueDelivery"];
   const dialogueHolder = currentAdmission?.holder;
   const otherWorkStates: OtherWorkState[] = currentAdmission?.otherWorks ?? [];
   let workWindow: DialogueWorkAdmission | null = null;
@@ -2075,35 +2070,9 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
       }
     }
   }
-  if (nativeDialogue) {
-    const [candidateId, notifiedRunId] = [...finalDialogueOffers].at(-1) ?? ["", undefined];
-    const offerContext = turnToolsContext.dialogueOffer!;
-    const request = {
-      scope: offerContext.scopeKey,
-      parentRunId,
-      sourceInputId: offerContext.sourceInputId,
-      workId: offerContext.workId,
-      triggerKey: candidateId || `${parentRunId}:end`,
-      candidateKeys: candidateId ? [candidateId] : [],
-    };
-    try {
-      const runId = notifiedRunId || (await ensureDialogueOrchestratorStep(request)).runId;
-      if (candidateId) {
-        const status = await witnessDialogueDeliveryStep(request, runId, candidateId);
-        dialogueDelivery = { status, candidateId };
-        if (status === "failed") {
-          outcome.error ??= "The thought result could not be publicly delivered.";
-          outcome.finishReason = "error";
-        }
-      }
-    } catch (error) {
-      console.warn("[Dialogue] end wake or delivery witness failed", error);
-      if (candidateId) dialogueDelivery = { status: "failed", candidateId };
-      outcome.error ??= "The dialogue delivery could not be confirmed.";
-      outcome.finishReason = "error";
-    }
-  }
-  // The final offer and delivery witness take precedence over any outstanding optional read assessment.
+  // Every accepted offer already activated or found an Actor at commit time.
+  // The Actor pulls it after the current publication; this thought ends without
+  // a second wake, a delivery witness, or a 30-minute idle dependency.
   await partialHandoff?.settled();
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
   // run retired with its collector): the last survivor judges lastness
@@ -2137,7 +2106,6 @@ export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   const turnResult: TurnRunResult = {
     ...(!nativeDialogue && producedMessages.length ? {nativeMessages: producedMessages} : {}),
     ...(dialogueWork ? { dialogueWork } : {}),
-    ...(dialogueDelivery ? { dialogueDelivery } : {}),
     turnId: input.turnId,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.regenerate ? { regenerate: true } : {}),

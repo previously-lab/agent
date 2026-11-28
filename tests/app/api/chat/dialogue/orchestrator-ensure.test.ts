@@ -79,23 +79,23 @@ describe("API dialogue activation with wake events", () => {
     expect(h.start).toHaveBeenCalledTimes(1);
   });
 
-  it("wakes only the checked scoped hook and reads no registry or other streams", async () => {
+  it("delegates to the checked active holder without a hook write or registry scan", async () => {
     const current = run("running", new Date(now - 10_000).toISOString());
     const holder = { runId: current.runId, sessionId: "session" };
     const hook = { runId: current.runId, hookId: "hook-A" };
     h.row.mockResolvedValue({ ...current, attributes: { ...current.attributes, session: holder.sessionId } });
     h.hook.mockResolvedValue(hook);
-    h.getRun.mockReturnValue({ getReadable: () => readable([{ data: { type: "exit_intent", at: current.createdAt, keys: [] } }]) });
+    h.getRun.mockReturnValue({ getReadable: () => readable([{ data: { type: "heartbeat", at: current.createdAt } }]) });
     await expect(ensureDialogueOrchestratorStep(request(), holder)).resolves.toMatchObject({ ...holder, reused: true });
     expect(h.getRun.mock.calls.map(([id]) => id)).toEqual([holder.runId]);
     expect(h.hook).toHaveBeenCalledWith("dialogue-execution:scope");
-    expect(h.resume).toHaveBeenCalledWith(hook, expect.objectContaining({ ...holder, triggerKey: "candidate-A" }));
-    expect(h.wake).toHaveBeenCalledWith(expect.objectContaining(holder));
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.wake).not.toHaveBeenCalled();
     expect(h.list).not.toHaveBeenCalled();
     expect(h.events).not.toHaveBeenCalled();
     expect(h.start).not.toHaveBeenCalled();
 
-    // Same healthy owner and trigger via the historical discovery path.
+    // The discovery path also returns the active owner without notifying it.
     const histories = Array.from({ length: 24 }, (_, i) => ({
       runId: `work-${i}`, status: "running", createdAt: new Date(now - i), attributes: {
         role: "thinking", scope: "scope", turn: `input-${i}`, delivery: "orchestrator",
@@ -103,18 +103,16 @@ describe("API dialogue activation with wake events", () => {
     }));
     h.list.mockResolvedValue({ data: [{ ...current, attributes: { ...current.attributes, session: holder.sessionId } }, ...histories] });
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ ...holder, reused: true });
-    expect(h.list).toHaveBeenCalledTimes(2);
     expect(h.events).toHaveBeenCalledTimes(histories.length);
-    expect(h.wake.mock.calls[0]).toEqual(h.wake.mock.calls[1]);
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.wake).not.toHaveBeenCalled();
   });
 
   it.each([
     ["session", { session: "old" }], ["scope", { scope: "other" }], ["role", { role: "thinking" }],
     ["terminal", { status: "completed" }], ["changed hook", { owner: "new" }], ["missing hook", { missing: true }],
-    ["expired session", { age: 1_810_000 }], ["stale heartbeat", { age: 121_000 }],
-    ["idle wake history needed", { event: { type: "exit_intent", at: new Date(now - 125_000).toISOString(), keys: [] } }],
+    ["exit intent", { event: { type: "exit_intent", at: new Date(now - 125_000).toISOString(), keys: [] } }],
     ["handoff", { event: { type: "continued", nextRunId: "next" } }],
-    ["handoff wait", { event: { type: "handoff_wait", waitingForRunId: "other", at: new Date(now).toISOString() } }],
     ["exit", { event: { type: "exit_commit", at: new Date(now).toISOString() } }],
     ["failure", { event: { type: "expression_outcome", status: "failed", candidateIds: ["candidate-A"] } }],
     ["large stream", { large: true }], ["partial stream", { partial: true }],
@@ -122,9 +120,9 @@ describe("API dialogue activation with wake events", () => {
     missing?: boolean; event?: unknown; large?: boolean; partial?: boolean }]>)("uses discovery for %s", async (_reason, change) => {
     const holder = { runId: "wrun_OLD", sessionId: "session" };
     const current = run(change.status ?? "running", new Date(now - (change.age ?? 10_000)).toISOString());
-    h.row.mockResolvedValue({ ...current, runId: holder.runId, attributes: {
+    h.row.mockImplementation(async (id: string) => id === holder.runId ? { ...current, runId: holder.runId, attributes: {
       role: change.role ?? "dialogueOrchestrator", scope: change.scope ?? "scope", session: change.session ?? holder.sessionId,
-    } });
+    } } : undefined);
     const hook = { runId: change.owner ?? holder.runId, hookId: "hook-A" };
     if (change.missing) h.hook.mockRejectedValueOnce(Object.assign(new Error("missing"), { name: "HookNotFoundError" }));
     else h.hook.mockResolvedValue(hook);
@@ -137,24 +135,21 @@ describe("API dialogue activation with wake events", () => {
     expect(h.wake).not.toHaveBeenCalledWith(expect.objectContaining({ runId: holder.runId }));
   });
 
-  it("discovers a successor after the checked hook disappears, but does not resend an ambiguous wake", async () => {
+  it("discovers the active successor after the known holder announces exit", async () => {
     const current = run("running", new Date(now - 10_000).toISOString());
     const holder = { runId: current.runId, sessionId: current.runId };
-    const hook = { runId: holder.runId, hookId: "old-hook" };
     h.row.mockResolvedValue(current);
-    h.hook.mockResolvedValue(hook);
-    h.resume.mockRejectedValueOnce(Object.assign(new Error("replaced"), { name: "HookNotFoundError" }));
+    h.hook.mockResolvedValue({ runId: holder.runId, hookId: "old-hook" });
     const successor = run("running", new Date(now).toISOString());
     h.list.mockResolvedValue({ data: [successor] });
+    h.getRun.mockImplementation((id: string) => ({
+      getReadable: () => readable([{ data: id === holder.runId
+        ? { type: "exit_intent", at: current.createdAt, keys: [] }
+        : { type: "heartbeat", at: new Date(now).toISOString() } }]),
+    }));
     await expect(ensureDialogueOrchestratorStep(request(), holder)).resolves.toMatchObject({ runId: successor.runId, reused: true });
-    expect(h.wake).toHaveBeenCalledTimes(1);
-    expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ runId: successor.runId }));
-    h.list.mockClear();
-    h.wake.mockClear();
-    h.resume.mockRejectedValueOnce(new Error("queue unavailable"));
-    await expect(ensureDialogueOrchestratorStep(request(), holder)).rejects.toThrow("queue unavailable");
-    expect(h.list).not.toHaveBeenCalled();
     expect(h.wake).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
     expect(h.start).not.toHaveBeenCalled();
   });
   it("paginates by entry point and observes changed or newly arrived runs on each read", async () => {
@@ -181,9 +176,12 @@ describe("API dialogue activation with wake events", () => {
     expect(next.dialogueRuns).toHaveLength(1);
     h.list.mockClear();
     expect(await readWorkSnapshotStep("scope", "old-input")).toMatchObject({ workId: "old-input" });
-    expect(h.list.mock.calls.map(([params]) => [params.workflowName, params.pagination.cursor])).toEqual([
-      [turn, undefined], [turn, "older"],
-    ]);
+    const calls = h.list.mock.calls.map(([params]) => params);
+    expect(calls).toHaveLength(10);
+    for (const status of ["pending", "running", "completed", "failed", "cancelled"]) {
+      expect(calls.filter(params => params.workflowName === turn && params.status === status)
+        .map(params => params.pagination.cursor)).toEqual([undefined, "older"]);
+    }
   });
 
   it("retains historical IDs when a compiler assigns new entry point IDs", async () => {
@@ -193,9 +191,9 @@ describe("API dialogue activation with wake events", () => {
     Object.assign(h.workflow, { workflowId: "new-actor-id" });
     try {
       await readDialogueWorldStep("scope");
-      expect(h.list.mock.calls.map(([params]) => params.workflowName).sort()).toEqual([
-        oldTurn, oldActor, "new-turn-id", "new-actor-id",
-      ].sort());
+      const names = h.list.mock.calls.map(([params]) => params.workflowName);
+      expect(new Set(names)).toEqual(new Set([oldTurn, oldActor, "new-turn-id", "new-actor-id"]));
+      expect(names).toHaveLength(16);
     } finally {
       Reflect.deleteProperty(h.turn, "workflowId");
       Reflect.deleteProperty(h.workflow, "workflowId");
@@ -216,21 +214,21 @@ describe("API dialogue activation with wake events", () => {
     expect(world.offers).toEqual([]);
     expect(world.works.map(work => work.inputId)).toEqual(["new-input"]);
   });
-  it("resumes a healthy Actor and records the wake", async () => {
+  it("reuses a healthy Actor without recording or delivering a wake", async () => {
     h.list.mockResolvedValue({ data: [run("running", new Date(now - 60_000).toISOString())] });
     const runId = `run-running-${new Date(now - 60_000).toISOString()}`;
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId, sessionId: runId, reused: true });
     expect(h.start).not.toHaveBeenCalled();
-    expect(h.resume).toHaveBeenCalledWith("dialogue-execution:scope", expect.objectContaining({ runId, reused: true }));
-    expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ runId, reused: true, triggerKey: "candidate-A" }));
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.wake).not.toHaveBeenCalled();
   });
 
-  it("records the actual new owner's session if the lease changed after discovery", async () => {
-    h.list.mockResolvedValue({ data: [run("running", new Date(now - 1_000).toISOString())] });
-    h.resume.mockResolvedValueOnce({ runId: "new-owner" });
-    h.row.mockResolvedValueOnce({ attributes: { role: "dialogueOrchestrator", scope: "scope", session: "new-session" } });
-    await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: "new-owner", sessionId: "new-session" });
-    expect(h.wake).toHaveBeenCalledWith(expect.objectContaining({ runId: "new-owner", sessionId: "new-session" }));
+  it("keeps delegating to a working Actor even after the 30-minute session window", async () => {
+    const existing = run("running", new Date(now - 31 * 60_000).toISOString());
+    h.list.mockResolvedValue({ data: [existing] });
+    await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: existing.runId, reused: true });
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
   });
 
   it("only acknowledges a forwarded wake accepted by the observed owner", async () => {
@@ -245,17 +243,12 @@ describe("API dialogue activation with wake events", () => {
     await expect(forwardDialogueWakeStep("scope", wake)).rejects.toThrow("queue unavailable");
   });
 
-  it("waits for the first Actor to register its hook instead of duplicating it", async () => {
+  it("does not probe the hook when an active Actor is already discoverable", async () => {
     const existing = run("running", new Date(now - 60_000).toISOString());
     h.list.mockResolvedValue({ data: [existing] });
-    let attempts = 0;
-    h.resume.mockImplementation(async () => {
-      attempts++;
-      if (attempts < 3) throw Object.assign(new Error("registering"), { name: "HookNotFoundError" });
-      return { runId: existing.runId };
-    });
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: existing.runId, reused: true });
-    expect(attempts).toBe(3);
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.hook).not.toHaveBeenCalled();
     expect(h.start).not.toHaveBeenCalled();
   });
 
@@ -271,12 +264,13 @@ describe("API dialogue activation with wake events", () => {
   });
 
   it("starts a new session once the original session window expires", async () => {
-    h.list.mockResolvedValue({ data: [run("running", new Date(now - 31 * 60_000).toISOString())] });
+    const existing = run("completed", new Date(now - 31 * 60_000).toISOString());
+    h.list.mockResolvedValue({ data: [existing] });
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({ runId: "run-new", sessionId: "run-new", reused: false });
-    expect(h.getRun).toHaveBeenCalledWith(`run-running-${new Date(now - 31 * 60_000).toISOString()}`);
+    expect(h.getRun).toHaveBeenCalledWith(existing.runId);
   });
 
-  it("resumes the healthy sleeping Actor after three minutes without a heartbeat", async () => {
+  it("starts a successor instead of notifying an Actor after exit intent", async () => {
     const existing = run("running", new Date(now - 3 * 60_000).toISOString());
     h.list.mockResolvedValue({ data: [existing] });
     h.getRun.mockImplementation(() => ({
@@ -284,9 +278,9 @@ describe("API dialogue activation with wake events", () => {
       getReadable: () => readable([{ type: "data-dialogue-exit_intent", data: { type: "exit_intent", keys: [], at: existing.createdAt } }]),
     }));
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({
-      runId: existing.runId, sessionId: existing.runId, reused: true,
+      runId: "run-new", sessionId: existing.runId, reused: false,
     });
-    expect(h.start).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
   });
 
   it("starts the next session without cancelling its idle predecessor", async () => {
@@ -314,10 +308,9 @@ describe("API dialogue activation with wake events", () => {
     }
   });
 
-  it("starts with the first wake when no hook can be resumed", async () => {
-    const existing = run("running", new Date(now - 60_000).toISOString());
+  it("writes the first wake only into the newly started Actor receipt", async () => {
+    const existing = run("completed", new Date(now - 60_000).toISOString());
     h.list.mockResolvedValue({ data: [existing] });
-    h.resume.mockRejectedValue(Object.assign(new Error("no active hook"), { name: "HookNotFoundError" }));
     await expect(ensureDialogueOrchestratorStep(request())).resolves.toMatchObject({
       runId: "run-new", sessionId: existing.runId, reused: false,
     });
@@ -335,6 +328,58 @@ describe("API dialogue activation with wake events", () => {
     h.list.mockRejectedValue(new Error("registry unavailable"));
     await expect(ensureDialogueOrchestratorStep(request())).rejects.toThrow("registry unavailable");
     expect(h.start).not.toHaveBeenCalled();
+  });
+
+  it("queries active runs without an age limit and stops terminal pages at the recovery window", async () => {
+    const turn = "workflow//./src/app/api/chat/turn-workflow//turnWorkflow";
+    const actor = "workflow//./src/app/api/chat/dialogue-orchestrator-workflow//dialogueOrchestratorWorkflow";
+    const thought = (id: string, status: string, age: number) => ({ runId: id, status, createdAt: new Date(now - age),
+      attributes: { role: "thinking", scope: "scope", turn: id, delivery: "orchestrator" } });
+    const active = thought("active-long", "running", 3 * 60 * 60_000);
+    const recent = thought("recent", "completed", 10_000);
+    const ancient = thought("ancient", "completed", 3 * 60 * 60_000);
+    h.list.mockImplementation(async ({ workflowName, status, pagination: { cursor } }) => {
+      if (workflowName === actor) return { data: [], hasMore: false };
+      if (workflowName !== turn) throw new Error("unexpected entry point");
+      if (status === "running" || status === "pending") return { data: status === "running" ? [active] : [], hasMore: false };
+      if (status === "completed") return cursor
+        ? { data: [ancient], hasMore: true, cursor: "must-not-read" }
+        : { data: [recent], hasMore: true, cursor: "old" };
+      return { data: [], hasMore: false };
+    });
+    const world = await readDialogueWorldStep("scope");
+    expect(world.works.map(work => work.runId)).toEqual(expect.arrayContaining(["active-long", "recent"]));
+    expect(world.works.map(work => work.runId)).not.toContain("ancient");
+    expect(h.events).not.toHaveBeenCalledWith("ancient");
+    expect(h.list.mock.calls.some(([params]) => params.status === "cancelled")).toBe(false);
+    expect(h.list.mock.calls.filter(([params]) => params.workflowName === turn && params.status === "completed")
+      .map(([params]) => params.pagination.cursor)).toEqual([undefined, "old"]);
+  });
+
+  it("pins a previously observed long-running thought by ID after it completes", async () => {
+    h.row.mockResolvedValue({ runId: "thought-long", status: "completed", createdAt: new Date(now - 3 * 60 * 60_000),
+      attributes: { role: "thinking", scope: "scope", turn: "input-long", work: "work-long", delivery: "orchestrator" } });
+    h.events.mockResolvedValue([{ type: "work_completed", updateId: "work-long:done", runId: "thought-long",
+      sourceInputId: "input-long", workId: "work-long", acceptedAt: new Date(now).toISOString(), text: "done", publicSeq: 1 }]);
+    const world = await readDialogueWorldStep("scope", ["thought-long"]);
+    expect(h.row).toHaveBeenCalledWith("thought-long", { resolveData: "none" });
+    expect(world.offers.map(offer => offer.offerId)).toContain("work-long:done");
+  });
+
+  it("does not read a terminal stream whose expiredAt has passed", async () => {
+    const expired = { ...run("completed", new Date(now - 60_000).toISOString()), expiredAt: new Date(now - 1).toISOString() };
+    h.list.mockImplementation(async ({ status }) => ({ data: status === "completed" ? [expired] : [], hasMore: false }));
+    await expect(readDialogueWorldStep("scope")).resolves.toMatchObject({ dialogueRuns: [] });
+    expect(h.getRun).not.toHaveBeenCalled();
+  });
+
+  it("treats a terminal 410 stream read as an archival miss", async () => {
+    const expired = run("completed", new Date(now - 60_000).toISOString());
+    h.list.mockImplementation(async ({ status }) => ({ data: status === "completed" ? [expired] : [], hasMore: false }));
+    h.getRun.mockReturnValue({ getReadable: () => ({
+      getTailIndex: async () => { throw Object.assign(new Error("expired"), { name: "StreamExpiredError", status: 410 }); },
+    }) });
+    await expect(readDialogueWorldStep("scope")).resolves.toMatchObject({ dialogueRuns: [] });
   });
 });
 

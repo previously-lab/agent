@@ -86,12 +86,14 @@ describe("work-only handoff", () => {
     }
   });
 
-  it("retains the original committed work ID after an ambiguous wake without claiming a holder", async () => {
+  it("redelivers the original committed work ID after an activation failure", async () => {
     h.ensure.mockRejectedValueOnce(new Error("queue acknowledgement lost"));
-    const result = await completeWorkExecute({ result: "done" }, { context: ctx(), toolCallId: "final", messages: [] });
-    expect(result).toEqual({ ok: true, kind: "work-update", updateId: "work-B:final", sourceInputId: "input-B" });
-    expect(h.ensure).toHaveBeenCalledTimes(1);
-    expect(h.publish).toHaveBeenCalledTimes(1);
+    const options = { context: ctx(), toolCallId: "final", messages: [] };
+    await expect(completeWorkExecute({ result: "done" }, options)).rejects.toThrow("queue acknowledgement lost");
+    await expect(completeWorkExecute({ result: "done" }, options))
+      .resolves.toMatchObject({ ok: true, kind: "work-update", updateId: "work-B:final", sourceInputId: "input-B" });
+    expect(h.ensure).toHaveBeenCalledTimes(2);
+    expect(h.publish).toHaveBeenCalledTimes(2);
   });
 
   it("reconciles a lost work-append acknowledgement before sending its wake", async () => {
